@@ -1,0 +1,3285 @@
+import { env } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
+import { describe, expect, it } from "vitest";
+import { issueAuthTokens, otpHash } from "../src/worker/auth";
+import { sha256Hex } from "../src/worker/security";
+
+const origin = "https://spatial.test";
+let testClientSequence = 0;
+
+function nextTestClientAddress(): string {
+  testClientSequence += 1;
+  return `2001:db8::${testClientSequence.toString(16)}`;
+}
+
+async function loginSession(
+  requestedEmail = env.ADMIN_EMAIL,
+): Promise<{ accessCookie: string; refreshCookie: string; challengeId: string; code: string; email: string }> {
+  const email = requestedEmail.toLowerCase();
+  const challengeId = crypto.randomUUID();
+  const code = "314159";
+  const codeHash = await otpHash(challengeId, email, code, env.OTP_PEPPER);
+  await env.DB.prepare(`
+    INSERT INTO auth_otp_challenges (id, email, code_hash, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).bind(
+    challengeId,
+    email,
+    codeHash,
+    new Date(Date.now() + 60_000).toISOString(),
+  ).run();
+  const response = await exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "CF-Connecting-IP": nextTestClientAddress(),
+    },
+    body: JSON.stringify({ email, challengeId, code }),
+  });
+
+  expect(response.status).toBe(200);
+  const cookie = response.headers.get("set-cookie");
+  expect(cookie).toContain("spatial_access=");
+  const access = cookie!.match(/spatial_access=([^;,]+)/)?.[1];
+  const refresh = cookie!.match(/spatial_refresh=([^;,]+)/)?.[1];
+  expect(access).toBeTruthy();
+  expect(refresh).toBeTruthy();
+  return {
+    accessCookie: `spatial_access=${access}`,
+    refreshCookie: `spatial_refresh=${refresh}`,
+    challengeId,
+    code,
+    email,
+  };
+}
+
+async function login(): Promise<string> {
+  return (await loginSession()).accessCookie;
+}
+
+async function verifyOtp(
+  requestedEmail: string,
+): Promise<Response> {
+  const email = requestedEmail.toLowerCase();
+  const challengeId = crypto.randomUUID();
+  const code = "271828";
+  const codeHash = await otpHash(challengeId, email, code, env.OTP_PEPPER);
+  await env.DB.prepare(`
+    INSERT INTO auth_otp_challenges (id, email, code_hash, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).bind(
+    challengeId,
+    email,
+    codeHash,
+    new Date(Date.now() + 60_000).toISOString(),
+  ).run();
+  return exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "CF-Connecting-IP": nextTestClientAddress(),
+    },
+    body: JSON.stringify({ email, challengeId, code }),
+  });
+}
+
+async function recordCompletedPrivacyScan(
+  projectId: string,
+  versionId: string,
+  assetId: string,
+): Promise<void> {
+  const project = await env.DB.prepare(
+    "SELECT organisation_id, created_by FROM projects WHERE id = ?",
+  ).bind(projectId).first<{ organisation_id: string; created_by: string }>();
+  const asset = await env.DB.prepare(
+    "SELECT sha256, mime_type, size_bytes FROM assets WHERE id = ? AND version_id = ?",
+  ).bind(assetId, versionId).first<{ sha256: string | null; mime_type: string; size_bytes: number }>();
+  if (!project || !asset) throw new Error("Privacy fixture requires an existing project and asset");
+  const scanId = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO privacy_scans
+        (id, organisation_id, project_id, version_id, client_operation_id,
+          request_hash, detector, detector_version, targets_json, status,
+          input_count, candidate_count, evidence_json, created_by, completed_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'test-fixture', 'test-fixture/1', '[]',
+        'COMPLETED', 1, 0, '{"humanReviewRequired":true}', ?, datetime('now'))
+    `).bind(
+      scanId,
+      project.organisation_id,
+      projectId,
+      versionId,
+      crypto.randomUUID(),
+      "d".repeat(64),
+      project.created_by,
+    ),
+    env.DB.prepare(`
+      INSERT INTO privacy_scan_inputs
+        (scan_id, asset_id, asset_sha256, mime_type, size_bytes)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(scanId, assetId, asset.sha256, asset.mime_type, asset.size_bytes),
+  ]);
+}
+
+describe("Spatial Studio Worker", () => {
+  it("reports binding health without exposing secrets", async () => {
+    const response = await exports.default.fetch(`${origin}/api/health`);
+    const body = await response.json<Record<string, unknown>>();
+
+    expect(response.status).toBe(200);
+    expect(body.status).toBe("ok");
+    expect(JSON.stringify(body)).not.toContain("test-otp-pepper");
+  });
+
+  it("rejects unauthenticated tenant APIs", async () => {
+    const response = await exports.default.fetch(`${origin}/api/dashboard`);
+    expect(response.status).toBe(401);
+  });
+
+  it("publishes only the public ES256 verification key", async () => {
+    const response = await exports.default.fetch(`${origin}/.well-known/jwks.json`);
+    const body = await response.json<{ keys: Array<Record<string, unknown>> }>();
+    expect(response.status).toBe(200);
+    expect(body.keys).toHaveLength(1);
+    expect(body.keys[0]).toMatchObject({
+      kty: "EC",
+      crv: "P-256",
+      alg: "ES256",
+      use: "sig",
+      kid: "test-es256-key",
+    });
+    expect(body.keys[0]).not.toHaveProperty("d");
+  });
+
+  it("reports an anonymous session without turning the sign-in screen into a failed request", async () => {
+    const response = await exports.default.fetch(`${origin}/api/auth/session`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ authenticated: false });
+
+    const refresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+    });
+    expect(refresh.status).toBe(204);
+  });
+
+  it("never presents DNS-only custom-domain ownership as active routing", async () => {
+    const operatorCookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie: operatorCookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Custom domain ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "open-import",
+        deliveryTemplate: "Property showcase",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const project = await projectResponse.json<{ project: { id: string } }>();
+    const hostname = `tour-${crypto.randomUUID().slice(0, 8)}.customer.test`;
+    const createResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/domains`,
+      {
+        method: "POST",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+        body: JSON.stringify({ hostname }),
+      },
+    );
+    expect(createResponse.status).toBe(201);
+    const created = await createResponse.json<{
+      domain: { id: string; status: string; verificationToken: string };
+    }>();
+    expect(created.domain.status).toBe("ownership_pending");
+
+    await env.DB.prepare(`
+      UPDATE custom_domains
+      SET dns_verified_at = datetime('now'), verified_at = datetime('now'),
+        status = 'pending', last_error = NULL
+      WHERE id = ?
+    `).bind(created.domain.id).run();
+
+    const provision = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/domains/${created.domain.id}/provision`,
+      {
+        method: "POST",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+      },
+    );
+    expect(provision.status).toBe(503);
+    await expect(provision.json()).resolves.toMatchObject({
+      error: expect.stringContaining("not configured"),
+      retryable: false,
+    });
+
+    const inventory = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/domains`,
+      { headers: { cookie: operatorCookie } },
+    );
+    expect(inventory.status).toBe(200);
+    await expect(inventory.json()).resolves.toMatchObject({
+      providerConfigured: false,
+      cnameTarget: "spatial.whymelabs.com",
+      domains: [{
+        id: created.domain.id,
+        hostname,
+        status: "provider_configuration_required",
+        dnsVerifiedAt: expect.any(String),
+        providerHostnameId: null,
+      }],
+    });
+    const stored = await env.DB.prepare(`
+      SELECT status, dns_verified_at, provider_hostname_id, provisioned_at
+      FROM custom_domains WHERE id = ?
+    `).bind(created.domain.id).first<{
+      status: string;
+      dns_verified_at: string | null;
+      provider_hostname_id: string | null;
+      provisioned_at: string | null;
+    }>();
+    expect(stored).toMatchObject({
+      status: "pending",
+      dns_verified_at: expect.any(String),
+      provider_hostname_id: null,
+      provisioned_at: null,
+    });
+  });
+
+  it("retires bootstrap login and consumes each OTP once", async () => {
+    const retired = await exports.default.fetch(`${origin}/api/auth/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "legacy-bootstrap-token" }),
+    });
+    expect(retired.status).toBe(410);
+    const session = await loginSession();
+    const replay = await exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: session.email,
+        challengeId: session.challengeId,
+        code: session.code,
+      }),
+    });
+    expect(replay.status).toBe(401);
+  });
+
+  it("rotates refresh tokens and revokes the session when an old token is reused", async () => {
+    const session = await loginSession();
+    const refresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: session.refreshCookie },
+    });
+    expect(refresh.status).toBe(200);
+    const refreshedCookies = refresh.headers.get("set-cookie") ?? "";
+    const newAccess = refreshedCookies.match(/spatial_access=([^;,]+)/)?.[1];
+    const newRefresh = refreshedCookies.match(/spatial_refresh=([^;,]+)/)?.[1];
+    expect(newAccess).toBeTruthy();
+    expect(newRefresh).toBeTruthy();
+
+    const secondRefresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: `spatial_refresh=${newRefresh}` },
+    });
+    expect(secondRefresh.status).toBe(200);
+    const secondCookies = secondRefresh.headers.get("set-cookie") ?? "";
+    const latestAccess = secondCookies.match(/spatial_access=([^;,]+)/)?.[1];
+    expect(latestAccess).toBeTruthy();
+
+    const reuse = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: session.refreshCookie },
+    });
+    expect(reuse.status).toBe(401);
+
+    const revokedAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
+      headers: { cookie: `spatial_access=${latestAccess}` },
+    });
+    expect(revokedAccess.status).toBe(401);
+  });
+
+  it("manages organisation invitations and invalidates access across role lifecycle changes", async () => {
+    const administrator = await loginSession();
+    const teammateEmail = `operator-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const clientOperationId = crypto.randomUUID();
+    const invitationBody = JSON.stringify({
+      clientOperationId,
+      email: teammateEmail,
+      role: "production_operator",
+      expiresInDays: 7,
+    });
+
+    const invitationResponse = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: invitationBody,
+    });
+    expect(invitationResponse.status).toBe(201);
+    const invitation = await invitationResponse.json<{
+      invitation: { id: string; userId: string; status: string; deliveryStatus: string };
+    }>();
+    expect(invitation.invitation).toMatchObject({
+      status: "pending",
+      deliveryStatus: "sent",
+    });
+
+    const repeatedInvitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: invitationBody,
+    });
+    expect(repeatedInvitation.status).toBe(200);
+    await expect(repeatedInvitation.json()).resolves.toMatchObject({
+      invitation: { id: invitation.invitation.id },
+      idempotent: true,
+    });
+
+    const teamBeforeSignIn = await exports.default.fetch(`${origin}/api/team`, {
+      headers: { cookie: administrator.accessCookie },
+    });
+    expect(teamBeforeSignIn.status).toBe(200);
+    const teamBefore = await teamBeforeSignIn.json<{
+      members: Array<Record<string, unknown>>;
+      invitations: Array<Record<string, unknown>>;
+    }>();
+    expect(teamBefore.members.find((member) => member.userId === invitation.invitation.userId)).toMatchObject({
+      email: teammateEmail,
+      role: "production_operator",
+      status: "invited",
+    });
+    expect(teamBefore.invitations.find((item) => item.id === invitation.invitation.id)).toMatchObject({
+      status: "pending",
+    });
+
+    const teammate = await loginSession(teammateEmail);
+    const operatorTeamAttempt = await exports.default.fetch(`${origin}/api/team`, {
+      headers: { cookie: teammate.accessCookie },
+    });
+    expect(operatorTeamAttempt.status).toBe(403);
+
+    const acceptedTeam = await exports.default.fetch(`${origin}/api/team`, {
+      headers: { cookie: administrator.accessCookie },
+    });
+    const accepted = await acceptedTeam.json<{
+      members: Array<Record<string, unknown>>;
+      invitations: Array<Record<string, unknown>>;
+    }>();
+    expect(accepted.members.find((member) => member.userId === invitation.invitation.userId)).toMatchObject({
+      status: "active",
+    });
+    expect(accepted.invitations.find((item) => item.id === invitation.invitation.id)).toMatchObject({
+      status: "accepted",
+    });
+
+    const promoteResponse = await exports.default.fetch(
+      `${origin}/api/team/members/${invitation.invitation.userId}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie: administrator.accessCookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ role: "platform_admin" }),
+      },
+    );
+    expect(promoteResponse.status).toBe(200);
+    await expect(promoteResponse.json()).resolves.toMatchObject({
+      member: { role: "platform_admin", status: "active" },
+    });
+
+    const staleAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
+      headers: { cookie: teammate.accessCookie },
+    });
+    expect(staleAccess.status).toBe(401);
+    const promoted = await loginSession(teammateEmail);
+
+    const selfDemotion = await exports.default.fetch(
+      `${origin}/api/team/members/${invitation.invitation.userId}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie: promoted.accessCookie,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ role: "production_operator" }),
+      },
+    );
+    expect(selfDemotion.status).toBe(409);
+
+    const revokeResponse = await exports.default.fetch(
+      `${origin}/api/team/members/${invitation.invitation.userId}`,
+      {
+        method: "DELETE",
+        headers: { cookie: administrator.accessCookie },
+      },
+    );
+    expect(revokeResponse.status).toBe(204);
+    const revokedAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
+      headers: { cookie: promoted.accessCookie },
+    });
+    expect(revokedAccess.status).toBe(401);
+    expect((await verifyOtp(teammateEmail)).status).toBe(401);
+
+    const reinvite = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email: teammateEmail,
+        role: "production_operator",
+        expiresInDays: 7,
+      }),
+    });
+    expect(reinvite.status).toBe(201);
+    expect((await verifyOtp(teammateEmail)).status).toBe(200);
+
+    const selfRevoke = await exports.default.fetch(
+      `${origin}/api/team/members/00000000-0000-4000-8000-000000000002`,
+      {
+        method: "DELETE",
+        headers: { cookie: administrator.accessCookie },
+      },
+    );
+    expect(selfRevoke.status).toBe(409);
+
+    const expiringEmail = `expired-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const expiringInvitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email: expiringEmail,
+        role: "production_operator",
+        expiresInDays: 1,
+      }),
+    });
+    expect(expiringInvitation.status).toBe(201);
+    await env.DB.prepare(`
+      UPDATE organisation_invitations SET expires_at = datetime('now', '-1 minute')
+      WHERE lower(email) = lower(?)
+    `).bind(expiringEmail).run();
+    const lifecycle = await exports.default.fetch(`${origin}/api/hosting/lifecycle/run`, {
+      method: "POST",
+      headers: { cookie: administrator.accessCookie },
+    });
+    expect(lifecycle.status).toBe(200);
+    await expect(lifecycle.json()).resolves.toMatchObject({
+      summary: { invitationsExpired: 1 },
+    });
+    expect((await verifyOtp(expiringEmail)).status).toBe(401);
+  });
+
+  it("accepts memberships in multiple organisations and rotates the session when switching", async () => {
+    const administrator = await loginSession();
+    const administratorUserId = "00000000-0000-4000-8000-000000000002";
+    const primaryOrganisationId = "00000000-0000-4000-8000-000000000001";
+    const secondOrganisationId = crypto.randomUUID();
+    const inaccessibleOrganisationId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, 'Field operations', ?, ?)",
+      ).bind(secondOrganisationId, `field-${secondOrganisationId.slice(0, 8)}`, now),
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, 'Restricted tenant', ?, ?)",
+      ).bind(inaccessibleOrganisationId, `restricted-${inaccessibleOrganisationId.slice(0, 8)}`, now),
+      env.DB.prepare(`
+        INSERT INTO memberships
+          (organisation_id, user_id, role, created_at, updated_at, status)
+        VALUES (?, ?, 'production_operator', ?, ?, 'active')
+      `).bind(secondOrganisationId, administratorUserId, now, now),
+    ]);
+
+    const organisationsResponse = await exports.default.fetch(`${origin}/api/auth/organisations`, {
+      headers: { cookie: administrator.accessCookie },
+    });
+    expect(organisationsResponse.status).toBe(200);
+    await expect(organisationsResponse.json()).resolves.toMatchObject({
+      currentOrganisationId: primaryOrganisationId,
+      organisations: expect.arrayContaining([
+        expect.objectContaining({
+          id: primaryOrganisationId,
+          name: "Spatial Studio",
+          role: "platform_admin",
+          current: true,
+        }),
+        expect.objectContaining({
+          id: secondOrganisationId,
+          name: "Field operations",
+          role: "production_operator",
+          current: false,
+        }),
+      ]),
+    });
+
+    const forbiddenSwitch = await exports.default.fetch(`${origin}/api/auth/organisations/switch`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ organisationId: inaccessibleOrganisationId }),
+    });
+    expect(forbiddenSwitch.status).toBe(403);
+    expect((await exports.default.fetch(`${origin}/api/dashboard`, {
+      headers: { cookie: administrator.accessCookie },
+    })).status).toBe(200);
+
+    const switchedResponse = await exports.default.fetch(`${origin}/api/auth/organisations/switch`, {
+      method: "POST",
+      headers: {
+        cookie: administrator.accessCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ organisationId: secondOrganisationId }),
+    });
+    expect(switchedResponse.status).toBe(200);
+    await expect(switchedResponse.clone().json()).resolves.toMatchObject({
+      user: {
+        userId: administratorUserId,
+        organisationId: secondOrganisationId,
+        role: "production_operator",
+      },
+      organisation: {
+        id: secondOrganisationId,
+        name: "Field operations",
+      },
+    });
+    const switchedCookieHeader = switchedResponse.headers.get("set-cookie");
+    const switchedAccess = switchedCookieHeader?.match(/spatial_access=([^;,]+)/)?.[1];
+    const switchedRefresh = switchedCookieHeader?.match(/spatial_refresh=([^;,]+)/)?.[1];
+    expect(switchedAccess).toBeTruthy();
+    expect(switchedRefresh).toBeTruthy();
+    expect((await exports.default.fetch(`${origin}/api/dashboard`, {
+      headers: { cookie: administrator.accessCookie },
+    })).status).toBe(401);
+    const switchedSession = await exports.default.fetch(`${origin}/api/auth/session`, {
+      headers: { cookie: `spatial_access=${switchedAccess}` },
+    });
+    expect(switchedSession.status).toBe(200);
+    await expect(switchedSession.json()).resolves.toMatchObject({
+      authenticated: true,
+      user: {
+        organisationId: secondOrganisationId,
+        role: "production_operator",
+      },
+    });
+
+    const multiOrganisationEmail = `multi-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const multiOrganisationUserId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, 'Multi tenant operator', ?)",
+      ).bind(multiOrganisationUserId, multiOrganisationEmail, now),
+      env.DB.prepare(`
+        INSERT INTO memberships
+          (organisation_id, user_id, role, created_at, updated_at, status)
+        VALUES (?, ?, 'production_operator', ?, ?, 'active')
+      `).bind(secondOrganisationId, multiOrganisationUserId, now, now),
+    ]);
+    const primaryInvitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: (await loginSession()).accessCookie,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email: multiOrganisationEmail,
+        role: "production_operator",
+        expiresInDays: 7,
+      }),
+    });
+    expect(primaryInvitation.status).toBe(201);
+    const multiOrganisationSession = await loginSession(multiOrganisationEmail);
+    const membershipsAfterAcceptance = await exports.default.fetch(`${origin}/api/auth/organisations`, {
+      headers: { cookie: multiOrganisationSession.accessCookie },
+    });
+    expect(membershipsAfterAcceptance.status).toBe(200);
+    const membershipsBody = await membershipsAfterAcceptance.json<{
+      organisations: Array<{ id: string }>;
+    }>();
+    expect(membershipsBody.organisations.map((organisation) => organisation.id)).toEqual(
+      expect.arrayContaining([primaryOrganisationId, secondOrganisationId]),
+    );
+  });
+
+  it("creates projects and enforces tenant isolation", async () => {
+    const cookie = await login();
+    const clientOperationId = crypto.randomUUID();
+    const projectBody = JSON.stringify({
+      clientOperationId,
+      name: "Test apartment",
+      captureAdapter: "open-import",
+      deliveryTemplate: "property-tour",
+    });
+    const createResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json",
+      },
+      body: projectBody,
+    });
+    expect(createResponse.status).toBe(201);
+    const created = await createResponse.json<{ project: { id: string } }>();
+    const repeatedCreateResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json",
+      },
+      body: projectBody,
+    });
+    expect(repeatedCreateResponse.status).toBe(200);
+    await expect(repeatedCreateResponse.json()).resolves.toMatchObject({
+      project: { id: created.project.id },
+      idempotent: true,
+    });
+
+    const otherOrganisationId = crypto.randomUUID();
+    const otherUserId = crypto.randomUUID();
+    const otherSessionId = crypto.randomUUID();
+    const otherRefreshHash = await sha256Hex("other-refresh:test-refresh-pepper");
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    const now = new Date().toISOString();
+
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, ?, ?, ?)",
+      ).bind(otherOrganisationId, "Other organisation", "other-org", now),
+      env.DB.prepare(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, ?, ?)",
+      ).bind(otherUserId, "other@example.com", "Other", now),
+      env.DB.prepare(
+        "INSERT INTO memberships (organisation_id, user_id, role, created_at) VALUES (?, ?, 'customer_readonly', ?)",
+      ).bind(otherOrganisationId, otherUserId, now),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(
+        otherSessionId,
+        otherUserId,
+        otherOrganisationId,
+        otherRefreshHash,
+        expiresAt,
+        now,
+      ),
+    ]);
+    const otherAuth = {
+      userId: otherUserId,
+      organisationId: otherOrganisationId,
+      email: "other@example.com",
+      displayName: "Other",
+      role: "customer_readonly" as const,
+    };
+    const otherTokens = await issueAuthTokens(env, otherAuth, otherSessionId, "other-refresh");
+
+    const isolatedResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}`,
+      {
+        headers: { cookie: `spatial_access=${otherTokens.accessToken}` },
+      },
+    );
+
+    expect(isolatedResponse.status).toBe(404);
+  });
+
+  it("runs a platform-admin manual invoice lifecycle without granting unpaid entitlement", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Manual billing ${crypto.randomUUID().slice(0, 8)}`,
+        customerName: "Spatial Merchant",
+        customerEmail: "accounts@example.com",
+        captureAdapter: "open-import",
+        deliveryTemplate: "Venue navigator",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const project = await projectResponse.json<{ project: { id: string } }>();
+    const periodStart = new Date().toISOString();
+    const periodEnd = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    const dueAt = new Date(Date.now() + 7 * 86_400_000).toISOString();
+    const clientOperationId = crypto.randomUUID();
+    const issueBody = {
+      clientOperationId,
+      projectId: project.project.id,
+      planCode: "venue",
+      amountCents: 49_900,
+      currency: "MYR",
+      periodStart,
+      periodEnd,
+      dueAt,
+      archiveOnExpiry: true,
+      externalReference: "INV-TEST-001",
+      note: "Bank transfer due within seven days.",
+    };
+    const operatorUserId = crypto.randomUUID();
+    const operatorSessionId = crypto.randomUUID();
+    const operatorEmail = `billing-operator-${operatorUserId.slice(0, 8)}@example.com`;
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO users (id, email, display_name)
+        VALUES (?, ?, 'Billing operator')
+      `).bind(operatorUserId, operatorEmail),
+      env.DB.prepare(`
+        INSERT INTO memberships
+          (organisation_id, user_id, role, status, updated_at)
+        VALUES ('00000000-0000-4000-8000-000000000001', ?,
+          'production_operator', 'active', datetime('now'))
+      `).bind(operatorUserId),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at)
+        VALUES (?, ?, '00000000-0000-4000-8000-000000000001', ?,
+          datetime('now', '+1 day'))
+      `).bind(
+        operatorSessionId,
+        operatorUserId,
+        crypto.randomUUID().replaceAll("-", "").padEnd(64, "0"),
+      ),
+    ]);
+    const operatorTokens = await issueAuthTokens(env, {
+      userId: operatorUserId,
+      organisationId: "00000000-0000-4000-8000-000000000001",
+      email: operatorEmail,
+      displayName: "Billing operator",
+      role: "production_operator",
+    }, operatorSessionId);
+    const forbiddenIssue = await exports.default.fetch(`${origin}/api/admin/billing/invoices`, {
+      method: "POST",
+      headers: {
+        cookie: `spatial_access=${operatorTokens.accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(issueBody),
+    });
+    expect(forbiddenIssue.status).toBe(403);
+
+    const issue = await exports.default.fetch(`${origin}/api/admin/billing/invoices`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(issueBody),
+    });
+    expect(issue.status).toBe(201);
+    const issued = await issue.json<{
+      idempotent: boolean;
+      invoice: { id: string; status: string; billing_method: string };
+      subscription: { id: string; status: string; payment_provider: string };
+    }>();
+    expect(issued).toMatchObject({
+      idempotent: false,
+      invoice: { status: "open", billing_method: "manual" },
+      subscription: { status: "past_due", payment_provider: "manual" },
+    });
+
+    const replay = await exports.default.fetch(`${origin}/api/admin/billing/invoices`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(issueBody),
+    });
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({
+      idempotent: true,
+      invoice: { id: issued.invoice.id, status: "open" },
+      subscription: { id: issued.subscription.id, status: "past_due" },
+    });
+
+    const missingReference = await exports.default.fetch(
+      `${origin}/api/admin/billing/invoices/${issued.invoice.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          status: "paid",
+        }),
+      },
+    );
+    expect(missingReference.status).toBe(400);
+
+    const paidOperationId = crypto.randomUUID();
+    const paidBody = {
+      clientOperationId: paidOperationId,
+      status: "paid",
+      paymentReference: "MBB-20260728-123456",
+      note: "Verified against the merchant bank statement.",
+    };
+    const paid = await exports.default.fetch(
+      `${origin}/api/admin/billing/invoices/${issued.invoice.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(paidBody),
+      },
+    );
+    expect(paid.status).toBe(200);
+    await expect(paid.json()).resolves.toMatchObject({
+      idempotent: false,
+      invoice: {
+        id: issued.invoice.id,
+        status: "paid",
+        payment_reference: paidBody.paymentReference,
+      },
+      subscription: { id: issued.subscription.id, status: "active" },
+    });
+
+    const paidReplay = await exports.default.fetch(
+      `${origin}/api/admin/billing/invoices/${issued.invoice.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(paidBody),
+      },
+    );
+    expect(paidReplay.status).toBe(200);
+    await expect(paidReplay.json()).resolves.toMatchObject({ idempotent: true });
+
+    const voidPaid = await exports.default.fetch(
+      `${origin}/api/admin/billing/invoices/${issued.invoice.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          status: "void",
+          note: "Should be rejected because collection was already recorded.",
+        }),
+      },
+    );
+    expect(voidPaid.status).toBe(409);
+
+    const cancel = await exports.default.fetch(
+      `${origin}/api/admin/billing/subscriptions/${issued.subscription.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          status: "cancelled",
+          note: "Customer requested termination after the current paid period.",
+        }),
+      },
+    );
+    expect(cancel.status).toBe(200);
+    await expect(cancel.json()).resolves.toMatchObject({
+      subscription: { id: issued.subscription.id, status: "cancelled" },
+    });
+
+    const workspaceResponse = await exports.default.fetch(`${origin}/api/hosting`, {
+      headers: { cookie },
+    });
+    expect(workspaceResponse.status).toBe(200);
+    const workspace = await workspaceResponse.json<{
+      manualBillingEnabled: boolean;
+      invoices: Array<{ id: string; status: string; billing_method: string }>;
+    }>();
+    expect(workspace.manualBillingEnabled).toBe(true);
+    expect(workspace.invoices).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: issued.invoice.id,
+        status: "paid",
+        billing_method: "manual",
+      }),
+    ]));
+
+    const operationCount = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM billing_manual_operations
+      WHERE invoice_id = ? OR subscription_id = ?
+    `).bind(issued.invoice.id, issued.subscription.id).first<{ count: number }>();
+    expect(operationCount?.count).toBe(3);
+  });
+
+  it("manages project metadata and preserves lifecycle state across archive and restore", async () => {
+    const cookie = await login();
+    const createResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Heritage gallery",
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+    const created = await createResponse.json<{ project: { id: string } }>();
+
+    const updateResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Heritage gallery archive",
+          customerName: "City Museum",
+          captureAdapter: "fjd-trion",
+          deliveryTemplate: "Venue navigator",
+          notes: "Keep metric masters and a public web derivative.",
+        }),
+      },
+    );
+    expect(updateResponse.status).toBe(200);
+    await expect(updateResponse.json()).resolves.toMatchObject({
+      project: {
+        id: created.project.id,
+        name: "Heritage gallery archive",
+        customerName: "City Museum",
+        captureAdapter: "fjd-trion",
+        deliveryTemplate: "Venue navigator",
+        notes: "Keep metric masters and a public web derivative.",
+        status: "DRAFT",
+      },
+    });
+
+    const archiveResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}/archive`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(archiveResponse.status).toBe(200);
+    await expect(archiveResponse.json()).resolves.toMatchObject({
+      project: { id: created.project.id, status: "ARCHIVED" },
+    });
+
+    const restoreResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}/restore`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(restoreResponse.status).toBe(200);
+    await expect(restoreResponse.json()).resolves.toMatchObject({
+      project: { id: created.project.id, status: "DRAFT" },
+    });
+
+    const sharedCustomerResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Museum west wing",
+        customerName: "City Museum",
+        captureAdapter: "fjd-trion",
+        deliveryTemplate: "Venue navigator",
+      }),
+    });
+    expect(sharedCustomerResponse.status).toBe(201);
+  });
+
+  it("applies idempotent tenant-scoped bulk project lifecycle changes with per-project outcomes", async () => {
+    const cookie = await login();
+    const createProject = async (name: string) => {
+      const response = await exports.default.fetch(`${origin}/api/projects`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          name,
+          captureAdapter: "open-import",
+          deliveryTemplate: "Property showcase",
+        }),
+      });
+      expect(response.status).toBe(201);
+      return (await response.json<{ project: { id: string } }>()).project;
+    };
+    const first = await createProject("Bulk lifecycle first");
+    const second = await createProject("Bulk lifecycle second");
+
+    const alreadyArchived = await exports.default.fetch(
+      `${origin}/api/projects/${first.id}/archive`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(alreadyArchived.status).toBe(200);
+
+    const operationId = crypto.randomUUID();
+    const requestBody = {
+      clientOperationId: operationId,
+      action: "archive",
+      projectIds: [second.id, first.id, second.id],
+    };
+    const response = await exports.default.fetch(`${origin}/api/projects/bulk-lifecycle`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json<{
+      operationId: string;
+      clientOperationId: string;
+      action: string;
+      requestedCount: number;
+      summary: { changed: number; unchanged: number; blocked: number; notFound: number };
+      results: Array<{ projectId: string; outcome: string; status?: string }>;
+    }>();
+    expect(result).toMatchObject({
+      clientOperationId: operationId,
+      action: "archive",
+      requestedCount: 2,
+      summary: { changed: 1, unchanged: 1, blocked: 0, notFound: 0 },
+    });
+    expect(result.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({ projectId: first.id, outcome: "unchanged", status: "ARCHIVED" }),
+      expect.objectContaining({ projectId: second.id, outcome: "changed", status: "ARCHIVED" }),
+    ]));
+
+    const repeated = await exports.default.fetch(`${origin}/api/projects/bulk-lifecycle`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    expect(repeated.status).toBe(200);
+    await expect(repeated.json()).resolves.toMatchObject({
+      clientOperationId: operationId,
+      idempotent: true,
+      summary: { changed: 1, unchanged: 1 },
+    });
+
+    const conflicting = await exports.default.fetch(`${origin}/api/projects/bulk-lifecycle`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: operationId,
+        action: "restore",
+        projectIds: [first.id, second.id],
+      }),
+    });
+    expect(conflicting.status).toBe(409);
+
+    const missingId = crypto.randomUUID();
+    const restore = await exports.default.fetch(`${origin}/api/projects/bulk-lifecycle`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        action: "restore",
+        projectIds: [first.id, second.id, missingId],
+      }),
+    });
+    expect(restore.status).toBe(200);
+    await expect(restore.json()).resolves.toMatchObject({
+      requestedCount: 3,
+      summary: { changed: 2, unchanged: 0, blocked: 0, notFound: 1 },
+      results: expect.arrayContaining([
+        expect.objectContaining({ projectId: missingId, outcome: "not_found" }),
+      ]),
+    });
+
+    const projectRows = await env.DB.prepare(
+      "SELECT id, status FROM projects WHERE id IN (?, ?) ORDER BY id",
+    ).bind(first.id, second.id).all<{ id: string; status: string }>();
+    expect(projectRows.results).toHaveLength(2);
+    expect(projectRows.results.every((project) => project.status === "DRAFT")).toBe(true);
+
+    const operationRows = await env.DB.prepare(
+      "SELECT status, request_hash, response_json FROM project_bulk_operations WHERE client_operation_id = ?",
+    ).bind(operationId).all<{ status: string; request_hash: string; response_json: string }>();
+    expect(operationRows.results).toHaveLength(1);
+    expect(operationRows.results[0]).toMatchObject({ status: "completed" });
+    expect(operationRows.results[0]!.request_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.parse(operationRows.results[0]!.response_json)).toMatchObject({
+      action: "archive",
+      requestedCount: 2,
+    });
+  });
+
+  it("manages templates and saved views and performs a previewed idempotent portfolio round trip", async () => {
+    const cookie = await login();
+    const templateOperationId = crypto.randomUUID();
+    const templateBody = {
+      clientOperationId: templateOperationId,
+      name: "Premium venue",
+      description: "Reusable venue defaults",
+      captureAdapter: "fjd-trion",
+      deliveryTemplate: "Venue navigator",
+      notes: "Capture public routes before staff-only areas.",
+    };
+    const templateResponse = await exports.default.fetch(`${origin}/api/project-templates`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(templateBody),
+    });
+    expect(templateResponse.status).toBe(201);
+    const template = await templateResponse.json<{ template: { id: string } }>();
+    const templateReplay = await exports.default.fetch(`${origin}/api/project-templates`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(templateBody),
+    });
+    expect(templateReplay.status).toBe(200);
+    await expect(templateReplay.json()).resolves.toMatchObject({
+      template: { id: template.template.id, name: "Premium venue" },
+      idempotent: true,
+    });
+
+    const viewResponse = await exports.default.fetch(`${origin}/api/project-views`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: "Venue queue",
+        isDefault: true,
+        filter: {
+          query: "museum",
+          statuses: ["QA_REQUIRED", "PROCESSING", "PROCESSING"],
+          captureAdapters: ["fjd-trion"],
+          deliveryTemplates: ["Venue navigator"],
+          sort: "name_asc",
+        },
+      }),
+    });
+    expect(viewResponse.status).toBe(201);
+    const view = await viewResponse.json<{ view: { id: string } }>();
+    const views = await exports.default.fetch(`${origin}/api/project-views`, {
+      headers: { cookie },
+    });
+    expect(views.status).toBe(200);
+    await expect(views.json()).resolves.toMatchObject({
+      views: [{
+        id: view.view.id,
+        name: "Venue queue",
+        isDefault: true,
+        filter: {
+          query: "museum",
+          statuses: ["PROCESSING", "QA_REQUIRED"],
+          captureAdapters: ["fjd-trion"],
+          deliveryTemplates: ["Venue navigator"],
+          sort: "name_asc",
+        },
+      }],
+    });
+
+    const sourceProjectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Portable museum wing",
+        customerName: "Museum Trust",
+        customerEmail: "ops@museum.example",
+        captureAdapter: "fjd-trion",
+        deliveryTemplate: "Venue navigator",
+        notes: "Preserve the public route.",
+      }),
+    });
+    expect(sourceProjectResponse.status).toBe(201);
+    const sourceProject = await sourceProjectResponse.json<{ project: { id: string } }>();
+    const exportResponse = await exports.default.fetch(`${origin}/api/projects/export`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ projectIds: [sourceProject.project.id] }),
+    });
+    expect(exportResponse.status).toBe(200);
+    expect(exportResponse.headers.get("content-type")).toContain("application/json");
+    expect(exportResponse.headers.get("content-disposition")).toContain("attachment");
+    const exported = await exportResponse.json<{
+      format: string;
+      schemaVersion: number;
+      fieldDefinitions: Array<Record<string, unknown>>;
+      projects: Array<Record<string, unknown>>;
+    }>();
+    expect(exported).toMatchObject({
+      format: "whymelabs.spatial.portfolio",
+      schemaVersion: 2,
+      fieldDefinitions: [],
+      projects: [{
+        sourceId: sourceProject.project.id,
+        name: "Portable museum wing",
+        customerName: "Museum Trust",
+        customerEmail: "ops@museum.example",
+        captureAdapter: "fjd-trion",
+        deliveryTemplate: "Venue navigator",
+        customFields: {},
+      }],
+    });
+    expect(exported.projects[0]).not.toHaveProperty("status");
+    expect(exported.projects[0]).not.toHaveProperty("slug");
+
+    const previewResponse = await exports.default.fetch(`${origin}/api/projects/import/preview`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(exported),
+    });
+    expect(previewResponse.status).toBe(200);
+    await expect(previewResponse.json()).resolves.toMatchObject({
+      valid: true,
+      schemaVersion: 2,
+      summary: { projects: 1, customers: 1 },
+      projects: [{ name: "Portable museum wing", targetStatus: "DRAFT" }],
+    });
+
+    const clientOperationId = crypto.randomUUID();
+    const importBody = { clientOperationId, manifest: exported };
+    const importResponse = await exports.default.fetch(`${origin}/api/projects/import`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(importBody),
+    });
+    expect(importResponse.status).toBe(201);
+    const imported = await importResponse.json<{
+      importId: string;
+      createdCount: number;
+      projects: Array<{ id: string; sourceId: string; name: string; status: string }>;
+    }>();
+    expect(imported).toMatchObject({
+      createdCount: 1,
+      projects: [{
+        sourceId: sourceProject.project.id,
+        name: "Portable museum wing",
+        status: "DRAFT",
+      }],
+    });
+    expect(imported.projects[0].id).not.toBe(sourceProject.project.id);
+
+    const importReplay = await exports.default.fetch(`${origin}/api/projects/import`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify(importBody),
+    });
+    expect(importReplay.status).toBe(200);
+    await expect(importReplay.json()).resolves.toMatchObject({
+      importId: imported.importId,
+      createdCount: 1,
+      idempotent: true,
+    });
+
+    const conflictResponse = await exports.default.fetch(`${origin}/api/projects/import`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId,
+        manifest: {
+          ...exported,
+          projects: [{ ...exported.projects[0], name: "Conflicting replay" }],
+        },
+      }),
+    });
+    expect(conflictResponse.status).toBe(409);
+
+    const deleteView = await exports.default.fetch(`${origin}/api/project-views/${view.view.id}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(deleteView.status).toBe(204);
+    const deleteTemplate = await exports.default.fetch(
+      `${origin}/api/project-templates/${template.template.id}`,
+      { method: "DELETE", headers: { cookie } },
+    );
+    expect(deleteTemplate.status).toBe(204);
+  });
+
+  it("scopes an invited reviewer to one immutable project review journey", async () => {
+    const operatorCookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie: operatorCookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Client approval suite",
+        captureAdapter: "open-import",
+        deliveryTemplate: "venue-navigator",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const versionId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO scene_versions
+        (id, project_id, version_number, status, source_provenance_json, created_by)
+      VALUES (?, ?, 1, 'QA_REQUIRED', '{}', ?)
+    `).bind(versionId, project.id, "00000000-0000-4000-8000-000000000002").run();
+
+    const reviewerEmail = "reviewer@example.com";
+    const invitationResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/reviewers`,
+      {
+        method: "POST",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          email: reviewerEmail,
+          role: "customer_reviewer",
+          expiresInDays: 7,
+        }),
+      },
+    );
+    expect(invitationResponse.status).toBe(201);
+    const invitation = await invitationResponse.json<{
+      invitation: { id: string; userId: string; status: string };
+    }>();
+    expect(invitation.invitation.status).toBe("pending");
+
+    const reviewerCookie = (await loginSession(reviewerEmail)).accessCookie;
+    const inboxResponse = await exports.default.fetch(`${origin}/api/review/inbox`, {
+      headers: { cookie: reviewerCookie },
+    });
+    expect(inboxResponse.status).toBe(200);
+    await expect(inboxResponse.json()).resolves.toMatchObject({
+      projects: [{ id: project.id, role: "customer_reviewer" }],
+    });
+
+    const commentResponse = await exports.default.fetch(
+      `${origin}/api/review/projects/${project.id}/versions/${versionId}/comments`,
+      {
+        method: "POST",
+        headers: { cookie: reviewerCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          kind: "redaction",
+          body: "Blur the family photo beside the doorway.",
+          cameraPose: {
+            position: [1.2, 1.6, -2.4],
+            target: [0.1, 1.1, 0.3],
+            up: [0, 1, 0],
+            fovDegrees: 58,
+          },
+          anchor: { point: [0.4, 1.3, -0.2], radius: 0.2 },
+        }),
+      },
+    );
+    expect(commentResponse.status).toBe(201);
+    const comment = await commentResponse.json<{ comment: { id: string } }>();
+
+    const decisionResponse = await exports.default.fetch(
+      `${origin}/api/review/projects/${project.id}/versions/${versionId}/decisions`,
+      {
+        method: "POST",
+        headers: { cookie: reviewerCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "changes_requested",
+          note: "Approve after the redaction request is resolved.",
+        }),
+      },
+    );
+    expect(decisionResponse.status).toBe(201);
+
+    const reviewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/reviews`,
+      { headers: { cookie: operatorCookie } },
+    );
+    expect(reviewResponse.status).toBe(200);
+    await expect(reviewResponse.json()).resolves.toMatchObject({
+      comments: [{
+        id: comment.comment.id,
+        version_id: versionId,
+        kind: "redaction",
+        status: "open",
+      }],
+      decisions: [{
+        version_id: versionId,
+        decision: "changes_requested",
+      }],
+      reviewers: [{
+        user_id: invitation.invitation.userId,
+        invitation_status: "accepted",
+      }],
+    });
+
+    const secondVersionId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO scene_versions
+        (id, project_id, version_number, status, source_provenance_json, created_by)
+      VALUES (?, ?, 2, 'QA_REQUIRED', '{"revision":"client changes"}', ?)
+    `).bind(secondVersionId, project.id, "00000000-0000-4000-8000-000000000002").run();
+    const projectScope = await env.DB.prepare(
+      "SELECT organisation_id FROM projects WHERE id = ?",
+    ).bind(project.id).first<{ organisation_id: string }>();
+    const leftAssetId = crypto.randomUUID();
+    const rightAssetId = crypto.randomUUID();
+    const leftObjectKey = `delivery-private/${projectScope!.organisation_id}/${project.id}/${versionId}/left.rad`;
+    const rightObjectKey = `delivery-private/${projectScope!.organisation_id}/${project.id}/${secondVersionId}/right.rad`;
+    const leftBytes = new Uint8Array([1, 2, 3, 4, 5, 6]);
+    const rightBytes = new Uint8Array([7, 8, 9, 10, 11, 12]);
+    await Promise.all([
+      env.SPATIAL_ASSETS.put(leftObjectKey, leftBytes),
+      env.SPATIAL_ASSETS.put(rightObjectKey, rightBytes),
+    ]);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'left.rad', 'application/octet-stream', ?, 'verified')
+      `).bind(leftAssetId, projectScope!.organisation_id, project.id, versionId, leftObjectKey, leftBytes.byteLength),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'right.rad', 'application/octet-stream', ?, 'verified')
+      `).bind(rightAssetId, projectScope!.organisation_id, project.id, secondVersionId, rightObjectKey, rightBytes.byteLength),
+      env.DB.prepare("UPDATE scene_versions SET manifest_json = ? WHERE id = ?")
+        .bind(JSON.stringify({ webAssetId: leftAssetId }), versionId),
+      env.DB.prepare("UPDATE scene_versions SET manifest_json = ? WHERE id = ?")
+        .bind(JSON.stringify({ webAssetId: rightAssetId }), secondVersionId),
+    ]);
+    const comparisonResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/versions/compare?left=${versionId}&right=${secondVersionId}`,
+      { headers: { cookie: reviewerCookie } },
+    );
+    expect(comparisonResponse.status).toBe(200);
+    const comparison = await comparisonResponse.json<{
+      versions: Array<{ id: string; version_number: number }>;
+      renderables: Array<{
+        versionId: string;
+        assetId: string;
+        format: string;
+        contentUrl: string;
+        sessionExpiresAt: string;
+      }>;
+    }>();
+    expect(comparison).toMatchObject({
+      versions: [
+        { id: versionId, version_number: 1 },
+        { id: secondVersionId, version_number: 2 },
+      ],
+      renderables: [
+        { versionId, assetId: leftAssetId, format: "rad" },
+        { versionId: secondVersionId, assetId: rightAssetId, format: "rad" },
+      ],
+      reviewDecisionHistory: [{
+        version_id: versionId,
+        decision: "changes_requested",
+        note: "Approve after the redaction request is resolved.",
+      }],
+    });
+    const leftRenderable = comparison.renderables[0]!;
+    expect(leftRenderable.contentUrl).toContain(`/comparison-asset/${project.id}/${versionId}/${leftAssetId}/left.rad?token=`);
+    expect(Date.parse(leftRenderable.sessionExpiresAt)).toBeGreaterThan(Date.now());
+    const leftRange = await exports.default.fetch(new URL(leftRenderable.contentUrl, origin), {
+      headers: { range: "bytes=1-3" },
+    });
+    expect(leftRange.status).toBe(206);
+    expect(Array.from(new Uint8Array(await leftRange.arrayBuffer()))).toEqual([2, 3, 4]);
+
+    const substitutedAsset = new URL(leftRenderable.contentUrl, origin);
+    substitutedAsset.pathname = substitutedAsset.pathname.replace(leftAssetId, rightAssetId);
+    const substitutionResponse = await exports.default.fetch(substitutedAsset);
+    expect(substitutionResponse.status).toBe(401);
+
+    const themeResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/theme`,
+      {
+        method: "PUT",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          brandName: "Whyme Venue",
+          accentColor: "#b8ff46",
+          surfaceColor: "#121713",
+        }),
+      },
+    );
+    expect(themeResponse.status).toBe(200);
+
+    const hostingResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/hosting`,
+      {
+        method: "PUT",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          planCode: "venue",
+          renewsAutomatically: true,
+          archiveOnExpiry: true,
+        }),
+      },
+    );
+    expect(hostingResponse.status).toBe(503);
+    await expect(hostingResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("payment provider"),
+      retryable: false,
+    });
+    const retentionResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/retention`,
+      {
+        method: "PUT",
+        headers: { cookie: operatorCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          rawRetentionDays: 90,
+          derivativeRetentionDays: 730,
+          releaseRetentionDays: 1095,
+          legalHold: false,
+        }),
+      },
+    );
+    expect(retentionResponse.status).toBe(200);
+    const hostingWorkspaceResponse = await exports.default.fetch(`${origin}/api/hosting`, {
+      headers: { cookie: operatorCookie },
+    });
+    expect(hostingWorkspaceResponse.status).toBe(200);
+    const hostingWorkspace = await hostingWorkspaceResponse.json<{
+      paymentProviderConfigured: boolean;
+      plans: Array<{ code: string }>;
+      subscriptions: Array<{ project_id: string }>;
+      invoices: Array<{ project_id: string }>;
+      checkouts: Array<{ project_id: string }>;
+    }>();
+    expect(hostingWorkspace.paymentProviderConfigured).toBe(false);
+    expect(hostingWorkspace.plans).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "venue" })]),
+    );
+    expect(hostingWorkspace.subscriptions.find((item) => item.project_id === project.id))
+      .toBeUndefined();
+    expect(hostingWorkspace.invoices.find((item) => item.project_id === project.id))
+      .toBeUndefined();
+    expect(hostingWorkspace.checkouts.find((item) => item.project_id === project.id))
+      .toBeUndefined();
+
+    const revokeResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/reviewers/${invitation.invitation.userId}`,
+      { method: "DELETE", headers: { cookie: operatorCookie } },
+    );
+    expect(revokeResponse.status).toBe(204);
+
+    const revokedInbox = await exports.default.fetch(`${origin}/api/review/inbox`, {
+      headers: { cookie: reviewerCookie },
+    });
+    expect(revokedInbox.status).toBe(200);
+    await expect(revokedInbox.json()).resolves.toEqual({ projects: [] });
+  });
+
+  it("runs the immutable Spark RAD publish, range delivery, and revoke path end to end", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Publishable apartment",
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const sceneBytes = new TextEncoder().encode("test-spark-rad-scene");
+
+    const uploadResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "44444444-4444-4444-8444-444444444444",
+          fileName: "scene.rad",
+          sizeBytes: sceneBytes.byteLength,
+          format: "rad",
+          mimeType: "application/octet-stream",
+        }),
+      },
+    );
+    expect(uploadResponse.status).toBe(201);
+    const { upload } = await uploadResponse.json<{
+      upload: { id: string; versionId: string; assetId: string };
+    }>();
+    const repeatedUploadResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "44444444-4444-4444-8444-444444444444",
+          fileName: "scene.rad",
+          sizeBytes: sceneBytes.byteLength,
+          format: "rad",
+          mimeType: "application/octet-stream",
+        }),
+      },
+    );
+    expect(repeatedUploadResponse.status).toBe(200);
+    await expect(repeatedUploadResponse.json()).resolves.toMatchObject({
+      upload: { id: upload.id },
+      idempotent: true,
+    });
+
+    const partResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: {
+          cookie,
+          "content-length": String(sceneBytes.byteLength),
+        },
+        body: sceneBytes,
+      },
+    );
+    expect(partResponse.status).toBe(200);
+    const { part } = await partResponse.json<{ part: { etag: string } }>();
+
+    const recoveryResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads/open`,
+      { headers: { cookie } },
+    );
+    expect(recoveryResponse.status).toBe(200);
+    await expect(recoveryResponse.json()).resolves.toMatchObject({
+      uploads: [{
+        id: upload.id,
+        projectId: project.id,
+        versionId: upload.versionId,
+        fileName: "scene.rad",
+        format: "rad",
+        expectedSizeBytes: sceneBytes.byteLength,
+        uploadedBytes: sceneBytes.byteLength,
+        partSizeBytes: 10 * 1024 * 1024,
+        expired: false,
+        parts: [{ partNumber: 1, etag: part.etag, sizeBytes: sceneBytes.byteLength }],
+      }],
+    });
+
+    const completeResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: part.etag }],
+        }),
+      },
+    );
+    expect(completeResponse.status).toBe(200);
+    const completed = await completeResponse.json<{
+      job: { id: string };
+      asset: { id: string; versionId: string };
+    }>();
+    const completedRecoveryResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads/open`,
+      { headers: { cookie } },
+    );
+    await expect(completedRecoveryResponse.json()).resolves.toEqual({ uploads: [] });
+
+    const jobResponse = await exports.default.fetch(
+      `${origin}/api/jobs/${completed.job.id}/manual-complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          progressMessage: "Spark RAD validated",
+          report: { validation: "passed" },
+        }),
+      },
+    );
+    expect(jobResponse.status).toBe(200);
+    const repeatedJobResponse = await exports.default.fetch(
+      `${origin}/api/jobs/${completed.job.id}/manual-complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          progressMessage: "Spark RAD validated",
+          report: { validation: "passed" },
+        }),
+      },
+    );
+    expect(repeatedJobResponse.status).toBe(200);
+    await expect(repeatedJobResponse.json()).resolves.toMatchObject({ idempotent: true });
+
+    await recordCompletedPrivacyScan(project.id, completed.asset.versionId, completed.asset.id);
+    const approvalRequest = {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        webAssetId: completed.asset.id,
+        visualGrade: "A",
+        privacyStatus: "approved",
+        measurementGrade: "visual-only",
+        notes: "Test approval",
+      }),
+    };
+    const approvalResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(approvalResponse.status).toBe(200);
+    const repeatedApprovalResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(repeatedApprovalResponse.status).toBe(200);
+    await expect(repeatedApprovalResponse.json()).resolves.toMatchObject({ idempotent: true });
+
+    const releaseResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "55555555-5555-4555-8555-555555555555",
+          slug: "publishable-apartment",
+          accessPolicy: "public",
+          viewerConfig: {
+            title: "Publishable apartment",
+            measurementDisclaimer: "Visual experience only.",
+            splatBudgetMillions: 1,
+            initialCamera: {
+              position: [3.14, 0.18, -3.56],
+              target: [3.08, -0.31, -2.69],
+              up: [-0.01, -0.87, -0.49],
+              fovDegrees: 58,
+            },
+          },
+        }),
+      },
+    );
+    expect(releaseResponse.status).toBe(201);
+    const release = await releaseResponse.clone().json<{ release: { id: string } }>();
+    const repeatedReleaseResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "55555555-5555-4555-8555-555555555555",
+          slug: "publishable-apartment",
+          accessPolicy: "public",
+          viewerConfig: {
+            title: "Publishable apartment",
+            measurementDisclaimer: "Visual experience only.",
+            splatBudgetMillions: 1,
+            initialCamera: {
+              position: [3.14, 0.18, -3.56],
+              target: [3.08, -0.31, -2.69],
+              up: [-0.01, -0.87, -0.49],
+              fovDegrees: 58,
+            },
+          },
+        }),
+      },
+    );
+    expect(repeatedReleaseResponse.status).toBe(200);
+    await expect(repeatedReleaseResponse.json()).resolves.toMatchObject({
+      release: { id: release.release.id },
+      idempotent: true,
+    });
+
+    const releasesResponse = await exports.default.fetch(`${origin}/api/releases`, {
+      headers: { cookie },
+    });
+    expect(releasesResponse.status).toBe(200);
+    await expect(releasesResponse.json()).resolves.toMatchObject({
+      releases: [{
+        id: release.release.id,
+        project_id: project.id,
+        project_name: "Publishable apartment",
+        slug: "publishable-apartment",
+        is_active: 1,
+      }],
+    });
+
+    const manifestResponse = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(manifestResponse.status).toBe(200);
+    const manifest = await manifestResponse.json<{
+      scene: { contentUrl: string };
+      viewer: {
+        initialCamera: {
+          position: [number, number, number];
+          target: [number, number, number];
+          up: [number, number, number];
+          fovDegrees: number;
+        };
+      };
+    }>();
+    expect(manifest.scene.contentUrl).toContain("/scene.rad?token=");
+    expect(manifest.viewer.initialCamera.up).toEqual([-0.01, -0.87, -0.49]);
+
+    const customHostname = `published-${crypto.randomUUID().slice(0, 8)}.customer.test`;
+    const customDomainId = crypto.randomUUID();
+    const owningProject = await env.DB.prepare(`
+      SELECT organisation_id, created_by FROM projects WHERE id = ?
+    `).bind(project.id).first<{ organisation_id: string; created_by: string }>();
+    expect(owningProject).toBeTruthy();
+    await env.DB.prepare(`
+      INSERT INTO custom_domains (
+        id, organisation_id, project_id, hostname, status, verification_token_hash,
+        created_by, verified_at, dns_verified_at, provider, provider_hostname_id,
+        provider_status, provider_ssl_status, provisioned_at
+      ) VALUES (?, ?, ?, ?, 'active', ?, ?, datetime('now'), datetime('now'),
+        'cloudflare-for-saas', ?, 'active', 'active', datetime('now'))
+    `).bind(
+      customDomainId,
+      owningProject!.organisation_id,
+      project.id,
+      customHostname,
+      "a".repeat(64),
+      owningProject!.created_by,
+      `provider-${customDomainId}`,
+    ).run();
+
+    const customDomainRoot = await exports.default.fetch(
+      `https://${customHostname}/`,
+      { redirect: "manual" },
+    );
+    expect(customDomainRoot.status).toBe(302);
+    expect(customDomainRoot.headers.get("location")).toBe("/s/publishable-apartment");
+
+    const customDomainManifest = await exports.default.fetch(
+      `https://${customHostname}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(customDomainManifest.status).toBe(200);
+
+    await env.DB.prepare(`
+      UPDATE custom_domains SET provider_ssl_status = 'pending' WHERE id = ?
+    `).bind(customDomainId).run();
+    const pendingCustomDomain = await exports.default.fetch(
+      `https://${customHostname}/`,
+    );
+    expect(pendingCustomDomain.status).toBe(503);
+    const pendingCustomManifest = await exports.default.fetch(
+      `https://${customHostname}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(pendingCustomManifest.status).toBe(404);
+
+    const assetResponse = await exports.default.fetch(
+      new URL(manifest.scene.contentUrl, origin),
+    );
+    expect(assetResponse.status).toBe(200);
+    expect(
+      new TextDecoder().decode(await assetResponse.arrayBuffer()),
+    ).toBe("test-spark-rad-scene");
+
+    const rangeResponse = await exports.default.fetch(
+      new URL(manifest.scene.contentUrl, origin),
+      { headers: { range: "bytes=5-13" } },
+    );
+    expect(rangeResponse.status).toBe(206);
+    expect(rangeResponse.headers.get("accept-ranges")).toBe("bytes");
+    expect(rangeResponse.headers.get("content-range")).toBe(
+      `bytes 5-13/${sceneBytes.byteLength}`,
+    );
+    expect(new TextDecoder().decode(await rangeResponse.arrayBuffer())).toBe(
+      "spark-rad",
+    );
+
+    const blockedArchive = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/archive`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(blockedArchive.status).toBe(409);
+    await expect(blockedArchive.json()).resolves.toMatchObject({
+      error: "Revoke the active release before archiving this project",
+    });
+
+    const revokeResponse = await exports.default.fetch(
+      `${origin}/api/release-channels/publishable-apartment`,
+      { method: "DELETE", headers: { cookie } },
+    );
+    expect(revokeResponse.status).toBe(204);
+    const revokedManifest = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(revokedManifest.status).toBe(404);
+
+    const archiveResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/archive`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(archiveResponse.status).toBe(200);
+    await expect(archiveResponse.json()).resolves.toMatchObject({
+      project: { status: "ARCHIVED" },
+    });
+    const restoreResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/restore`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(restoreResponse.status).toBe(200);
+    await expect(restoreResponse.json()).resolves.toMatchObject({
+      project: { status: "REVOKED" },
+    });
+  });
+
+  it("lets a leased processor download its source, upload a derivative, and persist execution evidence", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Worker transfer contract",
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const sourceBytes = new TextEncoder().encode("ply\nformat ascii 1.0\nend_header\n");
+
+    const uploadResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          fileName: "worker-source.ply",
+          sizeBytes: sourceBytes.byteLength,
+          format: "ply",
+          mimeType: "application/octet-stream",
+        }),
+      },
+    );
+    expect(uploadResponse.status).toBe(201);
+    const { upload } = await uploadResponse.json<{ upload: { id: string } }>();
+    const partResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-length": String(sourceBytes.byteLength) },
+        body: sourceBytes,
+      },
+    );
+    const { part } = await partResponse.json<{ part: { etag: string } }>();
+    const completionResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ partNumber: 1, etag: part.etag }] }),
+      },
+    );
+    expect(completionResponse.status).toBe(200);
+    const completedUpload = await completionResponse.clone().json<{
+      job: { id: string };
+    }>();
+
+    const unrelatedLeaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: "test-spark-worker",
+        jobId: crypto.randomUUID(),
+      }),
+    });
+    expect(unrelatedLeaseResponse.status).toBe(204);
+
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: "test-spark-worker",
+        jobId: completedUpload.job.id,
+      }),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const leased = await leaseResponse.json<{
+      job: {
+        id: string;
+        projectId: string;
+        versionId: string;
+        input: {
+          id: string;
+          fileName: string;
+          format: string;
+          sizeBytes: number;
+          downloadUrl: string;
+        };
+      };
+      leaseToken: string;
+    }>();
+    expect(leased.job.id).toBe(completedUpload.job.id);
+    expect(leased.job.projectId).toBe(project.id);
+    expect(leased.job.input).toMatchObject({
+      fileName: "worker-source.ply",
+      format: "ply",
+      sizeBytes: sourceBytes.byteLength,
+    });
+
+    const sourceResponse = await exports.default.fetch(
+      new URL(leased.job.input.downloadUrl, origin),
+      {
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+        },
+      },
+    );
+    expect(sourceResponse.status).toBe(200);
+    expect(new Uint8Array(await sourceResponse.arrayBuffer())).toEqual(sourceBytes);
+
+    const derivativeBytes = new TextEncoder().encode("spark-spz-derivative");
+    const createDerivativeResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/outputs`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "web",
+          fileName: "worker-scene.spz",
+          mimeType: "application/octet-stream",
+          sizeBytes: derivativeBytes.byteLength,
+        }),
+      },
+    );
+    expect(createDerivativeResponse.status).toBe(201);
+    const createdDerivative = await createDerivativeResponse.json<{
+      upload: { id: string };
+    }>();
+    const derivativePartResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/outputs/${createdDerivative.upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+          "content-length": String(derivativeBytes.byteLength),
+        },
+        body: derivativeBytes,
+      },
+    );
+    expect(derivativePartResponse.status).toBe(200);
+    const derivativePart = await derivativePartResponse.json<{ part: { etag: string } }>();
+    const derivativeResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/outputs/${createdDerivative.upload.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          parts: [{ partNumber: 1, etag: derivativePart.part.etag }],
+        }),
+      },
+    );
+    expect(derivativeResponse.status).toBe(200);
+    const derivative = await derivativeResponse.json<{
+      output: {
+        kind: string;
+        format: string;
+        objectKey: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+      };
+    }>();
+    expect(derivative.output).toMatchObject({
+      kind: "web",
+      format: "spz",
+      fileName: "worker-scene.spz",
+      sizeBytes: derivativeBytes.byteLength,
+    });
+
+    const completeResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: leased.leaseToken,
+          progressMessage: "Spark SPZ derivative generated",
+          outputs: [derivative.output],
+          report: { validation: "passed", renderer: "Spark 2.1.0" },
+          evidence: {
+            processorVersion: "spatial-processor/0.1.0",
+            computeDurationMs: 3210,
+            activeHumanDurationMs: 0,
+            inputBytes: sourceBytes.byteLength,
+            outputBytes: derivativeBytes.byteLength,
+            toolVersions: {
+              spark: "2.1.0",
+              processor: "0.1.0",
+            },
+          },
+        }),
+      },
+    );
+    expect(completeResponse.status).toBe(200);
+    await expect(completeResponse.json()).resolves.toMatchObject({
+      job: { id: leased.job.id, state: "SUCCEEDED" },
+      outputs: [{ kind: "web", format: "spz", sizeBytes: derivativeBytes.byteLength }],
+    });
+
+    const jobsResponse = await exports.default.fetch(`${origin}/api/jobs`, {
+      headers: { cookie },
+    });
+    const jobs = await jobsResponse.json<{
+      jobs: Array<{
+        id: string;
+        state: string;
+        compute_duration_ms: number;
+        active_human_duration_ms: number;
+        input_bytes: number;
+        output_bytes: number;
+        evidence_json: string;
+      }>;
+    }>();
+    expect(jobs.jobs.find((job) => job.id === leased.job.id)).toMatchObject({
+      state: "SUCCEEDED",
+      compute_duration_ms: 3210,
+      active_human_duration_ms: 0,
+      input_bytes: sourceBytes.byteLength,
+      output_bytes: derivativeBytes.byteLength,
+    });
+  });
+
+  it("surfaces and safely discards expired recoverable uploads", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Expired upload recovery",
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const uploadResponse = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        fileName: "expired.sog",
+        sizeBytes: 16,
+        format: "sog",
+        mimeType: "application/octet-stream",
+      }),
+    });
+    const { upload } = await uploadResponse.json<{ upload: { id: string } }>();
+    await env.DB.prepare(
+      "UPDATE upload_sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?",
+    ).bind(upload.id).run();
+
+    const inventory = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads/open`,
+      { headers: { cookie } },
+    );
+    await expect(inventory.json()).resolves.toMatchObject({
+      uploads: [{ id: upload.id, expired: true, uploadedBytes: 0, parts: [] }],
+    });
+
+    const otherOrganisationId = crypto.randomUUID();
+    const otherUserId = crypto.randomUUID();
+    const otherSessionId = crypto.randomUUID();
+    const otherRefreshSecret = "upload-isolation-refresh";
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, 'Upload isolation', ?, ?)",
+      ).bind(otherOrganisationId, `upload-isolation-${project.id.slice(0, 8)}`, now),
+      env.DB.prepare(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, 'Upload isolation', ?)",
+      ).bind(otherUserId, `upload-${project.id.slice(0, 8)}@example.com`, now),
+      env.DB.prepare(
+        "INSERT INTO memberships (organisation_id, user_id, role, created_at) VALUES (?, ?, 'production_operator', ?)",
+      ).bind(otherOrganisationId, otherUserId, now),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(
+        otherSessionId,
+        otherUserId,
+        otherOrganisationId,
+        await sha256Hex(`${otherRefreshSecret}:${env.REFRESH_TOKEN_PEPPER}`),
+        new Date(Date.now() + 60_000).toISOString(),
+        now,
+      ),
+    ]);
+    const otherTokens = await issueAuthTokens(env, {
+      userId: otherUserId,
+      organisationId: otherOrganisationId,
+      email: `upload-${project.id.slice(0, 8)}@example.com`,
+      displayName: "Upload isolation",
+      role: "production_operator",
+    }, otherSessionId, otherRefreshSecret);
+    const isolatedInventory = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads/open`,
+      { headers: { cookie: `spatial_access=${otherTokens.accessToken}` } },
+    );
+    expect(isolatedInventory.status).toBe(404);
+
+    const rejectedPart = await exports.default.fetch(`${origin}/api/uploads/${upload.id}/parts/1`, {
+      method: "PUT",
+      headers: { cookie, "content-length": "16" },
+      body: new Uint8Array(16),
+    });
+    expect(rejectedPart.status).toBe(410);
+    await expect(rejectedPart.json()).resolves.toMatchObject({
+      code: "upload_expired",
+    });
+
+    const discard = await exports.default.fetch(`${origin}/api/uploads/${upload.id}`, {
+      method: "DELETE",
+      headers: { cookie },
+    });
+    expect(discard.status).toBe(204);
+    const emptyInventory = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads/open`,
+      { headers: { cookie } },
+    );
+    await expect(emptyInventory.json()).resolves.toEqual({ uploads: [] });
+  });
+
+  it("gives operators explicit retry and cancel recovery controls", async () => {
+    const cookie = await login();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const member = await env.DB.prepare(`
+      SELECT m.organisation_id AS organisationId, m.user_id AS userId
+      FROM memberships m
+      ORDER BY m.created_at
+      LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const organisationId = member!.organisationId;
+    const userId = member!.userId;
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Recovery contract', ?, 'PROCESSING_FAILED', 'open-import', 'property-tour', ?)
+      `).bind(projectId, organisationId, `recovery-${projectId.slice(0, 8)}`, userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'PROCESSING_FAILED', ?)
+      `).bind(versionId, projectId, userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, integrity_status)
+        VALUES (?, ?, ?, ?, 'source', 'ply', ?, 'bad-scene.ply', 'application/octet-stream', 1, 'failed')
+      `).bind(assetId, organisationId, projectId, versionId, `raw-private/${organisationId}/${projectId}/${versionId}/bad-scene.ply`),
+      env.DB.prepare(`
+        INSERT INTO processing_jobs
+          (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state, error_json)
+        VALUES (?, ?, ?, ?, ?, 'asset.validate', 'spatial-processor/0.1.0', ?, 'FAILED', ?)
+      `).bind(jobId, organisationId, projectId, versionId, assetId, `recovery:${jobId}`, JSON.stringify({
+        code: "INVALID_PLY",
+        message: "PLY header is incomplete",
+        failureClass: "input_validation",
+      })),
+    ]);
+
+    const retryResponse = await exports.default.fetch(`${origin}/api/jobs/${jobId}/retry`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(retryResponse.status).toBe(200);
+    await expect(retryResponse.json()).resolves.toMatchObject({
+      job: { id: jobId, state: "QUEUED" },
+    });
+
+    const cancelResponse = await exports.default.fetch(`${origin}/api/jobs/${jobId}/cancel`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(cancelResponse.status).toBe(200);
+    await expect(cancelResponse.json()).resolves.toMatchObject({
+      job: { id: jobId, state: "CANCELLED" },
+    });
+  });
+
+  it("authors vendor-neutral scene semantics, routes, privacy, and adaptive delivery", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Authored venue', ?, 'QA_REQUIRED', 'open-import', 'venue-navigator', ?)
+      `).bind(projectId, member!.organisationId, `authored-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, member!.userId),
+    ]);
+
+    const entityResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        versionId,
+        kind: "room",
+        label: "Gallery one",
+        position: [1, 1.6, 2],
+        geometry: {
+          type: "box",
+          points: [[-2, 0, -3], [2, 2.8, 3]],
+        },
+        metadata: {
+          cameraPose: {
+            position: [1, 1.6, 4],
+            target: [1, 1.2, 2],
+            up: [0, 1, 0],
+            fovDegrees: 58,
+          },
+        },
+      }),
+    });
+    expect(entityResponse.status).toBe(201);
+    const entity = await entityResponse.json<{ entity: { id: string } }>();
+
+    const routeResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/routes`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        label: "First visit",
+        accessibility: "step_free",
+        stops: [{ entityId: entity.entity.id }],
+      }),
+    });
+    expect(routeResponse.status).toBe(201);
+
+    const policyResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/delivery-policy`, {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        adaptiveQuality: true,
+        mobileLiteBudget: 0.75,
+        mobileStandardBudget: 1.25,
+        desktopStandardBudget: 2,
+        desktopHighBudget: 4,
+        maxInitialBytes: 15728640,
+      }),
+    });
+    expect(policyResponse.status).toBe(200);
+
+    const regionResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/privacy-regions`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        label: "Personal photograph",
+        source: "operator",
+        geometry: { type: "polygon", points: [[0, 0, 0], [1, 0, 0], [1, 1, 0]] },
+      }),
+    });
+    expect(regionResponse.status).toBe(201);
+    const region = await regionResponse.json<{ privacyRegion: { id: string } }>();
+    const approveRegion = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/privacy-regions/${region.privacyRegion.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ status: "approved" }),
+      },
+    );
+    expect(approveRegion.status).toBe(200);
+
+    const workspace = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial`, {
+      headers: { cookie },
+    });
+    expect(workspace.status).toBe(200);
+    await expect(workspace.json()).resolves.toMatchObject({
+      version: { id: versionId, version_number: 1 },
+      entities: [{ id: entity.entity.id, kind: "room", label: "Gallery one" }],
+      routes: [{ label: "First visit", accessibility: "step_free" }],
+      privacyRegions: [{ label: "Personal photograph", status: "approved" }],
+      deliveryPolicy: { adaptive_quality: 1, mobile_lite_budget: 0.75 },
+      collisionProxy: {
+        version: "box-union-v1",
+        boxes: [{ entityId: entity.entity.id, label: "Gallery one", min: [-2, 0, -3], max: [2, 2.8, 3] }],
+      },
+      navigationMesh: {
+        version: "room-box-triangles-v1",
+        indices: [0, 1, 2, 0, 2, 3],
+        sourceEntityIds: [entity.entity.id],
+      },
+    });
+  });
+
+  it("produces idempotent reviewed metric and visual evidence from authored geometry", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const fromVersionId = crypto.randomUUID();
+    const toVersionId = crypto.randomUUID();
+    const operationId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Geometry evidence', ?, 'QA_REQUIRED', 'open-import', 'venue-navigator', ?)
+      `).bind(projectId, member!.organisationId, `geometry-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(fromVersionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 2, 'QA_REQUIRED', ?)
+      `).bind(toVersionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_entities
+          (id, organisation_id, project_id, version_id, kind, label, geometry_json, metadata_json, created_by)
+        VALUES (?, ?, ?, ?, 'room', 'Gallery A', ?, '{}', ?)
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        fromVersionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 5]] }),
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities
+          (id, organisation_id, project_id, version_id, kind, label, geometry_json, metadata_json, created_by)
+        VALUES (?, ?, ?, ?, 'room', 'Gallery A', ?, '{}', ?)
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        toVersionId,
+        JSON.stringify({ type: "box", points: [[0.1, 0, 0], [4.1, 3, 5]] }),
+        member!.userId,
+      ),
+    ]);
+
+    const body = {
+      clientOperationId: operationId,
+      fromVersionId,
+      toVersionId,
+      thresholdMm: 50,
+      coordinateAssurance: "registered_project_frame",
+      registrationEvidence: "Independent project control confirms both authored versions use the same Y-up local origin.",
+    };
+    const createdResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json<{
+      report: { id: string; status: string; summary: Record<string, unknown> };
+    }>();
+    expect(created.report).toMatchObject({
+      status: "ready",
+      summary: {
+        method: "authored-plan-geometry-diff-v1",
+        result: "changes_detected",
+        thresholdMm: 50,
+        summary: {
+          comparable: 1,
+          changed: 1,
+          maxDeviationMm: 100,
+        },
+        visual: {
+          coordinatePlane: "XZ",
+          units: "metres",
+        },
+      },
+    });
+
+    const replayResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(replayResponse.status).toBe(200);
+    await expect(replayResponse.json()).resolves.toMatchObject({
+      report: { id: created.report.id },
+      idempotent: true,
+    });
+
+    const conflictResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ ...body, thresholdMm: 80 }),
+      },
+    );
+    expect(conflictResponse.status).toBe(409);
+
+    const reviewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports/${created.report.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "needs_recapture",
+          note: "The 100 mm shift exceeds the agreed threshold; recapture and verify registration.",
+        }),
+      },
+    );
+    expect(reviewResponse.status).toBe(200);
+    await expect(reviewResponse.json()).resolves.toMatchObject({
+      report: {
+        id: created.report.id,
+        status: "reviewed",
+        reviewDecision: "needs_recapture",
+      },
+    });
+
+    const stored = await env.DB.prepare(`
+      SELECT method, result, threshold_mm, source_geometry_hash,
+        client_operation_id, request_hash, review_decision, reviewed_by
+      FROM change_detection_reports WHERE id = ?
+    `).bind(created.report.id).first<Record<string, unknown>>();
+    expect(stored).toMatchObject({
+      method: "authored-plan-geometry-diff-v1",
+      result: "changes_detected",
+      threshold_mm: 50,
+      client_operation_id: operationId,
+      review_decision: "needs_recapture",
+      reviewed_by: member!.userId,
+    });
+    expect(stored!.source_geometry_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored!.request_hash).toMatch(/^[a-f0-9]{64}$/);
+
+    const secondOperationId = crypto.randomUUID();
+    const regeneratedResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          clientOperationId: secondOperationId,
+          thresholdMm: 80,
+        }),
+      },
+    );
+    expect(regeneratedResponse.status).toBe(201);
+    await expect(regeneratedResponse.json()).resolves.toMatchObject({
+      report: {
+        id: created.report.id,
+        summary: { thresholdMm: 80 },
+      },
+    });
+
+    const historicalReplay = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(historicalReplay.status).toBe(200);
+    await expect(historicalReplay.json()).resolves.toMatchObject({
+      report: {
+        id: created.report.id,
+        summary: { thresholdMm: 50 },
+      },
+      idempotent: true,
+    });
+    const operationCount = await env.DB.prepare(`
+      SELECT count(*) AS count FROM change_detection_operations
+      WHERE organisation_id = ? AND project_id = ?
+    `).bind(member!.organisationId, projectId).first<{ count: number }>();
+    expect(operationCount?.count).toBe(2);
+  });
+
+  it("stores private trajectory evidence and returns reviewed recapture guidance", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const operationId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Capture coverage', ?, 'QA_REQUIRED', 'open-import', 'venue-navigator', ?)
+      `).bind(projectId, member!.organisationId, `coverage-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_entities
+          (id, organisation_id, project_id, version_id, kind, label, geometry_json, metadata_json, created_by)
+        VALUES (?, ?, ?, ?, 'room', 'Captured room', ?, '{}', ?)
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        versionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 4]] }),
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities
+          (id, organisation_id, project_id, version_id, kind, label, geometry_json, metadata_json, created_by)
+        VALUES (?, ?, ?, ?, 'room', 'Missed room', ?, '{}', ?)
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        versionId,
+        JSON.stringify({ type: "box", points: [[8, 0, 0], [12, 3, 4]] }),
+        member!.userId,
+      ),
+    ]);
+    const body = {
+      clientOperationId: operationId,
+      versionId,
+      source: {
+        adapter: "open-import",
+        fileName: "capture-trajectory.json",
+        format: "canonical_pose_json_v1",
+        coordinateFrame: "project-local-y-up",
+        alignmentEvidence: "Operator aligned the trajectory and authored rooms to the same local project frame.",
+      },
+      parameters: {
+        coverageRadiusM: 1.25,
+        maximumSampleGapM: 3,
+        loopClosureRadiusM: 1,
+        minimumRoomCoveragePercent: 85,
+        verticalToleranceM: 0.5,
+      },
+      points: [
+        { position: [0.5, 1.5, 0.5], timestampMs: 0 },
+        { position: [2, 1.5, 0.5], timestampMs: 1000 },
+        { position: [3.5, 1.5, 0.5], timestampMs: 2000 },
+        { position: [3.5, 1.5, 2], timestampMs: 3000 },
+        { position: [3.5, 1.5, 3.5], timestampMs: 4000 },
+        { position: [2, 1.5, 3.5], timestampMs: 5000 },
+        { position: [0.5, 1.5, 3.5], timestampMs: 6000 },
+        { position: [0.5, 1.5, 2], timestampMs: 7000 },
+        { position: [0.5, 1.5, 0.5], timestampMs: 8000 },
+      ],
+    };
+    const createdResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json<{
+      report: { id: string; result: string; summary: Record<string, unknown> };
+    }>();
+    expect(created.report).toMatchObject({
+      result: "recapture_required",
+      summary: {
+        method: "authored-room-trajectory-coverage-v1",
+        summary: {
+          sampleCount: 9,
+          roomCount: 2,
+          roomsMeetingCoverage: 1,
+          roomsBelowCoverage: 1,
+          loopClosed: true,
+        },
+      },
+    });
+
+    const replay = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({
+      report: { id: created.report.id },
+      idempotent: true,
+    });
+    const conflict = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          parameters: { ...body.parameters, coverageRadiusM: 2 },
+        }),
+      },
+    );
+    expect(conflict.status).toBe(409);
+    const adapterMismatch = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          clientOperationId: crypto.randomUUID(),
+          source: { ...body.source, adapter: "fjd-trion" },
+        }),
+      },
+    );
+    expect(adapterMismatch.status).toBe(422);
+
+    const reviewed = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/capture-completeness/${created.report.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "needs_recapture",
+          note: "The missed room requires another capture pass before reconstruction proceeds.",
+        }),
+      },
+    );
+    expect(reviewed.status).toBe(200);
+    await expect(reviewed.json()).resolves.toMatchObject({
+      report: {
+        id: created.report.id,
+        status: "reviewed",
+        reviewDecision: "needs_recapture",
+      },
+    });
+
+    const stored = await env.DB.prepare(`
+      SELECT c.source_hash, c.request_hash, c.reviewed_by,
+        a.object_key, a.size_bytes, a.integrity_status
+      FROM capture_completeness_reports c
+      JOIN assets a ON a.id = c.source_asset_id
+      WHERE c.id = ?
+    `).bind(created.report.id).first<{
+      source_hash: string;
+      request_hash: string;
+      reviewed_by: string;
+      object_key: string;
+      size_bytes: number;
+      integrity_status: string;
+    }>();
+    expect(stored).toMatchObject({
+      reviewed_by: member!.userId,
+      integrity_status: "verified",
+    });
+    expect(stored!.source_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(stored!.request_hash).toMatch(/^[a-f0-9]{64}$/);
+    const sourceObject = await env.SPATIAL_ASSETS.get(stored!.object_key);
+    expect(sourceObject).not.toBeNull();
+    expect(sourceObject?.size).toBe(stored!.size_bytes);
+    const persistedCounts = await env.DB.prepare(`
+      SELECT
+        (SELECT count(*) FROM capture_completeness_reports WHERE project_id = ?) AS reports,
+        (SELECT count(*) FROM assets WHERE project_id = ? AND format = 'capture-trajectory-json') AS assets
+    `).bind(projectId, projectId).first<{ reports: number; assets: number }>();
+    expect(persistedCounts).toEqual({ reports: 1, assets: 1 });
+
+    const workspace = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(workspace.status).toBe(200);
+    await expect(workspace.json()).resolves.toMatchObject({
+      captureCompletenessReports: [{
+        id: created.report.id,
+        result: "recapture_required",
+        review_decision: "needs_recapture",
+      }],
+    });
+  });
+
+  it("queues idempotent privacy scans, exposes evidence candidates, and gates QA on human resolution", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const posterAssetId = crypto.randomUUID();
+    const webAssetId = crypto.randomUUID();
+    const operationId = crypto.randomUUID();
+    const posterKey = `delivery-private/${member!.organisationId}/${projectId}/${versionId}/privacy-frame.png`;
+    await env.SPATIAL_ASSETS.put(posterKey, new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]), {
+      httpMetadata: { contentType: "image/png" },
+      customMetadata: { sha256: "a".repeat(64) },
+    });
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Privacy evidence contract', ?, 'QA_REQUIRED', 'open-import', 'property-tour', ?)
+      `).bind(projectId, member!.organisationId, `privacy-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'poster', 'png', ?, 'privacy-frame.png', 'image/png', 8, ?, 'verified')
+      `).bind(
+        posterAssetId, member!.organisationId, projectId, versionId, posterKey, "a".repeat(64),
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'scene.rad', 'application/octet-stream', 8, ?, 'verified')
+      `).bind(
+        webAssetId, member!.organisationId, projectId, versionId,
+        `delivery-private/${member!.organisationId}/${projectId}/${versionId}/scene.rad`,
+        "b".repeat(64),
+      ),
+    ]);
+
+    const requestBody = {
+      clientOperationId: operationId,
+      versionId,
+      assetIds: [posterAssetId],
+    };
+    const queued = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/privacy-scans`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      },
+    );
+    expect(queued.status).toBe(202);
+    const queuedBody = await queued.json<{ scan: { id: string; status: string } }>();
+    expect(queuedBody.scan.status).toBe("QUEUED");
+
+    const replay = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/privacy-scans`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      },
+    );
+    expect(replay.status).toBe(202);
+    await expect(replay.json()).resolves.toMatchObject({
+      scan: { id: queuedBody.scan.id },
+      idempotent: true,
+    });
+
+    const candidateId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE privacy_scans
+        SET status = 'COMPLETED', input_count = 1, candidate_count = 1,
+          evidence_json = ?, completed_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(JSON.stringify({ detector: "test-fixture", inputs: 1 }), queuedBody.scan.id),
+      env.DB.prepare(`
+        INSERT INTO privacy_candidates
+          (id, scan_id, organisation_id, project_id, version_id, asset_id, target,
+            label, bbox_json, bbox_hash, detector_metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, 'human face', 'Human face', ?, ?, ?)
+      `).bind(
+        candidateId,
+        queuedBody.scan.id,
+        member!.organisationId,
+        projectId,
+        versionId,
+        posterAssetId,
+        JSON.stringify({ xMin: 0.1, yMin: 0.2, xMax: 0.4, yMax: 0.6 }),
+        "c".repeat(64),
+        JSON.stringify({ modelConfidenceUnavailable: true }),
+      ),
+    ]);
+
+    const workspace = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(workspace.status).toBe(200);
+    await expect(workspace.json()).resolves.toMatchObject({
+      privacyScans: [{
+        id: queuedBody.scan.id,
+        status: "COMPLETED",
+        input_count: 1,
+        candidate_count: 1,
+      }],
+      privacyCandidates: [{
+        id: candidateId,
+        asset_id: posterAssetId,
+        target: "human face",
+        status: "pending",
+      }],
+    });
+
+    const approvalBody = {
+      webAssetId,
+      posterAssetId,
+      visualGrade: "A",
+      privacyStatus: "approved",
+      measurementGrade: "visual-only",
+    };
+    const blockedApproval = await exports.default.fetch(
+      `${origin}/api/versions/${versionId}/approve`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(approvalBody),
+      },
+    );
+    expect(blockedApproval.status).toBe(409);
+    await expect(blockedApproval.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Privacy"),
+    });
+
+    const dismissed = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/privacy-candidates/${candidateId}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          status: "dismissed",
+          note: "Fixture contains no identifiable person.",
+        }),
+      },
+    );
+    expect(dismissed.status).toBe(200);
+
+    const approved = await exports.default.fetch(
+      `${origin}/api/versions/${versionId}/approve`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(approvalBody),
+      },
+    );
+    expect(approved.status).toBe(200);
+  });
+
+  it("enforces retention in R2 and records an auditable lifecycle run", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const expiredSessionId = crypto.randomUUID();
+    const expiredRefreshHash = crypto.randomUUID().replaceAll("-", "").padEnd(64, "0");
+    const expiredHistoryHash = crypto.randomUUID().replaceAll("-", "").padEnd(64, "1");
+    const objectKey = `raw-private/${member!.organisationId}/${projectId}/${versionId}/expired-source.ply`;
+    await env.SPATIAL_ASSETS.put(objectKey, new Uint8Array([1, 2, 3, 4]));
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Retention proof', ?, 'ARCHIVED', 'open-import', 'property-tour', ?)
+      `).bind(projectId, member!.organisationId, `retention-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'ARCHIVED', ?)
+      `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, integrity_status, created_at)
+        VALUES (?, ?, ?, ?, 'source', 'ply', ?, 'expired-source.ply',
+          'application/octet-stream', 4, 'verified', '2000-01-01T00:00:00.000Z')
+      `).bind(assetId, member!.organisationId, projectId, versionId, objectKey),
+      env.DB.prepare(`
+        INSERT INTO project_retention_policies
+          (project_id, organisation_id, raw_retention_days, derivative_retention_days,
+            release_retention_days, legal_hold, updated_by)
+        VALUES (?, ?, 0, 30, 30, 0, ?)
+      `).bind(projectId, member!.organisationId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO auth_otp_challenges
+          (id, email, code_hash, expires_at, consumed_at, created_at)
+        VALUES (?, 'expired@example.com', ?, datetime('now', '-8 days'),
+          datetime('now', '-8 days'), datetime('now', '-8 days'))
+      `).bind(crypto.randomUUID(), crypto.randomUUID()),
+      env.DB.prepare(`
+        INSERT INTO rate_limits (bucket, subject, window_start, request_count)
+        VALUES ('retention-test', 'expired-subject', unixepoch('now') - 259200, 1)
+      `),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at, revoked_at,
+            revoke_reason, last_seen_at, created_at)
+        VALUES (?, ?, ?, ?, datetime('now', '-32 days'), datetime('now', '-32 days'),
+          'retention_test', datetime('now', '-32 days'), datetime('now', '-32 days'))
+      `).bind(expiredSessionId, member!.userId, member!.organisationId, expiredRefreshHash),
+      env.DB.prepare(`
+        INSERT INTO auth_refresh_token_history (token_hash, session_id, used_at)
+        VALUES (?, ?, datetime('now', '-32 days'))
+      `).bind(expiredHistoryHash, expiredSessionId),
+    ]);
+
+    const response = await exports.default.fetch(`${origin}/api/hosting/lifecycle/run`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "succeeded",
+      summary: {
+        assetsDeleted: 1,
+        otpChallengesDeleted: 1,
+        rateLimitWindowsDeleted: 1,
+        refreshHistoryDeleted: 1,
+      },
+    });
+    await expect(env.SPATIAL_ASSETS.head(objectKey)).resolves.toBeNull();
+    const tombstone = await env.DB.prepare(`
+      SELECT deleted_at, deletion_reason FROM assets WHERE id = ?
+    `).bind(assetId).first<{ deleted_at: string | null; deletion_reason: string | null }>();
+    expect(tombstone?.deleted_at).toBeTruthy();
+    expect(tombstone?.deletion_reason).toBe("source_retention_elapsed");
+    const action = await env.DB.prepare(`
+      SELECT action FROM lifecycle_actions WHERE resource_id = ? ORDER BY created_at DESC LIMIT 1
+    `).bind(assetId).first<{ action: string }>();
+    expect(action?.action).toBe("asset_deleted");
+  });
+
+  it("gates measured floor plans on scoped tolerance and independent residual evidence", async () => {
+    const cookie = await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Measured suite', ?, 'QA_REQUIRED', 'open-import', 'measured-floor-plan', ?)
+      `).bind(projectId, member!.organisationId, `measured-${projectId.slice(0, 8)}`, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, member!.userId),
+    ]);
+
+    const invalidCertified = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement/briefs`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        productType: "measured_floor_plan",
+        intendedUse: "Leasing layout",
+        units: "metres",
+        toleranceMm: 30,
+        relianceClass: "professional_certified",
+      }),
+    });
+    expect(invalidCertified.status).toBe(400);
+
+    const briefResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement/briefs`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        productType: "measured_floor_plan",
+        intendedUse: "Leasing layout and furniture planning",
+        units: "metres",
+        toleranceMm: 30,
+        relianceClass: "project_verified",
+        exclusions: "Hidden services and title boundaries",
+      }),
+    });
+    expect(briefResponse.status).toBe(201);
+    const brief = await briefResponse.json<{ brief: { id: string } }>();
+
+    const roomResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        kind: "room",
+        label: "Measured room",
+        geometry: {
+          type: "box",
+          points: [[1, 0, 2], [5.5, 2.8, 6]],
+        },
+        metadata: {},
+      }),
+    });
+    expect(roomResponse.status).toBe(201);
+
+    const prematureDeliverable = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/deliverables`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(prematureDeliverable.status).toBe(409);
+    await expect(prematureDeliverable.json()).resolves.toMatchObject({
+      error: "A passing measurement QA report is required before generating a deliverable",
+      code: "measurement_qa_required",
+    });
+
+    for (const [index, observed] of [[0.005, 0, 0], [1.01, 0, 0], [2.015, 0, 0]].entries()) {
+      const response = await exports.default.fetch(
+        `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/check-points`,
+        {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            label: `CP-${index + 1}`,
+            reference: [index, 0, 0],
+            observed,
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+    }
+
+    const reportResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/qa-report`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(reportResponse.status).toBe(201);
+    await expect(reportResponse.json()).resolves.toMatchObject({
+      report: { pointCount: 3, result: "pass", toleranceMm: 30 },
+    });
+
+    const deliverableResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/deliverables`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(deliverableResponse.status).toBe(201);
+    const deliverable = await deliverableResponse.json<{
+      deliverable: { id: string; assetId: string; fileName: string; sha256: string; downloadUrl: string };
+    }>();
+    expect(deliverable.deliverable).toMatchObject({
+      fileName: `measured-${projectId.slice(0, 8)}-floor-plan.dxf`,
+    });
+    expect(deliverable.deliverable.sha256).toMatch(/^[a-f0-9]{64}$/);
+
+    const download = await exports.default.fetch(`${origin}${deliverable.deliverable.downloadUrl}`, {
+      headers: { cookie },
+    });
+    expect(download.status).toBe(200);
+    expect(download.headers.get("content-type")).toContain("application/dxf");
+    expect(download.headers.get("content-disposition")).toContain(`measured-${projectId.slice(0, 8)}-floor-plan.dxf`);
+    const dxf = new TextDecoder().decode(await download.arrayBuffer());
+    expect(dxf).toContain("$INSUNITS");
+    expect(dxf).toContain("ROOM_OUTLINE");
+    expect(dxf).toContain("Measured room");
+    expect(await sha256Hex(dxf)).toBe(deliverable.deliverable.sha256);
+
+    const repeatedDeliverable = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/deliverables`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(repeatedDeliverable.status).toBe(200);
+    await expect(repeatedDeliverable.json()).resolves.toMatchObject({
+      idempotent: true,
+      deliverable: {
+        id: deliverable.deliverable.id,
+        assetId: deliverable.deliverable.assetId,
+        sha256: deliverable.deliverable.sha256,
+      },
+    });
+
+    const range = await exports.default.fetch(`${origin}${deliverable.deliverable.downloadUrl}`, {
+      headers: { cookie, Range: "bytes=0-99" },
+    });
+    expect(range.status).toBe(206);
+    expect(range.headers.get("content-range")).toMatch(/^bytes 0-99\/\d+$/);
+    expect((await range.arrayBuffer()).byteLength).toBe(100);
+
+    const isolatedOrganisationId = crypto.randomUUID();
+    const isolatedUserId = crypto.randomUUID();
+    const isolatedSessionId = crypto.randomUUID();
+    const isolatedRefreshSecret = "isolated-measurement-refresh";
+    const isolatedNow = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, 'Isolated surveyor', ?, ?)",
+      ).bind(isolatedOrganisationId, `isolated-${projectId.slice(0, 8)}`, isolatedNow),
+      env.DB.prepare(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, 'Isolated operator', ?)",
+      ).bind(isolatedUserId, `isolated-${projectId.slice(0, 8)}@example.com`, isolatedNow),
+      env.DB.prepare(
+        "INSERT INTO memberships (organisation_id, user_id, role, created_at) VALUES (?, ?, 'production_operator', ?)",
+      ).bind(isolatedOrganisationId, isolatedUserId, isolatedNow),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(
+        isolatedSessionId,
+        isolatedUserId,
+        isolatedOrganisationId,
+        await sha256Hex(`${isolatedRefreshSecret}:${env.REFRESH_TOKEN_PEPPER}`),
+        new Date(Date.now() + 60_000).toISOString(),
+        isolatedNow,
+      ),
+    ]);
+    const isolatedTokens = await issueAuthTokens(env, {
+      userId: isolatedUserId,
+      organisationId: isolatedOrganisationId,
+      email: `isolated-${projectId.slice(0, 8)}@example.com`,
+      displayName: "Isolated operator",
+      role: "production_operator",
+    }, isolatedSessionId, isolatedRefreshSecret);
+    const isolatedDownload = await exports.default.fetch(
+      `${origin}${deliverable.deliverable.downloadUrl}`,
+      { headers: { cookie: `spatial_access=${isolatedTokens.accessToken}` } },
+    );
+    expect(isolatedDownload.status).toBe(404);
+
+    const changedGeometry = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        versionId,
+        kind: "room",
+        label: "Added after QA",
+        geometry: {
+          type: "box",
+          points: [[6, 0, 2], [8, 2.8, 4]],
+        },
+        metadata: {},
+      }),
+    });
+    expect(changedGeometry.status).toBe(201);
+    const staleGeneration = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${brief.brief.id}/deliverables`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(staleGeneration.status).toBe(409);
+    await expect(staleGeneration.json()).resolves.toMatchObject({
+      code: "measurement_qa_stale",
+    });
+    const retainedDownload = await exports.default.fetch(
+      `${origin}${deliverable.deliverable.downloadUrl}`,
+      { headers: { cookie } },
+    );
+    expect(retainedDownload.status).toBe(200);
+    expect(await sha256Hex(new TextDecoder().decode(await retainedDownload.arrayBuffer())))
+      .toBe(deliverable.deliverable.sha256);
+
+    const workspace = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement`, {
+      headers: { cookie },
+    });
+    expect(workspace.status).toBe(200);
+    await expect(workspace.json()).resolves.toMatchObject({
+      briefs: [{ id: brief.brief.id, status: "accepted", reliance_class: "project_verified" }],
+      qaReports: [{ point_count: 3, result: "pass" }],
+      deliverables: [{ id: deliverable.deliverable.id, asset_id: deliverable.deliverable.assetId }],
+      economics: { totalCostCents: 0, currency: "MYR" },
+    });
+  });
+});

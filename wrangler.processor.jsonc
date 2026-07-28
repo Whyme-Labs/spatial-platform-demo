@@ -1,0 +1,139 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "spatial-processor-cloud",
+  "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+  "main": "src/processor-cloud/index.ts",
+  "workers_dev": true,
+  "preview_urls": true,
+  "compatibility_date": "2026-07-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["WORKER_API_TOKEN"]
+  },
+  "vars": {
+    "APP_ORIGIN": "http://host.docker.internal:8787",
+    "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
+    "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+  },
+  "containers": [
+    {
+      "class_name": "SpatialProcessorContainer",
+      "image": "./processor/Dockerfile",
+      "image_build_context": ".",
+      "max_instances": 3,
+      "instance_type": "standard-3",
+      "rollout_step_percentage": 100
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROCESSOR_CONTAINER",
+        "class_name": "SpatialProcessorContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "processor-container-v1",
+      "new_sqlite_classes": ["SpatialProcessorContainer"]
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
+  },
+  "env": {
+    "staging": {
+      "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+      "name": "spatial-processor-cloud-staging",
+      "secrets": {
+        "required": ["WORKER_API_TOKEN"]
+      },
+      "vars": {
+        "APP_ORIGIN": "https://spatial-studio-staging.swmengappdev.workers.dev",
+        "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
+        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+      },
+      "containers": [
+        {
+          "class_name": "SpatialProcessorContainer",
+          "image": "./processor/Dockerfile",
+          "image_build_context": ".",
+          "max_instances": 3,
+          "instance_type": "standard-3",
+          "rollout_step_percentage": 100
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "PROCESSOR_CONTAINER",
+            "class_name": "SpatialProcessorContainer"
+          }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "spatial-processing-dispatch-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "spatial-processing-dispatch-staging-dlq",
+            "max_concurrency": 3
+          }
+        ]
+      }
+    },
+    "production": {
+      "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+      "name": "spatial-processor-cloud-production",
+      "secrets": {
+        "required": ["WORKER_API_TOKEN"]
+      },
+      "vars": {
+        "APP_ORIGIN": "https://spatial.whymelabs.com",
+        "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
+        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+      },
+      "containers": [
+        {
+          "class_name": "SpatialProcessorContainer",
+          "image": "./processor/Dockerfile",
+          "image_build_context": ".",
+          "max_instances": 3,
+          "instance_type": "standard-3",
+          "rollout_step_percentage": 100
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "PROCESSOR_CONTAINER",
+            "class_name": "SpatialProcessorContainer"
+          }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "spatial-processing-dispatch-production",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 5,
+            "dead_letter_queue": "spatial-processing-dispatch-production-dlq",
+            "max_concurrency": 3
+          }
+        ]
+      }
+    }
+  }
+}

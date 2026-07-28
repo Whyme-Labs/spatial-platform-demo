@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Spatial Studio Spark Renderer</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b1320'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%23d4ff58'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/renderer/styles.css" />
+  </head>
+  <body>
+    <main id="sparkViewport" class="spark-viewport" aria-label="Interactive spatial scene">
+      <canvas id="sparkCanvas" tabindex="0" aria-label="3D Gaussian splat scene"></canvas>
+
+      <div id="sparkLoading" class="spark-loading" role="status" aria-live="polite">
+        <span class="spark-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <strong id="sparkLoadingTitle">Starting Spark</strong>
+        <span id="sparkLoadingDetail">Preparing the spatial renderer</span>
+        <div class="spark-progress"><i id="sparkProgress"></i></div>
+      </div>
+
+      <div id="sparkError" class="spark-error" role="alert" hidden>
+        <span>RENDERER ERROR</span>
+        <strong id="sparkErrorTitle">The spatial scene could not be rendered.</strong>
+        <p id="sparkErrorDetail"></p>
+      </div>
+
+      <div class="spark-controls" aria-label="Scene controls">
+        <button id="resetView" type="button" title="Reset view">Reset view</button>
+        <button id="toggleHelp" type="button" aria-expanded="false" aria-controls="controlHelp">Controls</button>
+        <button id="enterFullscreen" type="button">Fullscreen</button>
+      </div>
+      <p id="controlStatus" class="spark-control-status" role="status" aria-live="polite"></p>
+
+      <div id="controlHelp" class="spark-help" hidden>
+        <strong>Explore the scene</strong>
+        <span>Drag to look · two-finger drag to move · pinch or scroll to travel</span>
+        <span>Desktop: WASD to move · arrow keys to look · Shift for speed</span>
+      </div>
+
+      <div class="spark-runtime">
+        <span class="spark-runtime-dot"></span>
+        <span>Spark 2.1</span>
+        <span id="sparkQuality">Adaptive LoD</span>
+      </div>
+    </main>
+    <script type="module" src="/src/renderer/main.ts"></script>
+  </body>
+</html>

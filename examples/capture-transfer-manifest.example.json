@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "1.0.0",
+  "projectId": "00000000-0000-4000-8000-000000000000",
+  "adapter": "xgrids-lcc",
+  "capturedAt": "2026-07-28T09:30:00+08:00",
+  "exportedAt": "2026-07-28T10:00:00+08:00",
+  "exporter": "Lixel CyberColor",
+  "exporterVersion": "record-the-exact-version",
+  "files": [
+    {
+      "path": "exports/capture-project.zip",
+      "format": "zip",
+      "purpose": "vendor_project",
+      "mimeType": "application/zip"
+    }
+  ]
+}

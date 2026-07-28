@@ -1,0 +1,327 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "spatial-studio",
+  "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+  "main": "src/worker/index.ts",
+  "workers_dev": true,
+  "preview_urls": true,
+  "compatibility_date": "2026-07-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": [
+      "JWT_KEYRING",
+      "OTP_PEPPER",
+      "REFRESH_TOKEN_PEPPER",
+      "SESSION_PEPPER",
+      "WORKER_API_TOKEN"
+    ]
+  },
+  "triggers": {
+    "crons": ["* * * * *", "17 * * * *"]
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "STATIC_ASSETS",
+    "run_worker_first": ["/", "/api/*", "/.well-known/*", "/asset/*", "/comparison-asset/*", "/s/*", "/review/*"],
+    "html_handling": "none",
+    "not_found_handling": "404-page"
+  },
+  "vars": {
+    "APP_ENV": "development",
+    "APP_ORIGIN": "http://localhost:8787",
+    "ADMIN_EMAIL": "swmengappdev@gmail.com",
+    "EMAIL_FROM": "login@whymelabs.com",
+    "JWT_ISSUER": "http://localhost:8787",
+    "JWT_AUDIENCE": "spatial-studio",
+    "ACCESS_TOKEN_TTL_SECONDS": "300",
+    "REFRESH_TOKEN_TTL_SECONDS": "2592000",
+    "OTP_TTL_SECONDS": "600",
+    "OTP_RESEND_SECONDS": "60",
+    "MAX_UPLOAD_BYTES": "107374182400",
+    "SCENE_SESSION_TTL_SECONDS": "1800",
+    "CLOUDFLARE_SAAS_ZONE_ID": "",
+    "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",
+    "STRIPE_PRICE_LISTING": "",
+    "STRIPE_PRICE_PORTFOLIO": "",
+    "STRIPE_PRICE_VENUE": ""
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "spatial-studio-local",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "SPATIAL_ASSETS",
+      "bucket_name": "spatial-studio-assets-local"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "AUTH_CACHE",
+      "id": "708239eda1cc4d3ca357398adf40cedd"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["login@whymelabs.com"]
+    }
+  ],
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "PRIVACY_SCAN_QUEUE",
+        "queue": "spatial-privacy-scans-local"
+      },
+      {
+        "binding": "PROCESSING_DISPATCH_QUEUE",
+        "queue": "spatial-processing-dispatch-local"
+      },
+      {
+        "binding": "PORTFOLIO_COPY_QUEUE",
+        "queue": "spatial-portfolio-copies-local"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "spatial-privacy-scans-local",
+        "max_batch_size": 1,
+        "max_batch_timeout": 2,
+        "max_retries": 2,
+        "dead_letter_queue": "spatial-privacy-scans-local-dlq",
+        "max_concurrency": 2
+      },
+      {
+        "queue": "spatial-portfolio-copies-local",
+        "max_batch_size": 1,
+        "max_batch_timeout": 2,
+        "max_retries": 2,
+        "dead_letter_queue": "spatial-portfolio-copies-local-dlq",
+        "max_concurrency": 4
+      }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
+  },
+  "env": {
+    "staging": {
+      "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+      "name": "spatial-studio-staging",
+      "secrets": {
+        "required": [
+          "JWT_KEYRING",
+          "OTP_PEPPER",
+          "REFRESH_TOKEN_PEPPER",
+          "SESSION_PEPPER",
+          "WORKER_API_TOKEN"
+        ]
+      },
+      "triggers": {
+        "crons": ["* * * * *", "17 * * * *"]
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        "APP_ORIGIN": "https://spatial-studio-staging.swmengappdev.workers.dev",
+        "ADMIN_EMAIL": "swmengappdev@gmail.com",
+        "EMAIL_FROM": "login@whymelabs.com",
+        "JWT_ISSUER": "https://spatial-studio-staging.swmengappdev.workers.dev",
+        "JWT_AUDIENCE": "spatial-studio",
+        "ACCESS_TOKEN_TTL_SECONDS": "300",
+        "REFRESH_TOKEN_TTL_SECONDS": "2592000",
+        "OTP_TTL_SECONDS": "600",
+        "OTP_RESEND_SECONDS": "60",
+        "MAX_UPLOAD_BYTES": "107374182400",
+        "SCENE_SESSION_TTL_SECONDS": "1800",
+        "CLOUDFLARE_SAAS_ZONE_ID": "",
+        "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",
+        "STRIPE_PRICE_LISTING": "",
+        "STRIPE_PRICE_PORTFOLIO": "",
+        "STRIPE_PRICE_VENUE": ""
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "spatial-studio-staging",
+          "database_id": "bc6c7e94-8fc1-4795-9b9e-a164a5a1eb5a",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "SPATIAL_ASSETS",
+          "bucket_name": "spatial-studio-assets-staging"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "AUTH_CACHE",
+          "id": "708239eda1cc4d3ca357398adf40cedd"
+        }
+      ],
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["login@whymelabs.com"]
+        }
+      ],
+      "ai": {
+        "binding": "AI"
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "PRIVACY_SCAN_QUEUE",
+            "queue": "spatial-privacy-scans-staging"
+          },
+          {
+            "binding": "PROCESSING_DISPATCH_QUEUE",
+            "queue": "spatial-processing-dispatch-staging"
+          },
+          {
+            "binding": "PORTFOLIO_COPY_QUEUE",
+            "queue": "spatial-portfolio-copies-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "spatial-privacy-scans-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "spatial-privacy-scans-staging-dlq",
+            "max_concurrency": 2
+          },
+          {
+            "queue": "spatial-portfolio-copies-staging",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "spatial-portfolio-copies-staging-dlq",
+            "max_concurrency": 4
+          }
+        ]
+      }
+    },
+    "production": {
+      "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
+      "name": "spatial-studio-production",
+      "secrets": {
+        "required": [
+          "JWT_KEYRING",
+          "OTP_PEPPER",
+          "REFRESH_TOKEN_PEPPER",
+          "SESSION_PEPPER",
+          "WORKER_API_TOKEN"
+        ]
+      },
+      "triggers": {
+        "crons": ["* * * * *", "17 * * * *"]
+      },
+      "routes": [
+        {
+          "pattern": "spatial.whymelabs.com",
+          "custom_domain": true
+        }
+      ],
+      "vars": {
+        "APP_ENV": "production",
+        "APP_ORIGIN": "https://spatial.whymelabs.com",
+        "ADMIN_EMAIL": "swmengappdev@gmail.com",
+        "EMAIL_FROM": "login@whymelabs.com",
+        "JWT_ISSUER": "https://spatial.whymelabs.com",
+        "JWT_AUDIENCE": "spatial-studio",
+        "ACCESS_TOKEN_TTL_SECONDS": "300",
+        "REFRESH_TOKEN_TTL_SECONDS": "2592000",
+        "OTP_TTL_SECONDS": "600",
+        "OTP_RESEND_SECONDS": "60",
+        "MAX_UPLOAD_BYTES": "107374182400",
+        "SCENE_SESSION_TTL_SECONDS": "1800",
+        "CLOUDFLARE_SAAS_ZONE_ID": "",
+        "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",
+        "STRIPE_PRICE_LISTING": "",
+        "STRIPE_PRICE_PORTFOLIO": "",
+        "STRIPE_PRICE_VENUE": ""
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "spatial-studio-production",
+          "database_id": "5e56b5db-79b0-4862-b8e7-6c27279bae56",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "SPATIAL_ASSETS",
+          "bucket_name": "spatial-studio-assets-production"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "AUTH_CACHE",
+          "id": "ffa4aac823b2436bb13bf2334973d123"
+        }
+      ],
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["login@whymelabs.com"]
+        }
+      ],
+      "ai": {
+        "binding": "AI"
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "PRIVACY_SCAN_QUEUE",
+            "queue": "spatial-privacy-scans-production"
+          },
+          {
+            "binding": "PROCESSING_DISPATCH_QUEUE",
+            "queue": "spatial-processing-dispatch-production"
+          },
+          {
+            "binding": "PORTFOLIO_COPY_QUEUE",
+            "queue": "spatial-portfolio-copies-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "spatial-privacy-scans-production",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "spatial-privacy-scans-production-dlq",
+            "max_concurrency": 2
+          },
+          {
+            "queue": "spatial-portfolio-copies-production",
+            "max_batch_size": 1,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "spatial-portfolio-copies-production-dlq",
+            "max_concurrency": 4
+          }
+        ]
+      }
+    }
+  }
+}

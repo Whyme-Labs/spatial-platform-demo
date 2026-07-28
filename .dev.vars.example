@@ -1,0 +1,5 @@
+SESSION_PEPPER=replace-with-an-independent-long-random-value
+WORKER_API_TOKEN=replace-with-an-independent-long-random-value
+OTP_PEPPER=replace-with-an-independent-long-random-value
+REFRESH_TOKEN_PEPPER=replace-with-an-independent-long-random-value
+OIDC_CLIENT_SECRETS={}

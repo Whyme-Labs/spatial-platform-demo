@@ -1,0 +1,12 @@
+.dev.vars
+.env
+.git
+.playwright-cli
+.tools
+.wrangler
+coverage
+dist
+node_modules
+public
+test
+*.log

@@ -1,0 +1,15 @@
+{
+  "name": "spatial-processor-container",
+  "version": "0.6.2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@playcanvas/splat-transform": "3.1.7",
+    "@sparkjsdev/spark": "2.1.0",
+    "playwright": "1.62.0",
+    "three": "0.180.0"
+  }
+}

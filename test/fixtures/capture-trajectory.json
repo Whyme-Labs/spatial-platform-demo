@@ -1,0 +1,13 @@
+{
+  "points": [
+    { "position": [0.5, 1.5, 0.5], "timestampMs": 0 },
+    { "position": [2, 1.5, 0.5], "timestampMs": 1000 },
+    { "position": [3.5, 1.5, 0.5], "timestampMs": 2000 },
+    { "position": [3.5, 1.5, 2], "timestampMs": 3000 },
+    { "position": [3.5, 1.5, 3.5], "timestampMs": 4000 },
+    { "position": [2, 1.5, 3.5], "timestampMs": 5000 },
+    { "position": [0.5, 1.5, 3.5], "timestampMs": 6000 },
+    { "position": [0.5, 1.5, 2], "timestampMs": 7000 },
+    { "position": [0.5, 1.5, 0.5], "timestampMs": 8000 }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/spatial-studio/scene-manifest.schema.json",
+  "title": "Spatial Studio Scene Manifest",
+  "type": "object",
+  "required": ["schemaVersion", "projectId", "units", "coordinateSystem", "assets", "quality"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "projectId": { "type": "string" },
+    "versionId": { "type": "string" },
+    "units": { "enum": ["metres"] },
+    "coordinateSystem": {
+      "type": "object",
+      "required": ["axisConvention", "localOrigin"],
+      "properties": {
+        "epsg": { "type": ["integer", "null"] },
+        "axisConvention": { "type": "string" },
+        "localOrigin": { "type": "array", "prefixItems": [{"type":"number"},{"type":"number"},{"type":"number"}], "minItems": 3, "maxItems": 3 }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "properties": {
+        "adapter": { "enum": ["xgrids-lcc", "fjd-trion", "open-import", "phone-video"] },
+        "device": { "type": "string" },
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "operatorId": { "type": "string" }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "required": ["splatMaster", "web"],
+      "properties": {
+        "splatMaster": { "type": "string" },
+        "pointCloudMaster": { "type": ["string", "null"] },
+        "web": { "type": "string" },
+        "portable": { "type": ["string", "null"] },
+        "collision": { "type": ["string", "null"] },
+        "navmesh": { "type": ["string", "null"] },
+        "poster": { "type": ["string", "null"] }
+      }
+    },
+    "semantics": {
+      "type": "object",
+      "properties": {
+        "floors": { "type": ["string", "null"] },
+        "rooms": { "type": ["string", "null"] },
+        "doors": { "type": ["string", "null"] },
+        "pois": { "type": ["string", "null"] },
+        "routes": { "type": ["string", "null"] }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "required": ["visualGrade", "measurementGrade", "privacyStatus"],
+      "properties": {
+        "visualGrade": { "enum": ["A", "B", "C", "rejected"] },
+        "measurementGrade": { "enum": ["visual-only", "indicative", "project-verified", "professional-certified"] },
+        "privacyStatus": { "enum": ["pending", "flagged", "approved"] },
+        "mobileProfile": { "type": "string" }
+      }
+    }
+  }
+}

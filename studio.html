@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0d0f0e" />
+  <meta name="robots" content="noindex,nofollow" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b1320'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%23d6ff4b'/%3E%3C/svg%3E" />
+  <title>Spatial Studio — Production operations</title>
+</head>
+<body class="studio-page">
+  <div class="studio-shell">
+    <aside class="studio-sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span><strong>Spatial Studio</strong><small>Production operations</small></span>
+      </a>
+      <nav class="studio-nav" aria-label="Operations">
+        <button class="nav-item active" data-section="projects"><span>◇</span>Projects</button>
+        <button class="nav-item" data-section="jobs"><span>⇄</span>Processing jobs</button>
+        <button class="nav-item" data-section="releases"><span>↗</span>Releases</button>
+        <button class="nav-item" data-section="reviews"><span>◎</span>Client review</button>
+        <button class="nav-item" data-section="spatial"><span>⌖</span>Spatial authoring</button>
+        <button class="nav-item" data-section="measurement"><span>⌁</span>Measurement</button>
+        <button class="nav-item" data-section="hosting"><span>◫</span>Hosting & lifecycle</button>
+        <button class="nav-item" data-section="team" hidden><span>◌</span>Team access</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="workspace-card">
+          <span class="eyebrow">WORKSPACE</span>
+          <strong id="workspaceName">Sign in required</strong>
+          <small id="workspaceRole">Secure production environment</small>
+          <div id="organisationSwitcher" class="organisation-switcher" hidden>
+            <label for="organisationSelect">Organisation</label>
+            <select id="organisationSelect" aria-describedby="organisationSwitchError"></select>
+            <button id="switchOrganisationButton" class="quiet-button wide" type="button">Switch workspace</button>
+            <small id="organisationSwitchError" class="form-error" role="alert"></small>
+          </div>
+        </div>
+        <button id="signOutButton" class="quiet-button wide" type="button" hidden>Sign out</button>
+        <a class="quiet-button wide" href="/">Open public site</a>
+      </div>
+    </aside>
+
+    <main class="studio-main">
+      <header class="studio-header">
+        <div>
+          <span id="viewEyebrow" class="eyebrow">POST-CAPTURE CONTROL PLANE</span>
+          <h1 id="viewTitle">From immutable source to approved spatial release.</h1>
+        </div>
+        <div class="header-actions">
+          <button class="quiet-button" id="refreshButton" type="button">Refresh</button>
+          <button class="quiet-button" id="portfolioToolsButton" type="button">Portfolio tools</button>
+          <button class="primary-button" id="newProjectButton" type="button">+ New project</button>
+        </div>
+      </header>
+
+      <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
+
+      <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
+        <article class="summary-card"><span>Active projects</span><strong id="activeProjects">—</strong><small>Immutable version history</small></article>
+        <article class="summary-card"><span>Processing queue</span><strong id="processingJobs">—</strong><small>Leased by local or cloud agents</small></article>
+        <article class="summary-card"><span>Hosted assets</span><strong id="hostedAssets">—</strong><small id="hostedBytes">Private R2 storage</small></article>
+        <article class="summary-card accent"><span>Active releases</span><strong id="activeReleases">—</strong><small>Revocable in one operation</small></article>
+      </section>
+
+      <section id="studioGrid" class="studio-grid">
+        <div id="projectBoard" class="project-board">
+          <div class="section-heading">
+            <div><span class="eyebrow">PROJECTS</span><h2>Current production</h2></div>
+            <div class="filter-group">
+              <button class="filter-chip active" data-filter="all">All</button>
+              <button class="filter-chip" data-filter="PROCESSING">Processing</button>
+              <button class="filter-chip" data-filter="QA_REQUIRED">QA</button>
+              <button class="filter-chip" data-filter="PUBLISHED">Published</button>
+              <button class="filter-chip" data-filter="ARCHIVED">Archived</button>
+            </div>
+          </div>
+          <div class="project-command-bar">
+            <label class="project-search">
+              <span class="sr-only">Search projects</span>
+              <input id="projectSearch" type="search" maxlength="120" placeholder="Search project, customer, or delivery…" />
+            </label>
+            <label>
+              <span class="sr-only">Capture adapter</span>
+              <select id="projectAdapterFilter">
+                <option value="">All capture sources</option>
+                <option value="xgrids-lcc">XGRIDS LCC</option>
+                <option value="fjd-trion">FJD Trion</option>
+                <option value="open-import">Open asset import</option>
+                <option value="phone-video">Phone / video</option>
+              </select>
+            </label>
+            <label>
+              <span class="sr-only">Delivery template</span>
+              <select id="projectDeliveryFilter"><option value="">All delivery templates</option></select>
+            </label>
+            <label>
+              <span class="sr-only">Sort projects</span>
+              <select id="projectSort">
+                <option value="updated_desc">Recently updated</option>
+                <option value="updated_asc">Oldest updated</option>
+                <option value="name_asc">Name A–Z</option>
+                <option value="name_desc">Name Z–A</option>
+              </select>
+            </label>
+            <label>
+              <span class="sr-only">Saved project view</span>
+              <select id="savedProjectView"><option value="">Current filters</option></select>
+            </label>
+            <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
+            <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
+          </div>
+          <div id="projectBulkBar" class="bulk-action-bar" role="status" aria-live="polite" hidden>
+            <strong id="projectSelectionCount">0 projects selected</strong>
+            <span id="projectSelectionHint">Select projects from the current portfolio.</span>
+            <div class="bulk-action-controls">
+              <button id="clearProjectSelection" class="quiet-button" type="button">Clear</button>
+              <button id="bulkRestoreProjects" class="quiet-button" type="button">Restore selected</button>
+              <button id="bulkArchiveProjects" class="danger-button" type="button">Archive selected</button>
+            </div>
+          </div>
+          <div id="projectTable" class="project-table" aria-live="polite">
+            <div class="empty-state">Sign in to load production projects.</div>
+          </div>
+        </div>
+
+        <aside id="queuePanel" class="queue-panel">
+          <div class="section-heading">
+            <div><span class="eyebrow">DURABLE JOBS</span><h2>Processing queue</h2></div>
+            <span class="worker-status"><i></i>Pull-agent contract</span>
+          </div>
+          <div id="jobList"><div class="empty-state compact">No jobs loaded.</div></div>
+          <div class="worker-card">
+            <span>Compute architecture</span>
+            <strong>Local RTX now.<br />Elastic workers later.</strong>
+            <small>Leases, heartbeats, idempotency keys, attempts and dead-letter states are persisted in D1.</small>
+          </div>
+        </aside>
+      </section>
+
+      <section id="projectDetail" class="output-section" tabindex="-1" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">SELECTED PROJECT</span><h2 id="detailTitle"></h2></div>
+          <span id="detailStatus" class="status-pill"></span>
+        </div>
+        <div id="detailBody" class="project-detail-grid"></div>
+      </section>
+
+      <section id="releaseWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">RELEASE INVENTORY</span><h2>Published history and active channels</h2></div>
+          <span class="worker-status"><i></i>Immutable release records</span>
+        </div>
+        <div id="releaseList" class="release-table" aria-live="polite">
+          <div class="empty-state">No releases loaded.</div>
+        </div>
+      </section>
+
+      <section id="reviewWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">CLIENT REVIEW</span><h2>Scoped access, anchored feedback, and approval history</h2></div>
+          <span class="worker-status"><i></i>Version-aware review</span>
+        </div>
+        <div id="reviewInbox" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">No review projects loaded.</div>
+        </div>
+      </section>
+
+      <section id="hostingWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">COMMERCIAL HOSTING</span><h2>Plans, invoices, storage, renewals, and operational alerts</h2></div>
+          <span class="worker-status"><i></i>Lifecycle controlled</span>
+        </div>
+        <div id="hostingOverview" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">No hosting data loaded.</div>
+        </div>
+      </section>
+
+      <section id="spatialWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">SPATIAL AUTHORING</span><h2>Floors, rooms, doorways, POIs, routes, and privacy regions</h2></div>
+          <span class="worker-status"><i></i>Vendor-neutral semantics</span>
+        </div>
+        <div id="spatialOverview" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">Open a project to author its latest immutable version.</div>
+        </div>
+      </section>
+
+      <section id="measurementWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">MEASURED FLOOR PLAN / SCAN-TO-CAD</span><h2>Tolerances, independent checks, cost evidence, and professional boundaries</h2></div>
+          <span class="worker-status"><i></i>Evidence before reliance</span>
+        </div>
+        <div id="measurementOverview" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">Open a project to define its measurement brief.</div>
+        </div>
+      </section>
+
+      <section id="teamWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">ORGANISATION ACCESS</span><h2>Members, invitations, roles, and immediate revocation</h2></div>
+          <div class="button-cluster">
+            <button id="createCaptureAgentButton" class="quiet-button" type="button">Capture agent</button>
+            <button id="addIdentityProviderButton" class="quiet-button" type="button">Configure SSO</button>
+            <button id="inviteTeamButton" class="primary-button" type="button">+ Invite teammate</button>
+          </div>
+        </div>
+        <div id="teamOverview" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">Team access is available to platform administrators.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="loginDialog" class="dialog-card">
+    <form id="loginForm">
+      <span class="eyebrow">SECURE STUDIO</span>
+      <h2>Sign in to production operations.</h2>
+      <p id="loginInstructions">Enter your authorised email. We will send a one-time code from <strong>login@whymelabs.com</strong>.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Email address</span><input id="loginEmail" name="email" type="email" autocomplete="email" maxlength="254" required /></label>
+        <label id="otpField" class="full auth-code-field"><span>Six-digit code</span><input id="loginCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" /></label>
+      </div>
+      <button id="loginSubmit" class="primary-button wide" type="submit">Email me a code</button>
+      <button id="resendLoginCode" class="quiet-button wide" type="button" hidden>Resend code</button>
+      <button id="changeLoginEmail" class="text-button wide" type="button" hidden>Use a different email</button>
+      <div id="enterpriseLoginRegion" class="enterprise-login-region">
+        <span class="auth-divider">or</span>
+        <button id="enterpriseLoginButton" class="quiet-button wide" type="button">Continue with enterprise SSO</button>
+        <div id="enterpriseProviderChoices" class="enterprise-provider-choices" aria-live="polite"></div>
+      </div>
+      <p id="loginError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="newProjectDialog" class="dialog-card wide-dialog">
+    <form id="newProjectForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">NEW SPATIAL PROJECT</span>
+      <h2>Create the canonical project before ingest.</h2>
+      <div class="mock-form-grid">
+        <label class="full"><span>Start from template</span><select id="newProjectTemplate" name="templateId"><option value="">No template — choose settings below</option></select></label>
+        <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
+        <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
+        <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
+        <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
+        <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000" placeholder="Area, floors, access, privacy and accuracy requirements"></textarea></label>
+      </div>
+      <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+      <button class="primary-button wide" type="submit">Create project</button>
+      <p id="projectError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="savedViewDialog" class="dialog-card">
+    <form id="savedViewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">PORTFOLIO VIEW</span>
+      <h2 id="savedViewTitle">Save the current filters.</h2>
+      <p>Saved views belong to your operator account and never change project data.</p>
+      <input name="viewId" type="hidden" />
+      <div class="mock-form-grid">
+        <label class="full"><span>View name</span><input name="name" required minlength="2" maxlength="80" /></label>
+        <label class="full checkbox-row"><input name="isDefault" type="checkbox" /> Open this view by default on sign-in.</label>
+      </div>
+      <button class="primary-button wide" type="submit">Save project view</button>
+      <p id="savedViewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="portfolioToolsDialog" class="dialog-card portfolio-dialog">
+    <form method="dialog" class="portfolio-dialog-shell">
+      <button class="dialog-close" value="cancel" type="submit">×</button>
+      <span class="eyebrow">PORTFOLIO OPERATIONS</span>
+      <h2>Templates and portable metadata.</h2>
+      <p>Templates and saved views stay in D1. Exports are explicit JSON downloads; importing always previews before it creates new DRAFT projects.</p>
+    </form>
+    <div class="portfolio-tools-grid">
+      <section class="portfolio-tool-section">
+        <div class="section-heading">
+          <div><span class="eyebrow">TEMPLATES</span><h3>Reusable project defaults</h3></div>
+        </div>
+        <div id="projectTemplateList" class="compact-record-list" aria-live="polite"></div>
+        <form id="projectTemplateForm" class="inline-tool-form">
+          <input name="templateId" type="hidden" />
+          <div class="mock-form-grid">
+            <label><span>Name</span><input name="name" required minlength="2" maxlength="80" /></label>
+            <label><span>Description</span><input name="description" maxlength="500" /></label>
+            <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
+            <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
+            <label class="full"><span>Default notes</span><textarea name="notes" maxlength="4000"></textarea></label>
+          </div>
+          <div class="form-actions">
+            <button id="cancelTemplateEdit" class="quiet-button" type="button" hidden>Cancel edit</button>
+            <button class="primary-button" type="submit">Create template</button>
+          </div>
+          <p id="projectTemplateError" class="form-error" role="alert"></p>
+        </form>
+      </section>
+      <section class="portfolio-tool-section">
+        <span class="eyebrow">PORTABLE EXPORT</span>
+        <h3>Move the canonical metadata</h3>
+        <p id="portfolioExportHint">Export up to 100 projects. Assets and lifecycle state remain in this workspace.</p>
+        <div class="form-actions">
+          <button id="exportSelectedProjects" class="primary-button" type="button">Export selected</button>
+          <button id="exportAllProjects" class="quiet-button" type="button">Export all</button>
+        </div>
+        <p id="portfolioExportError" class="form-error" role="alert"></p>
+      </section>
+      <section class="portfolio-tool-section">
+        <span class="eyebrow">VALIDATED IMPORT</span>
+        <h3>Preview, then create DRAFT projects</h3>
+        <label class="portfolio-file-input"><span>Spatial portfolio JSON</span><input id="portfolioImportFile" type="file" accept=".json,application/json" /></label>
+        <div id="portfolioImportPreview" class="notice-card" aria-live="polite">Choose an exported portfolio file to begin.</div>
+        <div class="form-actions">
+          <button id="previewPortfolioImport" class="quiet-button" type="button" disabled>Validate import</button>
+          <button id="commitPortfolioImport" class="primary-button" type="button" disabled>Create projects</button>
+        </div>
+        <p id="portfolioImportError" class="form-error" role="alert"></p>
+      </section>
+      <section id="projectFieldManager" class="portfolio-tool-section">
+        <span class="eyebrow">PROJECT SCHEMA</span>
+        <h3>Organisation-defined metadata</h3>
+        <p>Typed fields are validated by the API and travel with a direct portfolio handoff. Field keys and types remain immutable.</p>
+        <div id="projectFieldList" class="compact-record-list" aria-live="polite"></div>
+        <form id="projectFieldForm" class="inline-tool-form">
+          <input name="fieldId" type="hidden" />
+          <div class="mock-form-grid">
+            <label><span>Key</span><input name="key" required minlength="2" maxlength="40" pattern="[a-z][a-z0-9_]*" placeholder="portfolio_code" /></label>
+            <label><span>Label</span><input name="label" required minlength="2" maxlength="80" /></label>
+            <label><span>Type</span><select name="type"><option value="text">Text</option><option value="number">Number</option><option value="boolean">True / false</option><option value="date">Date</option><option value="select">Select</option><option value="url">URL</option></select></label>
+            <label><span>Sort order</span><input name="sortOrder" type="number" min="0" max="10000" step="1" value="0" /></label>
+            <label class="full"><span>Description</span><input name="description" maxlength="500" /></label>
+            <label class="full"><span>Select options</span><textarea name="options" maxlength="6050" placeholder="One option per line; only used by Select fields"></textarea></label>
+            <label class="full checkbox-row"><input name="required" type="checkbox" /> Require a value on newly created and explicitly edited project metadata.</label>
+          </div>
+          <div class="form-actions">
+            <button id="cancelProjectFieldEdit" class="quiet-button" type="button" hidden>Cancel edit</button>
+            <button class="primary-button" type="submit">Create field</button>
+          </div>
+          <p id="projectFieldError" class="form-error" role="alert"></p>
+        </form>
+      </section>
+      <section id="portfolioHandoffSection" class="portfolio-tool-section">
+        <span class="eyebrow">CROSS-ORGANISATION HANDOFF</span>
+        <h3>Copy selected metadata into another workspace</h3>
+        <p>Requires platform-administrator access in both workspaces. The source remains unchanged; versions, R2 assets, releases, jobs, and review history are excluded.</p>
+        <label><span>Destination workspace</span><select id="portfolioHandoffTarget"><option value="">Choose a destination</option></select></label>
+        <div id="portfolioHandoffPreview" class="notice-card" aria-live="polite">Select projects in the portfolio and choose a destination.</div>
+        <div class="form-actions">
+          <button id="previewPortfolioHandoff" class="quiet-button" type="button" disabled>Preview handoff</button>
+          <button id="commitPortfolioHandoff" class="primary-button" type="button" disabled>Create DRAFT copies</button>
+        </div>
+        <p id="portfolioHandoffError" class="form-error" role="alert"></p>
+      </section>
+      <section id="assetHandoffSection" class="portfolio-tool-section">
+        <span class="eyebrow">IMMUTABLE ASSET COPY</span>
+        <h3>Copy one project and its verified R2 assets</h3>
+        <p>The source remains unchanged. The destination receives new IDs and returns to INGESTED; uploads, jobs, QA, reviews, releases, identity, and billing authority never transfer.</p>
+        <label><span>Destination workspace</span><select id="assetHandoffTarget"><option value="">Choose a destination</option></select></label>
+        <div id="assetHandoffPreview" class="notice-card" aria-live="polite">Select exactly one project and choose a destination.</div>
+        <div id="assetHandoffProgress" class="asset-handoff-progress" aria-live="polite" hidden></div>
+        <div class="form-actions asset-handoff-actions">
+          <button id="previewAssetHandoff" class="quiet-button" type="button" disabled>Preview asset copy</button>
+          <button id="commitAssetHandoff" class="primary-button" type="button" disabled>Start verified copy</button>
+          <button id="refreshAssetHandoff" class="quiet-button" type="button" disabled>Refresh progress</button>
+          <button id="retryAssetHandoff" class="quiet-button" type="button" disabled>Retry failed items</button>
+          <button id="cancelAssetHandoff" class="danger-button" type="button" disabled>Cancel and clean up</button>
+        </div>
+        <p id="assetHandoffError" class="form-error" role="alert"></p>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="teamInvitationDialog" class="dialog-card wide-dialog">
+    <form id="teamInvitationForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">TEAM INVITATION</span>
+      <h2>Grant production access after email verification.</h2>
+      <p>The invitation is accepted only after the recipient completes email OTP sign-in. Existing sessions are revoked whenever their role changes.</p>
+      <div class="mock-form-grid">
+        <label><span>Email address</span><input name="email" type="email" autocomplete="email" maxlength="254" required /></label>
+        <label><span>Role</span><select name="role"><option value="production_operator">Production operator</option><option value="platform_admin">Platform administrator</option></select></label>
+        <label><span>Invitation lifetime</span><select name="expiresInDays"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label>
+      </div>
+      <button class="primary-button wide" type="submit">Send secure invitation</button>
+      <p id="teamInvitationError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="identityProviderDialog" class="dialog-card wide-dialog">
+    <form id="identityProviderForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">ENTERPRISE IDENTITY</span>
+      <h2>Register an OIDC provider.</h2>
+      <p>The client secret is never submitted through this browser. Create the draft here, store its generated provider ID in the <code>OIDC_CLIENT_SECRETS</code> Worker secret, then activate after discovery succeeds.</p>
+      <div class="mock-form-grid">
+        <label><span>Display name</span><input name="name" minlength="2" maxlength="80" placeholder="Company SSO" required /></label>
+        <label><span>OIDC issuer</span><input name="issuer" type="url" maxlength="500" placeholder="https://identity.example.com" required /></label>
+        <label class="full"><span>Client ID</span><input name="clientId" maxlength="300" autocomplete="off" required /></label>
+        <label class="full"><span>Allowed email domains</span><input name="emailDomains" maxlength="1000" placeholder="example.com, subsidiary.example.com" required /><small>Comma-separated; each domain is matched exactly.</small></label>
+      </div>
+      <button class="primary-button wide" type="submit">Create draft provider</button>
+      <p id="identityProviderError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureAgentDialog" class="dialog-card wide-dialog">
+    <form id="captureAgentForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">UNATTENDED CAPTURE TRANSFER</span>
+      <h2 id="captureAgentTitle">Create a scoped transfer credential.</h2>
+      <p id="captureAgentDescription">Assign only the projects this workstation may upload. The token is returned after this action and is never stored in plaintext.</p>
+      <input name="mode" type="hidden" value="create" />
+      <input name="credentialId" type="hidden" />
+      <div class="mock-form-grid">
+        <label id="captureAgentNameField" class="full"><span>Workstation name</span><input name="name" minlength="2" maxlength="80" required placeholder="K1 export workstation" /></label>
+        <label id="captureAgentExpiryField"><span>Credential lifetime</span><select name="expiresInDays"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="180">180 days</option><option value="365">365 days</option></select></label>
+      </div>
+      <section id="captureAgentProjectField" class="capture-agent-project-field">
+        <span class="field-label">Assigned projects</span>
+        <p>Removing a project stops new parts and completion immediately. Existing immutable R2 objects are not deleted.</p>
+        <div id="captureAgentProjectChoices" class="capture-agent-project-choices" aria-live="polite"></div>
+      </section>
+      <button id="captureAgentSubmit" class="primary-button wide" type="submit">Create scoped token</button>
+      <p id="captureAgentError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureAgentTokenDialog" class="dialog-card wide-dialog">
+    <form method="dialog">
+      <button class="dialog-close" value="cancel" type="submit">×</button>
+      <span class="eyebrow">TOKEN ISSUED</span>
+      <h2 id="captureAgentTokenTitle">Store this credential now.</h2>
+      <p>This token is sufficient only for the assigned project upload APIs. Put it in <code>SPATIAL_CAPTURE_AGENT_TOKEN</code>; never commit it to source control.</p>
+      <label class="full"><span>Capture-agent token</span><textarea id="captureAgentTokenValue" readonly rows="4" spellcheck="false"></textarea></label>
+      <div class="form-actions">
+        <button id="copyCaptureAgentToken" class="primary-button" type="button">Copy token</button>
+        <button class="quiet-button" value="cancel" type="submit">I stored it safely</button>
+      </div>
+      <p id="captureAgentTokenError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="uploadDialog" class="dialog-card wide-dialog">
+    <form id="uploadForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">IMMUTABLE SOURCE INGEST</span>
+      <h2>Preserve a capture asset or delivery master.</h2>
+      <p>The browser sends resumable 25 MiB parts. R2 keeps the immutable bytes; D1 records their purpose, integrity state, and processing lifecycle. Only compatible Gaussian masters enter Spark.</p>
+      <section id="uploadAdapterGuidance" class="notice-card"></section>
+      <section id="uploadRecovery" class="notice-card" aria-live="polite" hidden></section>
+      <div class="mock-form-grid">
+        <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready Spark web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
+        <label><span>Declared format</span><select id="uploadFormat" name="format"><option value="ply">PLY</option></select></label>
+        <label class="full"><span>Immutable local file</span><input id="uploadAssetInput" name="asset" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.zip" required /><small id="uploadPurposeHelp">Spark will validate and derive a browser-ready RAD scene from this portable Gaussian master.</small></label>
+        <label><span>Target project</span><input id="uploadProjectName" disabled /></label>
+      </div>
+      <div class="upload-progress"><i id="uploadProgress"></i></div>
+      <small id="uploadStatus" role="status" aria-live="polite">Ready to upload.</small>
+      <button class="primary-button wide" type="submit">Start resumable upload</button>
+      <button id="pauseUploadButton" class="quiet-button wide" type="button" hidden>Pause upload</button>
+      <p id="uploadError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureBundleDialog" class="dialog-card capture-bundle-dialog">
+    <form id="captureBundleForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">VENDOR-NEUTRAL CAPTURE CONTRACT</span>
+      <h2>Register exactly what this capture can support.</h2>
+      <p>Bind verified R2 assets to their evidence roles. The platform preserves a SHA-256-addressed manifest and evaluates rendering, metric, reconstruction, automation, and licence readiness independently.</p>
+      <div class="mock-form-grid">
+        <label><span>Immutable version</span><select id="captureBundleVersion" name="versionId" required></select></label>
+        <label><span>Capture adapter</span><input id="captureBundleAdapter" name="adapter" readonly required /></label>
+        <label><span>Hardware vendor</span><input name="vendor" minlength="1" maxlength="120" required /></label>
+        <label><span>Scanner / source model</span><input name="model" minlength="1" maxlength="120" required /></label>
+        <label><span>Hardware version</span><input name="hardwareVersion" maxlength="120" /></label>
+        <label><span>Firmware version</span><input name="firmwareVersion" maxlength="120" /></label>
+        <label><span>Exporter</span><input name="exporterName" minlength="1" maxlength="120" required /></label>
+        <label><span>Exporter version</span><input name="exporterVersion" minlength="1" maxlength="120" required /></label>
+        <label><span>Exported at</span><input name="exportedAt" type="datetime-local" required /></label>
+        <label><span>Export mode</span><select name="exporterMode" required><option value="gui">Interactive GUI</option><option value="cli">Command line</option><option value="api">API</option><option value="cloud">Managed cloud</option></select></label>
+        <label><span>Coordinate frame</span><input name="coordinateFrameId" value="project-local" minlength="2" maxlength="240" required /></label>
+        <label><span>Units</span><select name="coordinateUnits" required><option value="metres">Metres</option><option value="millimetres">Millimetres</option></select></label>
+        <label><span>Axis convention</span><select name="axisConvention" required><option value="right-handed-y-up">Right-handed, Y up</option><option value="right-handed-z-up">Right-handed, Z up</option><option value="left-handed-y-up">Left-handed, Y up</option><option value="left-handed-z-up">Left-handed, Z up</option></select></label>
+        <label><span>EPSG (optional)</span><input name="epsg" type="number" min="2000" max="999999" step="1" /></label>
+        <label class="full"><span>Registration method</span><textarea name="registrationMethod" minlength="10" maxlength="2000" required placeholder="Explain how scale, orientation, origin, and any external control were established."></textarea></label>
+      </div>
+      <section class="capture-bundle-section" aria-labelledby="captureBundleAssetsTitle">
+        <div class="section-heading compact-heading">
+          <div><span class="eyebrow">IMMUTABLE INPUTS</span><h3 id="captureBundleAssetsTitle">Assign evidence roles</h3></div>
+        </div>
+        <p class="field-note">Only verified assets on the selected version appear. Select an asset, then choose every role it genuinely evidences.</p>
+        <div id="captureBundleAssets" class="capture-bundle-assets" aria-live="polite"></div>
+      </section>
+      <section class="capture-bundle-section">
+        <span class="eyebrow">COMMERCIAL RIGHTS</span>
+        <div class="rights-grid">
+          <label class="checkbox-row"><input name="commercialUseConfirmed" type="checkbox" required /> Commercial use confirmed</label>
+          <label class="checkbox-row"><input name="selfHostingConfirmed" type="checkbox" required /> Self-hosting confirmed</label>
+          <label class="checkbox-row"><input name="redistributionConfirmed" type="checkbox" required /> Derived redistribution confirmed</label>
+        </div>
+        <label class="full"><span>Written rights evidence</span><textarea name="rightsEvidence" minlength="10" maxlength="2000" required placeholder="Quote or identify the quotation, licence, email, or contract that grants these rights."></textarea></label>
+        <label class="full"><span>Known limitations (one per line)</span><textarea name="limitations" maxlength="10000" placeholder="Camera poses are not exported.&#10;Cloud processing requires a separate subscription."></textarea></label>
+      </section>
+      <div id="captureBundlePreview" class="notice-card">Select verified assets and evidence roles. Capabilities are derived from those roles, never typed as unsupported claims.</div>
+      <button class="primary-button wide" type="submit">Register immutable capture bundle</button>
+      <p id="captureBundleError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureBundleReviewDialog" class="dialog-card wide-dialog">
+    <form id="captureBundleReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">CAPTURE CONTRACT REVIEW</span>
+      <h2>Record whether this bundle is acceptable.</h2>
+      <input name="manifestId" type="hidden" />
+      <div id="captureBundleReviewContext" class="notice-card"></div>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="accepted">Accept registered evidence</option><option value="needs_vendor_evidence">Needs vendor evidence</option><option value="rejected">Reject bundle</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="State what was verified, remaining limitations, and the next action."></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Record capture-contract review</button>
+      <p id="captureBundleReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="editProjectDialog" class="dialog-card wide-dialog">
+    <form id="editProjectForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">PROJECT SETTINGS</span>
+      <h2>Maintain the canonical project record.</h2>
+      <div class="mock-form-grid">
+        <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
+        <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
+        <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
+        <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
+        <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
+      </div>
+      <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+      <button class="primary-button wide" type="submit">Save project settings</button>
+      <p id="editProjectError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="qaDialog" class="dialog-card wide-dialog">
+    <form id="qaForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">QUALITY GATE</span>
+      <h2>Approve a web derivative.</h2>
+      <p>Only Spark RAD, SPZ, or SOG assets can be published. Privacy approval is mandatory.</p>
+      <section id="qaPrivacyEvidence" class="notice-card" aria-live="polite"></section>
+      <button id="qaOpenPrivacyWorkspace" class="quiet-button wide" type="button">Open privacy evidence workspace</button>
+      <div class="mock-form-grid">
+        <label class="full"><span>Web asset</span><select name="webAssetId" id="qaAssetSelect" required></select></label>
+        <label><span>Visual grade</span><select name="visualGrade"><option>A</option><option>B</option><option>C</option></select></label>
+        <label><span>Measurement grade</span><select name="measurementGrade"><option value="visual-only">Visual only</option><option value="indicative">Indicative</option><option value="project-verified">Project verified</option><option value="professional-certified">Professional certified</option></select></label>
+        <label class="full"><span>QA notes</span><textarea name="notes" maxlength="4000"></textarea></label>
+        <label class="full checkbox-row"><input name="privacyApproved" type="checkbox" required /> I confirm privacy and publication review is approved.</label>
+      </div>
+      <button class="primary-button wide" type="submit">Approve immutable version</button>
+      <p id="qaError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="releaseDialog" class="dialog-card wide-dialog">
+    <form id="releaseForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">PUBLISH RELEASE</span>
+      <h2>Create or advance a release channel.</h2>
+      <div class="mock-form-grid">
+        <label><span>Public slug</span><input name="slug" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required /></label>
+        <label><span>Access policy</span><select name="accessPolicy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="token">Access token</option><option value="customer-authenticated">Customer authenticated</option></select></label>
+        <label class="full"><span>Viewer title</span><input name="title" required /></label>
+        <label class="full"><span>Subtitle</span><input name="subtitle" maxlength="240" /></label>
+        <label><span>Capture date</span><input name="captureDate" type="date" /></label>
+        <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
+        <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer" required>This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Publish release</button>
+      <p id="releaseError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="reviewerDialog" class="dialog-card wide-dialog">
+    <form id="reviewerForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">CLIENT ACCESS</span>
+      <h2>Invite a reviewer to one project.</h2>
+      <p>The invitation is project-scoped and expires automatically. Access can be revoked at any time.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Email address</span><input name="email" type="email" autocomplete="email" maxlength="254" required /></label>
+        <label><span>Access role</span><select name="role"><option value="customer_reviewer">Reviewer — comment and decide</option><option value="customer_readonly">Read only</option></select></label>
+        <label><span>Expires after</span><select name="expiresInDays"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label>
+      </div>
+      <button class="primary-button wide" type="submit">Send secure invitation</button>
+      <p id="reviewerError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="deliveryDialog" class="dialog-card wide-dialog">
+    <form id="deliveryForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">DELIVERY SETTINGS</span>
+      <h2>Brand and retain this spatial asset.</h2>
+      <div class="mock-form-grid">
+        <label><span>Brand name</span><input name="brandName" maxlength="120" placeholder="Customer or venue" /></label>
+        <label><span>Logo URL</span><input name="logoUrl" type="url" maxlength="2048" placeholder="https://…" /></label>
+        <label><span>Accent colour</span><input name="accentColor" type="color" value="#d6ff4b" /></label>
+        <label><span>Surface colour</span><input name="surfaceColor" type="color" value="#0d0f0e" /></label>
+        <label><span>Hosting plan</span><select name="planCode"><option value="listing">Listing</option><option value="portfolio">Portfolio</option><option value="venue">Venue</option><option value="enterprise">Enterprise private</option></select></label>
+        <label><span>Raw retention</span><select name="rawRetentionDays"><option value="90">90 days</option><option value="365" selected>1 year</option><option value="1095">3 years</option><option value="3650">10 years</option><option value="0">Delete after acceptance</option></select></label>
+        <label><span>Derivative retention</span><select name="derivativeRetentionDays"><option value="365">1 year</option><option value="730" selected>2 years</option><option value="1825">5 years</option><option value="3650">10 years</option></select></label>
+        <label><span>Release retention</span><select name="releaseRetentionDays"><option value="365">1 year</option><option value="1095" selected>3 years</option><option value="1825">5 years</option><option value="3650">10 years</option></select></label>
+        <label class="full checkbox-row"><input name="archiveOnExpiry" type="checkbox" checked /> Archive the project if hosting expires.</label>
+        <label class="full checkbox-row"><input name="legalHold" type="checkbox" /> Legal hold: prevent lifecycle deletion.</label>
+      </div>
+      <p id="deliveryBillingStatus" class="notice-card" aria-live="polite"></p>
+      <button class="primary-button wide" type="submit">Save brand & retention</button>
+      <button id="startHostingCheckout" class="quiet-button wide" type="button">Open billing workspace</button>
+      <p id="deliveryError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="domainDialog" class="dialog-card wide-dialog">
+    <form id="domainForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">CUSTOM DOMAIN</span>
+      <h2>Provision a branded hostname.</h2>
+      <p>Ownership, Cloudflare routing, and the TLS certificate are tracked separately. A hostname is active only after all three checks pass.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Hostname</span><input name="hostname" placeholder="tour.customer.com" required /></label>
+      </div>
+      <button class="primary-button wide" type="submit">Create verification record</button>
+      <div id="domainInstructions" class="notice-card" hidden></div>
+      <section class="domain-inventory-section" aria-labelledby="domainInventoryTitle">
+        <div class="workspace-section-heading">
+          <div>
+            <span class="eyebrow">HOSTNAME LIFECYCLE</span>
+            <h3 id="domainInventoryTitle">Registered domains</h3>
+          </div>
+        </div>
+        <div id="domainInventory" class="domain-inventory" aria-live="polite"></div>
+      </section>
+      <p id="domainError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="entityDialog" class="dialog-card wide-dialog">
+    <form id="entityForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">SPATIAL ENTITY</span>
+      <h2>Add structure to the current version.</h2>
+      <div class="mock-form-grid">
+        <label><span>Type</span><select name="kind"><option value="floor">Floor</option><option value="room">Room</option><option value="doorway">Doorway</option><option value="poi">Point of interest</option></select></label>
+        <label><span>Label</span><input name="label" required maxlength="120" /></label>
+        <label class="full"><span>Description</span><textarea name="description" maxlength="1000"></textarea></label>
+        <label class="full"><span>Position (x, y, z metres)</span><input name="position" placeholder="0, 0, 0" pattern="\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*" title="Enter exactly three numbers separated by commas, for example 0, 1.6, 2" /></label>
+        <label class="full"><span>Walkable bounds (min x, floor y, min z → max x, ceiling y, max z)</span><input name="bounds" placeholder="-2, 0, -3 → 2, 2.6, 3" /></label>
+      </div>
+      <p class="field-note">Add bounds to rooms and floors to generate the runtime collision proxy and navigation mesh. Leave blank for labels and POIs.</p>
+      <button class="primary-button wide" type="submit">Add spatial entity</button>
+      <p id="entityError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="semanticExtractionDialog" class="dialog-card wide-dialog">
+    <form id="semanticExtractionForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">POINT-CLOUD SEMANTICS</span>
+      <h2>Propose walkable regions for human review.</h2>
+      <p>The processor inspects horizontal occupancy in a verified, registered Y-up metric PLY. It creates candidates only—never authored rooms or measurement claims.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Registered PLY asset</span><select id="semanticInputAsset" name="inputAssetId" required></select></label>
+        <label><span>Horizontal grid</span><input name="gridSizeM" type="number" min="0.05" max="2" step="0.05" value="0.25" required /></label>
+        <label><span>Floor band</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" required /></label>
+        <label><span>Minimum region area</span><input name="minimumAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" required /></label>
+        <label><span>Maximum candidates</span><input name="maximumCandidates" type="number" min="1" max="100" step="1" value="24" required /></label>
+        <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" required /></label>
+        <label><span>Floor elevation hint (optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic lower support layer" /></label>
+        <label class="full"><span>Registration evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Who verified metres, Y-up orientation, and the project-local registered frame?"></textarea></label>
+      </div>
+      <p class="field-note">Furniture, ceilings, stairs, glass, sparse floors, and overlapping levels can mislead occupancy extraction. Inspect every polygon before acceptance.</p>
+      <button class="primary-button wide" type="submit">Queue semantic extraction</button>
+      <p id="semanticExtractionError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="semanticReviewDialog" class="dialog-card wide-dialog">
+    <form id="semanticReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">HUMAN SEMANTIC REVIEW</span>
+      <h2>Choose which polygons become editable room seeds.</h2>
+      <input name="extractionId" type="hidden" />
+      <div id="semanticReviewContext" class="notice-card"></div>
+      <fieldset class="full candidate-choice-fieldset">
+        <legend>Walkable candidates</legend>
+        <div id="semanticCandidateChoices" class="semantic-candidate-choices"></div>
+      </fieldset>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="accept_selected">Accept selected as editable rooms</option><option value="reject_all">Reject every candidate</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="Describe how the point cloud and candidate boundaries were checked."></textarea></label>
+      </div>
+      <p class="field-note">Acceptance creates an authored floor grouping and editable room polygons. It does not certify walls, accessibility, title, area, or survey accuracy.</p>
+      <button class="primary-button wide" type="submit">Record semantic review</button>
+      <p id="semanticReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="routeDialog" class="dialog-card wide-dialog">
+    <form id="routeForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">GUIDED ROUTE</span>
+      <h2>Connect authored places into a guided visit.</h2>
+      <div class="mock-form-grid">
+        <label><span>Route name</span><input name="label" required maxlength="120" /></label>
+        <label><span>Accessibility</span><select name="accessibility"><option value="standard">Standard</option><option value="step_free">Step free</option><option value="restricted">Restricted</option></select></label>
+        <label class="full"><span>Stops in order</span><select id="routeStops" name="stops" multiple size="7" required></select></label>
+        <label class="full"><span>Description</span><textarea name="description" maxlength="1000"></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Create guided route</button>
+      <p id="routeError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="privacyCandidateDialog" class="dialog-card wide-dialog">
+    <form id="privacyCandidateForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">PRIVACY EVIDENCE</span>
+      <h2>Record the human decision.</h2>
+      <p id="privacyCandidateContext">Review the highlighted model candidate before changing its status.</p>
+      <input name="candidateId" type="hidden" />
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="status" required><option value="dismissed">Dismiss false positive</option><option value="confirmed">Confirm privacy issue</option><option value="resolved">Mark issue resolved</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="2" maxlength="1000" required placeholder="What did you verify, or how was the issue resolved?"></textarea></label>
+      </div>
+      <p class="field-note">Detection never approves publication automatically. Confirmed and pending candidates continue to block QA; resolved and dismissed candidates retain their audit history.</p>
+      <button class="primary-button wide" type="submit">Record privacy decision</button>
+      <p id="privacyCandidateError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="measurementBriefDialog" class="dialog-card wide-dialog">
+    <form id="measurementBriefForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">MEASUREMENT BRIEF</span>
+      <h2>Define reliance before producing drawings.</h2>
+      <div class="mock-form-grid">
+        <label><span>Product</span><select name="productType"><option value="measured_floor_plan">Measured floor plan</option><option value="scan_to_cad">Scan-to-CAD base drawing</option></select></label>
+        <label><span>Tolerance</span><input name="toleranceMm" type="number" min="1" max="1000" step="0.1" value="30" required /></label>
+        <label><span>Reliance</span><select name="relianceClass"><option value="indicative">Indicative</option><option value="project_verified">Project verified</option></select></label>
+        <label><span>Coordinates</span><input name="coordinateReference" maxlength="240" placeholder="Local grid or EPSG" /></label>
+        <label class="full"><span>Intended use</span><textarea name="intendedUse" required minlength="3" maxlength="2000"></textarea></label>
+        <label class="full"><span>Exclusions</span><textarea name="exclusions" maxlength="4000" placeholder="Hidden services, boundaries, obstructed surfaces…"></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Create evidence brief</button>
+      <p id="measurementBriefError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="checkPointDialog" class="dialog-card wide-dialog">
+    <form id="checkPointForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">INDEPENDENT CHECK POINT</span>
+      <h2>Compare reference and observed coordinates.</h2>
+      <div class="mock-form-grid">
+        <label class="full"><span>Point label</span><input name="label" required maxlength="120" /></label>
+        <label class="full"><span>Reference x, y, z</span><input name="reference" required placeholder="0, 0, 0" /></label>
+        <label class="full"><span>Observed x, y, z</span><input name="observed" required placeholder="0.005, 0, 0" /></label>
+        <label class="full"><span>Evidence note</span><textarea name="evidenceNote" maxlength="1000"></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Record check point</button>
+      <p id="checkPointError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="geometryChangeDialog" class="dialog-card wide-dialog">
+    <form id="geometryChangeForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">AUTHORED GEOMETRY EVIDENCE</span>
+      <h2>Compare two registered spatial versions.</h2>
+      <p>This comparison measures authored floor, room, and doorway footprints. It does not infer survey accuracy from Gaussian appearance.</p>
+      <div class="mock-form-grid">
+        <label><span>From version</span><select id="geometryChangeFrom" name="fromVersionId" required></select></label>
+        <label><span>To version</span><select id="geometryChangeTo" name="toVersionId" required></select></label>
+        <label><span>Material-change threshold</span><input name="thresholdMm" type="number" min="1" max="10000" step="1" value="50" required /></label>
+        <label><span>Coordinate assurance</span><select name="coordinateAssurance" required><option value="shared_local_frame">Shared local frame</option><option value="registered_project_frame">Registered project frame</option></select></label>
+        <label class="full"><span>Registration evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="State how both versions were aligned to the same coordinate frame and who verified it."></textarea></label>
+      </div>
+      <p class="field-note">Entities correspond by normalized type and label. Duplicate labels or invalid footprints block a metric conclusion instead of being guessed.</p>
+      <button class="primary-button wide" type="submit">Generate metric evidence</button>
+      <p id="geometryChangeError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="geometryChangeReviewDialog" class="dialog-card wide-dialog">
+    <form id="geometryChangeReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">HUMAN REVIEW</span>
+      <h2>Record the disposition of this comparison.</h2>
+      <input name="reportId" type="hidden" />
+      <div id="geometryChangeReviewContext" class="notice-card"></div>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="accepted">Accept evidence</option><option value="needs_recapture">Needs recapture or registration</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="Explain what was checked and the next action."></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Record review</button>
+      <p id="geometryChangeReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="rawSceneChangeDialog" class="dialog-card wide-dialog">
+    <form id="rawSceneChangeForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">RAW-SCENE REGISTRATION + CHANGE EVIDENCE</span>
+      <h2>Align and compare two immutable PLY assets.</h2>
+      <p>The leased processor can estimate bounded yaw and translation before comparing voxel occupancy, centroids, and mean colour. Every transform remains quality-gated evidence for human review—not survey registration.</p>
+      <div class="mock-form-grid">
+        <label><span>Baseline version</span><select id="rawChangeBaselineVersion" name="baselineVersionId" required></select></label>
+        <label><span>Baseline PLY</span><select id="rawChangeBaselineAsset" name="baselineAssetId" required></select></label>
+        <label><span>Candidate version</span><select id="rawChangeCandidateVersion" name="candidateVersionId" required></select></label>
+        <label><span>Candidate PLY</span><select id="rawChangeCandidateAsset" name="candidateAssetId" required></select></label>
+        <label><span>Registration mode</span><select name="registrationMode" required><option value="automatic_rigid">Automatic yaw + translation</option><option value="declared">Already registered</option></select></label>
+        <label><span>Coordinate precondition</span><select name="coordinateAssurance" required><option value="shared_local_frame">Same scale and gravity axis</option><option value="registered_project_frame">Registered project frame</option></select></label>
+        <label><span>Registration search radius (m)</span><input name="registrationSearchRadiusM" type="number" min="0.05" max="20" step="0.05" value="1" required /></label>
+        <label><span>Maximum registration RMSE (mm)</span><input name="registrationMaximumRmseMm" type="number" min="1" max="10000" step="1" value="100" required /></label>
+        <label><span>Minimum registration overlap (%)</span><input name="registrationMinimumOverlapPercent" type="number" min="5" max="100" step="1" value="55" required /></label>
+        <label><span>Voxel size (m)</span><input name="voxelSizeM" type="number" min="0.005" max="5" step="0.005" value="0.1" required /></label>
+        <label><span>Occupancy threshold (%)</span><input name="structuralChangeThresholdPercent" type="number" min="0" max="100" step="0.1" value="2" required /></label>
+        <label><span>Colour threshold (%)</span><input name="photometricChangeThresholdPercent" type="number" min="0" max="100" step="0.1" value="12" required /></label>
+        <label><span>Centroid threshold (mm)</span><input name="centroidChangeThresholdMm" type="number" min="1" max="10000" step="1" value="50" required /></label>
+        <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" required /></label>
+        <label class="full"><span>Registration evidence / preconditions</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="For automatic mode, state how metres, scale, gravity axis, and source provenance were verified. For declared mode, state how the exact shared frame was established."></textarea></label>
+      </div>
+      <p class="field-note">Automatic mode preserves scale and gravity, searches yaw and translation only, and blocks change analysis when overlap, RMSE, or ambiguity gates fail. Large inputs remain private and immutable.</p>
+      <button class="primary-button wide" type="submit">Queue registration and comparison</button>
+      <p id="rawSceneChangeError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="rawSceneChangeReviewDialog" class="dialog-card wide-dialog">
+    <form id="rawSceneChangeReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">HUMAN RAW-SCENE REVIEW</span>
+      <h2>Record what this registered comparison means operationally.</h2>
+      <input name="reportId" type="hidden" />
+      <div id="rawSceneChangeReviewContext" class="notice-card"></div>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="accepted">Accept evidence</option><option value="investigate">Investigate change</option><option value="needs_recapture">Needs recapture or registration</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="State what was reviewed, likely causes, limitations, and the next action."></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Record raw-scene review</button>
+      <p id="rawSceneChangeReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureCompletenessDialog" class="dialog-card wide-dialog">
+    <form id="captureCompletenessForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">CAPTURE COMPLETENESS EVIDENCE</span>
+      <h2>Check a pose path against authored rooms.</h2>
+      <p>Upload canonical Y-up trajectory JSON. The source is preserved privately in R2; D1 stores the bounded result and review history.</p>
+      <div class="mock-form-grid">
+        <label><span>Scene version</span><select id="captureCompletenessVersion" name="versionId" required></select></label>
+        <label><span>Trajectory JSON</span><input name="trajectoryFile" type="file" accept="application/json,.json" required /></label>
+        <label class="full"><span>Coordinate frame</span><input name="coordinateFrame" value="project-local-y-up" minlength="3" maxlength="240" required /></label>
+        <label class="full"><span>Alignment evidence</span><textarea name="alignmentEvidence" minlength="10" maxlength="2000" required placeholder="Explain how the pose path and authored rooms were aligned to the same Y-up frame."></textarea></label>
+        <label><span>Coverage radius (m)</span><input name="coverageRadiusM" type="number" min="0.1" max="10" step="0.05" value="1.25" required /></label>
+        <label><span>Maximum sample gap (m)</span><input name="maximumSampleGapM" type="number" min="0.1" max="20" step="0.1" value="3" required /></label>
+        <label><span>Loop-closure radius (m)</span><input name="loopClosureRadiusM" type="number" min="0.1" max="20" step="0.1" value="1" required /></label>
+        <label><span>Minimum room coverage (%)</span><input name="minimumRoomCoveragePercent" type="number" min="1" max="100" step="1" value="85" required /></label>
+        <label><span>Vertical tolerance (m)</span><input name="verticalToleranceM" type="number" min="0" max="10" step="0.1" value="0.5" required /></label>
+      </div>
+      <details class="format-guide">
+        <summary>Canonical trajectory JSON format</summary>
+        <pre>{"points":[{"position":[0,1.5,0],"timestampMs":0},{"position":[1,1.5,0],"timestampMs":1000}]}</pre>
+      </details>
+      <p class="field-note">Maximum 5,000 poses and 750 KiB. This checks path coverage only—not sharpness, exposure, occlusion, SLAM correctness, or reconstruction quality.</p>
+      <button class="primary-button wide" type="submit">Analyze capture trajectory</button>
+      <p id="captureCompletenessError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="captureCompletenessReviewDialog" class="dialog-card wide-dialog">
+    <form id="captureCompletenessReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">HUMAN CAPTURE REVIEW</span>
+      <h2>Record whether this evidence is sufficient.</h2>
+      <input name="reportId" type="hidden" />
+      <div id="captureCompletenessReviewContext" class="notice-card"></div>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="accepted">Accept evidence</option><option value="needs_recapture">Needs recapture</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="State what was reviewed, known limitations, and the next action."></textarea></label>
+      </div>
+      <button class="primary-button wide" type="submit">Record capture review</button>
+      <p id="captureCompletenessReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="versionComparisonDialog" class="dialog-card version-comparison-dialog">
+    <section class="comparison-shell" aria-labelledby="comparisonTitle">
+      <button class="dialog-close" type="button" data-close-dialog aria-label="Close version comparison">×</button>
+      <header class="comparison-heading">
+        <div>
+          <span class="eyebrow">IMMUTABLE VERSION EVIDENCE</span>
+          <h2 id="comparisonTitle">Compare two spatial releases.</h2>
+          <p>Review the same place side by side. Visual comparison supports human approval; it is not an automated geometry-difference claim.</p>
+        </div>
+        <label class="comparison-sync-control">
+          <input id="comparisonSync" type="checkbox" checked />
+          <span>Synchronize navigation</span>
+        </label>
+      </header>
+
+      <form id="versionComparisonForm" class="comparison-toolbar">
+        <label><span>Left version</span><select id="comparisonLeftVersion" name="left" required></select></label>
+        <label><span>Right version</span><select id="comparisonRightVersion" name="right" required></select></label>
+        <button id="comparisonSubmit" class="primary-button" type="submit">Load comparison</button>
+        <p id="comparisonError" class="form-error" role="alert"></p>
+      </form>
+
+      <div id="comparisonLoading" class="comparison-loading" role="status" aria-live="polite" hidden>
+        <i></i><span>Preparing signed comparison sessions…</span>
+      </div>
+
+      <div id="comparisonGrid" class="comparison-grid" aria-live="polite">
+        <article class="comparison-card" data-comparison-side="left">
+          <header><div><span class="eyebrow">LEFT</span><h3 id="compareLeftTitle">Select a version</h3></div><span id="compareLeftStatus" class="comparison-status">Waiting</span></header>
+          <div class="comparison-frame-stage">
+            <iframe id="compareLeftFrame" title="Left spatial version" allow="fullscreen" hidden></iframe>
+            <div id="compareLeftEmpty" class="comparison-frame-empty">Load a comparison to start the Spark renderer.</div>
+          </div>
+          <button id="compareLeftRetry" class="quiet-button wide" type="button" hidden>Retry left renderer</button>
+          <div id="compareLeftEvidence" class="comparison-evidence"></div>
+        </article>
+
+        <article class="comparison-card" data-comparison-side="right">
+          <header><div><span class="eyebrow">RIGHT</span><h3 id="compareRightTitle">Select a version</h3></div><span id="compareRightStatus" class="comparison-status">Waiting</span></header>
+          <div class="comparison-frame-stage">
+            <iframe id="compareRightFrame" title="Right spatial version" allow="fullscreen" hidden></iframe>
+            <div id="compareRightEmpty" class="comparison-frame-empty">Load a comparison to start the Spark renderer.</div>
+          </div>
+          <button id="compareRightRetry" class="quiet-button wide" type="button" hidden>Retry right renderer</button>
+          <div id="compareRightEvidence" class="comparison-evidence"></div>
+        </article>
+      </div>
+    </section>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="/src/client/studio.ts"></script>
+</body>
+</html>

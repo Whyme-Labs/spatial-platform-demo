@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "0.1.0",
+  "projectId": "demo-spatial-gallery",
+  "versionId": "v1",
+  "units": "metres",
+  "coordinateSystem": {
+    "epsg": null,
+    "axisConvention": "RUB",
+    "localOrigin": [0, 0, 0]
+  },
+  "capture": {
+    "adapter": "open-import",
+    "device": "procedural-demo",
+    "capturedAt": "2026-07-26T12:00:00+08:00",
+    "operatorId": "demo"
+  },
+  "assets": {
+    "splatMaster": "generated-in-browser",
+    "pointCloudMaster": null,
+    "web": "delivery/web/scene.rad",
+    "portable": "delivery/portable/scene.spz",
+    "collision": null,
+    "navmesh": null,
+    "poster": null
+  },
+  "semantics": {
+    "floors": null,
+    "rooms": null,
+    "doors": null,
+    "pois": "embedded-demo-hotspots",
+    "routes": "embedded-demo-tour"
+  },
+  "quality": {
+    "visualGrade": "B",
+    "measurementGrade": "visual-only",
+    "privacyStatus": "approved",
+    "mobileProfile": "spark-adaptive-lod"
+  }
+}
