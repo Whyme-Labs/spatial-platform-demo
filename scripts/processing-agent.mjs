@@ -21,6 +21,7 @@ import {
   assertRegisteredSceneChangeCapacity,
   ProcessingAgentError,
   compareRegisteredScenes,
+  extractMetricFloorPlan,
   extractWalkableSemanticCandidates,
   inspectSpzContainer,
   parsePlySceneSignature,
@@ -33,7 +34,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.6.2";
+const processorVersion = "spatial-processor/0.7.0";
 const sparkVersion = "2.1.0";
 const once = process.argv.includes("--once");
 const posterOnlyIndex = process.argv.indexOf("--poster-only");
@@ -61,6 +62,9 @@ const configuration = posterOnly ? null : {
   maxRuntimeMs: positiveInteger(process.env.PROCESSOR_MAX_JOB_RUNTIME_MINUTES, 180) * 60 * 1000,
   maximumChangeInputBytes:
     positiveInteger(process.env.PROCESSOR_MAX_CHANGE_INPUT_MIB, 1024) * 1024 * 1024,
+  maximumPointcloudInputBytes:
+    positiveInteger(process.env.PROCESSOR_MAX_POINTCLOUD_INPUT_MIB, 1024) * 1024 * 1024,
+  pdalBinary: resolve(process.env.PDAL_BIN || "/usr/local/bin/pdal"),
   activeHumanDurationMs: nonnegativeInteger(process.env.PROCESSOR_ACTIVE_HUMAN_MS, 0),
   chromePath: process.env.PROCESSOR_CHROME_PATH?.trim() || undefined,
 };
@@ -110,6 +114,7 @@ log("processor.started", {
   origin: configuration.origin,
   mode: once ? "once" : "continuous",
   maximumChangeInputBytes: configuration.maximumChangeInputBytes,
+  maximumPointcloudInputBytes: configuration.maximumPointcloudInputBytes,
 });
 
 do {
@@ -175,6 +180,132 @@ async function processNextJob() {
       );
     }
 
+    if (job.jobType === "floorplan.extract-v1") {
+      if (!job.floorplanExtractionId || !job.floorplanConfig) {
+        throw new ProcessingAgentError(
+          "FLOORPLAN_JOB_INCOMPLETE",
+          "Floor-plan extraction lease is missing its extraction identity or bounded parameters",
+          { failureClass: "configuration", retryable: false },
+        );
+      }
+      if (download.sizeBytes > configuration.maximumPointcloudInputBytes) {
+        throw new ProcessingAgentError(
+          "FLOORPLAN_INPUT_CAPACITY_EXCEEDED",
+          `Point cloud is ${download.sizeBytes} bytes; the worker limit is ${configuration.maximumPointcloudInputBytes}`,
+          {
+            failureClass: "capacity",
+            retryable: false,
+            details: {
+              inputBytes: download.sizeBytes,
+              maximumInputBytes: configuration.maximumPointcloudInputBytes,
+            },
+          },
+        );
+      }
+      await heartbeat(job.id, lease.leaseToken, 24, "Normalizing vendor point cloud to metric PLY");
+      const normalized = await normalizeMetricPointCloud({
+        sourcePath,
+        sourceFormat: String(job.input.format).toLowerCase(),
+        sourceUpAxis: String(job.floorplanConfig.sourceUpAxis ?? "y"),
+        workDirectory,
+        pdalBinary: configuration.pdalBinary,
+        timeoutMs: configuration.maxRuntimeMs,
+      });
+      await heartbeat(job.id, lease.leaseToken, 48, "Building bounded metric occupancy");
+      const sourceBytes = await readFile(normalized.path);
+      const signature = parsePlySceneSignature(sourceBytes, {
+        voxelSizeM: Math.max(0.025, Math.min(
+          Number(job.floorplanConfig.gridSizeM) / 2,
+          Number(job.floorplanConfig.floorBandM),
+        )),
+        maximumSamplePoints: Number(job.floorplanConfig.maximumSamplePoints),
+      });
+      await heartbeat(job.id, lease.leaseToken, 70, "Deriving reviewable rooms, walls, and openings");
+      const report = extractMetricFloorPlan(signature, {
+        gridSizeM: Number(job.floorplanConfig.gridSizeM),
+        floorBandM: Number(job.floorplanConfig.floorBandM),
+        wallMinHeightM: Number(job.floorplanConfig.wallMinHeightM),
+        wallMaxHeightM: Number(job.floorplanConfig.wallMaxHeightM),
+        minimumWallHeightCoverage: Number(job.floorplanConfig.minimumWallHeightCoverage),
+        minimumRoomAreaM2: Number(job.floorplanConfig.minimumRoomAreaM2),
+        maximumOpeningWidthM: Number(job.floorplanConfig.maximumOpeningWidthM),
+        maximumRooms: Number(job.floorplanConfig.maximumRooms),
+        maximumSamplePoints: Number(job.floorplanConfig.maximumSamplePoints),
+        elevationHintM: job.floorplanConfig.elevationHintM === null
+          ? null
+          : Number(job.floorplanConfig.elevationHintM),
+      });
+      report.parameters.sourceUpAxis = String(job.floorplanConfig.sourceUpAxis ?? "y");
+      report.floorplanExtractionId = job.floorplanExtractionId;
+      report.source = {
+        ...report.source,
+        assetId: job.input.id,
+        fileName: job.input.fileName,
+        sourceFormat: String(job.input.format).toLowerCase(),
+        normalizedFormat: "ply",
+        sizeBytes: download.sizeBytes,
+        sha256: download.sha256,
+        coordinateAssurance: String(job.floorplanConfig.coordinateAssurance),
+        registrationEvidence: String(job.floorplanConfig.registrationEvidence),
+      };
+      const reportPath = join(
+        workDirectory,
+        `floorplan-proposal-${job.floorplanExtractionId}.json`,
+      );
+      await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await heartbeat(job.id, lease.leaseToken, 88, "Uploading immutable floor-plan proposal");
+      const output = await uploadOutput(job, lease.leaseToken, "report", reportPath, "application/json");
+      if (heartbeatFailure) throw heartbeatFailure;
+      const computeDurationMs = Math.round(performance.now() - jobStartedAt);
+      const completion = await fetchJson(`/api/worker/jobs/${job.id}/floorplan-extraction-complete`, {
+        method: "POST",
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Indicative floor-plan proposal is ready for operator review",
+          output,
+          report,
+          evidence: {
+            processorVersion,
+            computeDurationMs,
+            activeHumanDurationMs: configuration.activeHumanDurationMs,
+            inputBytes: download.sizeBytes,
+            outputBytes: output.sizeBytes,
+            toolVersions: {
+              node: process.version,
+              processor: "0.7.0",
+              extractor: "metric-pointcloud-floorplan-v1",
+              normalizer: normalized.tool,
+            },
+            normalization: {
+              sourceFormat: String(job.input.format).toLowerCase(),
+              sourceUpAxis: String(job.floorplanConfig.sourceUpAxis ?? "y"),
+              normalizedFormat: "ply",
+              tool: normalized.tool,
+              commandDigest: normalized.commandDigest,
+            },
+          },
+        }),
+      });
+      log("processor.floorplan_extraction_succeeded", {
+        jobId: job.id,
+        floorplanExtractionId: job.floorplanExtractionId,
+        roomCount: report.rooms.length,
+        wallCount: report.walls.length,
+        openingCount: report.openings.length,
+        computeDurationMs,
+        reportAssetId: completion.reportAssetId,
+      });
+      return {
+        claimed: true,
+        jobId: job.id,
+        state: "SUCCEEDED",
+        floorplanExtractionId: job.floorplanExtractionId,
+      };
+    }
+
     if (job.jobType === "semantic.extract-v1") {
       if (!job.semanticExtractionId || !job.semanticConfig) {
         throw new ProcessingAgentError(
@@ -236,7 +367,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.6.2",
+              processor: "0.7.0",
               extractor: "registered-ply-walkable-candidates-v1",
             },
           },
@@ -308,7 +439,7 @@ async function processNextJob() {
             outputBytes: 0,
             toolVersions: {
               node: process.version,
-              processor: "0.6.2",
+              processor: "0.7.0",
               validator: "bounded-file-signature-v1",
             },
           },
@@ -418,7 +549,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.6.2",
+            processor: "0.7.0",
           },
         },
       }),
@@ -634,7 +765,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.6.2",
+          processor: "0.7.0",
           method: "registered-ply-voxel-change-v1",
         },
       },
@@ -649,6 +780,97 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
     candidateBytes: candidateDownload.sizeBytes,
   });
   return { changeReportId: job.changeReportId, result: report.result };
+}
+
+async function normalizeMetricPointCloud({
+  sourcePath,
+  sourceFormat,
+  sourceUpAxis,
+  workDirectory,
+  pdalBinary,
+  timeoutMs,
+}) {
+  if (sourceFormat === "ply" && sourceUpAxis === "y") {
+    return {
+      path: sourcePath,
+      tool: "native-ply-v1",
+      commandDigest: null,
+    };
+  }
+  if (!["y", "z"].includes(sourceUpAxis)) {
+    throw new ProcessingAgentError(
+      "UNSUPPORTED_POINTCLOUD_AXIS",
+      `Floor-plan normalization does not support a ${sourceUpAxis}-up source`,
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  const readerByFormat = {
+    ply: "readers.ply",
+    e57: "readers.e57",
+    las: "readers.las",
+    laz: "readers.las",
+    pts: "readers.pts",
+  };
+  const reader = readerByFormat[sourceFormat];
+  if (!reader) {
+    throw new ProcessingAgentError(
+      "UNSUPPORTED_FLOORPLAN_SOURCE",
+      `Floor-plan normalization does not support ${sourceFormat}`,
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: { supportedFormats: ["ply", "e57", "las", "laz", "pts"] },
+      },
+    );
+  }
+  await access(pdalBinary).catch((error) => {
+    throw new ProcessingAgentError(
+      "PDAL_PROCESSOR_MISSING",
+      `PDAL is required to normalize ${sourceFormat} point clouds`,
+      { failureClass: "configuration", retryable: false, cause: error },
+    );
+  });
+  const normalizedPath = join(workDirectory, "registered-pointcloud.normalized.ply");
+  const stages = [
+    { type: reader, filename: sourcePath },
+    ...(sourceUpAxis === "z"
+      ? [{
+        type: "filters.transformation",
+        matrix: "1 0 0 0  0 0 1 0  0 -1 0 0  0 0 0 1",
+      }]
+      : []),
+    {
+      type: "writers.ply",
+      filename: normalizedPath,
+      storage_mode: "little endian",
+      dims: "X,Y,Z",
+    },
+  ];
+  const pipelineDocument = {
+    pipeline: stages,
+  };
+  const serialized = `${JSON.stringify(pipelineDocument, null, 2)}\n`;
+  const pipelinePath = join(workDirectory, "pdal-floorplan-pipeline.json");
+  await writeFile(pipelinePath, serialized, { encoding: "utf8", mode: 0o600 });
+  const commandDigest = createHash("sha256").update(serialized).digest("hex");
+  await runProcess(
+    pdalBinary,
+    ["pipeline", pipelinePath],
+    timeoutMs,
+    {
+      tool: "PDAL",
+      event: "pointcloud.normalize",
+      startCode: "PDAL_START_FAILED",
+      failureCode: "PDAL_NORMALIZATION_FAILED",
+      timeoutCode: "PDAL_NORMALIZATION_TIMEOUT",
+      failureClass: "conversion",
+    },
+  );
+  return {
+    path: normalizedPath,
+    tool: "PDAL",
+    commandDigest,
+  };
 }
 
 function verifyDownloadedInput(expected, actual, label) {

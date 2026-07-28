@@ -473,6 +473,27 @@ form[aria-busy="true"] .dialog-close {
 .semantic-extraction-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .semantic-extraction-heading small { display:block; margin-top:4px; color:var(--muted); }
 .semantic-extraction-actions { display:flex; gap:7px; flex-wrap:wrap; }
+.floorplan-workflow-card { display:grid; gap:12px; padding:16px; border:1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius:17px; background:linear-gradient(145deg, rgba(10,15,12,.96), rgba(7,10,8,.88)); }
+.floorplan-run { display:grid; gap:9px; padding:13px; border:1px solid var(--line); border-radius:13px; background:rgba(13,15,14,.84); }
+.floorplan-run-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.floorplan-run-metrics { display:flex; flex-wrap:wrap; gap:6px; }
+.floorplan-run-metrics span { padding:4px 8px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:.76rem; }
+.floorplan-export-list { display:flex; flex-wrap:wrap; gap:7px; }
+.floorplan-export-link { appearance:none; display:inline-flex; align-items:center; gap:6px; min-height:34px; padding:7px 10px; border:1px solid var(--line); border-radius:9px; color:var(--text); text-decoration:none; background:rgba(255,255,255,.025); font:inherit; cursor:pointer; }
+.floorplan-export-link:disabled { cursor:wait; opacity:.64; }
+.floorplan-export-link:hover { border-color:var(--accent); background:rgba(255,255,255,.05); }
+.floorplan-review-dialog { width:min(1180px, calc(100vw - 32px)); }
+.floorplan-review-grid { display:grid; grid-template-columns:minmax(360px,1.05fr) minmax(320px,.95fr); gap:16px; margin:16px 0; }
+.floorplan-plan-editor { display:grid; gap:7px; min-width:0; }
+.floorplan-plan-editor textarea { min-height:440px; resize:vertical; font:500 .78rem/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; tab-size:2; }
+.floorplan-preview-panel { min-width:0; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(4,7,5,.65); }
+.floorplan-review-preview { min-height:360px; display:grid; place-items:center; overflow:auto; border-radius:10px; background:#f7f4ea; }
+.floorplan-review-preview svg { display:block; width:100%; min-width:320px; height:auto; max-height:520px; }
+.floorplan-review-preview .preview-room { fill:#e9e3d4; stroke:#aca28e; stroke-width:1.4; }
+.floorplan-review-preview .preview-wall { stroke:#171916; stroke-width:5; stroke-linecap:square; }
+.floorplan-review-preview .preview-opening { stroke:#2f786f; stroke-width:7; stroke-linecap:butt; }
+.floorplan-review-preview .preview-label { fill:#262922; font:600 11px system-ui,sans-serif; text-anchor:middle; dominant-baseline:middle; }
+.floorplan-json-invalid { color:var(--danger); }
 .semantic-candidate-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
 .semantic-candidate-summary > span { padding:9px; border:1px solid var(--line); border-radius:10px; }
 .semantic-candidate-summary small,.semantic-candidate-summary strong { display:block; overflow-wrap:anywhere; }
@@ -628,6 +649,8 @@ form[aria-busy="true"] .dialog-close {
   .geometry-change-row { grid-template-columns:minmax(0,1fr) auto; }
   .geometry-change-row .status-pill { grid-column:1/-1;width:max-content; }
   .semantic-extraction-heading { flex-direction:column; }
+  .floorplan-review-grid { grid-template-columns:1fr; }
+  .floorplan-run-heading { flex-direction:column; }
   .semantic-candidate-choices,.semantic-candidate-summary { grid-template-columns:1fr; }
   .manual-billing-form { grid-template-columns:1fr 1fr; }
   .billing-field-wide { grid-column:1/-1; }

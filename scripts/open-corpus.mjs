@@ -179,6 +179,7 @@ async function prepareCorpus() {
 
   await createSourceEvidenceDerivatives();
   await createNegativeAndOpaqueFixtures();
+  await createFloorplanContractFixture();
   const derived = await inventoryDerived();
   await writeJson(join(reportsRoot, "derived-provenance.json"), {
     schemaVersion: "whymelabs.open-spatial-derived-corpus.v1",
@@ -196,6 +197,7 @@ async function prepareCorpus() {
       "Synthetic IMU/GNSS fixtures validate the application contract only.",
       "Opaque XBIN/FJDSLAM/LCC/LCC2 fixtures validate transport and audit labelling only, never vendor origin or decoding.",
       "The Khronos box validates collision GLB transport, not walkability or navmesh quality.",
+      "The two-room floor-plan fixture is deterministic application-authored metric geometry, not an independent scanner-accuracy benchmark.",
     ],
   });
   emit("corpus.prepare.completed", { derivedCount: derived.length });
@@ -346,6 +348,35 @@ async function createNegativeAndOpaqueFixtures() {
   }
 }
 
+async function createFloorplanContractFixture() {
+  const points = [];
+  for (let x = 0.125; x < 8; x += 0.25) {
+    for (let z = 0.125; z < 4; z += 0.25) points.push([x, 0, z]);
+  }
+  for (let y = 0.25; y <= 2.5; y += 0.25) {
+    for (let x = 0; x <= 8; x += 0.25) {
+      points.push([x, y, 0], [x, y, 4]);
+    }
+    for (let z = 0; z <= 4; z += 0.25) {
+      points.push([0, y, z], [8, y, z]);
+      if (z < 1.5 || z > 2.5) points.push([4, y, z]);
+    }
+  }
+  const ply = [
+    "ply",
+    "format ascii 1.0",
+    `element vertex ${points.length}`,
+    "property float x",
+    "property float y",
+    "property float z",
+    "comment deterministic application contract fixture; metres; right-handed Y-up",
+    "end_header",
+    ...points.map((point) => point.join(" ")),
+    "",
+  ].join("\n");
+  await writeFile(join(derivedRoot, "vendor-neutral-two-room.ply"), ply, { mode: 0o600 });
+}
+
 async function verifyDerivedCorpus() {
   const required = [
     "aws-laundry-room.ply",
@@ -363,6 +394,7 @@ async function verifyDerivedCorpus() {
     "odm-aukerman-two-image.zip",
     "synthetic-imu-trajectory.csv",
     "synthetic-gnss-trajectory.json",
+    "vendor-neutral-two-room.ply",
   ];
   for (const fileName of required) {
     if (!(await exists(join(derivedRoot, fileName)))) {
@@ -393,6 +425,7 @@ async function runCompatibilityMatrix() {
     ["metric_point_cloud/las", fixturePath(fixtureById("pdal-simple-las")), "las", "metric_point_cloud"],
     ["metric_point_cloud/laz", fixturePath(fixtureById("pdal-simple-laz")), "laz", "metric_point_cloud"],
     ["metric_point_cloud/e57", fixturePath(fixtureById("pdal-a4-e57")), "e57", "metric_point_cloud"],
+    ["metric_point_cloud/pts", fixturePath(fixtureById("pdal-test-pts")), "pts", "metric_point_cloud"],
     ["source_images/jpg", fixturePath(fixtureById("opensfm-berlin-image-01")), "jpg", "source_images"],
     ["source_images/png", join(derivedRoot, "opensfm-berlin-01.png"), "png", "source_images"],
     ["source_images/webp", join(derivedRoot, "opensfm-berlin-01.webp"), "webp", "source_images"],

@@ -24,6 +24,7 @@ const report = {
   fixtures: [],
   assertions: [],
   processorEvents: [],
+  floorplan: null,
   browser: null,
 };
 
@@ -65,6 +66,18 @@ const fixtures = [
     purpose: "metric_point_cloud",
     mimeType: "application/octet-stream",
     expectedState: "SUCCEEDED",
+  },
+  {
+    id: "floorplan-metric-ply",
+    projectKey: "floorplan",
+    adapter: "open-import",
+    file: join(derivedRoot, "vendor-neutral-two-room.ply"),
+    format: "ply",
+    purpose: "metric_point_cloud",
+    mimeType: "application/octet-stream",
+    expectedState: "SUCCEEDED",
+    synthetic: true,
+    floorplan: true,
   },
   {
     id: "source-image",
@@ -237,6 +250,23 @@ try {
       );
     }
   }
+
+  const floorplanRun = fixtureRuns.find((entry) => entry.fixture.floorplan);
+  if (!floorplanRun) throw new Error("Missing deterministic floor-plan contract fixture");
+  report.floorplan = await runFloorplanWorkflow(floorplanRun, cookie, workerToken);
+  recordAssertion(
+    "vendor-neutral floor-plan processor reaches operator review",
+    report.floorplan.extractionStatus === "READY_FOR_REVIEW",
+  );
+  recordAssertion(
+    "operator-approved floor plan emits SVG, PDF, and DXF",
+    report.floorplan.exports.map((entry) => entry.format).sort().join(",") === "dxf,pdf,svg",
+  );
+  recordAssertion(
+    "floor-plan exports remain indicative and are hash verified",
+    report.floorplan.measurementClass === "indicative" &&
+      report.floorplan.exports.every((entry) => entry.hashVerified),
+  );
 
   const gaussianRun = fixtureRuns.find((entry) => entry.fixture.publish);
   if (!gaussianRun) throw new Error("Missing publishable Gaussian fixture");
@@ -445,6 +475,135 @@ async function waitForJob(jobId, expectedState, authCookie) {
     await delay(Math.min(3000, 250 + attempt * 150));
   }
   throw new Error(`Job ${jobId} did not reach a terminal state`);
+}
+
+async function runFloorplanWorkflow(fixtureRun, authCookie, token) {
+  const queued = await api(
+    `/api/projects/${fixtureRun.project.id}/spatial/floorplan-extractions`,
+    {
+      method: "POST",
+      cookie: authCookie,
+      body: {
+        clientOperationId: crypto.randomUUID(),
+        versionId: fixtureRun.upload.versionId,
+        inputAssetId: fixtureRun.upload.assetId,
+        coordinateAssurance: "registered_y_up_metric_frame",
+        sourceUpAxis: "y",
+        registrationEvidence:
+          "Deterministic metre-based Y-up contract fixture generated and hash-verified by the open-corpus runner.",
+        gridSizeM: 0.25,
+        floorBandM: 0.15,
+        wallMinHeightM: 0.25,
+        wallMaxHeightM: 2.5,
+        minimumWallHeightCoverage: 0.6,
+        minimumRoomAreaM2: 4,
+        maximumOpeningWidthM: 1.25,
+        maximumRooms: 20,
+        maximumSamplePoints: 1_000_000,
+      },
+    },
+  );
+  const processor = await runProcessor(queued.extraction.jobId, token);
+  report.processorEvents.push(...processor.events);
+  await waitForJob(queued.extraction.jobId, "SUCCEEDED", authCookie);
+  const workspace = await api(
+    `/api/projects/${fixtureRun.project.id}/spatial?versionId=${fixtureRun.upload.versionId}`,
+    { cookie: authCookie },
+  );
+  const extraction = workspace.floorplanExtractions.find(
+    (candidate) => candidate.id === queued.extraction.id,
+  );
+  if (!extraction?.proposal_json || extraction.status !== "READY_FOR_REVIEW") {
+    throw new Error("Floor-plan processor did not produce a reviewable immutable proposal");
+  }
+  const proposal = JSON.parse(extraction.proposal_json);
+  const plan = {
+    schemaVersion: "1.0.0",
+    units: "metres",
+    coordinateFrame: "registered_y_up_metric_frame",
+    levels: [{
+      id: "level-ground",
+      label: "Ground floor",
+      elevationM: proposal.summary.inferredFloorElevationM,
+      rooms: proposal.rooms.map((room) => ({
+        id: room.roomKey,
+        label: room.label,
+        points: room.geometry.points.map(([x, , z]) => [x, z]),
+      })),
+      walls: proposal.walls.map((wall) => ({
+        id: wall.wallKey,
+        label: wall.label,
+        start: [wall.geometry.points[0][0], wall.geometry.points[0][2]],
+        end: [wall.geometry.points[1][0], wall.geometry.points[1][2]],
+        thicknessM: wall.thicknessM,
+        heightM: wall.heightM,
+      })),
+      openings: proposal.openings.map((opening) => ({
+        id: opening.openingKey,
+        label: opening.label,
+        type: "unknown",
+        wallId: null,
+        start: [opening.geometry.points[0][0], opening.geometry.points[0][2]],
+        end: [opening.geometry.points[1][0], opening.geometry.points[1][2]],
+        widthM: opening.widthM,
+        heightM: opening.heightM,
+      })),
+    }],
+  };
+  const reviewed = await api(
+    `/api/projects/${fixtureRun.project.id}/spatial/floorplan-extractions/${extraction.id}/review`,
+    {
+      method: "POST",
+      cookie: authCookie,
+      body: {
+        clientOperationId: crypto.randomUUID(),
+        decision: "approve",
+        note:
+          "Automated contract operator checked the deterministic source and preserved every proposal for export verification.",
+        plan,
+      },
+    },
+  );
+  const generated = await api(
+    `/api/projects/${fixtureRun.project.id}/spatial/floorplan-revisions/${reviewed.revision.id}/exports`,
+    {
+      method: "POST",
+      cookie: authCookie,
+      body: {
+        clientOperationId: crypto.randomUUID(),
+        formats: ["svg", "pdf", "dxf"],
+      },
+    },
+  );
+  const verifiedExports = [];
+  for (const item of generated.exports) {
+    const response = await fetch(`${origin}${item.downloadUrl}`, {
+      headers: { cookie: cookieHeader(authCookie) },
+      signal: AbortSignal.timeout(30_000),
+    });
+    assertResponse(response, `download ${item.format} floor-plan export`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    verifiedExports.push({
+      id: item.id,
+      format: item.format,
+      sizeBytes: bytes.byteLength,
+      sha256: item.sha256,
+      hashVerified: digest === item.sha256,
+    });
+  }
+  return {
+    projectId: fixtureRun.project.id,
+    versionId: fixtureRun.upload.versionId,
+    extractionId: extraction.id,
+    extractionStatus: extraction.status,
+    roomCount: proposal.summary.roomCount,
+    wallCount: proposal.summary.wallCount,
+    openingCount: proposal.summary.openingCount,
+    revisionId: reviewed.revision.id,
+    measurementClass: reviewed.revision.measurementClass,
+    exports: verifiedExports,
+  };
 }
 
 async function approveAndPublish(gaussianRun, authCookie) {

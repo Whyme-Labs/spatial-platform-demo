@@ -48,6 +48,10 @@ certification, or legal opinion.
   route IDs or JWT tenant claims alone.
 - Raw/master assets remain private in R2. Browser delivery uses short-lived,
   scoped scene/comparison sessions and range-capable Worker endpoints.
+- Vendor-neutral floorplan extraction accepts only checksum-verified metric
+  point-cloud assets. Gaussian masters are rejected, proposal reports are
+  immutable in R2, and D1 retains the extraction, review, evidence, revision,
+  and export lifecycle.
 
 ### Manual merchant billing
 
@@ -67,6 +71,9 @@ certification, or legal opinion.
 
 - Production responses include HSTS, CSP, `nosniff`, strict referrer policy,
   permissions policy, frame protection, COOP, and CORP.
+- Static application entry points and assets run through the Worker before the
+  Assets binding. Live probes and a direct-entry regression test verify that
+  `/studio.html` and `/images/*` cannot bypass request IDs or security headers.
 - CSP denies objects, external form actions, foreign frames, and foreign base
   URLs. The only script exception is WebAssembly evaluation required by the
   bundled Spark runtime plus Cloudflare analytics.
@@ -74,6 +81,10 @@ certification, or legal opinion.
   delivery assets use bounded signed access.
 - JSON request bodies are bounded. Upload size/type/purpose rules and multipart
   ETag/byte reconciliation are server authoritative.
+- Floorplan completion fails closed on an immutable-input mismatch, unsupported
+  source format, coordinate-assurance mismatch, unbounded sample request,
+  inconsistent submitted/stored report, or output hash mismatch. Concurrent
+  review/export requests converge on unique revisions and export objects.
 - The shared `runAction` single-flight layer disables all conflicting controls,
   sets `aria-busy`, preserves form data, restores state after failure, and
   surfaces retryable errors. Static action-state and rendered-control audits
@@ -103,24 +114,32 @@ certification, or legal opinion.
 
 - `npm audit --audit-level=low`: 0 vulnerabilities.
 - `npm run check`: types, strict TypeScript, action audit, control audit,
-  production build, 23 Worker/domain suites, and production dry-run.
-- The final release gate passed all 106 tests across 23 files, including the
-  privacy retry, manual-billing, retention, authorization, and replay cases.
-- Control audit: 121 static buttons, 91 dynamic buttons, 18 static links,
-  seven dynamic links, and 32 forms.
-- Open corpus: 12 pinned source fixtures verified; the final 14-lane,
-  24-assertion end-to-end run passed and rendered a real Spark scene in Chrome
-  with no page, console, or failed-response errors. Its machine-readable report
-  is
-  `.cache/open-corpus/reports/worker-e2e-2026-07-28T13-04-12-959Z-e9f5eebd.json`.
+  production build, 25 Worker/domain suites, and production dry-run.
+- The final release gate passed all 110 tests across 25 files, including
+  floorplan source/hash/report tampering, sampling bounds, cancellation/retry,
+  concurrent review/export, direct static-entry headers, privacy retry,
+  manual-billing, retention, authorization, and replay cases.
+- Control audit: 125 static buttons, 98 dynamic buttons, 18 static links,
+  eight dynamic links, and 34 forms.
+- Open corpus: 13 pinned upstream fixtures verified; the final 15-lane,
+  28-assertion end-to-end run passed metric floorplan extraction, review,
+  hash-verified SVG/PDF/DXF export, and a real Spark scene in Chrome with no
+  page, console, or failed-response errors. Its machine-readable report is
+  `.cache/open-corpus/reports/worker-e2e-2026-07-28T17-30-07-499Z-c703a878.json`.
+- The pinned processor image read PLY, E57, LAS, LAZ, and PTS through its
+  production PDAL 2.9.2 environment.
 - Main Worker and processor-Container production dry-runs passed.
-- Staging migration/deployment, health, JWKS, session, security-header, and D1
-  billing-schema smoke passed before production promotion.
+- Staging migration/deployment, health, JWKS, session, direct static-entry
+  security headers, and D1 billing/floorplan-schema smoke passed before
+  production promotion.
 - Production migration, health, public scene, JWKS, HSTS/CSP, anonymous billing
-  denial, and APAC D1 billing-schema smoke passed.
-- Final application release `1af567ca-e372-491c-983a-0edb80d27123` and
-  processor release `ab2a9496-794e-4c39-973d-41b44fad5216` are active.
-  Production processor health reports `spatial-processor/0.6.2`,
+  and floorplan denial, static-entry header, and APAC D1 schema smoke passed.
+- Final application releases
+  `c70c026c-3221-4593-b489-a811e09edeae` (staging) and
+  `bfa71fa0-e42f-445b-9227-76dbb16ffe37` (production), plus processor releases
+  `117312e4-f252-4128-b8e3-98d07b743b19` (staging) and
+  `0e7d2031-9e2c-4600-9d76-2e82fc7d9240` (production), are active.
+  Production processor health reports `spatial-processor/0.7.0`,
   `Spark 2.1.0`, and `cloudflare-container`.
 
 ## Open operational decisions

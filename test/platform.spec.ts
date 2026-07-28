@@ -131,6 +131,15 @@ describe("Spatial Studio Worker", () => {
     expect(JSON.stringify(body)).not.toContain("test-otp-pepper");
   });
 
+  it("serves direct static entry points through the Worker security middleware", async () => {
+    for (const path of ["/studio.html", "/images/spatial-hero.webp"]) {
+      const response = await exports.default.fetch(`${origin}${path}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-request-id")).toBeTruthy();
+      expect(response.headers.get("content-security-policy")).toContain("object-src 'none'");
+    }
+  });
+
   it("rejects unauthenticated tenant APIs", async () => {
     const response = await exports.default.fetch(`${origin}/api/dashboard`);
     expect(response.status).toBe(401);

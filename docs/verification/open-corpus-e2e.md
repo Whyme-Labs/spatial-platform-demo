@@ -4,7 +4,7 @@
 - Environment: local Cloudflare Worker with local D1, R2, KV, Queues, remote
   Workers AI, and the production processing agent
 - Renderer: Spark 2.1.0
-- Processor: `spatial-processor/0.6.2`
+- Processor: `spatial-processor/0.7.0`
 
 ## Result
 
@@ -18,6 +18,8 @@ seeded email OTP challenge
   -> D1 processing job
   -> worker-token lease and heartbeat
   -> integrity and format validation
+  -> metric point-cloud normalisation and floorplan proposal
+  -> operator review and SVG/PDF/DXF export
   -> Spark RAD and poster generation
   -> Workers AI privacy scan
   -> human-style privacy disposition
@@ -40,13 +42,18 @@ Machine-readable evidence:
 - `.cache/open-corpus/reports/upstream-verification.json`
 - `.cache/open-corpus/reports/derived-provenance.json`
 - `.cache/open-corpus/reports/compatibility-matrix.json`
-- `.cache/open-corpus/reports/worker-e2e-2026-07-28T13-04-12-959Z-e9f5eebd.json`
-- `.cache/open-corpus/reports/viewer-e2e-2026-07-28T13-04-12-959Z-e9f5eebd.png`
+- `.cache/open-corpus/reports/worker-e2e-2026-07-28T17-30-07-499Z-c703a878.json`
+- `.cache/open-corpus/reports/viewer-e2e-2026-07-28T17-30-07-499Z-c703a878.png`
 
-The final run completed in about 152 seconds with 14 fixture lanes and 24
+The final run completed in about 312 seconds with 15 fixture lanes and 28
 passing assertions. The browser reported
 `Spark 2.1.0 ready`, found one renderer canvas, and recorded no page errors,
 console errors, or HTTP responses at or above 400.
+
+The floorplan lane produced a two-room, five-wall, one-opening proposal,
+recorded an operator-reviewed indicative revision, and downloaded
+hash-verified SVG (2,065 bytes), PDF (1,453 bytes), and DXF (1,663 bytes)
+exports.
 
 ## Covered production lanes
 
@@ -54,6 +61,7 @@ console errors, or HTTP responses at or above 400.
 |---|---|---|---|
 | Gaussian SPZ v4 | AWS Laundry Room SOG, converted with SplatTransform | Normalise NGSP v4, build RAD, poster, report | `SUCCEEDED` |
 | Metric point cloud | PDAL LAZ | Bounded evidence validation | `SUCCEEDED` |
+| Floorplan metric point cloud | Deterministic derived indoor PLY | Native metric normalisation, proposal, review, and SVG/PDF/DXF export | `READY_FOR_REVIEW`, reviewed and exported |
 | Source image | OpenSfM Berlin JPEG | Bounded image validation | `SUCCEEDED` |
 | Source video | Derived OpenSfM MP4 | ISO-BMFF validation | `SUCCEEDED` |
 | Camera poses | OpenSfM reconstruction JSON | JSON validation | `SUCCEEDED` |
@@ -93,6 +101,14 @@ release was created from it.
 7. **Successful SplatTransform progress was labelled as an error.** Child
    stderr is now retained as a `.stderr` diagnostic stream; a regression test
    prevents ordinary CLI progress from creating false error telemetry.
+8. **Metric input had no vendor-neutral authoring path.** The processor now
+   normalises PLY/E57/LAS/LAZ/PTS through pinned native/PDAL readers, enforces
+   a bounded sample budget and canonical Y-up coordinates, and stores an
+   immutable proposal report before human review and export.
+9. **Static asset routes could bypass Worker headers or return 404 when forced
+   through the Worker.** Explicit static pass-through routes now preserve
+   Cloudflare Assets delivery while applying request IDs, CSP, and production
+   HSTS.
 
 ## Staging deployment proof
 
@@ -100,17 +116,17 @@ The exact processor image was published to isolated staging and production
 resources on 2026-07-28:
 
 - Application Worker:
-  staging `594814af-79d3-4cdd-a8ba-8255ba8a3426`,
-  production `1af567ca-e372-491c-983a-0edb80d27123`
+  staging `c70c026c-3221-4593-b489-a811e09edeae`,
+  production `bfa71fa0-e42f-445b-9227-76dbb16ffe37`
 - Processor Worker and container:
-  staging `0e5a6696-da04-4ae4-bf06-9e771aa60770`,
-  production `ab2a9496-794e-4c39-973d-41b44fad5216`
+  staging `117312e4-f252-4128-b8e3-98d07b743b19`,
+  production `0e7d2031-9e2c-4600-9d76-2e82fc7d9240`
 - Processor image digest:
-  `sha256:9ccadf6540687ded43de1d231b6efac4bf46bd99e9cc1198447534eb59fe5ba4`
+  `sha256:05751ed5c0cadbb8cae4c6fc0d5b71e6a2d58490c06237a75b6ace41be76f612`
 
 Live staging and production health checks returned HTTP 200. The processor
 identified
-`spatial-processor/0.6.2`, `Spark 2.1.0`, and
+`spatial-processor/0.7.0`, `Spark 2.1.0`, and
 `cloudflare-container` execution. Authenticated corpus mutation remains a
 local disposable proof because the staging OTP and JWT secrets are
 intentionally non-exportable; staging validation does not bypass that
@@ -121,8 +137,11 @@ security boundary.
 - The XBIN, FJDSLAM, and LCC2 files are synthetic opaque containers. They
   prove upload, retention, audit labelling, and evidence handling only. They
   do not prove a vendor decoder, scanner provenance, or licensed export.
-- LAS/LAZ/E57 currently receive bounded signature and hash validation, not
-  full coordinate, point-count, registration, or accuracy analysis.
+- PLY/E57/LAS/LAZ/PTS now have production-format readers and bounded
+  normalisation for floorplan proposals. This does not prove source
+  registration, absolute accuracy, or suitability for certified measurement.
+- The deterministic indoor PLY proves the complete software path and geometric
+  review contract. It is not evidence of K1/P2 capture quality.
 - The Khronos box proves lawful GLB transport, not automatic indoor collision
   or navmesh quality.
 - OpenSfM Berlin is outdoor. It supplies lawful image/pose evidence but is not

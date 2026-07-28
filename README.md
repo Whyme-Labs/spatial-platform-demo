@@ -101,6 +101,10 @@ Implemented:
   immutable R2 report evidence, D1 candidate lifecycle, explicit
   accept-selected/reject-all review, and polygonal navigation triangles only
   after human acceptance
+- vendor-neutral registered PLY/E57/LAS/LAZ/PTS floor-plan extraction with
+  explicit source-axis normalisation, immutable proposal evidence, mandatory
+  operator correction, versioned indicative revisions, and hash-bound private
+  SVG/PDF/DXF exports that remain separate from measurement certification
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1
@@ -157,9 +161,11 @@ Intentionally outside the current production boundary:
 - licensed scanner-origin validation and full 6DoF/control-point registration;
   the deployed raw-scene lane can estimate bounded same-scale,
   gravity-aligned yaw and translation, but does not certify survey accuracy
-- automatic multi-level circulation, doorway/stair inference, or a validated
-  point-cloud-derived floor-plan service; the current overlay is authored
-  geometry and the current DXF is evidence-gated draft geometry
+- automatic multi-level circulation, stair inference, or survey-grade automatic
+  floor plans; the deployed vendor-neutral floor-plan lane derives a bounded
+  single-level room/wall/opening proposal from registered PLY/E57/LAS/LAZ/PTS,
+  requires operator correction, and only exports visibly indicative
+  SVG/PDF/DXF
 - arbitrary capture editing, furniture asset placement, or generative
   background reconstruction after deleting captured objects
 - activation and acceptance of a real customer enterprise identity provider

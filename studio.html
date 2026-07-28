@@ -709,6 +709,63 @@
     </form>
   </dialog>
 
+  <dialog id="floorplanExtractionDialog" class="dialog-card wide-dialog">
+    <form id="floorplanExtractionForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">VENDOR-NEUTRAL FLOOR PLAN</span>
+      <h2>Derive rooms, walls, and opening candidates.</h2>
+      <p>The processor normalizes a verified metric point cloud and produces an indicative proposal. PLY is read natively; E57, LAS, LAZ, and PTS are normalized through PDAL with recorded provenance.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Registered metric point cloud</span><select id="floorplanInputAsset" name="inputAssetId" required></select></label>
+        <label><span>Source up axis</span><select name="sourceUpAxis" required><option value="y">Y-up (viewer / Gaussian frame)</option><option value="z">Z-up (survey / LAS frame)</option></select></label>
+        <label><span>Plan grid</span><input name="gridSizeM" type="number" min="0.05" max="1" step="0.05" value="0.25" required /></label>
+        <label><span>Floor band</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" required /></label>
+        <label><span>Wall evidence from</span><input name="wallMinHeightM" type="number" min="0.1" max="5" step="0.05" value="0.25" required /></label>
+        <label><span>Wall evidence to</span><input name="wallMaxHeightM" type="number" min="0.2" max="10" step="0.05" value="2.5" required /></label>
+        <label><span>Vertical wall coverage</span><input name="minimumWallHeightCoverage" type="number" min="0.1" max="1" step="0.05" value="0.45" required /></label>
+        <label><span>Minimum room area</span><input name="minimumRoomAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" required /></label>
+        <label><span>Maximum opening width</span><input name="maximumOpeningWidthM" type="number" min="0.1" max="5" step="0.05" value="1.25" required /></label>
+        <label><span>Maximum rooms</span><input name="maximumRooms" type="number" min="1" max="250" step="1" value="100" required /></label>
+        <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" required /></label>
+        <label><span>Floor elevation hint (optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic strongest floor layer" /></label>
+        <label class="full"><span>Registration evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Who verified metres, Y-up orientation, registration, and this immutable source?"></textarea></label>
+      </div>
+      <p class="field-note">The machine closes likely door-width gaps only to segment rooms, then keeps those gaps as unclassified opening candidates. It does not infer legal areas, survey control, or construction tolerances.</p>
+      <button class="primary-button wide" type="submit">Queue floor-plan extraction</button>
+      <p id="floorplanExtractionError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="floorplanReviewDialog" class="dialog-card floorplan-review-dialog">
+    <form id="floorplanReviewForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">OPERATOR FLOOR-PLAN REVIEW</span>
+      <h2>Correct topology before producing a revision.</h2>
+      <input name="extractionId" type="hidden" />
+      <div id="floorplanReviewContext" class="notice-card"></div>
+      <div class="floorplan-review-grid">
+        <label class="floorplan-plan-editor"><span>Structured plan (metres)</span><textarea id="floorplanPlanEditor" name="planJson" spellcheck="false" required></textarea></label>
+        <section class="floorplan-preview-panel" aria-labelledby="floorplanPreviewTitle">
+          <div class="workspace-section-heading">
+            <div>
+              <span class="eyebrow">LIVE CHECK</span>
+              <h3 id="floorplanPreviewTitle">Plan preview</h3>
+            </div>
+          </div>
+          <div id="floorplanReviewPreview" class="floorplan-review-preview"></div>
+          <p id="floorplanReviewValidation" class="field-note" aria-live="polite"></p>
+        </section>
+      </div>
+      <div class="mock-form-grid">
+        <label><span>Decision</span><select name="decision" required><option value="approve">Approve corrected indicative revision</option><option value="reject">Reject proposal</option></select></label>
+        <label class="full"><span>Evidence note</span><textarea name="note" minlength="10" maxlength="2000" required placeholder="Describe how room outlines, wall runs, openings, and source registration were checked."></textarea></label>
+      </div>
+      <p class="field-note">Approval enables watermarked SVG, PDF, and DXF exports labelled indicative. Measured or certified drawings remain blocked behind the separate check-point QA and professional sign-off workflow.</p>
+      <button class="primary-button wide" type="submit">Save operator decision</button>
+      <p id="floorplanReviewError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
   <dialog id="routeDialog" class="dialog-card wide-dialog">
     <form id="routeForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>

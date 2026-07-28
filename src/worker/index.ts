@@ -47,6 +47,11 @@ import {
   sceneEntitySchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
+  floorplanExtractionSchema,
+  floorplanExtractionReviewSchema,
+  floorplanExportSchema,
+  floorplanProposalReportSchema,
+  floorplanReviewPlanSchema,
   sceneRouteSchema,
   privacyRegionSchema,
   privacyRegionDecisionSchema,
@@ -72,6 +77,7 @@ import {
   workerJobFailureSchema,
   workerSceneChangeCompletionSchema,
   workerSemanticExtractionCompletionSchema,
+  workerFloorplanExtractionCompletionSchema,
   workerOutputUploadSchema,
   type AuthContext,
 } from "./contracts";
@@ -486,6 +492,8 @@ type JobLeaseRow = {
   secondary_input_object_key: string | null;
   semantic_extraction_id: string | null;
   semantic_config_json: string | null;
+  floorplan_extraction_id: string | null;
+  floorplan_config_json: string | null;
 };
 
 type SemanticExtractionRow = {
@@ -513,6 +521,75 @@ type SemanticExtractionRow = {
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type FloorplanExtractionRow = {
+  id: string;
+  organisation_id: string;
+  project_id: string;
+  version_id: string;
+  input_asset_id: string;
+  job_id: string;
+  method: "metric-pointcloud-floorplan-v1";
+  normalizer: string;
+  status: "QUEUED" | "PROCESSING" | "READY_FOR_REVIEW" | "REVIEWED" | "REJECTED" | "FAILED" | "CANCELLED";
+  parameters_json: string;
+  source_evidence_json: string;
+  proposal_json: string | null;
+  proposal_hash: string | null;
+  report_asset_id: string | null;
+  client_operation_id: string;
+  request_hash: string;
+  created_by: string;
+  reviewed_by: string | null;
+  review_decision: "approve" | "reject" | null;
+  review_note: string | null;
+  review_client_operation_id: string | null;
+  review_request_hash: string | null;
+  review_response_json: string | null;
+  reviewed_at: string | null;
+  error_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FloorplanRevisionRow = {
+  id: string;
+  organisation_id: string;
+  project_id: string;
+  version_id: string;
+  extraction_id: string;
+  revision_number: number;
+  measurement_class: "indicative";
+  status: "approved" | "superseded";
+  plan_json: string;
+  plan_hash: string;
+  source_proposal_hash: string;
+  review_note: string;
+  created_by: string;
+  approved_at: string;
+  created_at: string;
+};
+
+type FloorplanExportRow = {
+  id: string;
+  organisation_id: string;
+  project_id: string;
+  version_id: string;
+  revision_id: string;
+  batch_id: string;
+  asset_id: string;
+  format: "svg" | "pdf" | "dxf";
+  generator_version: string;
+  plan_hash: string;
+  status: "ready" | "superseded";
+  created_by: string;
+  created_at: string;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  object_key: string;
 };
 
 type RegisteredSceneChangeRow = {
@@ -781,6 +858,17 @@ app.get("/api/health", async (context) => {
     requestId: context.get("requestId"),
   }, database?.ready === 1 ? 200 : 503);
 });
+
+for (const path of [
+  "/studio.html",
+  "/index.html",
+  "/404.html",
+  "/assets/*",
+  "/images/*",
+  "/renderer/*",
+]) {
+  app.get(path, (context) => serveStaticEntry(context, context.req.path));
+}
 
 app.post("/api/auth/otp/request", async (context) => {
   if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
@@ -6083,6 +6171,9 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     rawChangeReports: [],
     semanticExtractions: [],
     semanticCandidates: [],
+    floorplanExtractions: [],
+    floorplanRevisions: [],
+    floorplanExports: [],
     deliveryPolicy: null,
     collisionProxy: { version: "box-union-v1", boxes: [] },
     navigationMesh: { version: "room-box-triangles-v1", vertices: [], indices: [], sourceEntityIds: [] },
@@ -6165,6 +6256,30 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
       ORDER BY created_at DESC, candidate_key LIMIT 250
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT r.*, j.state AS job_state, j.progress AS job_progress,
+        j.progress_message AS job_progress_message, j.attempt_count,
+        j.max_attempts, j.error_json AS job_error_json,
+        a.file_name AS input_file_name, a.format AS input_format,
+        a.size_bytes AS input_size_bytes
+      FROM floorplan_extraction_runs r
+      JOIN processing_jobs j ON j.id = r.job_id
+      JOIN assets a ON a.id = r.input_asset_id
+      WHERE r.project_id = ? AND r.version_id = ? AND r.organisation_id = ?
+      ORDER BY r.created_at DESC LIMIT 25
+    `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT * FROM floorplan_revisions
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+      ORDER BY revision_number DESC, created_at DESC LIMIT 100
+    `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT e.*, a.file_name, a.mime_type, a.size_bytes, a.sha256
+      FROM floorplan_exports e
+      JOIN assets a ON a.id = e.asset_id
+      WHERE e.project_id = ? AND e.version_id = ? AND e.organisation_id = ?
+      ORDER BY e.created_at DESC LIMIT 300
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const runtime = buildSpatialRuntime(entities);
@@ -6182,6 +6297,13 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     deliveryPolicy: requiredBatchResult(results, 9).results[0] ?? null,
     semanticExtractions: requiredBatchResult(results, 10).results,
     semanticCandidates: requiredBatchResult(results, 11).results,
+    floorplanExtractions: requiredBatchResult(results, 12).results,
+    floorplanRevisions: requiredBatchResult(results, 13).results,
+    floorplanExports: (requiredBatchResult(results, 14).results as Array<Record<string, unknown>>).map((row) => ({
+      ...row,
+      download_url:
+        `/api/projects/${access.project.id}/spatial/floorplan-exports/${String(row.id)}/download`,
+    })),
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
   });
@@ -6926,7 +7048,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.6.2', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.7.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -7196,6 +7318,644 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
   });
   return context.json(parseStoredObject(storedReview.review_response_json ?? "{}"));
 });
+
+app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = floorplanExtractionSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
+  if (!project) return notFound(context, "Project not found");
+  if (project.status === "ARCHIVED") {
+    return conflict(context, "Archived projects cannot start floor-plan extraction");
+  }
+  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
+  const prior = await context.env.DB.prepare(`
+    SELECT * FROM floorplan_extraction_runs
+    WHERE organisation_id = ? AND client_operation_id = ?
+  `).bind(
+    auth.organisationId,
+    parsed.data.clientOperationId,
+  ).first<FloorplanExtractionRow>();
+  if (prior) {
+    if (prior.request_hash !== requestHash) {
+      return conflict(context, "Operation ID was already used for a different floor-plan extraction");
+    }
+    return context.json({ extraction: floorplanExtractionApi(prior), idempotent: true });
+  }
+  const version = await context.env.DB.prepare(`
+    SELECT id FROM scene_versions WHERE id = ? AND project_id = ?
+  `).bind(parsed.data.versionId, project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Immutable scene version not found");
+  const asset = await context.env.DB.prepare(`
+    SELECT id, version_id, kind, format, integrity_status, file_name, size_bytes, sha256
+    FROM assets
+    WHERE id = ? AND project_id = ? AND organisation_id = ? AND deleted_at IS NULL
+  `).bind(
+    parsed.data.inputAssetId,
+    project.id,
+    auth.organisationId,
+  ).first<{
+    id: string;
+    version_id: string;
+    kind: string;
+    format: string;
+    integrity_status: string;
+    file_name: string;
+    size_bytes: number;
+    sha256: string | null;
+  }>();
+  if (!asset) return notFound(context, "Metric point-cloud asset not found");
+  if (asset.version_id !== version.id) {
+    return unprocessable(context, {
+      inputAssetId: ["Point-cloud asset does not belong to the selected version"],
+    });
+  }
+  const sourceFormat = asset.format.toLowerCase();
+  if (
+    asset.kind !== "pointcloud" ||
+    !["ply", "e57", "las", "laz", "pts"].includes(sourceFormat)
+  ) {
+    return unprocessable(context, {
+      inputAssetId: [
+        "Floor-plan extraction requires a metric point-cloud PLY, E57, LAS, LAZ, or PTS asset",
+      ],
+    });
+  }
+  if (asset.integrity_status !== "verified") {
+    return conflict(context, "Point-cloud asset has not passed immutable integrity verification");
+  }
+  if (!asset.sha256 || !/^[a-f0-9]{64}$/i.test(asset.sha256)) {
+    return conflict(
+      context,
+      "Point-cloud asset is missing the immutable SHA-256 required for floor-plan extraction",
+    );
+  }
+  if (asset.size_bytes > 1024 * 1024 * 1024) {
+    return unprocessable(context, {
+      inputAssetId: [
+        "This worker profile accepts point clouds up to 1 GiB; tile or decimate larger captures first",
+      ],
+    });
+  }
+  const extractionId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const normalizer =
+    sourceFormat === "ply" && parsed.data.sourceUpAxis === "y"
+      ? "native-ply-v1"
+      : "pdal";
+  const parameters = {
+    coordinateAssurance: parsed.data.coordinateAssurance,
+    sourceUpAxis: parsed.data.sourceUpAxis,
+    registrationEvidence: parsed.data.registrationEvidence,
+    gridSizeM: parsed.data.gridSizeM,
+    floorBandM: parsed.data.floorBandM,
+    wallMinHeightM: parsed.data.wallMinHeightM,
+    wallMaxHeightM: parsed.data.wallMaxHeightM,
+    minimumWallHeightCoverage: parsed.data.minimumWallHeightCoverage,
+    minimumRoomAreaM2: parsed.data.minimumRoomAreaM2,
+    maximumOpeningWidthM: parsed.data.maximumOpeningWidthM,
+    maximumRooms: parsed.data.maximumRooms,
+    maximumSamplePoints: parsed.data.maximumSamplePoints,
+    elevationHintM: parsed.data.elevationHintM ?? null,
+  };
+  const sourceEvidence = {
+    assetId: asset.id,
+    fileName: asset.file_name,
+    sourceFormat,
+    sizeBytes: asset.size_bytes,
+    sha256: asset.sha256,
+    integrityStatus: asset.integrity_status,
+    coordinateAssurance: parsed.data.coordinateAssurance,
+    sourceUpAxis: parsed.data.sourceUpAxis,
+    registrationEvidence: parsed.data.registrationEvidence,
+    normalizer,
+  };
+  await context.env.DB.batch([
+    context.env.DB.prepare(`
+      INSERT INTO processing_jobs (
+        id, organisation_id, project_id, version_id, input_asset_id, job_type,
+        processor_version, idempotency_key, state, priority, max_attempts,
+        progress_message
+      ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
+        'spatial-processor/0.7.0', ?, 'QUEUED', 78, 3,
+        'Waiting for a vendor-neutral floor-plan worker')
+    `).bind(
+      jobId,
+      auth.organisationId,
+      project.id,
+      version.id,
+      asset.id,
+      `floorplan-extraction:${auth.organisationId}:${parsed.data.clientOperationId}`,
+    ),
+    context.env.DB.prepare(`
+      INSERT INTO floorplan_extraction_runs (
+        id, organisation_id, project_id, version_id, input_asset_id, job_id,
+        normalizer, parameters_json, source_evidence_json,
+        client_operation_id, request_hash, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extractionId,
+      auth.organisationId,
+      project.id,
+      version.id,
+      asset.id,
+      jobId,
+      normalizer,
+      JSON.stringify(parameters),
+      JSON.stringify(sourceEvidence),
+      parsed.data.clientOperationId,
+      requestHash,
+      auth.userId,
+    ),
+  ]);
+  await audit(context, auth, "spatial.floorplan_extraction.create", "floorplan_extraction", extractionId, {
+    jobId,
+    versionId: version.id,
+    inputAssetId: asset.id,
+    sourceFormat,
+    normalizer,
+    parameters,
+  });
+  dispatchProcessingJob(context, jobId);
+  const created = await context.env.DB.prepare(
+    "SELECT * FROM floorplan_extraction_runs WHERE id = ?",
+  ).bind(extractionId).first<FloorplanExtractionRow>();
+  return context.json({ extraction: floorplanExtractionApi(created!) }, 202);
+});
+
+app.post(
+  "/api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    const parsed = floorplanExtractionReviewSchema.safeParse(await readJson(context));
+    if (!parsed.success) return validationError(context, parsed.error.flatten());
+    const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
+    if (!project) return notFound(context, "Project not found");
+    const extraction = await context.env.DB.prepare(`
+      SELECT * FROM floorplan_extraction_runs
+      WHERE id = ? AND project_id = ? AND organisation_id = ?
+    `).bind(
+      context.req.param("extractionId"),
+      project.id,
+      auth.organisationId,
+    ).first<FloorplanExtractionRow>();
+    if (!extraction) return notFound(context, "Floor-plan extraction not found");
+    const requestHash = await sha256Hex(JSON.stringify(parsed.data));
+    if (extraction.review_client_operation_id) {
+      if (
+        extraction.review_client_operation_id !== parsed.data.clientOperationId ||
+        extraction.review_request_hash !== requestHash
+      ) {
+        return conflict(context, "This floor-plan proposal already received a different review");
+      }
+      return context.json({
+        ...(parseStoredObject(extraction.review_response_json ?? "{}") as Record<string, unknown>),
+        idempotent: true,
+      });
+    }
+    if (extraction.status !== "READY_FOR_REVIEW" || !extraction.proposal_hash) {
+      return conflict(
+        context,
+        `Floor-plan extraction is ${extraction.status.toLowerCase()} and cannot be reviewed`,
+      );
+    }
+    if (parsed.data.plan) {
+      const planIssue = floorplanPlanIssue(parsed.data.plan);
+      if (planIssue) return unprocessable(context, { plan: [planIssue] });
+    }
+    const revisionId = parsed.data.decision === "approve" ? crypto.randomUUID() : null;
+    const planJson = parsed.data.plan ? JSON.stringify(parsed.data.plan) : null;
+    const planHash = planJson ? await sha256Hex(planJson) : null;
+    let response: Record<string, unknown> = {};
+    let reviewWriteError: unknown = null;
+    for (let allocationAttempt = 0; allocationAttempt < 3; allocationAttempt += 1) {
+      const revisionNumber = revisionId
+        ? ((await context.env.DB.prepare(`
+          SELECT COALESCE(MAX(revision_number), 0) AS value
+          FROM floorplan_revisions
+          WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+        `).bind(project.id, extraction.version_id, auth.organisationId)
+          .first<{ value: number }>())?.value ?? 0) + 1
+        : null;
+      response = {
+        extraction: {
+          id: extraction.id,
+          status: parsed.data.decision === "approve" ? "REVIEWED" : "REJECTED",
+          reviewDecision: parsed.data.decision,
+        },
+        revision: revisionId && planHash && planJson && revisionNumber
+          ? {
+            id: revisionId,
+            revisionNumber,
+            status: "approved",
+            measurementClass: "indicative",
+            planHash,
+          }
+          : null,
+      };
+      const serializedResponse = JSON.stringify(response);
+      const statements: D1PreparedStatement[] = [
+        context.env.DB.prepare(`
+          UPDATE floorplan_extraction_runs
+          SET status = ?, reviewed_by = ?, review_decision = ?, review_note = ?,
+            review_client_operation_id = ?, review_request_hash = ?,
+            review_response_json = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+          WHERE id = ? AND project_id = ? AND organisation_id = ?
+            AND status = 'READY_FOR_REVIEW' AND review_client_operation_id IS NULL
+        `).bind(
+          parsed.data.decision === "approve" ? "REVIEWED" : "REJECTED",
+          auth.userId,
+          parsed.data.decision,
+          parsed.data.note,
+          parsed.data.clientOperationId,
+          requestHash,
+          serializedResponse,
+          extraction.id,
+          project.id,
+          auth.organisationId,
+        ),
+      ];
+      if (revisionId && planHash && planJson && revisionNumber) {
+        statements.push(
+          context.env.DB.prepare(`
+            UPDATE floorplan_revisions SET status = 'superseded'
+            WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+              AND status = 'approved'
+              AND EXISTS (
+                SELECT 1 FROM floorplan_extraction_runs
+                WHERE id = ? AND review_client_operation_id = ?
+                  AND review_request_hash = ?
+                  AND review_response_json = ?
+              )
+          `).bind(
+            project.id,
+            extraction.version_id,
+            auth.organisationId,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO floorplan_revisions (
+              id, organisation_id, project_id, version_id, extraction_id,
+              revision_number, plan_json, plan_hash, source_proposal_hash,
+              review_note, created_by
+            )
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ?
+                AND review_response_json = ?
+            )
+          `).bind(
+            revisionId,
+            auth.organisationId,
+            project.id,
+            extraction.version_id,
+            extraction.id,
+            revisionNumber,
+            planJson,
+            planHash,
+            extraction.proposal_hash,
+            parsed.data.note,
+            auth.userId,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+        );
+      }
+      try {
+        await context.env.DB.batch(statements);
+        reviewWriteError = null;
+        break;
+      } catch (error) {
+        reviewWriteError = error;
+        if (
+          revisionId &&
+          allocationAttempt < 2 &&
+          isFloorplanRevisionSequenceConflict(error)
+        ) {
+          continue;
+        }
+        break;
+      }
+    }
+    const storedReview = await context.env.DB.prepare(`
+      SELECT review_client_operation_id, review_request_hash, review_response_json
+      FROM floorplan_extraction_runs WHERE id = ? AND organisation_id = ?
+    `).bind(extraction.id, auth.organisationId).first<{
+      review_client_operation_id: string | null;
+      review_request_hash: string | null;
+      review_response_json: string | null;
+    }>();
+    if (
+      storedReview?.review_client_operation_id !== parsed.data.clientOperationId ||
+      storedReview.review_request_hash !== requestHash
+    ) {
+      if (reviewWriteError) throw reviewWriteError;
+      return conflict(context, "A different floor-plan review completed first");
+    }
+    if (reviewWriteError) {
+      return context.json({
+        ...(parseStoredObject(storedReview.review_response_json ?? "{}") as Record<string, unknown>),
+        idempotent: true,
+      });
+    }
+    if (storedReview.review_response_json !== JSON.stringify(response)) {
+      return context.json({
+        ...(parseStoredObject(storedReview.review_response_json ?? "{}") as Record<string, unknown>),
+        idempotent: true,
+      });
+    }
+    await audit(context, auth, "spatial.floorplan_extraction.review", "floorplan_extraction", extraction.id, {
+      decision: parsed.data.decision,
+      revisionId,
+      planHash,
+    });
+    return context.json(parseStoredObject(storedReview.review_response_json ?? "{}"));
+  },
+);
+
+app.post(
+  "/api/projects/:projectId/spatial/floorplan-revisions/:revisionId/exports",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    const parsed = floorplanExportSchema.safeParse(await readJson(context));
+    if (!parsed.success) return validationError(context, parsed.error.flatten());
+    const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
+    if (!project) return notFound(context, "Project not found");
+    const revision = await context.env.DB.prepare(`
+      SELECT * FROM floorplan_revisions
+      WHERE id = ? AND project_id = ? AND organisation_id = ?
+    `).bind(
+      context.req.param("revisionId"),
+      project.id,
+      auth.organisationId,
+    ).first<FloorplanRevisionRow>();
+    if (!revision) return notFound(context, "Approved floor-plan revision not found");
+    if (revision.status !== "approved") {
+      return conflict(context, "Superseded floor-plan revisions cannot create new exports");
+    }
+    const requestHash = await sha256Hex(JSON.stringify(parsed.data));
+    const prior = await context.env.DB.prepare(`
+      SELECT response_json, request_hash FROM floorplan_export_batches
+      WHERE organisation_id = ? AND client_operation_id = ?
+    `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
+      response_json: string | null;
+      request_hash: string;
+    }>();
+    if (prior) {
+      if (prior.request_hash !== requestHash) {
+        return conflict(context, "Operation ID was already used for different floor-plan exports");
+      }
+      return context.json({
+        ...(parseStoredObject(prior.response_json ?? "{}") as Record<string, unknown>),
+        idempotent: true,
+      });
+    }
+    const storedPlan = floorplanReviewPlanSchema.safeParse(parseStoredObject(revision.plan_json));
+    if (!storedPlan.success) {
+      return conflict(context, "Approved floor-plan revision failed its stored schema check");
+    }
+    const existing = await context.env.DB.prepare(`
+      SELECT e.*, a.file_name, a.mime_type, a.size_bytes, a.sha256, a.object_key
+      FROM floorplan_exports e
+      JOIN assets a ON a.id = e.asset_id
+      WHERE e.revision_id = ? AND e.organisation_id = ?
+    `).bind(revision.id, auth.organisationId).all<FloorplanExportRow>();
+    const existingByFormat = new Map(existing.results.map((row) => [row.format, row]));
+    const batchId = crypto.randomUUID();
+    const generated: FloorplanExportRow[] = [];
+    const assetStatements: D1PreparedStatement[] = [];
+    try {
+      for (const format of parsed.data.formats) {
+        if (existingByFormat.has(format)) continue;
+        const exportId = crypto.randomUUID();
+        const assetId = crypto.randomUUID();
+        const generatedFile = floorplanExportBytes(storedPlan.data, format, {
+          projectName: project.name,
+          revisionNumber: revision.revision_number,
+          planHash: revision.plan_hash,
+          approvedAt: revision.approved_at,
+        });
+        const fileName =
+          `${slugify(project.name)}-indicative-floorplan-r${revision.revision_number}.${format}`;
+        const objectKey =
+          `deliverables-private/${auth.organisationId}/${project.id}/${revision.version_id}` +
+          `/floorplans/${revision.id}/${exportId}-${fileName}`;
+        const digest = await sha256Hex(generatedFile.bytes);
+        const stored = await context.env.SPATIAL_ASSETS.put(objectKey, generatedFile.bytes, {
+          httpMetadata: { contentType: generatedFile.mimeType },
+          customMetadata: {
+            projectId: project.id,
+            revisionId: revision.id,
+            planHash: revision.plan_hash,
+            measurementClass: "indicative",
+          },
+        });
+        const row: FloorplanExportRow = {
+          id: exportId,
+          organisation_id: auth.organisationId,
+          project_id: project.id,
+          version_id: revision.version_id,
+          revision_id: revision.id,
+          batch_id: batchId,
+          asset_id: assetId,
+          format,
+          generator_version: "indicative-floorplan-export-v1",
+          plan_hash: revision.plan_hash,
+          status: "ready",
+          created_by: auth.userId,
+          created_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+          file_name: fileName,
+          mime_type: generatedFile.mimeType,
+          size_bytes: generatedFile.bytes.byteLength,
+          sha256: digest,
+          object_key: objectKey,
+        };
+        generated.push(row);
+        assetStatements.push(
+          context.env.DB.prepare(`
+            INSERT INTO assets (
+              id, organisation_id, project_id, version_id, kind, format, object_key,
+              file_name, mime_type, size_bytes, etag, sha256, integrity_status
+            ) VALUES (?, ?, ?, ?, 'portable', ?, ?, ?, ?, ?, ?, ?, 'verified')
+          `).bind(
+            assetId,
+            auth.organisationId,
+            project.id,
+            revision.version_id,
+            format,
+            objectKey,
+            fileName,
+            generatedFile.mimeType,
+            generatedFile.bytes.byteLength,
+            stored.etag,
+            digest,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO floorplan_exports (
+              id, organisation_id, project_id, version_id, revision_id, batch_id,
+              asset_id, format, plan_hash, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            exportId,
+            auth.organisationId,
+            project.id,
+            revision.version_id,
+            revision.id,
+            batchId,
+            assetId,
+            format,
+            revision.plan_hash,
+            auth.userId,
+          ),
+        );
+      }
+    } catch (error) {
+      await Promise.all(
+        generated.map((row) => context.env.SPATIAL_ASSETS.delete(row.object_key)),
+      );
+      throw error;
+    }
+    const allRows = parsed.data.formats.map((format) => {
+      const row = existingByFormat.get(format) ?? generated.find((candidate) => candidate.format === format);
+      if (!row) throw new Error(`Floor-plan export ${format} was not generated`);
+      return row;
+    });
+    const response = {
+      revision: {
+        id: revision.id,
+        revisionNumber: revision.revision_number,
+        planHash: revision.plan_hash,
+        measurementClass: revision.measurement_class,
+      },
+      exports: allRows.map((row) => floorplanExportApi(row)),
+    };
+    try {
+      await context.env.DB.batch([
+        context.env.DB.prepare(`
+          INSERT INTO floorplan_export_batches (
+            id, organisation_id, project_id, revision_id, client_operation_id,
+            request_hash, response_json, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          batchId,
+          auth.organisationId,
+          project.id,
+          revision.id,
+          parsed.data.clientOperationId,
+          requestHash,
+          JSON.stringify(response),
+          auth.userId,
+        ),
+        ...assetStatements,
+      ]);
+    } catch (error) {
+      await Promise.all(
+        generated.map((row) => context.env.SPATIAL_ASSETS.delete(row.object_key)),
+      );
+      const concurrentOperation = await context.env.DB.prepare(`
+        SELECT response_json, request_hash FROM floorplan_export_batches
+        WHERE organisation_id = ? AND client_operation_id = ?
+      `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
+        response_json: string | null;
+        request_hash: string;
+      }>();
+      if (concurrentOperation?.response_json) {
+        if (concurrentOperation.request_hash !== requestHash) {
+          return conflict(context, "Operation ID was already used for different floor-plan exports");
+        }
+        return context.json({
+          ...(parseStoredObject(concurrentOperation.response_json) as Record<string, unknown>),
+          idempotent: true,
+        });
+      }
+      const concurrentRows = await context.env.DB.prepare(`
+        SELECT e.*, a.file_name, a.mime_type, a.size_bytes, a.sha256, a.object_key
+        FROM floorplan_exports e
+        JOIN assets a ON a.id = e.asset_id
+        WHERE e.revision_id = ? AND e.organisation_id = ?
+          AND e.format IN (${parsed.data.formats.map(() => "?").join(",")})
+      `).bind(
+        revision.id,
+        auth.organisationId,
+        ...parsed.data.formats,
+      ).all<FloorplanExportRow>();
+      const concurrentByFormat = new Map(
+        concurrentRows.results.map((row) => [row.format, row]),
+      );
+      if (parsed.data.formats.every((format) => concurrentByFormat.has(format))) {
+        const concurrentResponse = {
+          revision: response.revision,
+          exports: parsed.data.formats.map((format) =>
+            floorplanExportApi(concurrentByFormat.get(format)!)),
+        };
+        await context.env.DB.prepare(`
+          INSERT OR IGNORE INTO floorplan_export_batches (
+            id, organisation_id, project_id, revision_id, client_operation_id,
+            request_hash, response_json, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          batchId,
+          auth.organisationId,
+          project.id,
+          revision.id,
+          parsed.data.clientOperationId,
+          requestHash,
+          JSON.stringify(concurrentResponse),
+          auth.userId,
+        ).run();
+        return context.json({ ...concurrentResponse, reused: true });
+      }
+      throw error;
+    }
+    await audit(context, auth, "spatial.floorplan_export.create", "floorplan_revision", revision.id, {
+      batchId,
+      formats: parsed.data.formats,
+      planHash: revision.plan_hash,
+      generatedFormats: generated.map((row) => row.format),
+    });
+    return context.json(response, generated.length ? 201 : 200);
+  },
+);
+
+app.get(
+  "/api/projects/:projectId/spatial/floorplan-exports/:exportId/download",
+  async (context) => {
+    const access = await requireReviewProject(context, context.req.param("projectId"));
+    if (access instanceof Response) return access;
+    const row = await context.env.DB.prepare(`
+      SELECT e.id, e.status, a.object_key, a.file_name
+      FROM floorplan_exports e
+      JOIN assets a ON a.id = e.asset_id
+      WHERE e.id = ? AND e.project_id = ? AND e.organisation_id = ?
+        AND a.deleted_at IS NULL
+    `).bind(
+      context.req.param("exportId"),
+      access.project.id,
+      access.auth.organisationId,
+    ).first<{ id: string; status: string; object_key: string; file_name: string }>();
+    if (!row) return notFound(context, "Floor-plan export not found");
+    const response = await serveR2Object(context, row.object_key);
+    response.headers.set(
+      "Content-Disposition",
+      `attachment; filename="${row.file_name.replaceAll("\"", "")}"`,
+    );
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
+  },
+);
 
 app.post("/api/projects/:projectId/spatial/raw-change-reports/:reportId/retry", async (context) => {
   const auth = await requireOperator(context);
@@ -8543,8 +9303,13 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
       SET status = 'QUEUED', updated_at = datetime('now')
       WHERE job_id = ? AND organisation_id = ?
     `).bind(job.id, auth.organisationId),
+    context.env.DB.prepare(`
+      UPDATE floorplan_extraction_runs
+      SET status = 'QUEUED', error_json = NULL, updated_at = datetime('now')
+      WHERE job_id = ? AND organisation_id = ?
+    `).bind(job.id, auth.organisationId),
   ];
-  if (!["registered-scene-change-v1", "semantic.extract-v1"].includes(job.job_type)) {
+  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)) {
     retryStatements.push(context.env.DB.prepare(
       "UPDATE scene_versions SET status = 'PROCESSING', updated_at = datetime('now') WHERE id = ?",
     ).bind(job.version_id));
@@ -8580,9 +9345,16 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
   if (!["QUEUED", "LEASED", "RUNNING"].includes(job.state)) {
     return context.json({ error: `A ${job.state.toLowerCase()} job cannot be cancelled` }, 409);
   }
+  const cancelledResource = job.job_type === "floorplan.extract-v1"
+    ? "Vendor-neutral floor-plan extraction"
+    : job.job_type === "semantic.extract-v1"
+    ? "Semantic extraction"
+    : job.job_type === "registered-scene-change-v1"
+    ? "Registered raw-scene comparison"
+    : "Processing job";
   const cancelError = JSON.stringify({
     code: "OPERATOR_CANCELLED",
-    message: "Registered raw-scene comparison was cancelled by a production operator",
+    message: `${cancelledResource} was cancelled by a production operator`,
     retryable: true,
     failedAt: new Date().toISOString(),
   });
@@ -8605,8 +9377,13 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
       SET status = 'FAILED', updated_at = datetime('now')
       WHERE job_id = ? AND organisation_id = ?
     `).bind(job.id, auth.organisationId),
+    context.env.DB.prepare(`
+      UPDATE floorplan_extraction_runs
+      SET status = 'CANCELLED', error_json = ?, updated_at = datetime('now')
+      WHERE job_id = ? AND organisation_id = ?
+    `).bind(cancelError, job.id, auth.organisationId),
   ];
-  if (!["registered-scene-change-v1", "semantic.extract-v1"].includes(job.job_type)) {
+  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)) {
     cancelStatements.push(context.env.DB.prepare(
       "UPDATE scene_versions SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ?",
     ).bind(job.version_id));
@@ -8728,7 +9505,9 @@ app.post("/api/worker/jobs/lease", async (context) => {
       ca.sha256 AS secondary_input_sha256,
       ca.object_key AS secondary_input_object_key,
       se.id AS semantic_extraction_id,
-      se.parameters_json AS semantic_config_json
+      se.parameters_json AS semantic_config_json,
+      fe.id AS floorplan_extraction_id,
+      fe.parameters_json AS floorplan_config_json
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
     LEFT JOIN upload_sessions us ON us.asset_id = a.id
@@ -8736,6 +9515,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
     LEFT JOIN assets ca ON ca.id = r.candidate_asset_id
       AND ca.organisation_id = j.organisation_id
     LEFT JOIN semantic_extraction_runs se ON se.job_id = j.id
+    LEFT JOIN floorplan_extraction_runs fe ON fe.job_id = j.id
     WHERE j.id = ? AND j.lease_token_hash = ?
   `).bind(claimed.id, leaseTokenHash).first<JobLeaseRow>();
   if (!job) {
@@ -8789,6 +9569,13 @@ app.post("/api/worker/jobs/lease", async (context) => {
       WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
     `).bind(job.semantic_extraction_id).run();
   }
+  if (job.floorplan_extraction_id) {
+    await context.env.DB.prepare(`
+      UPDATE floorplan_extraction_runs
+      SET status = 'PROCESSING', error_json = NULL, updated_at = datetime('now')
+      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
+    `).bind(job.floorplan_extraction_id).run();
+  }
   return context.json({
     job: {
       id: job.id,
@@ -8829,6 +9616,12 @@ app.post("/api/worker/jobs/lease", async (context) => {
         ? {
           semanticExtractionId: job.semantic_extraction_id,
           semanticConfig: parseStoredObject(job.semantic_config_json ?? "{}"),
+        }
+        : {}),
+      ...(job.floorplan_extraction_id
+        ? {
+          floorplanExtractionId: job.floorplan_extraction_id,
+          floorplanConfig: parseStoredObject(job.floorplan_config_json ?? "{}"),
         }
         : {}),
     },
@@ -9602,6 +10395,287 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
   });
 });
 
+app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context) => {
+  if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
+  const parsed = workerFloorplanExtractionCompletionSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
+  const job = await context.env.DB.prepare(`
+    SELECT j.id, j.organisation_id, j.project_id, j.version_id,
+      j.input_asset_id, j.state, a.size_bytes AS input_size_bytes,
+      a.format AS input_format, r.id AS extraction_id, r.parameters_json,
+      r.normalizer
+    FROM processing_jobs j
+    JOIN floorplan_extraction_runs r ON r.job_id = j.id
+    JOIN assets a ON a.id = j.input_asset_id
+    WHERE j.id = ? AND j.job_type = 'floorplan.extract-v1'
+      AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
+      AND j.lease_expires_at > ?
+  `).bind(
+    context.req.param("jobId"),
+    tokenHash,
+    new Date().toISOString(),
+  ).first<{
+    id: string;
+    organisation_id: string;
+    project_id: string;
+    version_id: string;
+    input_asset_id: string;
+    state: string;
+    input_size_bytes: number;
+    input_format: string;
+    extraction_id: string;
+    parameters_json: string;
+    normalizer: string;
+  }>();
+  if (!job) return forbidden(context, "Lease is invalid or expired");
+  if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
+    return validationError(context, {
+      evidence: ["Reported input bytes do not match the exact registered point-cloud asset"],
+    });
+  }
+  const sourceFormat = job.input_format.toLowerCase();
+  if (
+    parsed.data.evidence.normalization.sourceFormat !== sourceFormat ||
+    Reflect.get(parsed.data.report.source, "sourceFormat") !== sourceFormat
+  ) {
+    return validationError(context, {
+      evidence: ["Normalization evidence does not match the immutable source format"],
+    });
+  }
+  if (
+    (job.normalizer === "native-ply-v1" && (
+      parsed.data.evidence.normalization.tool !== "native-ply-v1" ||
+      parsed.data.evidence.normalization.commandDigest !== null
+    )) ||
+    (job.normalizer === "pdal" && (
+      parsed.data.evidence.normalization.tool !== "PDAL" ||
+      parsed.data.evidence.normalization.commandDigest === null
+    ))
+  ) {
+    return validationError(context, {
+      evidence: ["Normalization provenance is inconsistent with the source format"],
+    });
+  }
+  const serverParameters = parseStoredObject(job.parameters_json);
+  if (
+    parsed.data.evidence.normalization.sourceUpAxis !==
+      Reflect.get(serverParameters as object, "sourceUpAxis")
+  ) {
+    return validationError(context, {
+      evidence: ["Normalization up-axis does not match the queued source declaration"],
+    });
+  }
+  for (const property of [
+    "gridSizeM",
+    "floorBandM",
+    "wallMinHeightM",
+    "wallMaxHeightM",
+    "minimumWallHeightCoverage",
+    "minimumRoomAreaM2",
+    "maximumOpeningWidthM",
+    "maximumRooms",
+    "maximumSamplePoints",
+    "sourceUpAxis",
+    "elevationHintM",
+  ]) {
+    if (Reflect.get(serverParameters as object, property) !==
+      Reflect.get(parsed.data.report.parameters, property)) {
+      return validationError(context, {
+        report: [`Floor-plan report parameter ${property} differs from the queued job`],
+      });
+    }
+  }
+  const maximumSamplePoints = Reflect.get(serverParameters as object, "maximumSamplePoints");
+  const sampledPointCount = Reflect.get(parsed.data.report.source, "sampledPointCount");
+  if (
+    typeof maximumSamplePoints !== "number" ||
+    !Number.isSafeInteger(maximumSamplePoints) ||
+    typeof sampledPointCount !== "number" ||
+    !Number.isSafeInteger(sampledPointCount) ||
+    sampledPointCount < 1 ||
+    sampledPointCount > maximumSamplePoints
+  ) {
+    return validationError(context, {
+      report: ["Floor-plan sampled point count exceeds or omits the queued processing bound"],
+    });
+  }
+  if (
+    Reflect.get(parsed.data.report.source, "coordinateAssurance") !==
+      Reflect.get(serverParameters as object, "coordinateAssurance")
+  ) {
+    return validationError(context, {
+      report: ["Floor-plan coordinate assurance differs from the queued job"],
+    });
+  }
+  const proposalKeys = [
+    ...parsed.data.report.rooms.map((room) => room.roomKey),
+    ...parsed.data.report.walls.map((wall) => wall.wallKey),
+    ...parsed.data.report.openings.map((opening) => opening.openingKey),
+  ];
+  if (new Set(proposalKeys).size !== proposalKeys.length) {
+    return validationError(context, { report: ["Every proposal key must be unique"] });
+  }
+  for (const room of parsed.data.report.rooms) {
+    const footprint = measurementFootprint({
+      id: room.roomKey,
+      label: room.label,
+      geometry_json: JSON.stringify(room.geometry),
+    });
+    if (!footprint) {
+      return validationError(context, { report: [`Room ${room.roomKey} has invalid polygon geometry`] });
+    }
+    const area = polygonArea2(footprint.points);
+    const tolerance = Math.max(0.01, room.areaM2 * 0.01);
+    if (Math.abs(area - room.areaM2) > tolerance) {
+      return validationError(context, {
+        report: [`Room ${room.roomKey} area contradicts its polygon geometry`],
+      });
+    }
+    if (room.geometry.points.some((point) => Math.abs(point[1] - room.elevationM) > 0.001)) {
+      return validationError(context, {
+        report: [`Room ${room.roomKey} is not on its declared elevation`],
+      });
+    }
+  }
+  const reportedArea = parsed.data.report.rooms.reduce((sum, room) => sum + room.areaM2, 0);
+  if (Math.abs(reportedArea - parsed.data.report.summary.totalRoomAreaM2) >
+    Math.max(0.01, reportedArea * 0.01)) {
+    return validationError(context, {
+      report: ["Total room area contradicts the room proposals"],
+    });
+  }
+  const output = parsed.data.output;
+  const expectedPrefix = `reports-private/${job.organisation_id}/${job.project_id}/${job.version_id}/`;
+  if (!output.objectKey.startsWith(expectedPrefix)) {
+    return validationError(context, {
+      objectKey: ["Floor-plan proposal is outside this job's immutable report prefix"],
+    });
+  }
+  if (safeFileName(output.fileName) !== output.fileName) {
+    return validationError(context, { fileName: ["Output filename is not canonical"] });
+  }
+  const stored = await context.env.SPATIAL_ASSETS.head(output.objectKey);
+  if (!stored) return validationError(context, { objectKey: ["Stored floor-plan report does not exist"] });
+  if (stored.size !== parsed.data.evidence.outputBytes) {
+    return validationError(context, {
+      evidence: ["Reported output bytes do not match the stored floor-plan report"],
+    });
+  }
+  if (!output.sha256) {
+    return validationError(context, {
+      output: ["Floor-plan proposal completion requires the processor's SHA-256"],
+    });
+  }
+  const storedReport = await context.env.SPATIAL_ASSETS.get(output.objectKey);
+  if (!storedReport) {
+    return validationError(context, { objectKey: ["Stored floor-plan report disappeared"] });
+  }
+  const storedReportBytes = await storedReport.arrayBuffer();
+  const storedReportHash = await sha256Hex(storedReportBytes);
+  if (storedReportHash !== output.sha256) {
+    return unprocessable(context, {
+      output: ["Floor-plan proposal SHA-256 does not match the immutable R2 object"],
+    });
+  }
+  let storedProposal: unknown;
+  try {
+    storedProposal = JSON.parse(new TextDecoder().decode(storedReportBytes));
+  } catch {
+    return unprocessable(context, {
+      output: ["Stored floor-plan proposal is not valid JSON"],
+    });
+  }
+  const parsedStoredProposal = floorplanProposalReportSchema.safeParse(storedProposal);
+  if (
+    !parsedStoredProposal.success ||
+    JSON.stringify(parsedStoredProposal.data) !== JSON.stringify(parsed.data.report)
+  ) {
+    return unprocessable(context, {
+      output: [
+        "Stored floor-plan proposal does not match the report submitted for approval",
+      ],
+    });
+  }
+  const proposalJson = JSON.stringify(parsed.data.report);
+  const proposalHash = await sha256Hex(proposalJson);
+  const reportAssetId = crypto.randomUUID();
+  const executionEvidence = {
+    ...parsed.data.evidence,
+    completedAt: new Date().toISOString(),
+    floorplanExtractionId: job.extraction_id,
+    proposalHash,
+    humanReviewRequired: true,
+  };
+  await context.env.DB.batch([
+    context.env.DB.prepare(`
+      INSERT INTO assets (
+        id, organisation_id, project_id, version_id, kind, format, object_key,
+        file_name, mime_type, size_bytes, etag, sha256, integrity_status
+      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified')
+    `).bind(
+      reportAssetId,
+      job.organisation_id,
+      job.project_id,
+      job.version_id,
+      output.objectKey,
+      output.fileName,
+      output.mimeType,
+      stored.size,
+      stored.etag,
+      storedReportHash,
+    ),
+    context.env.DB.prepare(`
+      UPDATE processing_jobs
+      SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
+        output_json = ?, processor_version = ?, compute_duration_ms = ?,
+        active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
+        evidence_json = ?, completed_at = datetime('now'),
+        lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+        updated_at = datetime('now')
+      WHERE id = ? AND lease_token_hash = ?
+    `).bind(
+      parsed.data.progressMessage,
+      JSON.stringify({
+        outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }],
+        proposalHash,
+      }),
+      parsed.data.evidence.processorVersion,
+      parsed.data.evidence.computeDurationMs,
+      parsed.data.evidence.activeHumanDurationMs,
+      parsed.data.evidence.inputBytes,
+      parsed.data.evidence.outputBytes,
+      JSON.stringify(executionEvidence),
+      job.id,
+      tokenHash,
+    ),
+    context.env.DB.prepare(`
+      UPDATE floorplan_extraction_runs
+      SET status = 'READY_FOR_REVIEW', proposal_json = ?, proposal_hash = ?,
+        report_asset_id = ?, error_json = NULL, updated_at = datetime('now')
+      WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED')
+    `).bind(
+      proposalJson,
+      proposalHash,
+      reportAssetId,
+      job.extraction_id,
+      job.id,
+    ),
+  ]);
+  return context.json({
+    job: { id: job.id, state: "SUCCEEDED" },
+    extraction: {
+      id: job.extraction_id,
+      status: "READY_FOR_REVIEW",
+      proposalHash,
+      roomCount: parsed.data.report.rooms.length,
+      wallCount: parsed.data.report.walls.length,
+      openingCount: parsed.data.report.openings.length,
+    },
+    reportAssetId,
+  });
+});
+
 app.post("/api/worker/jobs/:jobId/fail", async (context) => {
   if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
   const parsed = workerJobFailureSchema.safeParse(await readJson(context));
@@ -9668,10 +10742,20 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
       retry ? "QUEUED" : terminalState,
       job.id,
     ),
+    context.env.DB.prepare(`
+      UPDATE floorplan_extraction_runs
+      SET status = CASE WHEN ? = 'QUEUED' THEN 'QUEUED' ELSE 'FAILED' END,
+        error_json = ?, updated_at = datetime('now')
+      WHERE job_id = ?
+    `).bind(
+      retry ? "QUEUED" : terminalState,
+      error,
+      job.id,
+    ),
   ];
   if (
     !retry &&
-    !["registered-scene-change-v1", "semantic.extract-v1"].includes(job.job_type)
+    !["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)
   ) {
     statements.push(
       context.env.DB.prepare(
@@ -13995,8 +15079,14 @@ function legacyCaptureAdapter(adapter: CaptureAdapterId): Exclude<CaptureAdapter
 
 async function readJson(context: Context<AppEnvironment>): Promise<unknown> {
   const contentLength = Number(context.req.header("Content-Length") ?? "0");
-  if (contentLength > 1024 * 1024) throw new Error("JSON request body exceeds 1 MiB");
-  return context.req.json<unknown>();
+  if (Number.isFinite(contentLength) && contentLength > 1024 * 1024) {
+    throw new Error("JSON request body exceeds 1 MiB");
+  }
+  const body = await context.req.text();
+  if (new TextEncoder().encode(body).byteLength > 1024 * 1024) {
+    throw new Error("JSON request body exceeds 1 MiB");
+  }
+  return JSON.parse(body) as unknown;
 }
 
 function parseStoredObject(value: string): unknown {
@@ -14005,6 +15095,15 @@ function parseStoredObject(value: string): unknown {
   } catch {
     return {};
   }
+}
+
+function isFloorplanRevisionSequenceConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed") &&
+    message.includes("floorplan_revisions.organisation_id") &&
+    message.includes("floorplan_revisions.project_id") &&
+    message.includes("floorplan_revisions.version_id") &&
+    message.includes("floorplan_revisions.revision_number");
 }
 
 type MeasurementFootprint = {
@@ -14091,6 +15190,446 @@ function semanticExtractionApi(run: SemanticExtractionRow): Record<string, unkno
     createdAt: run.created_at,
     updatedAt: run.updated_at,
   };
+}
+
+type FloorplanPlan = ReturnType<typeof floorplanReviewPlanSchema.parse>;
+
+function floorplanExtractionApi(run: FloorplanExtractionRow): Record<string, unknown> {
+  return {
+    id: run.id,
+    projectId: run.project_id,
+    versionId: run.version_id,
+    inputAssetId: run.input_asset_id,
+    jobId: run.job_id,
+    method: run.method,
+    normalizer: run.normalizer,
+    status: run.status,
+    parameters: parseStoredObject(run.parameters_json),
+    sourceEvidence: parseStoredObject(run.source_evidence_json),
+    proposal: run.proposal_json ? parseStoredObject(run.proposal_json) : null,
+    proposalHash: run.proposal_hash,
+    reportAssetId: run.report_asset_id,
+    reviewDecision: run.review_decision,
+    reviewNote: run.review_note,
+    reviewedAt: run.reviewed_at,
+    error: run.error_json ? parseStoredObject(run.error_json) : null,
+    createdAt: run.created_at,
+    updatedAt: run.updated_at,
+  };
+}
+
+function floorplanPlanIssue(plan: FloorplanPlan): string | null {
+  const identifiers = new Set<string>();
+  for (const level of plan.levels) {
+    if (identifiers.has(level.id)) return `Duplicate floor-plan identifier: ${level.id}`;
+    identifiers.add(level.id);
+    const wallIds = new Set<string>();
+    for (const room of level.rooms) {
+      if (identifiers.has(room.id)) return `Duplicate floor-plan identifier: ${room.id}`;
+      identifiers.add(room.id);
+      if (polygonArea2(room.points) < 0.01) {
+        return `Room ${room.label} has less than 0.01 square metre of enclosed area`;
+      }
+      if (floorplanPolygonSelfIntersects(room.points)) {
+        return `Room ${room.label} has a self-intersecting outline`;
+      }
+    }
+    for (const wall of level.walls) {
+      if (identifiers.has(wall.id)) return `Duplicate floor-plan identifier: ${wall.id}`;
+      identifiers.add(wall.id);
+      wallIds.add(wall.id);
+      if (floorplanDistance(wall.start, wall.end) < 0.05) {
+        return `Wall ${wall.label} is shorter than 0.05 metre`;
+      }
+    }
+    for (const opening of level.openings) {
+      if (identifiers.has(opening.id)) return `Duplicate floor-plan identifier: ${opening.id}`;
+      identifiers.add(opening.id);
+      const observedWidth = floorplanDistance(opening.start, opening.end);
+      if (observedWidth < 0.05) return `Opening ${opening.label} is shorter than 0.05 metre`;
+      if (Math.abs(observedWidth - opening.widthM) > Math.max(0.1, opening.widthM * 0.1)) {
+        return `Opening ${opening.label} width does not match its endpoints`;
+      }
+      if (opening.wallId && !wallIds.has(opening.wallId)) {
+        return `Opening ${opening.label} refers to a wall outside its level`;
+      }
+    }
+  }
+  return null;
+}
+
+function floorplanPolygonSelfIntersects(points: Array<[number, number]>): boolean {
+  for (let first = 0; first < points.length; first += 1) {
+    const firstNext = (first + 1) % points.length;
+    for (let second = first + 1; second < points.length; second += 1) {
+      const secondNext = (second + 1) % points.length;
+      if (
+        first === second ||
+        firstNext === second ||
+        secondNext === first ||
+        (first === 0 && secondNext === 0)
+      ) continue;
+      if (floorplanSegmentsIntersect(
+        points[first]!,
+        points[firstNext]!,
+        points[second]!,
+        points[secondNext]!,
+      )) return true;
+    }
+  }
+  return false;
+}
+
+function floorplanSegmentsIntersect(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+  d: [number, number],
+): boolean {
+  const cross = (
+    first: [number, number],
+    second: [number, number],
+    third: [number, number],
+  ) => (second[0] - first[0]) * (third[1] - first[1]) -
+    (second[1] - first[1]) * (third[0] - first[0]);
+  const first = cross(a, b, c);
+  const second = cross(a, b, d);
+  const third = cross(c, d, a);
+  const fourth = cross(c, d, b);
+  return (
+    ((first > 0 && second < 0) || (first < 0 && second > 0)) &&
+    ((third > 0 && fourth < 0) || (third < 0 && fourth > 0))
+  );
+}
+
+function floorplanDistance(start: [number, number], end: [number, number]): number {
+  return Math.hypot(end[0] - start[0], end[1] - start[1]);
+}
+
+function floorplanExportApi(row: FloorplanExportRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    revisionId: row.revision_id,
+    assetId: row.asset_id,
+    format: row.format,
+    generatorVersion: row.generator_version,
+    planHash: row.plan_hash,
+    status: row.status,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    sha256: row.sha256,
+    createdAt: databaseTimestampToIso(row.created_at),
+    downloadUrl:
+      `/api/projects/${row.project_id}/spatial/floorplan-exports/${row.id}/download`,
+  };
+}
+
+function databaseTimestampToIso(value: string): string {
+  const timestamp = value.includes("T") ? value : `${value.replace(" ", "T")}Z`;
+  const parsed = new Date(timestamp);
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function floorplanExportBytes(
+  plan: FloorplanPlan,
+  format: "svg" | "pdf" | "dxf",
+  metadata: {
+    projectName: string;
+    revisionNumber: number;
+    planHash: string;
+    approvedAt: string;
+  },
+): { bytes: Uint8Array; mimeType: string } {
+  if (format === "svg") {
+    return {
+      bytes: new TextEncoder().encode(generateIndicativeFloorplanSvg(plan, metadata)),
+      mimeType: "image/svg+xml",
+    };
+  }
+  if (format === "dxf") {
+    return {
+      bytes: new TextEncoder().encode(generateIndicativeFloorplanDxf(plan, metadata)),
+      mimeType: "application/dxf",
+    };
+  }
+  return {
+    bytes: generateIndicativeFloorplanPdf(plan, metadata),
+    mimeType: "application/pdf",
+  };
+}
+
+function floorplanLevelBounds(level: FloorplanPlan["levels"][number]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
+  const points = [
+    ...level.rooms.flatMap((room) => room.points),
+    ...level.walls.flatMap((wall) => [wall.start, wall.end]),
+    ...level.openings.flatMap((opening) => [opening.start, opening.end]),
+  ];
+  return {
+    minX: Math.min(...points.map((point) => point[0])),
+    minY: Math.min(...points.map((point) => point[1])),
+    maxX: Math.max(...points.map((point) => point[0])),
+    maxY: Math.max(...points.map((point) => point[1])),
+  };
+}
+
+function generateIndicativeFloorplanSvg(
+  plan: FloorplanPlan,
+  metadata: {
+    projectName: string;
+    revisionNumber: number;
+    planHash: string;
+    approvedAt: string;
+  },
+): string {
+  const scale = 80;
+  const padding = 48;
+  const titleHeight = 88;
+  const levelGap = 80;
+  const layouts = plan.levels.map((level) => {
+    const bounds = floorplanLevelBounds(level);
+    return {
+      level,
+      bounds,
+      width: Math.max(1, bounds.maxX - bounds.minX) * scale + padding * 2,
+      height: Math.max(1, bounds.maxY - bounds.minY) * scale + padding * 2 + 36,
+    };
+  });
+  const width = Math.max(720, ...layouts.map((layout) => layout.width));
+  const height = titleHeight + layouts.reduce((sum, layout) => sum + layout.height, 0) +
+    Math.max(0, layouts.length - 1) * levelGap + 56;
+  let offsetY = titleHeight;
+  const groups = layouts.map(({ level, bounds, height: levelHeight }) => {
+    const x = (value: number) => padding + (value - bounds.minX) * scale;
+    const y = (value: number) => padding + (bounds.maxY - value) * scale;
+    const roomPaths = level.rooms.map((room) => {
+      const points = room.points.map((point) => `${dxfNumber(x(point[0]))},${dxfNumber(y(point[1]))}`).join(" ");
+      const centroid = room.points.reduce(
+        (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
+        [0, 0],
+      ).map((value) => value / room.points.length) as [number, number];
+      return `<polygon points="${points}" class="room"/><text x="${dxfNumber(x(centroid[0]))}" y="${dxfNumber(y(centroid[1]))}" class="label">${xmlText(room.label)}</text>`;
+    }).join("");
+    const walls = level.walls.map((wall) =>
+      `<line x1="${dxfNumber(x(wall.start[0]))}" y1="${dxfNumber(y(wall.start[1]))}" x2="${dxfNumber(x(wall.end[0]))}" y2="${dxfNumber(y(wall.end[1]))}" class="wall"/>`
+    ).join("");
+    const openings = level.openings.map((opening) =>
+      `<line x1="${dxfNumber(x(opening.start[0]))}" y1="${dxfNumber(y(opening.start[1]))}" x2="${dxfNumber(x(opening.end[0]))}" y2="${dxfNumber(y(opening.end[1]))}" class="opening"/>`
+    ).join("");
+    const result = `<g transform="translate(0 ${dxfNumber(offsetY)})"><text x="${padding}" y="24" class="level">${xmlText(level.label)} · ${dxfNumber(level.elevationM)} m</text><g transform="translate(0 36)">${roomPaths}${walls}${openings}</g></g>`;
+    offsetY += levelHeight + levelGap;
+    return result;
+  }).join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${Math.ceil(width)}" height="${Math.ceil(height)}" viewBox="0 0 ${Math.ceil(width)} ${Math.ceil(height)}" role="img" aria-labelledby="title desc">
+  <title id="title">${xmlText(metadata.projectName)} indicative floor plan</title>
+  <desc id="desc">Operator-reviewed indicative floor plan; not a survey or construction drawing.</desc>
+  <style>
+    .room{fill:#f4f1e8;stroke:#b7ad99;stroke-width:1.5}
+    .wall{stroke:#171916;stroke-width:8;stroke-linecap:square}
+    .opening{stroke:#fff;stroke-width:12;stroke-linecap:butt}
+    .opening+*{stroke:#2f786f}
+    .label{font:500 13px system-ui,sans-serif;text-anchor:middle;dominant-baseline:middle;fill:#20231f}
+    .level{font:700 18px system-ui,sans-serif;fill:#20231f}
+    .meta{font:500 12px ui-monospace,monospace;fill:#62675f}
+    .watermark{font:800 28px system-ui,sans-serif;letter-spacing:4px;fill:#ad3b2f;opacity:.7}
+  </style>
+  <rect width="100%" height="100%" fill="#fcfbf7"/>
+  <text x="${padding}" y="34" class="level">${xmlText(metadata.projectName)}</text>
+  <text x="${padding}" y="58" class="meta">Revision ${metadata.revisionNumber} · approved ${xmlText(metadata.approvedAt)} · SHA-256 ${metadata.planHash.slice(0, 16)}…</text>
+  <text x="${width - padding}" y="38" text-anchor="end" class="watermark">INDICATIVE</text>
+  ${groups}
+  <text x="${padding}" y="${height - 24}" class="meta">Operator-reviewed visual deliverable · metres · not for survey, construction, title, or regulated reliance</text>
+</svg>
+`;
+}
+
+function generateIndicativeFloorplanDxf(
+  plan: FloorplanPlan,
+  metadata: {
+    projectName: string;
+    revisionNumber: number;
+    planHash: string;
+    approvedAt: string;
+  },
+): string {
+  const values = [
+    "999", `Whyme Labs indicative floor plan: ${dxfText(metadata.projectName)}`,
+    "999", `Revision ${metadata.revisionNumber}; approved ${dxfText(metadata.approvedAt)}`,
+    "999", `Plan SHA-256: ${metadata.planHash}`,
+    "999", "INDICATIVE ONLY - NOT FOR SURVEY, CONSTRUCTION, TITLE, OR REGULATED RELIANCE",
+    "0", "SECTION", "2", "HEADER",
+    "9", "$ACADVER", "1", "AC1009",
+    "9", "$INSUNITS", "70", "6",
+    "0", "ENDSEC",
+    "0", "SECTION", "2", "TABLES",
+    "0", "TABLE", "2", "LAYER", "70", "5",
+    ...dxfLayer("ROOM_OUTLINE", 8),
+    ...dxfLayer("WALL", 7),
+    ...dxfLayer("OPENING", 4),
+    ...dxfLayer("LABEL", 3),
+    ...dxfLayer("INDICATIVE", 1),
+    "0", "ENDTAB", "0", "ENDSEC",
+    "0", "SECTION", "2", "ENTITIES",
+  ];
+  for (const level of plan.levels) {
+    for (const room of level.rooms) {
+      for (let index = 0; index < room.points.length; index += 1) {
+        const start = room.points[index]!;
+        const end = room.points[(index + 1) % room.points.length]!;
+        values.push(...floorplanDxfLine("ROOM_OUTLINE", start, end, level.elevationM));
+      }
+      const centroid = room.points.reduce(
+        (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
+        [0, 0],
+      ).map((value) => value / room.points.length) as [number, number];
+      values.push(
+        "0", "TEXT", "8", "LABEL",
+        "10", dxfNumber(centroid[0]), "20", dxfNumber(centroid[1]),
+        "30", dxfNumber(level.elevationM), "40", "0.25",
+        "1", dxfText(room.label), "72", "1", "73", "2",
+        "11", dxfNumber(centroid[0]), "21", dxfNumber(centroid[1]),
+        "31", dxfNumber(level.elevationM),
+      );
+    }
+    for (const wall of level.walls) {
+      values.push(...floorplanDxfLine("WALL", wall.start, wall.end, level.elevationM));
+    }
+    for (const opening of level.openings) {
+      values.push(...floorplanDxfLine("OPENING", opening.start, opening.end, level.elevationM));
+    }
+  }
+  values.push(
+    "0", "TEXT", "8", "INDICATIVE",
+    "10", "0", "20", "0", "30", "0", "40", "0.35",
+    "1", "INDICATIVE - OPERATOR REVIEWED - NOT A SURVEY",
+    "0", "ENDSEC", "0", "EOF",
+  );
+  return `${values.join("\n")}\n`;
+}
+
+function floorplanDxfLine(
+  layer: string,
+  start: [number, number],
+  end: [number, number],
+  elevationM: number,
+): string[] {
+  return [
+    "0", "LINE", "8", layer,
+    "10", dxfNumber(start[0]), "20", dxfNumber(start[1]), "30", dxfNumber(elevationM),
+    "11", dxfNumber(end[0]), "21", dxfNumber(end[1]), "31", dxfNumber(elevationM),
+  ];
+}
+
+function generateIndicativeFloorplanPdf(
+  plan: FloorplanPlan,
+  metadata: {
+    projectName: string;
+    revisionNumber: number;
+    planHash: string;
+    approvedAt: string;
+  },
+): Uint8Array {
+  const pageWidth = 842;
+  const pageHeight = 595;
+  const pageObjects: Array<{ page: number; content: number; stream: string }> = [];
+  for (const [index, level] of plan.levels.entries()) {
+    const bounds = floorplanLevelBounds(level);
+    const drawingWidth = Math.max(0.1, bounds.maxX - bounds.minX);
+    const drawingHeight = Math.max(0.1, bounds.maxY - bounds.minY);
+    const scale = Math.min(740 / drawingWidth, 450 / drawingHeight);
+    const offsetX = 50 + (740 - drawingWidth * scale) / 2;
+    const offsetY = 70 + (450 - drawingHeight * scale) / 2;
+    const x = (value: number) => offsetX + (value - bounds.minX) * scale;
+    const y = (value: number) => offsetY + (value - bounds.minY) * scale;
+    const commands = [
+      "0.18 0.20 0.17 RG 0.8 w",
+      ...level.rooms.flatMap((room) => {
+        const [first, ...rest] = room.points;
+        return [
+          `${dxfNumber(x(first![0]))} ${dxfNumber(y(first![1]))} m`,
+          ...rest.map((point) => `${dxfNumber(x(point[0]))} ${dxfNumber(y(point[1]))} l`),
+          "h S",
+        ];
+      }),
+      "0.05 0.06 0.05 RG 4 w",
+      ...level.walls.map((wall) =>
+        `${dxfNumber(x(wall.start[0]))} ${dxfNumber(y(wall.start[1]))} m ${dxfNumber(x(wall.end[0]))} ${dxfNumber(y(wall.end[1]))} l S`
+      ),
+      "0.20 0.55 0.50 RG 7 w",
+      ...level.openings.map((opening) =>
+        `${dxfNumber(x(opening.start[0]))} ${dxfNumber(y(opening.start[1]))} m ${dxfNumber(x(opening.end[0]))} ${dxfNumber(y(opening.end[1]))} l S`
+      ),
+      "BT /F1 16 Tf 50 555 Td",
+      `(${pdfText(metadata.projectName)} - ${pdfText(level.label)}) Tj ET`,
+      "BT /F1 9 Tf 50 537 Td",
+      `(Revision ${metadata.revisionNumber} | elevation ${dxfNumber(level.elevationM)} m | approved ${pdfText(metadata.approvedAt)}) Tj ET`,
+      "1 0.2 0.16 rg BT /F1 18 Tf 650 555 Td (INDICATIVE) Tj ET",
+      "0.25 0.27 0.24 rg BT /F1 8 Tf 50 32 Td",
+      `(Operator-reviewed visual deliverable | metres | SHA-256 ${metadata.planHash.slice(0, 20)}... | not a survey or construction drawing) Tj ET`,
+    ];
+    pageObjects.push({
+      page: 4 + index * 2,
+      content: 5 + index * 2,
+      stream: `${commands.join("\n")}\n`,
+    });
+  }
+  const objectCount = 3 + pageObjects.length * 2;
+  const objects = new Map<number, string>([
+    [1, "<< /Type /Catalog /Pages 2 0 R >>"],
+    [2, `<< /Type /Pages /Count ${pageObjects.length} /Kids [${pageObjects.map((entry) => `${entry.page} 0 R`).join(" ")}] >>`],
+    [3, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"],
+  ]);
+  for (const entry of pageObjects) {
+    objects.set(
+      entry.page,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${entry.content} 0 R >>`,
+    );
+    objects.set(
+      entry.content,
+      `<< /Length ${new TextEncoder().encode(entry.stream).byteLength} >>\nstream\n${entry.stream}endstream`,
+    );
+  }
+  const chunks: string[] = ["%PDF-1.4\n"];
+  const offsets = [0];
+  let byteOffset = new TextEncoder().encode(chunks[0]!).byteLength;
+  for (let index = 1; index <= objectCount; index += 1) {
+    offsets[index] = byteOffset;
+    const chunk = `${index} 0 obj\n${objects.get(index)}\nendobj\n`;
+    chunks.push(chunk);
+    byteOffset += new TextEncoder().encode(chunk).byteLength;
+  }
+  const xrefOffset = byteOffset;
+  const xref = [
+    `xref\n0 ${objectCount + 1}\n`,
+    "0000000000 65535 f \n",
+    ...offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`),
+    `trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`,
+  ].join("");
+  chunks.push(xref);
+  return new TextEncoder().encode(chunks.join(""));
+}
+
+function xmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function pdfText(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7e]/g, "?")
+    .replace(/([\\()])/g, "\\$1")
+    .slice(0, 500);
 }
 
 function measurementDeliverableApi(row: MeasurementDeliverableRow): {

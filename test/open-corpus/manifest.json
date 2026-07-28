@@ -63,6 +63,18 @@
       "lanes": ["metric_point_cloud/e57"]
     },
     {
+      "id": "pdal-test-pts",
+      "fileName": "pdal-test.pts",
+      "sourceUrl": "https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/pts/test.pts",
+      "license": "BSD-3-Clause",
+      "licenseUrl": "https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/LICENSE.txt",
+      "sourceCommit": "a4c50af9a845cbf50fe690fe2dbd3181ce127dc4",
+      "sizeBytes": 889,
+      "sha256": "0c9d3f5c6d5925151a21377d28f74e0cf79e0e78e37bb4c90f7286fe56b3d024",
+      "tier": "integration",
+      "lanes": ["metric_point_cloud/pts"]
+    },
+    {
       "id": "opensfm-berlin-reconstruction",
       "fileName": "opensfm-berlin-reconstruction.json",
       "sourceUrl": "https://raw.githubusercontent.com/mapillary/OpenSfM/238744cdf3b5d50149c50d136a87f7fea25ad5cd/data/berlin/reconstruction_example.json",

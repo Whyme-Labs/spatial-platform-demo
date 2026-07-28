@@ -666,6 +666,212 @@ export const workerSemanticExtractionCompletionSchema = z.object({
   }),
 });
 
+const boundedMetricSchema = z.number().finite().min(-10_000_000).max(10_000_000);
+const point2MetricSchema = z.tuple([boundedMetricSchema, boundedMetricSchema]);
+const floorplanKeySchema = z.string().trim()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/);
+
+export const floorplanExtractionSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  versionId: z.string().uuid(),
+  inputAssetId: z.string().uuid(),
+  coordinateAssurance: z.literal("registered_y_up_metric_frame"),
+  sourceUpAxis: z.enum(["y", "z"]).default("y"),
+  registrationEvidence: z.string().trim().min(10).max(2000),
+  gridSizeM: z.number().min(0.05).max(1).default(0.25),
+  floorBandM: z.number().min(0.05).max(0.5).default(0.15),
+  wallMinHeightM: z.number().min(0.1).max(5).default(0.25),
+  wallMaxHeightM: z.number().min(0.2).max(10).default(2.5),
+  minimumWallHeightCoverage: z.number().min(0.1).max(1).default(0.45),
+  minimumRoomAreaM2: z.number().min(0.25).max(10_000).default(2),
+  maximumOpeningWidthM: z.number().min(0.1).max(5).default(1.25),
+  maximumRooms: z.number().int().min(1).max(250).default(100),
+  maximumSamplePoints: z.number().int().min(1_000).max(10_000_000).default(2_000_000),
+  elevationHintM: z.number().finite().nullable().optional(),
+}).superRefine((value, context) => {
+  if (value.wallMaxHeightM <= value.wallMinHeightM) {
+    context.addIssue({
+      code: "custom",
+      path: ["wallMaxHeightM"],
+      message: "Maximum wall height must be greater than minimum wall height",
+    });
+  }
+  if (value.maximumOpeningWidthM < value.gridSizeM) {
+    context.addIssue({
+      code: "custom",
+      path: ["maximumOpeningWidthM"],
+      message: "Maximum opening width must be at least one grid cell",
+    });
+  }
+});
+
+const floorplanRoomProposalSchema = z.object({
+  roomKey: z.string().regex(/^room-[0-9]{3}$/),
+  kind: z.literal("room_candidate"),
+  label: z.string().trim().min(1).max(120),
+  elevationM: boundedMetricSchema,
+  areaM2: z.number().positive().max(10_000_000),
+  confidence: z.number().min(0).max(1),
+  geometry: z.object({
+    type: z.literal("polygon"),
+    points: polygon3Schema,
+  }),
+  evidence: z.record(z.string(), z.unknown()),
+});
+
+const floorplanLineProposalSchema = z.object({
+  label: z.string().trim().min(1).max(120),
+  elevationM: boundedMetricSchema,
+  confidence: z.number().min(0).max(1),
+  geometry: z.object({
+    type: z.literal("line"),
+    points: z.array(point3Schema).length(2),
+  }),
+  evidence: z.record(z.string(), z.unknown()),
+});
+
+const floorplanWallProposalSchema = floorplanLineProposalSchema.extend({
+  wallKey: z.string().regex(/^wall-[0-9]{3}$/),
+  kind: z.literal("wall_candidate"),
+  heightM: z.number().positive().max(100),
+  thicknessM: z.number().positive().max(10),
+});
+
+const floorplanOpeningProposalSchema = floorplanLineProposalSchema.extend({
+  openingKey: z.string().regex(/^opening-[0-9]{3}$/),
+  kind: z.literal("opening_candidate"),
+  widthM: z.number().positive().max(50),
+  heightM: z.number().positive().max(100).nullable(),
+});
+
+export const floorplanProposalReportSchema = z.object({
+    schemaVersion: z.literal("1.0.0"),
+    method: z.literal("metric-pointcloud-floorplan-v1"),
+    result: z.literal("proposal_ready"),
+    measurementClass: z.literal("indicative"),
+    source: z.record(z.string(), z.unknown()),
+    parameters: z.record(z.string(), z.unknown()),
+    summary: z.object({
+      inferredFloorElevationM: boundedMetricSchema,
+      credibleHorizontalLayerCount: z.number().int().positive(),
+      wallCellCount: z.number().int().positive(),
+      wallCount: z.number().int().min(1).max(5_000),
+      roomCount: z.number().int().min(1).max(250),
+      openingCount: z.number().int().min(0).max(2_000),
+      totalRoomAreaM2: z.number().positive().max(10_000_000),
+    }),
+    rooms: z.array(floorplanRoomProposalSchema).min(1).max(250),
+    walls: z.array(floorplanWallProposalSchema).min(1).max(5_000),
+    openings: z.array(floorplanOpeningProposalSchema).max(2_000),
+    humanReviewRequired: z.literal(true),
+    limitations: z.array(z.string().trim().min(10).max(1000)).min(1).max(20),
+  }).superRefine((report, context) => {
+    for (const [property, count] of [
+      ["roomCount", report.rooms.length],
+      ["wallCount", report.walls.length],
+      ["openingCount", report.openings.length],
+    ] as const) {
+      if (report.summary[property] !== count) {
+        context.addIssue({
+          code: "custom",
+          path: ["summary", property],
+          message: `${property} must match its proposal array`,
+        });
+      }
+    }
+  });
+
+export const workerFloorplanExtractionCompletionSchema = z.object({
+  leaseToken: z.string().min(20).max(512),
+  progressMessage: z.string().trim().min(2).max(500),
+  output: workerOutputSchema.extend({
+    kind: z.literal("report"),
+    format: z.literal("json"),
+  }),
+  report: floorplanProposalReportSchema,
+  evidence: z.object({
+    processorVersion: z.string().trim().min(1).max(120),
+    computeDurationMs: z.number().int().nonnegative(),
+    activeHumanDurationMs: z.number().int().nonnegative(),
+    inputBytes: z.number().int().positive(),
+    outputBytes: z.number().int().positive(),
+    toolVersions: z.record(z.string(), z.string().trim().min(1).max(120)).default({}),
+    normalization: z.object({
+      sourceFormat: z.enum(["ply", "e57", "las", "laz", "pts"]),
+      sourceUpAxis: z.enum(["y", "z"]),
+      normalizedFormat: z.literal("ply"),
+      tool: z.string().trim().min(1).max(120),
+      commandDigest: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+    }),
+  }),
+});
+
+const floorplanRoomSchema = z.object({
+  id: floorplanKeySchema,
+  label: z.string().trim().min(1).max(120),
+  points: z.array(point2MetricSchema).min(3).max(2_000),
+});
+const floorplanWallSchema = z.object({
+  id: floorplanKeySchema,
+  label: z.string().trim().min(1).max(120),
+  start: point2MetricSchema,
+  end: point2MetricSchema,
+  thicknessM: z.number().positive().max(10),
+  heightM: z.number().positive().max(100),
+});
+const floorplanOpeningSchema = z.object({
+  id: floorplanKeySchema,
+  label: z.string().trim().min(1).max(120),
+  type: z.enum(["door", "window", "opening", "unknown"]),
+  wallId: floorplanKeySchema.nullable().optional(),
+  start: point2MetricSchema,
+  end: point2MetricSchema,
+  widthM: z.number().positive().max(50),
+  heightM: z.number().positive().max(100).nullable().optional(),
+});
+
+export const floorplanReviewPlanSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  units: z.literal("metres"),
+  coordinateFrame: z.literal("registered_y_up_metric_frame"),
+  levels: z.array(z.object({
+    id: floorplanKeySchema,
+    label: z.string().trim().min(1).max(120),
+    elevationM: boundedMetricSchema,
+    rooms: z.array(floorplanRoomSchema).min(1).max(250),
+    walls: z.array(floorplanWallSchema).min(1).max(5_000),
+    openings: z.array(floorplanOpeningSchema).max(2_000),
+  })).min(1).max(100),
+});
+
+export const floorplanExtractionReviewSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  decision: z.enum(["approve", "reject"]),
+  note: z.string().trim().min(10).max(2000),
+  plan: floorplanReviewPlanSchema.nullable().optional(),
+}).superRefine((value, context) => {
+  if (value.decision === "approve" && !value.plan) {
+    context.addIssue({
+      code: "custom",
+      path: ["plan"],
+      message: "An operator-corrected plan is required for approval",
+    });
+  }
+  if (value.decision === "reject" && value.plan) {
+    context.addIssue({
+      code: "custom",
+      path: ["plan"],
+      message: "A rejected proposal must not create an approved plan",
+    });
+  }
+});
+
+export const floorplanExportSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  formats: z.array(z.enum(["svg", "pdf", "dxf"])).min(1).max(3)
+    .transform((formats) => [...new Set(formats)].sort()),
+});
+
 export const sceneRouteSchema = z.object({
   versionId: z.string().uuid(),
   label: z.string().trim().min(1).max(120),

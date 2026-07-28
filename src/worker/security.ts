@@ -8,8 +8,13 @@ export function secureToken(byteLength = 32): string {
   return base64UrlEncode(bytes);
 }
 
-export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+export async function sha256Hex(value: string | ArrayBuffer | Uint8Array): Promise<string> {
+  const source = typeof value === "string"
+    ? encoder.encode(value)
+    : value instanceof ArrayBuffer
+      ? value
+      : Uint8Array.from(value);
+  const digest = await crypto.subtle.digest("SHA-256", source);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

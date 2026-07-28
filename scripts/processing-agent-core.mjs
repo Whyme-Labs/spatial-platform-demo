@@ -623,6 +623,424 @@ export function extractWalkableSemanticCandidates(signature, {
   };
 }
 
+export function extractMetricFloorPlan(signature, {
+  gridSizeM = 0.25,
+  floorBandM = 0.15,
+  wallMinHeightM = 0.25,
+  wallMaxHeightM = 2.5,
+  minimumWallHeightCoverage = 0.45,
+  minimumRoomAreaM2 = 2,
+  maximumOpeningWidthM = 1.25,
+  maximumRooms = 100,
+  maximumSamplePoints = 2_000_000,
+  elevationHintM = null,
+} = {}) {
+  if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_SOURCE",
+      "A non-empty registered metric point-cloud signature is required for floor-plan extraction",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (!Number.isFinite(gridSizeM) || gridSizeM < 0.05 || gridSizeM > 1) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Grid size must be between 0.05 and 1 metre",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (!Number.isFinite(floorBandM) || floorBandM < 0.05 || floorBandM > 0.5) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Floor band must be between 0.05 and 0.5 metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (
+    !Number.isFinite(wallMinHeightM) ||
+    !Number.isFinite(wallMaxHeightM) ||
+    wallMinHeightM < 0.1 ||
+    wallMaxHeightM <= wallMinHeightM ||
+    wallMaxHeightM > 10
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Wall evidence heights must define a positive interval between 0.1 and 10 metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (
+    !Number.isFinite(minimumWallHeightCoverage) ||
+    minimumWallHeightCoverage < 0.1 ||
+    minimumWallHeightCoverage > 1
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Minimum wall height coverage must be between 0.1 and 1",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (
+    !Number.isFinite(minimumRoomAreaM2) ||
+    minimumRoomAreaM2 < 0.25 ||
+    minimumRoomAreaM2 > 10_000
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Minimum room area must be between 0.25 and 10,000 square metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (
+    !Number.isFinite(maximumOpeningWidthM) ||
+    maximumOpeningWidthM < gridSizeM ||
+    maximumOpeningWidthM > 5
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Maximum opening width must be at least one grid cell and no more than 5 metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (!Number.isSafeInteger(maximumRooms) || maximumRooms < 1 || maximumRooms > 250) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Maximum rooms must be between 1 and 250",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (elevationHintM !== null && !Number.isFinite(elevationHintM)) {
+    throw new ProcessingAgentError(
+      "INVALID_FLOORPLAN_PARAMETERS",
+      "Elevation hint must be a finite number of metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+
+  const minimumRoomCells = Math.ceil(minimumRoomAreaM2 / (gridSizeM * gridSizeM));
+  const horizontalLayers = new Map();
+  const sourcePoints = [];
+  for (const voxel of signature.voxels.values()) {
+    const [x, y, z] = voxel.centroid ?? [];
+    if (![x, y, z].every(Number.isFinite)) continue;
+    sourcePoints.push([x, y, z]);
+    const layerIndex = Math.round(y / floorBandM);
+    const cellKey = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+    const cells = horizontalLayers.get(layerIndex) ?? new Set();
+    cells.add(cellKey);
+    horizontalLayers.set(layerIndex, cells);
+  }
+  const credibleLayers = [...horizontalLayers.entries()]
+    .filter(([, cells]) => cells.size >= minimumRoomCells)
+    .map(([index, cells]) => ({
+      index,
+      elevationM: semanticRound(index * floorBandM),
+      cells,
+    }));
+  if (!credibleLayers.length) {
+    throw new ProcessingAgentError(
+      "INSUFFICIENT_FLOOR_SUPPORT",
+      "The registered point cloud contains no horizontal floor support large enough for the requested room area",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  credibleLayers.sort((left, right) => {
+    if (elevationHintM !== null) {
+      const distance = Math.abs(left.elevationM - elevationHintM) -
+        Math.abs(right.elevationM - elevationHintM);
+      if (distance) return distance;
+    }
+    return right.cells.size - left.cells.size || left.elevationM - right.elevationM;
+  });
+  const floor = credibleLayers[0];
+
+  const verticalResolutionM = Math.max(
+    0.025,
+    Math.min(Number(signature.voxelSizeM) || floorBandM, floorBandM),
+  );
+  const expectedVerticalBins = Math.max(
+    1,
+    Math.floor((wallMaxHeightM - wallMinHeightM) / verticalResolutionM) + 1,
+  );
+  const wallHeightBins = new Map();
+  for (const [x, y, z] of sourcePoints) {
+    const relativeY = y - floor.elevationM;
+    if (relativeY < wallMinHeightM || relativeY > wallMaxHeightM) continue;
+    const cellKey = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+    const bins = wallHeightBins.get(cellKey) ?? new Set();
+    bins.add(Math.round(relativeY / verticalResolutionM));
+    wallHeightBins.set(cellKey, bins);
+  }
+  const wallCells = new Set(
+    [...wallHeightBins.entries()]
+      .filter(([, bins]) => {
+        if (bins.size < 3) return false;
+        const sorted = [...bins].sort((left, right) => left - right);
+        const verticalSpanCoverage =
+          (sorted.at(-1) - sorted[0] + 1) / expectedVerticalBins;
+        return verticalSpanCoverage >= minimumWallHeightCoverage;
+      })
+      .map(([cell]) => cell),
+  );
+  if (wallCells.size < 3) {
+    throw new ProcessingAgentError(
+      "INSUFFICIENT_WALL_SUPPORT",
+      "The registered point cloud does not contain enough vertically persistent wall evidence",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: {
+          observedWallCellCount: wallCells.size,
+          minimumWallHeightCoverage,
+        },
+      },
+    );
+  }
+
+  const maximumOpeningCells = Math.max(1, Math.floor(maximumOpeningWidthM / gridSizeM));
+  const closedWallCells = new Set(wallCells);
+  const openingPlans = [];
+  const addOpeningGaps = (axis) => {
+    const grouped = new Map();
+    for (const cell of wallCells) {
+      const [x, z] = semanticParseCell(cell);
+      const fixed = axis === "x" ? z : x;
+      const variable = axis === "x" ? x : z;
+      const values = grouped.get(fixed) ?? [];
+      values.push(variable);
+      grouped.set(fixed, values);
+    }
+    for (const [fixed, values] of grouped) {
+      const sorted = [...new Set(values)].sort((left, right) => left - right);
+      for (let index = 1; index < sorted.length; index += 1) {
+        const previous = sorted[index - 1];
+        const next = sorted[index];
+        const gapCells = next - previous - 1;
+        if (gapCells < 2 || gapCells > maximumOpeningCells) continue;
+        // A credible opening must have wall continuation on both sides, not
+        // merely two isolated pieces of clutter.
+        const continuationBefore = sorted.includes(previous - 1);
+        const continuationAfter = sorted.includes(next + 1);
+        if (!continuationBefore || !continuationAfter) continue;
+        for (let variable = previous + 1; variable < next; variable += 1) {
+          closedWallCells.add(axis === "x"
+            ? `${variable},${fixed}`
+            : `${fixed},${variable}`);
+        }
+        const start = (previous + 1) * gridSizeM;
+        const end = next * gridSizeM;
+        openingPlans.push({
+          axis,
+          fixed,
+          start,
+          end,
+          widthM: semanticRound(gapCells * gridSizeM),
+          supportBefore: wallHeightBins.get(axis === "x"
+            ? `${previous},${fixed}`
+            : `${fixed},${previous}`)?.size ?? 0,
+          supportAfter: wallHeightBins.get(axis === "x"
+            ? `${next},${fixed}`
+            : `${fixed},${next}`)?.size ?? 0,
+        });
+      }
+    }
+  };
+  addOpeningGaps("x");
+  addOpeningGaps("z");
+
+  const roomComponents = semanticCellComponents(new Set(
+    [...floor.cells].filter((cell) => !closedWallCells.has(cell)),
+  ))
+    .filter((component) => component.length >= minimumRoomCells)
+    .sort((left, right) => right.length - left.length ||
+      semanticCellSortKey(left).localeCompare(semanticCellSortKey(right)))
+    .slice(0, maximumRooms);
+  if (!roomComponents.length) {
+    throw new ProcessingAgentError(
+      "INSUFFICIENT_ROOM_SUPPORT",
+      "Wall-supported segmentation produced no room candidate large enough for review",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+
+  const rooms = roomComponents.map((component, index) => {
+    const outline = semanticCellOutline(component);
+    const points = outline.map(([x, z]) => [
+      semanticRound(x * gridSizeM),
+      floor.elevationM,
+      semanticRound(z * gridSizeM),
+    ]);
+    const areaM2 = semanticRound(component.length * gridSizeM * gridSizeM);
+    return {
+      roomKey: `room-${String(index + 1).padStart(3, "0")}`,
+      kind: "room_candidate",
+      label: `Room ${index + 1}`,
+      elevationM: floor.elevationM,
+      areaM2,
+      confidence: semanticRound(Math.min(0.96, 0.55 +
+        Math.min(0.35, Math.log10(Math.max(10, component.length)) / 10))),
+      geometry: { type: "polygon", points },
+      evidence: {
+        occupiedCellCount: component.length,
+        gridSizeM,
+        openingGapsClosedForSegmentation: openingPlans.length,
+      },
+    };
+  });
+
+  const walls = metricWallSegments(closedWallCells, gridSizeM, floor.elevationM, wallMaxHeightM);
+  const openings = openingPlans
+    .sort((left, right) => left.axis.localeCompare(right.axis) ||
+      left.fixed - right.fixed || left.start - right.start)
+    .map((opening, index) => ({
+      openingKey: `opening-${String(index + 1).padStart(3, "0")}`,
+      kind: "opening_candidate",
+      label: `Opening ${index + 1}`,
+      widthM: opening.widthM,
+      elevationM: floor.elevationM,
+      heightM: null,
+      confidence: semanticRound(Math.min(
+        0.9,
+        0.45 + Math.min(opening.supportBefore, opening.supportAfter) /
+          expectedVerticalBins * 0.4,
+      )),
+      geometry: {
+        type: "line",
+        points: opening.axis === "x"
+          ? [
+            [semanticRound(opening.start), floor.elevationM, semanticRound(opening.fixed * gridSizeM)],
+            [semanticRound(opening.end), floor.elevationM, semanticRound(opening.fixed * gridSizeM)],
+          ]
+          : [
+            [semanticRound(opening.fixed * gridSizeM), floor.elevationM, semanticRound(opening.start)],
+            [semanticRound(opening.fixed * gridSizeM), floor.elevationM, semanticRound(opening.end)],
+          ],
+      },
+      evidence: {
+        classification: "door_or_window_unknown",
+        gapCells: Math.round(opening.widthM / gridSizeM),
+        gridSizeM,
+      },
+    }));
+
+  return {
+    schemaVersion: "1.0.0",
+    method: "metric-pointcloud-floorplan-v1",
+    result: "proposal_ready",
+    measurementClass: "indicative",
+    source: {
+      format: signature.format,
+      vertexCount: signature.vertexCount,
+      sampledPointCount: signature.sampledPointCount,
+      samplingStride: signature.samplingStride,
+      voxelCount: signature.voxelCount,
+      coordinateAssurance: "registered_y_up_metric_frame",
+    },
+    parameters: {
+      gridSizeM,
+      floorBandM,
+      wallMinHeightM,
+      wallMaxHeightM,
+      minimumWallHeightCoverage,
+      minimumRoomAreaM2,
+      maximumOpeningWidthM,
+      maximumRooms,
+      maximumSamplePoints,
+      elevationHintM,
+    },
+    summary: {
+      inferredFloorElevationM: floor.elevationM,
+      credibleHorizontalLayerCount: credibleLayers.length,
+      wallCellCount: wallCells.size,
+      wallCount: walls.length,
+      roomCount: rooms.length,
+      openingCount: openings.length,
+      totalRoomAreaM2: semanticRound(rooms.reduce((sum, room) => sum + room.areaM2, 0)),
+    },
+    rooms,
+    walls,
+    openings,
+    humanReviewRequired: true,
+    limitations: [
+      "The proposal is indicative and must be corrected and approved by an operator before export.",
+      "Openings are geometry gaps with unknown door or window classification until an operator reviews them.",
+      "Furniture, glass, reflective surfaces, sparse capture, and non-vertical construction can create false or missing walls.",
+      "The source must already use metres in a registered Y-up frame; this method does not establish survey control.",
+      "No result is suitable for construction, title, boundary, or regulated reliance without the separate measurement evidence and professional sign-off workflow.",
+    ],
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+function metricWallSegments(cells, gridSizeM, elevationM, wallHeightM) {
+  const horizontal = new Map();
+  const vertical = new Map();
+  for (const cell of cells) {
+    const [x, z] = semanticParseCell(cell);
+    const hasHorizontal = cells.has(`${x - 1},${z}`) || cells.has(`${x + 1},${z}`);
+    const hasVertical = cells.has(`${x},${z - 1}`) || cells.has(`${x},${z + 1}`);
+    if (hasHorizontal) {
+      const values = horizontal.get(z) ?? [];
+      values.push(x);
+      horizontal.set(z, values);
+    }
+    if (hasVertical) {
+      const values = vertical.get(x) ?? [];
+      values.push(z);
+      vertical.set(x, values);
+    }
+  }
+  const runs = [];
+  const appendRuns = (axis, grouped) => {
+    for (const [fixed, rawValues] of grouped) {
+      const values = [...new Set(rawValues)].sort((left, right) => left - right);
+      let start = values[0];
+      let previous = values[0];
+      for (let index = 1; index <= values.length; index += 1) {
+        const current = values[index];
+        if (current === previous + 1) {
+          previous = current;
+          continue;
+        }
+        if (previous - start + 1 >= 2) runs.push({ axis, fixed, start, end: previous + 1 });
+        start = current;
+        previous = current;
+      }
+    }
+  };
+  appendRuns("x", horizontal);
+  appendRuns("z", vertical);
+  return runs
+    .sort((left, right) => left.axis.localeCompare(right.axis) ||
+      left.fixed - right.fixed || left.start - right.start)
+    .map((run, index) => ({
+      wallKey: `wall-${String(index + 1).padStart(3, "0")}`,
+      kind: "wall_candidate",
+      label: `Wall ${index + 1}`,
+      elevationM,
+      heightM: wallHeightM,
+      thicknessM: gridSizeM,
+      confidence: 0.8,
+      geometry: {
+        type: "line",
+        points: run.axis === "x"
+          ? [
+            [semanticRound(run.start * gridSizeM), elevationM, semanticRound(run.fixed * gridSizeM)],
+            [semanticRound(run.end * gridSizeM), elevationM, semanticRound(run.fixed * gridSizeM)],
+          ]
+          : [
+            [semanticRound(run.fixed * gridSizeM), elevationM, semanticRound(run.start * gridSizeM)],
+            [semanticRound(run.fixed * gridSizeM), elevationM, semanticRound(run.end * gridSizeM)],
+          ],
+      },
+      evidence: {
+        axis: run.axis,
+        supportingCellCount: run.end - run.start,
+        gridSizeM,
+      },
+    }));
+}
+
 function semanticCellComponents(cells) {
   const remaining = new Set(cells);
   const components = [];

@@ -150,6 +150,7 @@ type Asset = {
   format: string;
   file_name: string;
   size_bytes: number;
+  sha256: string | null;
   integrity_status: string;
 };
 type Version = { id: string; version_number: number; status: string; created_at: string };
@@ -847,6 +848,60 @@ type SpatialWorkspace = {
     status: "pending" | "accepted" | "rejected";
     scene_entity_id: string | null;
   }>;
+  floorplanExtractions: Array<{
+    id: string;
+    version_id: string;
+    input_asset_id: string;
+    job_id: string;
+    method: string;
+    normalizer: string;
+    status: "QUEUED" | "PROCESSING" | "READY_FOR_REVIEW" | "REVIEWED" | "REJECTED" | "FAILED" | "CANCELLED";
+    parameters_json: string;
+    source_evidence_json: string;
+    proposal_json: string | null;
+    proposal_hash: string | null;
+    report_asset_id: string | null;
+    review_decision: "approve" | "reject" | null;
+    review_note: string | null;
+    error_json: string | null;
+    job_state: string;
+    job_progress: number;
+    job_progress_message: string | null;
+    job_error_json: string | null;
+    input_file_name: string;
+    input_format: string;
+    input_size_bytes: number;
+    created_at: string;
+  }>;
+  floorplanRevisions: Array<{
+    id: string;
+    version_id: string;
+    extraction_id: string;
+    revision_number: number;
+    measurement_class: "indicative";
+    status: "approved" | "superseded";
+    plan_json: string;
+    plan_hash: string;
+    source_proposal_hash: string;
+    review_note: string;
+    approved_at: string;
+    created_at: string;
+  }>;
+  floorplanExports: Array<{
+    id: string;
+    revision_id: string;
+    asset_id: string;
+    format: "svg" | "pdf" | "dxf";
+    generator_version: string;
+    plan_hash: string;
+    status: "ready" | "superseded";
+    file_name: string;
+    mime_type: string;
+    size_bytes: number;
+    sha256: string;
+    created_at: string;
+    download_url: string;
+  }>;
   deliveryPolicy: Record<string, unknown> | null;
   collisionProxy: { version: string; boxes: Array<{ entityId: string; label: string; min: number[]; max: number[] }> };
   navigationMesh: { version: string; vertices: number[][]; indices: number[]; sourceEntityIds: string[] };
@@ -1062,6 +1117,8 @@ const domainDialog = byId<HTMLDialogElement>("domainDialog");
 const entityDialog = byId<HTMLDialogElement>("entityDialog");
 const semanticExtractionDialog = byId<HTMLDialogElement>("semanticExtractionDialog");
 const semanticReviewDialog = byId<HTMLDialogElement>("semanticReviewDialog");
+const floorplanExtractionDialog = byId<HTMLDialogElement>("floorplanExtractionDialog");
+const floorplanReviewDialog = byId<HTMLDialogElement>("floorplanReviewDialog");
 const routeDialog = byId<HTMLDialogElement>("routeDialog");
 const privacyCandidateDialog = byId<HTMLDialogElement>("privacyCandidateDialog");
 const measurementBriefDialog = byId<HTMLDialogElement>("measurementBriefDialog");
@@ -1155,11 +1212,21 @@ let semanticReviewOperation: {
   id: string;
   requestKey: string;
 } | null = null;
+let floorplanExtractionOperation: {
+  id: string;
+  requestKey: string;
+} | null = null;
+let floorplanReviewOperation: {
+  id: string;
+  requestKey: string;
+} | null = null;
+const floorplanExportOperations = new Map<string, { id: string; requestKey: string }>();
 let customDomainWorkspace: CustomDomainWorkspace | null = null;
 const customDomainChallenges = new Map<string, string>();
 let privacyScanPollGeneration = 0;
 let rawSceneChangePollGeneration = 0;
 let semanticExtractionPollGeneration = 0;
+let floorplanExtractionPollGeneration = 0;
 let comparisonProjectId: string | null = null;
 let comparisonVersions: Version[] = [];
 let comparisonGeneration = 0;
@@ -1238,6 +1305,8 @@ function bindInterface(): void {
   const entityForm = byId<HTMLFormElement>("entityForm");
   const semanticExtractionForm = byId<HTMLFormElement>("semanticExtractionForm");
   const semanticReviewForm = byId<HTMLFormElement>("semanticReviewForm");
+  const floorplanExtractionForm = byId<HTMLFormElement>("floorplanExtractionForm");
+  const floorplanReviewForm = byId<HTMLFormElement>("floorplanReviewForm");
   const routeForm = byId<HTMLFormElement>("routeForm");
   const privacyCandidateForm = byId<HTMLFormElement>("privacyCandidateForm");
   const measurementBriefForm = byId<HTMLFormElement>("measurementBriefForm");
@@ -1870,6 +1939,44 @@ function bindInterface(): void {
   if (semanticReviewDecision instanceof HTMLSelectElement) {
     semanticReviewDecision.addEventListener("change", updateSemanticReviewChoiceState);
   }
+  const floorplanExtractionSubmit =
+    floorplanExtractionForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  floorplanExtractionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(floorplanExtractionForm);
+    void runAction({
+      key: "queue-floorplan-extraction",
+      trigger: floorplanExtractionSubmit,
+      form: floorplanExtractionForm,
+      pendingLabel: "Queueing floor-plan extraction…",
+      errorTarget: byId("floorplanExtractionError"),
+    }, () => queueFloorplanExtraction(form));
+  });
+  const floorplanReviewSubmit =
+    floorplanReviewForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  floorplanReviewForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(floorplanReviewForm);
+    const extractionId = String(form.get("extractionId") ?? "");
+    const decision = String(form.get("decision") ?? "approve");
+    void runAction({
+      key: `review-floorplan-extraction:${extractionId}`,
+      trigger: floorplanReviewSubmit,
+      form: floorplanReviewForm,
+      pendingLabel: decision === "reject"
+        ? "Recording rejection…"
+        : "Saving approved revision…",
+      errorTarget: byId("floorplanReviewError"),
+    }, () => reviewFloorplanExtraction(form));
+  });
+  const floorplanReviewDecision = floorplanReviewForm.elements.namedItem("decision");
+  if (floorplanReviewDecision instanceof HTMLSelectElement) {
+    floorplanReviewDecision.addEventListener("change", updateFloorplanReviewState);
+  }
+  byId<HTMLTextAreaElement>("floorplanPlanEditor").addEventListener(
+    "input",
+    updateFloorplanReviewPreview,
+  );
   const routeSubmit = routeForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   routeForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -6067,7 +6174,214 @@ function renderSpatial(): void {
     }, saveDefaultDeliveryPolicy);
   });
   delivery.append(savePolicy);
-  container.append(hierarchy, semanticExtraction, routes, captureEvidence, assurance, delivery);
+  container.append(
+    hierarchy,
+    semanticExtraction,
+    renderFloorplanWorkflow(project, spatial),
+    routes,
+    captureEvidence,
+    assurance,
+    delivery,
+  );
+}
+
+function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
+  const workflow = element("article", "workspace-card-large floorplan-workflow-card");
+  workflow.append(
+    element("span", "eyebrow", "VENDOR-NEUTRAL FLOOR PLAN"),
+    element("h3", "", "Metric capture → operator revision → portable drawings"),
+    element(
+      "p",
+      "muted-copy",
+      "Verified PLY, E57, LAS, LAZ, and PTS evidence enters one bounded pipeline. Machine topology is never published directly: an operator corrects it first, and every indicative export is hash-bound to that approved revision.",
+    ),
+  );
+  const assets = floorplanExtractionAssets();
+  const runs = spatial.floorplanExtractions ?? [];
+  if (!runs.length) {
+    workflow.append(
+      element(
+        "p",
+        "muted-copy",
+        "No floor-plan extraction has been queued for this immutable version.",
+      ),
+    );
+  }
+  for (const run of runs.slice(0, 8)) {
+    const card = element("section", "floorplan-run");
+    const heading = element("div", "floorplan-run-heading");
+    heading.append(
+      element("strong", "", run.input_file_name),
+      element("span", `status-pill ${statusClass(run.status)}`, humanStatus(run.status)),
+    );
+    card.append(
+      heading,
+      element(
+        "small",
+        "muted-copy",
+        `${run.input_format.toUpperCase()} · ${formatBytes(run.input_size_bytes)} · ${run.normalizer} · queued ${parseTimestamp(run.created_at).toLocaleString()}`,
+      ),
+    );
+    const summary = floorplanProposalSummary(run.proposal_json);
+    if (summary) {
+      const metrics = element("div", "floorplan-run-metrics");
+      metrics.append(
+        element("span", "", `${summary.roomCount} room${summary.roomCount === 1 ? "" : "s"}`),
+        element("span", "", `${summary.wallCount} wall run${summary.wallCount === 1 ? "" : "s"}`),
+        element("span", "", `${summary.openingCount} opening candidate${summary.openingCount === 1 ? "" : "s"}`),
+        element("span", "", `${summary.totalRoomAreaM2.toFixed(2)} m² indicative`),
+      );
+      card.append(metrics);
+    }
+    if (run.job_progress_message) {
+      card.append(element("p", "inline-status", run.job_progress_message));
+    }
+    if (run.status === "FAILED" || run.status === "CANCELLED") {
+      card.append(
+        element(
+          "p",
+          run.status === "CANCELLED" ? "field-note" : "form-error",
+          processingJobError(run.error_json ?? run.job_error_json),
+        ),
+      );
+    }
+    if (run.status === "REVIEWED" || run.status === "REJECTED") {
+      card.append(
+        element(
+          "p",
+          "field-note",
+          run.status === "REVIEWED"
+            ? "Operator correction is preserved as an immutable indicative revision."
+            : "The operator rejected this proposal; no floor-plan revision was created.",
+        ),
+      );
+    }
+    const actions = element("div", "semantic-extraction-actions");
+    if (run.status === "READY_FOR_REVIEW") {
+      const review = element("button", "primary-button", "Correct and review plan");
+      review.addEventListener("click", () => openFloorplanReviewDialog(run.id));
+      actions.append(review);
+    }
+    if (run.status === "QUEUED" || run.status === "PROCESSING") {
+      const cancel = element("button", "danger-button", "Cancel extraction");
+      cancel.addEventListener("click", () => {
+        if (!confirm("Cancel this floor-plan extraction? Its immutable source will be retained.")) return;
+        void runAction({
+          key: `cancel-floorplan-extraction:${run.job_id}`,
+          trigger: cancel,
+          pendingLabel: "Cancelling…",
+        }, () => cancelFloorplanExtraction(run.job_id));
+      });
+      actions.append(cancel);
+    }
+    if (
+      (run.status === "FAILED" || run.status === "CANCELLED") &&
+      (run.job_state === "FAILED" || run.job_state === "DEAD_LETTER" ||
+        run.job_state === "CANCELLED")
+    ) {
+      const retry = element("button", "quiet-button", "Retry extraction");
+      retry.addEventListener("click", () => {
+        void runAction({
+          key: `retry-floorplan-extraction:${run.job_id}`,
+          trigger: retry,
+          pendingLabel: "Queueing retry…",
+        }, () => retryFloorplanExtraction(run.job_id));
+      });
+      actions.append(retry);
+    }
+    if (actions.childElementCount) card.append(actions);
+    workflow.append(card);
+  }
+
+  const controls = element("div", "semantic-extraction-actions");
+  const queue = element(
+    "button",
+    "primary-button",
+    runs.length ? "Queue another floor plan" : "Generate floor-plan proposal",
+  );
+  queue.disabled = assets.length === 0;
+  queue.title = assets.length
+    ? ""
+    : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first.";
+  queue.addEventListener("click", openFloorplanExtractionDialog);
+  const refresh = element("button", "quiet-button", "Refresh status");
+  refresh.addEventListener("click", () => {
+    void runAction({
+      key: `refresh-floorplans:${project.id}`,
+      trigger: refresh,
+      pendingLabel: "Refreshing…",
+      disable: [queue],
+    }, () => loadSpatialWorkspace(project.id));
+  });
+  controls.append(queue, refresh);
+  workflow.append(
+    controls,
+    element(
+      "small",
+      "field-note",
+      assets.length
+        ? `${assets.length} verified metric point-cloud asset${assets.length === 1 ? "" : "s"} available. Every output remains explicitly indicative.`
+        : "A verified metric point cloud is required; visual-only Gaussian splats are not measurement evidence.",
+    ),
+  );
+
+  for (const revision of (spatial.floorplanRevisions ?? []).slice(0, 5)) {
+    const card = element("section", "floorplan-run");
+    const heading = element("div", "floorplan-run-heading");
+    heading.append(
+      element("strong", "", `Revision ${revision.revision_number}`),
+      element(
+        "span",
+        `status-pill ${revision.status === "approved" ? "status-ready" : ""}`,
+        `${humanStatus(revision.status)} · indicative`,
+      ),
+    );
+    card.append(
+      heading,
+      element(
+        "small",
+        "muted-copy",
+        `Approved ${parseTimestamp(revision.approved_at).toLocaleString()} · plan SHA-256 ${revision.plan_hash.slice(0, 16)}…`,
+      ),
+    );
+    const exportsForRevision = (spatial.floorplanExports ?? []).filter(
+      (item) => item.revision_id === revision.id,
+    );
+    if (exportsForRevision.length) {
+      const downloads = element("div", "floorplan-export-list");
+      for (const item of exportsForRevision) {
+        const download = element(
+          "button",
+          "floorplan-export-link",
+          `${item.format.toUpperCase()} · ${formatBytes(item.size_bytes)}`,
+        );
+        const downloadError = element("span", "form-error");
+        download.addEventListener("click", () => {
+          void runAction({
+            key: `download-floorplan-export:${item.id}`,
+            trigger: download,
+            pendingLabel: "Downloading…",
+            errorTarget: downloadError,
+          }, () => downloadFloorplanExport(item.download_url, item.file_name));
+        });
+        downloads.append(download, downloadError);
+      }
+      card.append(downloads);
+    }
+    if (revision.status === "approved" && exportsForRevision.length < 3) {
+      const generate = element("button", "quiet-button", "Generate SVG, PDF, and DXF");
+      generate.addEventListener("click", () => {
+        void runAction({
+          key: `export-floorplan:${revision.id}`,
+          trigger: generate,
+          pendingLabel: "Generating exports…",
+        }, () => exportFloorplanRevision(revision.id));
+      });
+      card.append(generate);
+    }
+    workflow.append(card);
+  }
+  return workflow;
 }
 
 async function loadSpatialWorkspace(projectId: string): Promise<void> {
@@ -6319,6 +6633,503 @@ function parseSemanticExtractionSummary(value: string | null): {
   } catch {
     return null;
   }
+}
+
+type EditableFloorplan = {
+  schemaVersion: "1.0.0";
+  units: "metres";
+  coordinateFrame: "registered_y_up_metric_frame";
+  levels: Array<{
+    id: string;
+    label: string;
+    elevationM: number;
+    rooms: Array<{ id: string; label: string; points: Array<[number, number]> }>;
+    walls: Array<{
+      id: string;
+      label: string;
+      start: [number, number];
+      end: [number, number];
+      thicknessM: number;
+      heightM: number;
+    }>;
+    openings: Array<{
+      id: string;
+      label: string;
+      type: "door" | "window" | "opening" | "unknown";
+      wallId: string | null;
+      start: [number, number];
+      end: [number, number];
+      widthM: number;
+      heightM: number | null;
+    }>;
+  }>;
+};
+
+function floorplanExtractionAssets(): Asset[] {
+  const versionId = state.spatial?.version?.id;
+  if (!versionId) return [];
+  return (state.selected?.assets ?? []).filter((asset) => (
+    asset.version_id === versionId &&
+    asset.kind === "pointcloud" &&
+    ["ply", "e57", "las", "laz", "pts"].includes(asset.format.toLowerCase()) &&
+    asset.integrity_status === "verified" &&
+    /^[a-f0-9]{64}$/i.test(asset.sha256 ?? "") &&
+    asset.size_bytes <= 1024 * 1024 * 1024
+  ));
+}
+
+function openFloorplanExtractionDialog(): void {
+  const assets = floorplanExtractionAssets();
+  if (!assets.length) {
+    showNotice(
+      "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset on this immutable version first.",
+      "error",
+    );
+    return;
+  }
+  const form = byId<HTMLFormElement>("floorplanExtractionForm");
+  form.reset();
+  const select = byId<HTMLSelectElement>("floorplanInputAsset");
+  select.replaceChildren();
+  for (const asset of assets) {
+    select.append(new Option(
+      `${asset.file_name} · ${asset.format.toUpperCase()} · ${formatBytes(asset.size_bytes)}`,
+      asset.id,
+    ));
+  }
+  byId("floorplanExtractionError").textContent = "";
+  floorplanExtractionOperation = null;
+  floorplanExtractionDialog.showModal();
+}
+
+async function queueFloorplanExtraction(form: FormData): Promise<void> {
+  const project = state.selected?.project;
+  const version = state.spatial?.version;
+  if (!project || !version) throw new Error("Open an immutable scene version first.");
+  const elevationValue = String(form.get("elevationHintM") ?? "").trim();
+  const body = {
+    versionId: version.id,
+    inputAssetId: String(form.get("inputAssetId") ?? ""),
+    coordinateAssurance: "registered_y_up_metric_frame",
+    sourceUpAxis: String(form.get("sourceUpAxis") ?? "y"),
+    registrationEvidence: String(form.get("registrationEvidence") ?? "").trim(),
+    gridSizeM: Number(form.get("gridSizeM") ?? 0.25),
+    floorBandM: Number(form.get("floorBandM") ?? 0.15),
+    wallMinHeightM: Number(form.get("wallMinHeightM") ?? 0.25),
+    wallMaxHeightM: Number(form.get("wallMaxHeightM") ?? 2.5),
+    minimumWallHeightCoverage: Number(form.get("minimumWallHeightCoverage") ?? 0.45),
+    minimumRoomAreaM2: Number(form.get("minimumRoomAreaM2") ?? 2),
+    maximumOpeningWidthM: Number(form.get("maximumOpeningWidthM") ?? 1.25),
+    maximumRooms: Number(form.get("maximumRooms") ?? 100),
+    maximumSamplePoints: Number(form.get("maximumSamplePoints") ?? 2_000_000),
+    elevationHintM: elevationValue === "" ? null : Number(elevationValue),
+  };
+  const requestKey = JSON.stringify(body);
+  if (!floorplanExtractionOperation || floorplanExtractionOperation.requestKey !== requestKey) {
+    floorplanExtractionOperation = { id: crypto.randomUUID(), requestKey };
+  }
+  const result = await api<{ extraction: { id: string } }>(
+    `/api/projects/${project.id}/spatial/floorplan-extractions`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: floorplanExtractionOperation.id,
+        ...body,
+      }),
+    },
+  );
+  floorplanExtractionOperation = null;
+  floorplanExtractionDialog.close();
+  showToast("Vendor-neutral floor-plan extraction queued");
+  await loadSpatialWorkspace(project.id);
+  void pollFloorplanExtraction(project.id, result.extraction.id);
+}
+
+function floorplanProposalSummary(value: string | null): {
+  roomCount: number;
+  wallCount: number;
+  openingCount: number;
+  totalRoomAreaM2: number;
+} | null {
+  if (!value) return null;
+  try {
+    const proposal = JSON.parse(value) as Record<string, unknown>;
+    const summary = proposal.summary;
+    if (!summary || typeof summary !== "object") return null;
+    const roomCount = Number(Reflect.get(summary, "roomCount"));
+    const wallCount = Number(Reflect.get(summary, "wallCount"));
+    const openingCount = Number(Reflect.get(summary, "openingCount"));
+    const totalRoomAreaM2 = Number(Reflect.get(summary, "totalRoomAreaM2"));
+    if ([roomCount, wallCount, openingCount, totalRoomAreaM2].some((item) => !Number.isFinite(item))) {
+      return null;
+    }
+    return { roomCount, wallCount, openingCount, totalRoomAreaM2 };
+  } catch {
+    return null;
+  }
+}
+
+function openFloorplanReviewDialog(extractionId: string): void {
+  const extraction = state.spatial?.floorplanExtractions.find((item) => item.id === extractionId);
+  if (!extraction || extraction.status !== "READY_FOR_REVIEW" || !extraction.proposal_json) {
+    showNotice("This floor-plan proposal is no longer ready for review. Refresh the workspace.", "error");
+    return;
+  }
+  let plan: EditableFloorplan;
+  try {
+    plan = floorplanProposalToEditablePlan(extraction.proposal_json);
+  } catch (error) {
+    showNotice(errorMessage(error), "error");
+    return;
+  }
+  const form = byId<HTMLFormElement>("floorplanReviewForm");
+  form.reset();
+  const extractionInput = form.elements.namedItem("extractionId");
+  if (extractionInput instanceof HTMLInputElement) extractionInput.value = extraction.id;
+  byId("floorplanReviewContext").textContent =
+    `${extraction.input_file_name} was normalized with ${extraction.normalizer}. ` +
+    "Correct labels, polygons, wall endpoints, and opening classifications against the immutable source.";
+  byId<HTMLTextAreaElement>("floorplanPlanEditor").value = JSON.stringify(plan, null, 2);
+  byId("floorplanReviewError").textContent = "";
+  floorplanReviewOperation = null;
+  updateFloorplanReviewState();
+  updateFloorplanReviewPreview();
+  floorplanReviewDialog.showModal();
+}
+
+function floorplanProposalToEditablePlan(proposalJson: string): EditableFloorplan {
+  const proposal = JSON.parse(proposalJson) as Record<string, unknown>;
+  const rooms = Array.isArray(proposal.rooms) ? proposal.rooms : [];
+  const walls = Array.isArray(proposal.walls) ? proposal.walls : [];
+  const openings = Array.isArray(proposal.openings) ? proposal.openings : [];
+  if (!rooms.length || !walls.length) {
+    throw new Error("The stored proposal has no reviewable rooms or walls.");
+  }
+  const proposalSummary = proposal.summary;
+  const elevationM = Number(
+    proposalSummary && typeof proposalSummary === "object"
+      ? Reflect.get(proposalSummary, "inferredFloorElevationM")
+      : 0,
+  );
+  const toPoint2 = (value: unknown): [number, number] => {
+    if (!Array.isArray(value) || value.length !== 3) throw new Error("Proposal geometry is malformed.");
+    const point = value.map(Number);
+    if (point.some((coordinate) => !Number.isFinite(coordinate))) {
+      throw new Error("Proposal geometry contains a non-finite coordinate.");
+    }
+    return [point[0]!, point[2]!];
+  };
+  return {
+    schemaVersion: "1.0.0",
+    units: "metres",
+    coordinateFrame: "registered_y_up_metric_frame",
+    levels: [{
+      id: "level-1",
+      label: "Level 1",
+      elevationM: Number.isFinite(elevationM) ? elevationM : 0,
+      rooms: rooms.map((candidate, index) => {
+        const room = candidate as Record<string, unknown>;
+        const geometry = room.geometry as Record<string, unknown>;
+        if (!Array.isArray(geometry?.points)) throw new Error("A proposed room is missing its polygon.");
+        return {
+          id: String(room.roomKey ?? `room-${index + 1}`),
+          label: String(room.label ?? `Room ${index + 1}`),
+          points: geometry.points.map(toPoint2),
+        };
+      }),
+      walls: walls.map((candidate, index) => {
+        const wall = candidate as Record<string, unknown>;
+        const geometry = wall.geometry as Record<string, unknown>;
+        if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
+          throw new Error("A proposed wall is missing its endpoints.");
+        }
+        return {
+          id: String(wall.wallKey ?? `wall-${index + 1}`),
+          label: String(wall.label ?? `Wall ${index + 1}`),
+          start: toPoint2(geometry.points[0]),
+          end: toPoint2(geometry.points[1]),
+          thicknessM: Number(wall.thicknessM ?? 0.2),
+          heightM: Number(wall.heightM ?? 2.5),
+        };
+      }),
+      openings: openings.map((candidate, index) => {
+        const opening = candidate as Record<string, unknown>;
+        const geometry = opening.geometry as Record<string, unknown>;
+        if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
+          throw new Error("A proposed opening is missing its endpoints.");
+        }
+        return {
+          id: String(opening.openingKey ?? `opening-${index + 1}`),
+          label: String(opening.label ?? `Opening ${index + 1}`),
+          type: "unknown",
+          wallId: null,
+          start: toPoint2(geometry.points[0]),
+          end: toPoint2(geometry.points[1]),
+          widthM: Number(opening.widthM),
+          heightM: null,
+        };
+      }),
+    }],
+  };
+}
+
+function parseEditableFloorplan(value: string): EditableFloorplan {
+  let plan: unknown;
+  try {
+    plan = JSON.parse(value);
+  } catch {
+    throw new Error("The structured plan is not valid JSON.");
+  }
+  if (!plan || typeof plan !== "object") throw new Error("The structured plan must be an object.");
+  if (
+    Reflect.get(plan, "schemaVersion") !== "1.0.0" ||
+    Reflect.get(plan, "units") !== "metres" ||
+    Reflect.get(plan, "coordinateFrame") !== "registered_y_up_metric_frame"
+  ) {
+    throw new Error("Keep schemaVersion 1.0.0, metres, and the registered Y-up metric frame.");
+  }
+  const levels = Reflect.get(plan, "levels");
+  if (!Array.isArray(levels) || levels.length === 0) {
+    throw new Error("The corrected plan needs at least one level.");
+  }
+  const finitePoint = (point: unknown): point is [number, number] =>
+    Array.isArray(point) && point.length === 2 && point.every((value) => Number.isFinite(value));
+  for (const level of levels) {
+    if (!level || typeof level !== "object") throw new Error("Every level must be an object.");
+    if (
+      !Array.isArray(Reflect.get(level, "rooms")) ||
+      !Array.isArray(Reflect.get(level, "walls")) ||
+      !Array.isArray(Reflect.get(level, "openings"))
+    ) {
+      throw new Error("Every level needs room, wall, and opening arrays.");
+    }
+    for (const room of Reflect.get(level, "rooms") as unknown[]) {
+      const points = room && typeof room === "object" ? Reflect.get(room, "points") : null;
+      if (!Array.isArray(points) || points.length < 3 || !points.every(finitePoint)) {
+        throw new Error("Every room needs at least three finite [x, z] points.");
+      }
+    }
+    for (const wall of Reflect.get(level, "walls") as unknown[]) {
+      if (
+        !wall || typeof wall !== "object" ||
+        !finitePoint(Reflect.get(wall, "start")) ||
+        !finitePoint(Reflect.get(wall, "end"))
+      ) throw new Error("Every wall needs finite start and end points.");
+    }
+  }
+  return plan as EditableFloorplan;
+}
+
+function updateFloorplanReviewState(): void {
+  const form = byId<HTMLFormElement>("floorplanReviewForm");
+  const decision = form.elements.namedItem("decision");
+  const reject = decision instanceof HTMLSelectElement && decision.value === "reject";
+  const editor = byId<HTMLTextAreaElement>("floorplanPlanEditor");
+  editor.disabled = reject;
+  editor.required = !reject;
+  byId("floorplanReviewPreview").toggleAttribute("hidden", reject);
+  byId("floorplanReviewValidation").textContent = reject
+    ? "Rejecting preserves the source and proposal evidence but creates no plan revision."
+    : "";
+  if (!reject) updateFloorplanReviewPreview();
+}
+
+function updateFloorplanReviewPreview(): void {
+  const preview = byId("floorplanReviewPreview");
+  const validation = byId("floorplanReviewValidation");
+  preview.replaceChildren();
+  try {
+    const plan = parseEditableFloorplan(byId<HTMLTextAreaElement>("floorplanPlanEditor").value);
+    const level = plan.levels[0]!;
+    const allPoints = [
+      ...level.rooms.flatMap((room) => room.points),
+      ...level.walls.flatMap((wall) => [wall.start, wall.end]),
+      ...level.openings.flatMap((opening) => [opening.start, opening.end]),
+    ];
+    const minX = Math.min(...allPoints.map((point) => point[0]));
+    const maxX = Math.max(...allPoints.map((point) => point[0]));
+    const minZ = Math.min(...allPoints.map((point) => point[1]));
+    const maxZ = Math.max(...allPoints.map((point) => point[1]));
+    const width = 640;
+    const height = 400;
+    const padding = 28;
+    const scale = Math.min(
+      (width - padding * 2) / Math.max(0.1, maxX - minX),
+      (height - padding * 2) / Math.max(0.1, maxZ - minZ),
+    );
+    const x = (value: number) => padding + (value - minX) * scale;
+    const y = (value: number) => height - padding - (value - minZ) * scale;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", `${level.label} floor-plan preview`);
+    for (const room of level.rooms) {
+      const polygon = document.createElementNS(svg.namespaceURI, "polygon");
+      polygon.setAttribute("points", room.points.map((point) => `${x(point[0])},${y(point[1])}`).join(" "));
+      polygon.setAttribute("class", "preview-room");
+      svg.append(polygon);
+      const center = room.points.reduce(
+        (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
+        [0, 0],
+      ).map((value) => value / room.points.length) as [number, number];
+      const label = document.createElementNS(svg.namespaceURI, "text");
+      label.setAttribute("x", String(x(center[0])));
+      label.setAttribute("y", String(y(center[1])));
+      label.setAttribute("class", "preview-label");
+      label.textContent = room.label;
+      svg.append(label);
+    }
+    for (const wall of level.walls) {
+      svg.append(floorplanPreviewLine(wall.start, wall.end, "preview-wall", x, y));
+    }
+    for (const opening of level.openings) {
+      svg.append(floorplanPreviewLine(opening.start, opening.end, "preview-opening", x, y));
+    }
+    preview.append(svg);
+    validation.classList.remove("floorplan-json-invalid");
+    validation.textContent =
+      `${level.rooms.length} rooms · ${level.walls.length} walls · ${level.openings.length} openings` +
+      `${plan.levels.length > 1 ? ` · previewing first of ${plan.levels.length} levels` : ""}`;
+  } catch (error) {
+    validation.classList.add("floorplan-json-invalid");
+    validation.textContent = errorMessage(error);
+    preview.append(emptyState("Fix the structured plan to restore the live preview."));
+  }
+}
+
+function floorplanPreviewLine(
+  start: [number, number],
+  end: [number, number],
+  className: string,
+  x: (value: number) => number,
+  y: (value: number) => number,
+): SVGLineElement {
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("x1", String(x(start[0])));
+  line.setAttribute("y1", String(y(start[1])));
+  line.setAttribute("x2", String(x(end[0])));
+  line.setAttribute("y2", String(y(end[1])));
+  line.setAttribute("class", className);
+  return line;
+}
+
+async function reviewFloorplanExtraction(form: FormData): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project before reviewing a floor plan.");
+  const extractionId = String(form.get("extractionId") ?? "");
+  const decision = String(form.get("decision") ?? "approve");
+  const plan = decision === "approve"
+    ? parseEditableFloorplan(String(form.get("planJson") ?? ""))
+    : null;
+  const body = {
+    decision,
+    note: String(form.get("note") ?? "").trim(),
+    plan,
+  };
+  const requestKey = JSON.stringify({ extractionId, ...body });
+  if (!floorplanReviewOperation || floorplanReviewOperation.requestKey !== requestKey) {
+    floorplanReviewOperation = { id: crypto.randomUUID(), requestKey };
+  }
+  await api(
+    `/api/projects/${project.id}/spatial/floorplan-extractions/${extractionId}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: floorplanReviewOperation.id,
+        ...body,
+      }),
+    },
+  );
+  floorplanReviewOperation = null;
+  floorplanReviewDialog.close();
+  showToast(decision === "approve"
+    ? "Indicative floor-plan revision approved"
+    : "Floor-plan proposal rejected");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function retryFloorplanExtraction(jobId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project before retrying floor-plan extraction.");
+  await api(`/api/jobs/${jobId}/retry`, { method: "POST" });
+  showToast("Floor-plan extraction retry queued");
+  await loadSpatialWorkspace(project.id);
+  const extraction = state.spatial?.floorplanExtractions.find((run) => run.job_id === jobId);
+  if (extraction) void pollFloorplanExtraction(project.id, extraction.id);
+}
+
+async function cancelFloorplanExtraction(jobId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project before cancelling floor-plan extraction.");
+  await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+  showToast("Floor-plan extraction cancelled");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function pollFloorplanExtraction(projectId: string, extractionId: string): Promise<void> {
+  const generation = ++floorplanExtractionPollGeneration;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, attempt < 4 ? 1_500 : 5_000));
+    if (
+      generation !== floorplanExtractionPollGeneration ||
+      state.selected?.project.id !== projectId ||
+      state.view !== "spatial"
+    ) return;
+    try {
+      await loadSpatialWorkspace(projectId);
+    } catch {
+      continue;
+    }
+    const extraction = state.spatial?.floorplanExtractions.find(
+      (candidate) => candidate.id === extractionId,
+    );
+    if (!extraction || !["QUEUED", "PROCESSING"].includes(extraction.status)) return;
+  }
+  if (generation === floorplanExtractionPollGeneration && state.selected?.project.id === projectId) {
+    showNotice(
+      "Floor-plan extraction is still running. Its immutable inputs and queued job are retained; refresh later.",
+      "error",
+    );
+  }
+}
+
+async function exportFloorplanRevision(revisionId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project before exporting its floor plan.");
+  const formats = ["dxf", "pdf", "svg"];
+  const requestKey = JSON.stringify({ revisionId, formats });
+  const prior = floorplanExportOperations.get(revisionId);
+  const operation = prior?.requestKey === requestKey
+    ? prior
+    : { id: crypto.randomUUID(), requestKey };
+  floorplanExportOperations.set(revisionId, operation);
+  await api(
+    `/api/projects/${project.id}/spatial/floorplan-revisions/${revisionId}/exports`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: operation.id,
+        formats,
+      }),
+    },
+  );
+  floorplanExportOperations.delete(revisionId);
+  showToast("Indicative SVG, PDF, and DXF exports are ready");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function downloadFloorplanExport(downloadUrl: string, fallbackFileName: string): Promise<void> {
+  const file = await apiFile(downloadUrl, { timeoutMs: 30_000, retries: 2 });
+  const objectUrl = URL.createObjectURL(file.blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = file.fileName ?? fallbackFileName;
+  anchor.hidden = true;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  showToast(`${anchor.download} downloaded`);
 }
 
 function processingJobError(value: string | null): string {

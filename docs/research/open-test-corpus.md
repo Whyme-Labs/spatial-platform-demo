@@ -14,11 +14,13 @@ The recommended corpus is:
 - A deterministic Gaussian PLY derived from that SOG for the strict Gaussian
   header and Spark-to-RAD path.
 - AWS Bench Melbourne SPZ as a large legacy-SPZ compatibility fixture.
-- PDAL fixtures for ordinary PLY, LAS, LAZ, and E57.
+- PDAL fixtures for ordinary PLY, LAS, LAZ, E57, and PTS.
 - OpenSfM Berlin for real images plus camera-pose JSON.
 - AWS Bench Melbourne MOV for source-video ingestion.
 - A two-image, CC0 Aukerman bundle for drone-image ZIP ingestion.
 - Khronos Box GLB for collision-mesh ingestion.
+- A deterministic, application-authored two-room metric PLY for the actual
+  queue, processor, operator-review, and export contract.
 - Deterministic mutations of those bytes for malformed, checksum, multipart,
   and size-limit failures.
 
@@ -50,10 +52,14 @@ The processor has materially different gates:
   `INVALID_GAUSSIAN_PLY`.
 - SPZ receives a bounded container preflight. Legacy gzip-framed SPZ is sent
   directly to Spark; NGSP v4 is normalized before Spark.
-- Evidence formats receive bounded identity checks only: `ASTM-E57`, `LASF`,
+- Evidence-ingest formats receive bounded identity checks: `ASTM-E57`, `LASF`,
   `RAD0`, PKZIP, JPEG/PNG/WebP, ISO-BMFF/EBML, `glTF`, PLY, or valid JSON.
   These checks do not establish semantic correctness, calibration, accuracy,
   or scanner provenance.
+- The separate floor-plan processor decodes registered metric PLY, E57,
+  LAS/LAZ, and PTS sources through the pinned PDAL runtime, normalises them to
+  the platform coordinate frame, and then applies bounded geometric checks.
+  Successful decoding still does not establish survey accuracy or provenance.
 - The processor recomputes the downloaded byte count and SHA-256 before any
   decoder work.
 
@@ -108,13 +114,14 @@ indicated.
 | LAS | [simple.las](https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/las/simple.las) | 36,437 | `a0570ef57b685b77a6d3e3992cbdfeecdb2c3065d3780bbeaba490818258b734` | `metric_point_cloud/las`; `LASF` bounded identity | Unit/integration |
 | LAZ | [simple.laz](https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/laz/simple.laz) | 18,217 | `ad3c65e06e9093b05b3181ee14ffb864a73a22363cb4fa9b7b8021e4d86cfb9d` | `metric_point_cloud/laz`; `LASF` bounded identity | Unit/integration |
 | E57 | [A4.e57](https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/e57/A4.e57) | 4,096 | `47b17e6a666de2b101a5837be96992d0b1304b0eb30148ab936c3110ad8a8b37` | `metric_point_cloud/e57`; `ASTM-E57` bounded identity | Unit/integration |
+| PTS | [test.pts](https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/pts/test.pts) | 889 | `0c9d3f5c6d5925151a21377d28f74e0cf79e0e78e37bb4c90f7286fe56b3d024` | `metric_point_cloud/pts`; real PTS reader/normalisation coverage | Unit/integration |
 | Multi-scan E57 | [A_B.e57](https://raw.githubusercontent.com/PDAL/PDAL/a4c50af9a845cbf50fe690fe2dbd3181ce127dc4/test/data/e57/A_B.e57) | 6,144 | `59fbade75d9ad46b1dc3be996f2907564107ee8ccf7009d5f75249ea0e084a55` | Optional multi-scan E57 parser coverage | Evaluation |
 
 PDAL's own pinned reader tests establish that the LAS/LAZ pair has 1,065
-points and that `A4.e57` contains XYZ, RGB, and intensity values. The
-application currently performs only bounded evidence validation on those
-formats; a passing test must not be presented as full parsing or metric
-validation.
+points, `A4.e57` contains four XYZ/RGB/intensity records, and `test.pts`
+contains 19 records. Ingest performs bounded evidence validation; the
+floor-plan production image additionally decodes and normalises each adopted
+format. A passing test must not be presented as survey-accuracy validation.
 
 The 197-byte PLY is particularly valuable. It should pass the point-cloud
 evidence lane, but its use as a Gaussian master must fail because it lacks all
@@ -357,6 +364,24 @@ never silently update a fixture to a moving branch head.
 - The complete Aukerman dataset because it is approximately 543 MB.
 - PDAL multi-scan E57 unless a specific multi-scan feature is under test.
 
+### Floor-plan production contract fixture
+
+`npm run corpus:prepare` deterministically creates
+`.cache/open-corpus/derived/vendor-neutral-two-room.ply`: an 8 m by 4 m,
+metre-based, right-handed Y-up point cloud containing dense floor support,
+exterior walls, a shared wall, and a one-metre opening. It is
+application-authored geometry, not scanner evidence and not an accuracy
+benchmark.
+
+The local end-to-end runner uploads this file through multipart R2, completes
+bounded evidence validation, queues `floorplan.extract-v1`, runs the real
+processor adapter, verifies the immutable proposal in R2, creates an
+operator-reviewed indicative revision, emits SVG/PDF/DXF, downloads all three,
+and recomputes their SHA-256 values. The real pinned PDAL fixtures separately
+prove that the production container can decode and normalise PLY, LAS, LAZ,
+E57, and PTS. Together these lanes test every implemented production boundary
+without misrepresenting synthetic geometry as a surveyed building.
+
 ## Explicit gaps and exclusions
 
 1. **No small, explicitly licensed indoor pose-plus-image sequence was found.**
@@ -379,10 +404,13 @@ never silently update a fixture to a moving branch head.
    application-authored unit fixture; do not present it as a vendor or
    industry-standard pose format.
 
-5. **LAS/LAZ/E57 tests presently prove bounded identity, not decoding.**
-   The processor checks magic bytes only for the evidence lane. Full parser,
-   coordinate-system, scan-count, and point-count assertions require a future
-   PDAL/libE57 processing stage.
+5. **Format decoding is not coordinate or survey verification.**
+   The evidence lane still checks bounded identity. The floor-plan processor
+   now uses pinned PDAL readers for PLY, LAS/LAZ, E57, and PTS and verifies
+   actual point counts in the production container. The source up-axis,
+   coordinate assurance, registration quality, scanner calibration, and
+   independent check points remain explicit project evidence rather than
+   properties inferred from a successful decoder run.
 
 6. **The Khronos box is not a collision-quality benchmark.**
    It proves a lawful GLB transport and attachment path. Walkability,
