@@ -37,6 +37,7 @@
     "corpus:compat": "node scripts/open-corpus.mjs compat",
     "corpus:all": "node scripts/open-corpus.mjs all",
     "corpus:e2e:local": "node scripts/open-corpus-e2e.mjs",
+    "lingbot:gaussian": "node scripts/lingbot-gaussian.mjs",
     "db:migrate:local": "wrangler d1 migrations apply spatial-studio-local --local",
     "db:migrate:production": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler d1 migrations apply DB --env production --remote",
     "db:migrate:staging": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler d1 migrations apply DB --env staging --remote",
