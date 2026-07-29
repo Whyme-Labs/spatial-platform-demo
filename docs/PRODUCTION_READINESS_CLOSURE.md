@@ -20,10 +20,10 @@ confused with an external activation or real-data validation gate.
 | Indicative floorplans | `LIVE` | Checksum-bound metric input, canonical Y-up normalisation, bounded extraction, immutable proposal evidence, operator review, versioned revisions, and hash-verified SVG/PDF/DXF exports | Real indoor scanner corpus, paid measurement briefs, and qualified sign-off before measured/certified claims |
 | Production viewer | `LIVE` | Bundled Spark 2.1, private range delivery, adaptive budgets, progress/error/retry telemetry, guided navigation, collision, floor plan, and public production scene | Broader physical phone matrix |
 | Publication and access | `LIVE` | Immutable public/unlisted/token/customer releases, short-lived scene sessions, private R2 range access, revoke, rollback, review links, and approval history | Real customer hostname activation |
-| Security and privacy | `LIVE` | CSP and security headers, same-origin mutation checks, output escaping, quotas, tenant isolation, secrets/key rotation, audit records, private raw assets, automated privacy evidence, and human-only disposition | Customer security review for sensitive deployments |
+| Security and privacy | `LIVE` | CSP and security headers, same-origin mutation checks, Turnstile-protected OTP requests/resends, output escaping, quotas, tenant isolation, secrets/key rotation, audit records, private raw assets, automated privacy evidence, and human-only disposition | Customer security review for sensitive deployments |
 | Reliability and observability | `LIVE` application controls; `VALIDATE` provider operations | Request IDs, structured logs, operations inventory, queue/dead-letter evidence, bounded auth-state cleanup, lifecycle enforcement, retained-object retrieval drill, recovery runbooks, and Worker health endpoint | External uptime alert route and provider-level restore exercise before paid customer data |
 | Source release gate | `LIVE` checks; `VALIDATE` policy enforcement | Private GitHub repository plus least-privilege, SHA-pinned CI for locked install, dependency audit, application release gate, and processor dry-run | Branch protection requires an upgraded GitHub plan or a public repository |
-| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 110 Worker/domain tests across 25 files; hermetic Worker runtime with remote bindings disabled; action-state and control-wiring audits; build and production dry-run; final 15-lane/28-assertion pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering; live staging and production Worker/container health | Maintain licensed K1/P2 compact/large/edge-case corpus |
+| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 115 Worker/domain tests across 26 files; hermetic Worker runtime with remote bindings disabled; action-state and control-wiring audits; build and production dry-run; final 15-lane/28-assertion pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering; live staging and production Worker/container health | Maintain licensed K1/P2 compact/large/edge-case corpus |
 
 ## Roadmap state
 
@@ -49,7 +49,7 @@ The remaining queue contains external evidence or account activation:
 Current production release evidence:
 
 - application Worker: staging `c70c026c-3221-4593-b489-a811e09edeae`,
-  production `d5387683-c72c-4a75-b751-c3fc61f0468a`;
+  production `112c472e-b721-465c-8583-2323504438c4`;
 - processor Worker/container: staging
   `117312e4-f252-4128-b8e3-98d07b743b19`, production
   `0e7d2031-9e2c-4600-9d76-2e82fc7d9240`;

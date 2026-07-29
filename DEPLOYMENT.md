@@ -41,6 +41,8 @@ rely on interactive account selection in CI.
 - `REFRESH_TOKEN_PEPPER` — hashes rotating refresh tokens
 - `SESSION_PEPPER` — signs short-lived published-scene tokens and lease material
 - `WORKER_API_TOKEN` — authenticates processing agents
+- `TURNSTILE_SECRET_KEY` — validates single-use OTP request/resend challenges
+  through server-side Siteverify; never expose it through client code or logs
 - `CLOUDFLARE_SAAS_API_TOKEN` — optional until branded-hostname activation;
   scoped to custom-hostname and certificate operations for the SaaS zone
 - `STRIPE_SECRET_KEY` — optional until self-service paid hosting activation;
@@ -60,6 +62,7 @@ npx wrangler secret put OTP_PEPPER --env production
 npx wrangler secret put REFRESH_TOKEN_PEPPER --env production
 npx wrangler secret put SESSION_PEPPER --env production
 npx wrangler secret put WORKER_API_TOKEN --env production
+npx wrangler secret put TURNSTILE_SECRET_KEY --env production
 npx wrangler secret put WORKER_API_TOKEN -c wrangler.processor.jsonc --env production
 npx wrangler secret put CLOUDFLARE_SAAS_API_TOKEN --env production
 npx wrangler secret put STRIPE_SECRET_KEY --env production
@@ -71,6 +74,14 @@ See [AUTHENTICATION.md](./AUTHENTICATION.md) for overlapping ES256 rotation.
 Rotating `SESSION_PEPPER` invalidates published-scene sessions. Rotate
 `WORKER_API_TOKEN` atomically across the application Worker, cloud processor
 Worker, and any temporary external processors.
+
+Production uses the public Turnstile sitekey declared in `wrangler.jsonc` for
+`spatial.whymelabs.com`; local and staging configuration uses Cloudflare's
+documented always-pass test sitekey. Set the corresponding documented test
+secret in local `.dev.vars` and staging only. Production must use the real
+secret and `npm run audit:production-config` rejects a production test sitekey.
+After secret rotation, complete a fresh browser challenge and verify that an
+OTP request succeeds before retiring the previous key.
 
 ## Enterprise OIDC activation
 

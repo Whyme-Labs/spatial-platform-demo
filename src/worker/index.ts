@@ -152,6 +152,10 @@ import {
   verifyOidcIdToken,
   type OidcMetadata,
 } from "./oidc";
+import {
+  TurnstileVerificationError,
+  verifyTurnstileToken,
+} from "./turnstile";
 
 type AppEnvironment = {
   Bindings: Env;
@@ -870,6 +874,14 @@ for (const path of [
   app.get(path, (context) => serveStaticEntry(context, context.req.path));
 }
 
+app.get("/api/auth/config", (context) => {
+  context.header("Cache-Control", "no-store");
+  return context.json({
+    turnstileSiteKey: context.env.TURNSTILE_SITE_KEY,
+    turnstileAction: "otp_request",
+  });
+});
+
 app.post("/api/auth/otp/request", async (context) => {
   if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
@@ -878,6 +890,59 @@ app.post("/api/auth/otp/request", async (context) => {
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const email = parsed.data.email;
   const emailSubject = await sha256Hex(email);
+  try {
+    const turnstileTestMode =
+      context.env.APP_ENV !== "production" &&
+      context.env.TURNSTILE_SITE_KEY === "1x00000000000000000000AA";
+    await verifyTurnstileToken({
+      secretKey: context.env.TURNSTILE_SECRET_KEY,
+      token: parsed.data.turnstileToken,
+      remoteIp: clientAddress === "unknown" ? null : clientAddress,
+      expectedHostname: turnstileTestMode
+        ? "localhost"
+        : new URL(context.env.APP_ORIGIN).hostname,
+      expectedAction: turnstileTestMode ? "test" : "otp_request",
+      testMode: turnstileTestMode,
+    });
+  } catch (error) {
+    const verificationError = error instanceof TurnstileVerificationError
+      ? error
+      : new TurnstileVerificationError(
+        "Turnstile verification did not complete",
+        "unavailable",
+        true,
+      );
+    await authSecurityEvent(
+      context,
+      verificationError.code === "rejected"
+        ? "otp.turnstile_rejected"
+        : "otp.turnstile_unavailable",
+      emailSubject,
+      null,
+      null,
+    );
+    console.warn(JSON.stringify({
+      event: "auth.turnstile_verification_failed",
+      requestId: context.get("requestId"),
+      code: verificationError.code,
+      retryable: verificationError.retryable,
+      providerCodes: verificationError.providerCodes,
+    }));
+    if (verificationError.code === "rejected") {
+      return context.json({
+        error: "Security check expired or failed. Complete it again.",
+        code: "turnstile_rejected",
+        retryable: true,
+        requestId: context.get("requestId"),
+      }, 403);
+    }
+    return context.json({
+      error: "Security verification is temporarily unavailable. Retry with a new check.",
+      code: "turnstile_unavailable",
+      retryable: true,
+      requestId: context.get("requestId"),
+    }, 503);
+  }
   if (!(await allowRate(context.env.DB, "otp-email", emailSubject, 5, 900))) return tooManyRequests(context);
 
   let challengeId = crypto.randomUUID();
@@ -15058,7 +15123,7 @@ function applySecurityHeaders(context: Context<AppEnvironment>): void {
   context.header("Cross-Origin-Resource-Policy", "same-origin");
   context.header(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' data: https://cloudflareinsights.com; worker-src 'self' blob:; frame-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self' data: https://cloudflareinsights.com; worker-src 'self' blob:; frame-src 'self' https://challenges.cloudflare.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'",
   );
   if (context.env.APP_ENV === "production") context.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 }

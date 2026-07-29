@@ -8,6 +8,32 @@ import {
 } from "../shared/capture-adapters";
 import "../../styles.css";
 
+type TurnstileWidgetOptions = {
+  sitekey: string;
+  action: string;
+  theme: "dark";
+  size: "flexible";
+  retry: "auto";
+  "refresh-expired": "manual";
+  "response-field": false;
+  callback: (token: string) => void;
+  "error-callback": (code: string) => void;
+  "expired-callback": () => void;
+  "timeout-callback": () => void;
+  "unsupported-callback": () => void;
+};
+type TurnstileApi = {
+  render(container: HTMLElement, options: TurnstileWidgetOptions): string;
+  reset(widgetId: string): void;
+  remove(widgetId: string): void;
+};
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
+
 type User = {
   userId: string;
   organisationId: string;
@@ -1141,6 +1167,10 @@ const backgroundActions = new SingleFlight();
 let authChallengeId: string | null = null;
 let otpResendAvailableAt = 0;
 let otpCooldownTimer: number | null = null;
+let turnstileToken: string | null = null;
+let turnstileWidgetId: string | null = null;
+let turnstileLoadPromise: Promise<TurnstileApi> | null = null;
+let turnstileInitialisePromise: Promise<void> | null = null;
 let projectOperationId: string | null = null;
 let templateOperation: { id: string; requestKey: string } | null = null;
 let savedViewOperation: { id: string; requestKey: string } | null = null;
@@ -1262,6 +1292,7 @@ async function initialise(): Promise<void> {
         byId("loginError").textContent = enterpriseLoginErrorMessage(ssoCode);
       }
       loginDialog.showModal();
+      beginTurnstileInitialisation();
       clearSsoReturnParameters();
       return;
     }
@@ -1276,6 +1307,7 @@ async function initialise(): Promise<void> {
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       loginDialog.showModal();
+      beginTurnstileInitialisation();
       return;
     }
     showNotice(errorMessage(error), "error");
@@ -1726,7 +1758,10 @@ function bindInterface(): void {
   const loginSubmit = byId<HTMLButtonElement>("loginSubmit");
   const enterpriseLoginButton = byId<HTMLButtonElement>("enterpriseLoginButton");
   const loginEmail = byId<HTMLInputElement>("loginEmail");
-  loginEmail.addEventListener("input", updateEnterpriseLoginAvailability);
+  loginEmail.addEventListener("input", () => {
+    updateEnterpriseLoginAvailability();
+    updateEmailOtpAvailability();
+  });
   loginForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(loginForm);
@@ -1737,9 +1772,13 @@ function bindInterface(): void {
       pendingLabel: authChallengeId ? "Signing in…" : "Sending code…",
       idleLabel: () => authChallengeId ? "Verify and sign in" : "Email me a code",
       errorTarget: byId("loginError"),
-    }, () => handleSignIn(form)).finally(updateOtpCooldown);
+    }, () => handleSignIn(form)).finally(() => {
+      updateOtpCooldown();
+      updateEmailOtpAvailability();
+    });
   });
   byId("changeLoginEmail").addEventListener("click", resetLogin);
+  byId("retryTurnstile").addEventListener("click", retryTurnstile);
   enterpriseLoginButton.addEventListener("click", () => {
     void runAction({
       key: "enterprise-auth-discovery",
@@ -1763,7 +1802,10 @@ function bindInterface(): void {
       pendingLabel: "Sending another code…",
       errorTarget: byId("loginError"),
       disable: [loginSubmit, byId<HTMLButtonElement>("changeLoginEmail")],
-    }, () => requestSignInCode(email)).finally(updateOtpCooldown);
+    }, () => requestSignInCode(email)).finally(() => {
+      updateOtpCooldown();
+      updateEmailOtpAvailability();
+    });
   });
   const newProjectSubmit = newProjectForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   newProjectForm.addEventListener("submit", (event) => {
@@ -2278,6 +2320,14 @@ async function handleSignIn(form: FormData): Promise<void> {
 }
 
 async function requestSignInCode(email: string): Promise<void> {
+  const token = turnstileToken;
+  if (!token) {
+    throw new Error("Complete the security check before requesting an email code.");
+  }
+  let requestAccepted = false;
+  turnstileToken = null;
+  updateTurnstileState("loading", "Verifying this security check…");
+  updateEmailOtpAvailability();
   const challenge = await api<{
     challengeId: string;
     expiresInSeconds: number;
@@ -2285,8 +2335,15 @@ async function requestSignInCode(email: string): Promise<void> {
     message: string;
   }>("/api/auth/otp/request", {
     method: "POST",
-    body: JSON.stringify({ email }),
-  });
+    body: JSON.stringify({ email, turnstileToken: token }),
+  }).then((result) => {
+    requestAccepted = true;
+    return result;
+  }).finally(() => resetTurnstile(
+    requestAccepted
+      ? "Complete a fresh security check before resending."
+      : "Complete the security check to request a code.",
+  ));
   authChallengeId = challenge.challengeId;
   byId<HTMLInputElement>("loginEmail").readOnly = true;
   byId("otpField").classList.add("active");
@@ -2316,7 +2373,9 @@ function resetLogin(): void {
   byId("loginSubmit").textContent = "Email me a code";
   byId("loginInstructions").innerHTML = "Enter your authorised email. We will send a one-time code from <strong>login@whymelabs.com</strong>.";
   byId("loginError").textContent = "";
+  resetTurnstile("Complete the security check to request a code.");
   updateEnterpriseLoginAvailability();
+  updateEmailOtpAvailability();
 }
 
 function startOtpCooldown(seconds: number): void {
@@ -2335,11 +2394,13 @@ function updateOtpCooldown(): void {
   const remaining = Math.max(0, Math.ceil((otpResendAvailableAt - Date.now()) / 1_000));
   const pending = isActionPending("auth-submit");
   resend.hidden = false;
-  resend.disabled = pending || remaining > 0;
+  resend.disabled = pending || remaining > 0 || !turnstileToken;
   resend.textContent = pending
     ? "Sending another code…"
     : remaining > 0
       ? `Resend code in ${remaining}s`
+      : !turnstileToken
+        ? "Complete security check to resend"
       : "Resend code";
   if (remaining === 0 && otpCooldownTimer !== null) {
     window.clearInterval(otpCooldownTimer);
@@ -2352,6 +2413,175 @@ function updateEnterpriseLoginAvailability(): void {
   const button = byId<HTMLButtonElement>("enterpriseLoginButton");
   const pending = isActionPending("enterprise-auth-discovery");
   button.disabled = pending || Boolean(authChallengeId) || !email.validity.valid || !email.value.trim();
+}
+
+function updateEmailOtpAvailability(): void {
+  const button = byId<HTMLButtonElement>("loginSubmit");
+  const email = byId<HTMLInputElement>("loginEmail");
+  const pending = isActionPending("auth-submit");
+  button.disabled = pending ||
+    !email.validity.valid ||
+    !email.value.trim() ||
+    (!authChallengeId && !turnstileToken);
+}
+
+function beginTurnstileInitialisation(): void {
+  void initialiseTurnstile().catch((error) => {
+    turnstileInitialisePromise = null;
+    updateTurnstileState(
+      "error",
+      error instanceof Error
+        ? `${error.message} Retry the security check.`
+        : "The security check could not load. Retry when the connection is stable.",
+      true,
+    );
+  });
+}
+
+function initialiseTurnstile(): Promise<void> {
+  if (turnstileInitialisePromise) return turnstileInitialisePromise;
+  turnstileInitialisePromise = (async () => {
+    turnstileToken = null;
+    updateTurnstileState("loading", "Preparing security check…");
+    updateEmailOtpAvailability();
+    const config = await api<{
+      turnstileSiteKey: string;
+      turnstileAction: string;
+    }>("/api/auth/config");
+    if (
+      !config.turnstileSiteKey ||
+      config.turnstileAction !== "otp_request"
+    ) {
+      throw new Error("The security check is not configured correctly.");
+    }
+    const turnstile = await loadTurnstileApi();
+    if (turnstileWidgetId) {
+      turnstile.remove(turnstileWidgetId);
+      turnstileWidgetId = null;
+    }
+    turnstileWidgetId = turnstile.render(byId("turnstileWidget"), {
+      sitekey: config.turnstileSiteKey,
+      action: config.turnstileAction,
+      theme: "dark",
+      size: "flexible",
+      retry: "auto",
+      "refresh-expired": "manual",
+      "response-field": false,
+      callback: (token) => {
+        turnstileToken = token;
+        updateTurnstileState("verified", "Security check complete.");
+        updateEmailOtpAvailability();
+        updateOtpCooldown();
+      },
+      "error-callback": () => {
+        turnstileToken = null;
+        updateTurnstileState(
+          "error",
+          "The security check did not complete. Retry it before requesting a code.",
+          true,
+        );
+        updateEmailOtpAvailability();
+        updateOtpCooldown();
+      },
+      "expired-callback": () => {
+        turnstileToken = null;
+        updateTurnstileState(
+          "expired",
+          "The security check expired. Complete a fresh check.",
+          true,
+        );
+        updateEmailOtpAvailability();
+        updateOtpCooldown();
+      },
+      "timeout-callback": () => {
+        turnstileToken = null;
+        updateTurnstileState(
+          "expired",
+          "The security check timed out. Retry to continue.",
+          true,
+        );
+        updateEmailOtpAvailability();
+        updateOtpCooldown();
+      },
+      "unsupported-callback": () => {
+        turnstileToken = null;
+        updateTurnstileState(
+          "error",
+          "This browser cannot run the security check. Update it or use another supported browser.",
+          true,
+        );
+        updateEmailOtpAvailability();
+        updateOtpCooldown();
+      },
+    });
+    updateTurnstileState("ready", "Security check in progress…");
+  })();
+  return turnstileInitialisePromise;
+}
+
+function loadTurnstileApi(): Promise<TurnstileApi> {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  if (turnstileLoadPromise) return turnstileLoadPromise;
+  turnstileLoadPromise = new Promise<TurnstileApi>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    script.async = true;
+    script.defer = true;
+    script.dataset.spatialTurnstile = "true";
+    script.addEventListener("load", () => {
+      if (window.turnstile) {
+        resolve(window.turnstile);
+        return;
+      }
+      turnstileLoadPromise = null;
+      reject(new Error("The security-check API did not initialise."));
+    }, { once: true });
+    script.addEventListener("error", () => {
+      turnstileLoadPromise = null;
+      script.remove();
+      reject(new Error("The security-check script could not be downloaded."));
+    }, { once: true });
+    document.head.append(script);
+  });
+  return turnstileLoadPromise;
+}
+
+function retryTurnstile(): void {
+  turnstileToken = null;
+  if (!turnstileWidgetId || !window.turnstile) {
+    turnstileInitialisePromise = null;
+    beginTurnstileInitialisation();
+    return;
+  }
+  updateTurnstileState("loading", "Retrying security check…");
+  window.turnstile.reset(turnstileWidgetId);
+  updateEmailOtpAvailability();
+  updateOtpCooldown();
+}
+
+function resetTurnstile(message: string): void {
+  turnstileToken = null;
+  if (turnstileWidgetId && window.turnstile) {
+    updateTurnstileState("loading", message);
+    window.turnstile.reset(turnstileWidgetId);
+  } else {
+    updateTurnstileState("loading", "Preparing security check…");
+    turnstileInitialisePromise = null;
+    beginTurnstileInitialisation();
+  }
+  updateEmailOtpAvailability();
+  updateOtpCooldown();
+}
+
+function updateTurnstileState(
+  state: "loading" | "ready" | "verified" | "expired" | "error",
+  message: string,
+  canRetry = false,
+): void {
+  const region = byId("turnstileRegion");
+  region.dataset.state = state;
+  byId("turnstileStatus").textContent = message;
+  byId<HTMLButtonElement>("retryTurnstile").hidden = !canRetry;
 }
 
 async function discoverEnterpriseLogin(): Promise<void> {

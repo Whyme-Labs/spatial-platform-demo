@@ -84,12 +84,20 @@ for (const secret of [
   "REFRESH_TOKEN_PEPPER",
   "SESSION_PEPPER",
   "WORKER_API_TOKEN",
+  "TURNSTILE_SECRET_KEY",
 ]) {
   requireConfiguration(
     appProduction.secrets?.required?.includes(secret),
     `production required secret ${secret} is not declared`,
   );
 }
+
+requireConfiguration(
+  typeof appProduction.vars?.TURNSTILE_SITE_KEY === "string" &&
+    appProduction.vars.TURNSTILE_SITE_KEY.length >= 20 &&
+    !appProduction.vars.TURNSTILE_SITE_KEY.startsWith("1x000000"),
+  "production Turnstile site key must be configured and must not use a test key",
+);
 
 requireConfiguration(
   processorProduction.vars?.APP_ORIGIN === "https://spatial.whymelabs.com",

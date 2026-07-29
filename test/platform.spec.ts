@@ -137,6 +137,12 @@ describe("Spatial Studio Worker", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("x-request-id")).toBeTruthy();
       expect(response.headers.get("content-security-policy")).toContain("object-src 'none'");
+      expect(response.headers.get("content-security-policy")).toContain(
+        "script-src 'self' 'wasm-unsafe-eval' https://static.cloudflareinsights.com https://challenges.cloudflare.com",
+      );
+      expect(response.headers.get("content-security-policy")).toContain(
+        "frame-src 'self' https://challenges.cloudflare.com",
+      );
     }
   });
 

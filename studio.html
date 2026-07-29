@@ -222,7 +222,14 @@
         <label class="full"><span>Email address</span><input id="loginEmail" name="email" type="email" autocomplete="email" maxlength="254" required /></label>
         <label id="otpField" class="full auth-code-field"><span>Six-digit code</span><input id="loginCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" /></label>
       </div>
-      <button id="loginSubmit" class="primary-button wide" type="submit">Email me a code</button>
+      <section id="turnstileRegion" class="turnstile-region" aria-labelledby="turnstileStatus">
+        <div id="turnstileWidget" class="turnstile-widget"></div>
+        <div class="turnstile-state">
+          <span id="turnstileStatus" role="status" aria-live="polite">Preparing security check…</span>
+          <button id="retryTurnstile" class="text-button" type="button" hidden>Retry security check</button>
+        </div>
+      </section>
+      <button id="loginSubmit" class="primary-button wide" type="submit" disabled>Email me a code</button>
       <button id="resendLoginCode" class="quiet-button wide" type="button" hidden>Resend code</button>
       <button id="changeLoginEmail" class="text-button wide" type="button" hidden>Use a different email</button>
       <div id="enterpriseLoginRegion" class="enterprise-login-region">

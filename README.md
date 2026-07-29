@@ -69,8 +69,9 @@ Implemented:
   storage, expiry, generation rotation, immediate revocation, last-use
   evidence, and an unattended local export-transfer agent that checkpoints
   exact-file SHA-256 plus committed multipart ETags before retry or restart
-- email OTP authentication, ES256/JWKS access tokens, rotating refresh
-  sessions, immediate D1 revocation, role checks, and rate limits
+- Turnstile-protected email OTP authentication, ES256/JWKS access tokens,
+  rotating refresh sessions, immediate D1 revocation, role checks, and
+  authoritative D1 rate limits
 - tenant-scoped enterprise OIDC with authorization code + PKCE, live provider
   discovery, RS256/ES256 ID-token verification, invited-account linking,
   provider session provenance, and immediate provider-disable revocation

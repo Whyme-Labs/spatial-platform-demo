@@ -16,6 +16,16 @@ Cloudflare Email Sending delivers both text and HTML OTP messages from
 five attempts, and are consumed atomically in D1. Responses are deliberately
 generic so the endpoint does not disclose which emails are authorised.
 
+Every OTP request and resend also requires a fresh Cloudflare Turnstile token.
+The browser widget uses action `otp_request`; the Worker validates the
+single-use token through Siteverify before creating a D1 challenge or sending
+email, and rejects mismatched action or hostname results. Siteverify uses the
+request's Cloudflare client address, a per-request idempotency key, an
+eight-second timeout, and one bounded transient retry. Turnstile complements
+the authoritative D1 IP/email limits; it does not replace them. The public
+sitekey is returned by `/api/auth/config`, while `TURNSTILE_SECRET_KEY` exists
+only as a Worker secret.
+
 Organisation team invitations use the same verified email identity boundary,
 but do not make membership active when an administrator merely types an email.
 The D1 membership remains `invited` until a valid, unexpired invitation is

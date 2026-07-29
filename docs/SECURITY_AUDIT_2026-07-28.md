@@ -24,6 +24,10 @@ certification, or legal opinion.
   minutes, have a five-attempt cap, and are atomically consumed.
 - Email and IP request/verification limits are authoritative in D1. KV provides
   resend suppression only and never grants authentication.
+- Every OTP request and resend now requires a fresh Turnstile token. The
+  Worker validates it through Siteverify before D1 challenge creation or email
+  delivery, checks the exact `otp_request` action and canonical hostname, and
+  fails closed on rejection or provider/configuration failure.
 - Access JWTs use ES256/P-256 with `kid`, issuer, audience, subject, session,
   role, `jti`, issued/not-before/expiry validation, a five-minute default TTL,
   and a public-only JWKS endpoint.
@@ -146,27 +150,13 @@ certification, or legal opinion.
   and floorplan denial, static-entry header, and APAC D1 schema smoke passed.
 - Final application releases
   `c70c026c-3221-4593-b489-a811e09edeae` (staging) and
-  `d5387683-c72c-4a75-b751-c3fc61f0468a` (production), plus processor releases
+  `112c472e-b721-465c-8583-2323504438c4` (production), plus processor releases
   `117312e4-f252-4128-b8e3-98d07b743b19` (staging) and
   `0e7d2031-9e2c-4600-9d76-2e82fc7d9240` (production), are active.
   Production processor health reports `spatial-processor/0.7.0`,
   `Spark 2.1.0`, and `cloudflare-container`.
 
 ## Open operational decisions
-
-### Turnstile on OTP request
-
-Severity: medium hardening, not a current authentication bypass.
-
-D1/KV rate limits and the generic OTP response constrain abuse, but a public
-OTP endpoint can still consume email/compute resources under distributed bot
-traffic. Add Cloudflare Turnstile before broad public acquisition. This
-requires a `spatial.whymelabs.com` widget sitekey and secret. Validate the token
-server-side before challenge creation and retain D1 rate limits as the
-authoritative fallback.
-
-Official guide:
-<https://developers.cloudflare.com/turnstile/tutorials/login-pages/>
 
 ### D1 recovery exercise
 

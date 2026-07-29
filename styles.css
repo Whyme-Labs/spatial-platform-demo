@@ -60,6 +60,12 @@ form[aria-busy="true"] .dialog-close {
 }
 .mock-form-grid .auth-code-field { display:none; }
 .mock-form-grid .auth-code-field.active { display:grid; }
+.turnstile-region { display:grid; gap:8px; min-height:78px; margin:2px 0 14px; padding:12px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.025); }
+.turnstile-widget { display:flex; min-height:35px; align-items:center; justify-content:center; overflow:hidden; }
+.turnstile-state { display:flex; gap:10px; align-items:center; justify-content:space-between; color:var(--muted); font-size:11px; line-height:1.4; }
+.turnstile-state .text-button { flex:0 0 auto; padding:0; font-size:11px; }
+.turnstile-region[data-state="verified"] { border-color:rgba(214,255,75,.35); background:rgba(214,255,75,.045); }
+.turnstile-region[data-state="error"],.turnstile-region[data-state="expired"] { border-color:rgba(255,128,112,.38); background:rgba(255,128,112,.045); }
 .enterprise-login-region { display:grid; gap:10px; margin-top:16px; }
 .auth-divider { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:center; color:var(--muted); font:600 9px/1 var(--mono); letter-spacing:.08em; text-transform:uppercase; }
 .auth-divider::before,.auth-divider::after { content:""; height:1px; background:var(--line); }
