@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Check out the verified revision
-        uses: actions/checkout@3d3c42e5aac5ba805825a76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.DEPLOY_SHA }}
           fetch-depth: 1
@@ -83,7 +83,7 @@ jobs:
 
       - name: Upload staging acceptance evidence
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: staging-acceptance-${{ env.DEPLOY_SHA }}
           path: .cache/staging-acceptance/report.json
