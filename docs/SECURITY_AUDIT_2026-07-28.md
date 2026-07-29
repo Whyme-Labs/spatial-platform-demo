@@ -115,7 +115,9 @@ certification, or legal opinion.
   generated binding types, observability, and dry-run gates.
 - GitHub CI uses read-only repository permissions and immutable action SHAs,
   then repeats locked installation, dependency audit, application checks, and
-  the processor deployment dry-run. The repository is private.
+  the processor deployment dry-run. The Worker test runtime disables remote
+  bindings, so CI has no Cloudflare account credential and cannot invoke live
+  Workers AI or production resources. The repository is private.
 
 ## Verification evidence
 

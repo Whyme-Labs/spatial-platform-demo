@@ -33,6 +33,10 @@ export default defineConfig({
       });
 
       return {
+        // Unit and integration suites must remain deterministic and runnable
+        // without Cloudflare account credentials. Live Workers AI acceptance
+        // is covered by the explicit production smoke checks instead.
+        remoteBindings: false,
         wrangler: { configPath: "./wrangler.jsonc" },
         miniflare: {
           bindings: {
@@ -57,10 +61,9 @@ export default defineConfig({
     // failures before any application code runs.
     maxWorkers: 1,
     // Worker integration tests exercise D1, R2, email, JWT signing, and full
-    // release lifecycles through Miniflare. Remote Cloudflare bindings can
-    // transiently take tens of seconds even after the application operation
-    // succeeds, so retain a bounded production gate without misclassifying
-    // provider transport latency as an application assertion failure.
+    // release lifecycles through Miniflare. Keep a bounded production gate
+    // without misclassifying workerd startup or storage latency as an
+    // application assertion failure.
     testTimeout: 120_000,
     hookTimeout: 120_000,
   },

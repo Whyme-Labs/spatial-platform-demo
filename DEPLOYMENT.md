@@ -22,6 +22,12 @@ and receive read-only repository contents permission. Branch protection is a
 separate repository-plan control; do not treat a green workflow as mandatory
 review enforcement unless GitHub reports the rule active.
 
+The Vitest Worker runtime sets `remoteBindings: false`. CI therefore needs no
+Cloudflare account token and cannot accidentally call production Workers AI or
+other remote bindings. Detector retry/normalisation is exercised with local
+test doubles; live Workers AI availability remains an explicit staging or
+production smoke check, not a unit-test dependency.
+
 Wrangler OAuth can expose several accounts to one operator. The repository's
 remote npm scripts therefore set this public account ID explicitly before
 invoking Wrangler; use those scripts for migration and deployment. For a
