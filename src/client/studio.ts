@@ -10124,6 +10124,7 @@ async function publishRelease(form: FormData): Promise<void> {
   releaseOperationId ??= crypto.randomUUID();
   const expiresAtValue = optionalString(form.get("expiresAt"));
   try {
+    const initialCamera = parseReleaseInitialCamera(form);
     const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
       `/api/projects/${state.selected.project.id}/releases`,
       {
@@ -10139,6 +10140,7 @@ async function publishRelease(form: FormData): Promise<void> {
             captureDate: optionalString(form.get("captureDate")),
             measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
             splatBudgetMillions: 2,
+            ...(initialCamera ? { initialCamera } : {}),
           },
         }),
       },
@@ -10153,6 +10155,38 @@ async function publishRelease(form: FormData): Promise<void> {
   } catch (error) {
     byId("releaseError").textContent = errorMessage(error);
   }
+}
+
+function parseReleaseInitialCamera(form: FormData): {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fovDegrees: number;
+} | null {
+  const rawPosition = String(form.get("initialCameraPosition") ?? "");
+  const rawTarget = String(form.get("initialCameraTarget") ?? "");
+  if (!rawPosition.trim() && !rawTarget.trim()) return null;
+  const position = parsePosition(rawPosition);
+  const target = parsePosition(rawTarget);
+  if (!position || !target) {
+    throw new Error("Starting camera position and target are both required.");
+  }
+  if (
+    Math.hypot(
+      position[0] - target[0],
+      position[1] - target[1],
+      position[2] - target[2],
+    ) < 1e-9
+  ) {
+    throw new Error("Starting camera position and target must differ.");
+  }
+  const up = parsePosition(String(form.get("initialCameraUp") ?? "")) ?? [0, 1, 0];
+  if (Math.hypot(...up) < 1e-9) throw new Error("Camera up must be a non-zero vector.");
+  const fovDegrees = Number(form.get("initialCameraFov") ?? 58);
+  if (!Number.isFinite(fovDegrees) || fovDegrees < 20 || fovDegrees > 100) {
+    throw new Error("Field of view must be between 20 and 100 degrees.");
+  }
+  return { position, target, up, fovDegrees };
 }
 
 async function revokeRelease(slug: string): Promise<void> {

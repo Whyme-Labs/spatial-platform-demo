@@ -584,6 +584,10 @@
         <label class="full"><span>Subtitle</span><input name="subtitle" maxlength="240" /></label>
         <label><span>Capture date</span><input name="captureDate" type="date" /></label>
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
+        <label class="full"><span>Starting camera position (x, y, z)</span><input name="initialCameraPosition" placeholder="Optional; for example -0.3, 0.71, -0.94" /></label>
+        <label class="full"><span>Starting camera target (x, y, z)</span><input name="initialCameraTarget" placeholder="Required when a starting position is set" /></label>
+        <label><span>Camera up (x, y, z)</span><input name="initialCameraUp" value="0, 1, 0" /></label>
+        <label><span>Field of view</span><input name="initialCameraFov" type="number" min="20" max="100" step="1" value="58" /></label>
         <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer" required>This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
       </div>
       <button class="primary-button wide" type="submit">Publish release</button>

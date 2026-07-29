@@ -312,6 +312,70 @@ export function planMultipartParts(sizeBytes, partSizeBytes) {
   return parts;
 }
 
+export function parsePosterCameraJson(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_INVALID",
+      "PROCESSOR_POSTER_CAMERA_JSON must be valid JSON",
+      { failureClass: "configuration", retryable: false, cause: error },
+    );
+  }
+  const vector = (name) => {
+    const candidate = parsed?.[name];
+    if (
+      !Array.isArray(candidate) ||
+      candidate.length !== 3 ||
+      candidate.some((coordinate) =>
+        typeof coordinate !== "number" ||
+        !Number.isFinite(coordinate) ||
+        Math.abs(coordinate) > 1_000_000
+      )
+    ) {
+      throw new ProcessingAgentError(
+        "POSTER_CAMERA_INVALID",
+        `PROCESSOR_POSTER_CAMERA_JSON.${name} must contain three finite coordinates`,
+        { failureClass: "configuration", retryable: false },
+      );
+    }
+    return [...candidate];
+  };
+  const position = vector("position");
+  const target = vector("target");
+  const up = vector("up");
+  if (position.every((coordinate, index) => Math.abs(coordinate - target[index]) < 1e-9)) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_INVALID",
+      "PROCESSOR_POSTER_CAMERA_JSON position and target must differ",
+      { failureClass: "configuration", retryable: false },
+    );
+  }
+  if (Math.hypot(...up) < 1e-9) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_INVALID",
+      "PROCESSOR_POSTER_CAMERA_JSON.up must be non-zero",
+      { failureClass: "configuration", retryable: false },
+    );
+  }
+  const fovDegrees = parsed?.fovDegrees ?? 58;
+  if (
+    typeof fovDegrees !== "number" ||
+    !Number.isFinite(fovDegrees) ||
+    fovDegrees < 20 ||
+    fovDegrees > 100
+  ) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_INVALID",
+      "PROCESSOR_POSTER_CAMERA_JSON.fovDegrees must be between 20 and 100",
+      { failureClass: "configuration", retryable: false },
+    );
+  }
+  return { position, target, up, fovDegrees };
+}
+
 export function assertRegisteredSceneChangeCapacity({
   baselineSizeBytes,
   candidateSizeBytes,

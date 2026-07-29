@@ -24,6 +24,7 @@ import {
   extractMetricFloorPlan,
   extractWalkableSemanticCandidates,
   inspectSpzContainer,
+  parsePosterCameraJson,
   parsePlySceneSignature,
   planMultipartParts,
   processOutputEvent,
@@ -67,6 +68,7 @@ const configuration = posterOnly ? null : {
   pdalBinary: resolve(process.env.PDAL_BIN || "/usr/local/bin/pdal"),
   activeHumanDurationMs: nonnegativeInteger(process.env.PROCESSOR_ACTIVE_HUMAN_MS, 0),
   chromePath: process.env.PROCESSOR_CHROME_PATH?.trim() || undefined,
+  posterCamera: parsePosterCameraJson(process.env.PROCESSOR_POSTER_CAMERA_JSON),
 };
 
 if (posterOnly) {
@@ -75,7 +77,12 @@ if (posterOnly) {
   if (!source || !destination) {
     throw new Error("Usage: node scripts/processing-agent.mjs --poster-only <scene.rad> <poster.png>");
   }
-  await generateSparkPoster(resolve(source), resolve(destination), process.env.PROCESSOR_CHROME_PATH?.trim());
+  await generateSparkPoster(
+    resolve(source),
+    resolve(destination),
+    process.env.PROCESSOR_CHROME_PATH?.trim(),
+    parsePosterCameraJson(process.env.PROCESSOR_POSTER_CAMERA_JSON),
+  );
   console.log(JSON.stringify({
     event: "processor.poster_smoke_succeeded",
     source: resolve(source),
@@ -480,7 +487,12 @@ async function processNextJob() {
 
     await heartbeat(job.id, lease.leaseToken, 72, "Rendering Spark scene poster");
     const posterPath = join(workDirectory, "poster.png");
-    await generateSparkPoster(radPath, posterPath, configuration.chromePath);
+    await generateSparkPoster(
+      radPath,
+      posterPath,
+      configuration.chromePath,
+      configuration.posterCamera,
+    );
     const posterMetadata = await fileMetadata(posterPath);
 
     const reportPath = join(workDirectory, "qa-report.json");
@@ -1220,8 +1232,8 @@ async function runProcess(command, args, timeoutMs, {
   });
 }
 
-async function generateSparkPoster(radPath, outputPath, configuredChromePath) {
-  const server = await startPosterServer(radPath);
+async function generateSparkPoster(radPath, outputPath, configuredChromePath, posterCamera = null) {
+  const server = await startPosterServer(radPath, posterCamera);
   const executablePath = configuredChromePath || await detectedChromePath();
   let browser;
   let page;
@@ -1290,7 +1302,7 @@ async function generateSparkPoster(radPath, outputPath, configuredChromePath) {
   }
 }
 
-async function startPosterServer(radPath) {
+async function startPosterServer(radPath, posterCamera) {
   const sparkModule = join(repositoryRoot, "node_modules", "@sparkjsdev", "spark", "dist", "spark.module.js");
   const sparkAssets = join(repositoryRoot, "node_modules", "@sparkjsdev", "spark", "dist", "assets");
   const threeBuild = join(repositoryRoot, "node_modules", "three", "build");
@@ -1300,7 +1312,7 @@ async function startPosterServer(radPath) {
     const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
     if (pathname === "/") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-      response.end(posterHtml());
+      response.end(posterHtml(posterCamera));
       return;
     }
     if (pathname === "/spark.module.js") return streamFile(response, sparkModule, "text/javascript");
@@ -1375,7 +1387,8 @@ async function startPosterServer(radPath) {
   };
 }
 
-function posterHtml() {
+function posterHtml(posterCamera) {
+  const cameraJson = JSON.stringify(posterCamera);
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8">
@@ -1402,8 +1415,16 @@ const sphere=mesh.getBoundingBox().getBoundingSphere(new THREE.Sphere());
 const radius=Number.isFinite(sphere.radius)&&sphere.radius>0?sphere.radius:1;
 camera.near=Math.max(.005,radius/2000);
 camera.far=Math.max(1000,radius*50);
-camera.position.copy(sphere.center).add(new THREE.Vector3(radius*.65,radius*.28,radius*1.85));
-camera.lookAt(sphere.center);
+const authoredCamera=${cameraJson};
+if(authoredCamera){
+  camera.position.fromArray(authoredCamera.position);
+  camera.up.fromArray(authoredCamera.up).normalize();
+  camera.fov=authoredCamera.fovDegrees;
+  camera.lookAt(new THREE.Vector3().fromArray(authoredCamera.target));
+}else{
+  camera.position.copy(sphere.center).add(new THREE.Vector3(radius*.65,radius*.28,radius*1.85));
+  camera.lookAt(sphere.center);
+}
 camera.updateProjectionMatrix();
 const sampleCanvas=document.createElement("canvas");
 sampleCanvas.width=96;
@@ -1413,7 +1434,7 @@ let lastSampleAt=0;
 let readyStreak=0;
 let stopped=false;
 window.posterStats=null;
-window.posterDetail={center:sphere.center.toArray(),radius};
+window.posterDetail={center:sphere.center.toArray(),radius,camera:authoredCamera};
 const renderPosterFrame=()=>{
   if(stopped)return;
   renderer.render(scene,camera);

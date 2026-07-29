@@ -5,6 +5,7 @@ import {
   compareRegisteredScenes,
   inspectSpzContainer,
   parsePlySceneSignature,
+  parsePosterCameraJson,
   planMultipartParts,
   processOutputEvent,
   processorFailure,
@@ -39,6 +40,34 @@ describe("processing agent core", () => {
   it("labels a child process stderr stream as diagnostics rather than a false error", () => {
     expect(processOutputEvent("splat.normalize", "stdout")).toBe("splat.normalize");
     expect(processOutputEvent("splat.normalize", "stderr")).toBe("splat.normalize.stderr");
+  });
+
+  it("accepts a bounded authored camera for indoor Gaussian posters", () => {
+    expect(parsePosterCameraJson(JSON.stringify({
+      position: [-0.3, 0.71, -0.94],
+      target: [-1.29, 0.61, -0.97],
+      up: [-0.02, 0, 1],
+      fovDegrees: 100,
+    }))).toEqual({
+      position: [-0.3, 0.71, -0.94],
+      target: [-1.29, 0.61, -0.97],
+      up: [-0.02, 0, 1],
+      fovDegrees: 100,
+    });
+    expect(parsePosterCameraJson(" ")).toBeNull();
+  });
+
+  it("rejects unusable authored poster cameras as configuration failures", () => {
+    expect(() => parsePosterCameraJson(JSON.stringify({
+      position: [0, 0, 0],
+      target: [0, 0, 0],
+      up: [0, 1, 0],
+      fovDegrees: 58,
+    }))).toThrowError(expect.objectContaining({
+      code: "POSTER_CAMERA_INVALID",
+      failureClass: "configuration",
+      retryable: false,
+    }));
   });
 
   it("validates a Gaussian PLY before invoking Spark", () => {
