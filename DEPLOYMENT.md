@@ -85,10 +85,14 @@ The staging deployment workflow additionally requires:
 
 Create a dedicated Cloudflare API token scoped only to this account and the
 staging Worker/Container, D1, R2, KV, and Queue deployment or canary operations
-used by the workflow. Do not place the operator's Wrangler OAuth credentials
-or any application secret in GitHub. After a successful manual dispatch, set
-`CLOUDFLARE_STAGING_ENABLED=true` to accept every successful `main` release
-gate automatically. Manual dispatches are accepted only from `main`.
+used by the workflow. The current Cloudflare permission labels are D1 Write,
+Workers Scripts Write, Workers KV Storage Write, Workers R2 Storage Write,
+Queues Write, and Containers Write (or their user-token `Edit` equivalents).
+Scope every policy to account `1e0170aaabc90ecf5f466128d1f0466a`. Do not place
+the operator's Wrangler OAuth credentials or any application secret in GitHub.
+After a successful manual dispatch, set `CLOUDFLARE_STAGING_ENABLED=true` to
+accept every successful `main` release gate automatically. Manual dispatches
+are accepted only from `main`.
 
 See [AUTHENTICATION.md](./AUTHENTICATION.md) for overlapping ES256 rotation.
 Rotating `SESSION_PEPPER` invalidates published-scene sessions. Rotate

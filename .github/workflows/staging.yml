@@ -79,10 +79,11 @@ jobs:
           --tag "git-${DEPLOY_SHA:0:12}"
 
       - name: Run deployed Cloudflare acceptance
+        id: acceptance
         run: npm run verify:staging
 
       - name: Upload staging acceptance evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.acceptance.outcome != 'skipped' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: staging-acceptance-${{ env.DEPLOY_SHA }}
