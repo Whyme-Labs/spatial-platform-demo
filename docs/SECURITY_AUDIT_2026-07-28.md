@@ -1,6 +1,7 @@
 # Security and production-readiness audit
 
 Date: 2026-07-28
+Live release re-verified: 2026-07-29
 
 Scope: Spatial Studio Worker, browser clients, processor boundary, D1, R2, KV,
 Queues, Send Email, Workers AI, configuration, migrations, and release process.
@@ -74,6 +75,9 @@ certification, or legal opinion.
 - Static application entry points and assets run through the Worker before the
   Assets binding. Live probes and a direct-entry regression test verify that
   `/studio.html` and `/images/*` cannot bypass request IDs or security headers.
+- The production application disables both its `workers.dev` route and preview
+  URLs, leaving `https://spatial.whymelabs.com` as its only public application
+  origin. A release-gate configuration audit prevents accidental re-enablement.
 - CSP denies objects, external form actions, foreign frames, and foreign base
   URLs. The only script exception is WebAssembly evaluation required by the
   bundled Spark runtime plus Cloudflare analytics.
@@ -114,7 +118,8 @@ certification, or legal opinion.
 
 - `npm audit --audit-level=low`: 0 vulnerabilities.
 - `npm run check`: types, strict TypeScript, action audit, control audit,
-  production build, 25 Worker/domain suites, and production dry-run.
+  production-configuration audit, production build, 25 Worker/domain suites,
+  and production dry-run.
 - The final release gate passed all 110 tests across 25 files, including
   floorplan source/hash/report tampering, sampling bounds, cancellation/retry,
   concurrent review/export, direct static-entry headers, privacy retry,
@@ -136,7 +141,7 @@ certification, or legal opinion.
   and floorplan denial, static-entry header, and APAC D1 schema smoke passed.
 - Final application releases
   `c70c026c-3221-4593-b489-a811e09edeae` (staging) and
-  `bfa71fa0-e42f-445b-9227-76dbb16ffe37` (production), plus processor releases
+  `d5387683-c72c-4a75-b751-c3fc61f0468a` (production), plus processor releases
   `117312e4-f252-4128-b8e3-98d07b743b19` (staging) and
   `0e7d2031-9e2c-4600-9d76-2e82fc7d9240` (production), are active.
   Production processor health reports `spatial-processor/0.7.0`,

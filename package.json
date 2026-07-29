@@ -9,9 +9,10 @@
   "scripts": {
     "build": "vite build",
     "auth:init:local": "node scripts/init-local-auth.mjs",
-    "check": "npm run types && npm run typecheck && npm run audit:actions && npm run audit:controls && npm run build && npm run test && npm run deploy:dry-run",
+    "check": "npm run types && npm run typecheck && npm run audit:actions && npm run audit:controls && npm run audit:production-config && npm run build && npm run test && npm run deploy:dry-run",
     "audit:actions": "node scripts/audit-action-state.mjs",
     "audit:controls": "node scripts/audit-control-wiring.mjs",
+    "audit:production-config": "node scripts/audit-production-config.mjs",
     "qa:browser:capture-bundle": "node scripts/browser-qa-capture-bundle.mjs",
     "qa:browser:raw-change": "node scripts/browser-qa-raw-scene.mjs",
     "qa:browser:semantic-extraction": "node scripts/browser-qa-semantic-extraction.mjs",

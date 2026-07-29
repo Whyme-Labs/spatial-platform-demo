@@ -117,7 +117,7 @@ resources on 2026-07-28:
 
 - Application Worker:
   staging `c70c026c-3221-4593-b489-a811e09edeae`,
-  production `bfa71fa0-e42f-445b-9227-76dbb16ffe37`
+  production `d5387683-c72c-4a75-b751-c3fc61f0468a`
 - Processor Worker and container:
   staging `117312e4-f252-4128-b8e3-98d07b743b19`,
   production `0e7d2031-9e2c-4600-9d76-2e82fc7d9240`

@@ -222,6 +222,8 @@
     "production": {
       "account_id": "1e0170aaabc90ecf5f466128d1f0466a",
       "name": "spatial-studio-production",
+      "workers_dev": false,
+      "preview_urls": false,
       "secrets": {
         "required": [
           "JWT_KEYRING",

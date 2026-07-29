@@ -1,6 +1,6 @@
 # Production-readiness closure
 
-Last reviewed: 2026-07-28
+Last reviewed: 2026-07-29
 
 The original 2026-07-26 audit assessed the repository as a static prototype.
 Milestones 1–24 replaced that prototype boundary with a deployed Cloudflare
@@ -48,7 +48,7 @@ The remaining queue contains external evidence or account activation:
 Current production release evidence:
 
 - application Worker: staging `c70c026c-3221-4593-b489-a811e09edeae`,
-  production `bfa71fa0-e42f-445b-9227-76dbb16ffe37`;
+  production `d5387683-c72c-4a75-b751-c3fc61f0468a`;
 - processor Worker/container: staging
   `117312e4-f252-4128-b8e3-98d07b743b19`, production
   `0e7d2031-9e2c-4600-9d76-2e82fc7d9240`;

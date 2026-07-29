@@ -10,6 +10,11 @@
 The environments use separate databases, buckets, and secrets in Cloudflare
 account `1e0170aaabc90ecf5f466128d1f0466a`.
 
+Production is intentionally served only from
+`https://spatial.whymelabs.com`. Its `workers.dev` route and preview URLs are
+disabled in `wrangler.jsonc`; `npm run audit:production-config` fails if that
+canonical-origin boundary or the staging/production storage separation drifts.
+
 Wrangler OAuth can expose several accounts to one operator. The repository's
 remote npm scripts therefore set this public account ID explicitly before
 invoking Wrangler; use those scripts for migration and deployment. For a
