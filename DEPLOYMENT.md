@@ -22,6 +22,13 @@ and receive read-only repository contents permission. Branch protection is a
 separate repository-plan control; do not treat a green workflow as mandatory
 review enforcement unless GitHub reports the rule active.
 
+The `Deploy and accept staging` workflow is the provider-native gate after
+`Release gate`. It checks out the exact successful `main` SHA, migrates and
+deploys both staging Workers, then verifies edge routes, ES256/JWKS boundaries,
+the processor Container, remote D1 state, and temporary exact-byte R2/KV
+canaries. It emits a redacted acceptance report and fails if canary cleanup
+fails. Keep `CLOUDFLARE_STAGING_ENABLED=false` until a manual dispatch passes.
+
 The Vitest Worker runtime sets `remoteBindings: false`. CI therefore needs no
 Cloudflare account token and cannot accidentally call production Workers AI or
 other remote bindings. Detector retry/normalisation is exercised with local
@@ -69,6 +76,19 @@ npx wrangler secret put STRIPE_SECRET_KEY --env production
 npx wrangler secret put STRIPE_WEBHOOK_SECRET --env production
 npx wrangler secret put OIDC_CLIENT_SECRETS --env production
 ```
+
+The staging deployment workflow additionally requires:
+
+- repository variable `CLOUDFLARE_ACCOUNT_ID`;
+- repository variable `CLOUDFLARE_STAGING_ENABLED`, initially `false`;
+- GitHub `staging` environment secret `CLOUDFLARE_API_TOKEN`.
+
+Create a dedicated Cloudflare API token scoped only to this account and the
+staging Worker/Container, D1, R2, KV, and Queue deployment or canary operations
+used by the workflow. Do not place the operator's Wrangler OAuth credentials
+or any application secret in GitHub. After a successful manual dispatch, set
+`CLOUDFLARE_STAGING_ENABLED=true` to accept every successful `main` release
+gate automatically.
 
 See [AUTHENTICATION.md](./AUTHENTICATION.md) for overlapping ES256 rotation.
 Rotating `SESSION_PEPPER` invalidates published-scene sessions. Rotate
@@ -445,7 +465,7 @@ npm run check
 npm run db:migrate:staging
 npm run processor:cloud:staging
 npm run deploy:staging
-curl --fail https://spatial-studio-staging.swmengappdev.workers.dev/api/health
+npm run verify:staging
 
 npm run db:migrate:production
 npm run processor:cloud:production
@@ -458,6 +478,11 @@ append-only after production deployment; do not edit an already applied file.
 `wrangler deploy` publishes both the Worker and its declared
 domain and schedule; verify both the `workers.dev` and branded JWKS after a
 signing-key secret change.
+
+`npm run verify:staging:public` is a safe read-only edge check. The full
+`npm run verify:staging` command also uses authenticated Wrangler access for a
+read-only remote D1 probe and temporary R2/KV canaries. Every canary uses a
+unique run ID and is deleted before the command succeeds.
 
 ## Post-deploy smoke test
 

@@ -874,8 +874,12 @@ for (const path of [
   app.get(path, (context) => serveStaticEntry(context, context.req.path));
 }
 
+app.use("/api/auth/*", async (context, next) => {
+  await next();
+  context.header("Cache-Control", "private, no-store");
+});
+
 app.get("/api/auth/config", (context) => {
-  context.header("Cache-Control", "no-store");
   return context.json({
     turnstileSiteKey: context.env.TURNSTILE_SITE_KEY,
     turnstileAction: "otp_request",
@@ -16082,10 +16086,12 @@ function unprocessable(context: Context<AppEnvironment>, details: unknown): Resp
 }
 
 function unauthorized(context: Context<AppEnvironment>, message: string): Response {
+  context.header("Cache-Control", "private, no-store");
   return context.json({ error: message, requestId: context.get("requestId") }, 401);
 }
 
 function forbidden(context: Context<AppEnvironment>, message: string): Response {
+  context.header("Cache-Control", "private, no-store");
   return context.json({ error: message, requestId: context.get("requestId") }, 403);
 }
 

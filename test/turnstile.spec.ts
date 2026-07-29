@@ -133,6 +133,7 @@ describe("Turnstile-protected OTP requests", () => {
   it("publishes only the site key and fails closed without a challenge token", async () => {
     const configResponse = await exports.default.fetch(`${origin}/api/auth/config`);
     expect(configResponse.status).toBe(200);
+    expect(configResponse.headers.get("cache-control")).toBe("private, no-store");
     const configText = await configResponse.text();
     expect(configText).toContain(env.TURNSTILE_SITE_KEY);
     expect(configText).not.toContain(env.TURNSTILE_SECRET_KEY);

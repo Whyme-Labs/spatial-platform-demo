@@ -149,6 +149,7 @@ describe("Spatial Studio Worker", () => {
   it("rejects unauthenticated tenant APIs", async () => {
     const response = await exports.default.fetch(`${origin}/api/dashboard`);
     expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("publishes only the public ES256 verification key", async () => {
@@ -169,12 +170,14 @@ describe("Spatial Studio Worker", () => {
   it("reports an anonymous session without turning the sign-in screen into a failed request", async () => {
     const response = await exports.default.fetch(`${origin}/api/auth/session`);
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ authenticated: false });
 
     const refresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
       method: "POST",
     });
     expect(refresh.status).toBe(204);
+    expect(refresh.headers.get("cache-control")).toBe("private, no-store");
   });
 
   it("never presents DNS-only custom-domain ownership as active routing", async () => {

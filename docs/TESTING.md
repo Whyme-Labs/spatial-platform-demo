@@ -1,6 +1,6 @@
 # Testing strategy
 
-Spatial Studio uses three complementary test layers. A change is production-ready
+Spatial Studio uses four complementary test layers. A change is production-ready
 only when the public behavior at its relevant seam is covered and the complete
 `npm run check` gate passes.
 
@@ -11,6 +11,7 @@ only when the public behavior at its relevant seam is covered and the complete
 | Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, OIDC helpers, processor validation, privacy detection, Turnstile verification |
 | Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
 | End to end | Production browser bundle | `npm run test:e2e` | Landing, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls and dropdowns, Spark renderer chrome |
+| Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`
 runs the instrumented Worker suite plus browser E2E.
@@ -65,3 +66,33 @@ viewports. It fails when:
 Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
 All API responses used by UI-layout tests are explicit fixtures. Worker routing
 and binding behavior remains the responsibility of the integration suite.
+
+## Deployed Cloudflare acceptance
+
+Local workerd tests are necessary but do not prove Cloudflare account state,
+remote binding permissions, edge headers, Worker routing, Container readiness,
+or remote consistency. The deployed acceptance runner closes that gap without
+bypassing authentication:
+
+```bash
+# Public HTTP boundary only; no Cloudflare account mutation.
+npm run verify:staging:public
+
+# Full staging acceptance with authenticated, temporary binding canaries.
+npm run verify:staging
+```
+
+The full runner checks the active application and processor deployments, reads
+the remote D1 migration ledger, performs exact-byte R2 and KV canary
+round-trips, and removes both canaries in a `finally` block. A cleanup failure
+fails the run. The bounded, redacted report is written to
+`.cache/staging-acceptance/report.json`.
+
+The `Deploy and accept staging` GitHub workflow deploys the exact `main`
+revision that passed `Release gate`, then uploads this report as immutable CI
+evidence. Automatic staging deployment remains disabled until the scoped
+Cloudflare API token is installed and a manual workflow dispatch passes.
+
+OTP is never bypassed in staging. Public acceptance verifies the anonymous and
+protected-route boundaries; a periodic operator smoke test must complete the
+real email OTP and managed Turnstile flow before a production release.
