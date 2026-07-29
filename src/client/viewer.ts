@@ -159,6 +159,11 @@ type SparkRendererMessage =
       accepted: boolean;
       message?: string;
       cameraPose: CameraPose;
+    }
+  | {
+      source: "spatial-spark";
+      type: "control-mode";
+      mode: "orbit" | "free-roam";
     };
 
 const byId = <T extends Element = HTMLElement>(id: string): T => {
@@ -238,6 +243,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   setLoading(true, "Authorising scene release…");
   rendererReady = false;
   setNavigatorReady(false);
+  byId("viewport").classList.remove("mobile-free-roam-active");
   errorPanel.hidden = true;
   releaseInfo.hidden = true;
   frame.hidden = true;
@@ -322,6 +328,10 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     }
     return;
   }
+  if (message.type === "control-mode") {
+    byId("viewport").classList.toggle("mobile-free-roam-active", message.mode === "free-roam");
+    return;
+  }
   if (message.type === "progress") {
     setLoading(false);
     byId("rendererStatus").textContent = message.detail;
@@ -358,7 +368,7 @@ function isSparkRendererMessage(value: unknown): value is SparkRendererMessage {
   const type = Reflect.get(value, "type");
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
-      type === "camera-update" || type === "camera-set");
+      type === "camera-update" || type === "camera-set" || type === "control-mode");
 }
 
 function applyManifest(manifest: ReleaseManifest): void {
@@ -837,6 +847,7 @@ function showError(title: string, message: string): void {
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
   rendererReady = false;
   setNavigatorReady(false);
+  byId("viewport").classList.remove("mobile-free-roam-active");
   setLoading(false);
   frame.hidden = true;
   errorPanel.hidden = false;

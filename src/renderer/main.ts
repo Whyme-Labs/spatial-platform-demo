@@ -7,6 +7,13 @@ import {
 } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { runAction } from "../client/action-state";
+import {
+  MobileControlSurface,
+  nearestWalkablePoint,
+  planarCameraStep,
+} from "./mobile-controls";
+
+declare const __SPATIAL_E2E__: boolean;
 
 const SPARK_RUNTIME_VERSION = "2.1.0";
 const parentOrigin = location.origin;
@@ -70,6 +77,11 @@ type RendererMessage =
         up: Vector3Tuple;
         fovDegrees: number;
       };
+    }
+  | {
+      source: "spatial-spark";
+      type: "control-mode";
+      mode: "orbit" | "free-roam";
     };
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -92,10 +104,36 @@ const helpButton = byId<HTMLButtonElement>("toggleHelp");
 const helpPanel = byId<HTMLElement>("controlHelp");
 const fullscreenButton = byId<HTMLButtonElement>("enterFullscreen");
 const controlStatus = byId<HTMLElement>("controlStatus");
+const mobileControls = new MobileControlSurface({
+  coarsePointer: matchMedia("(any-pointer: coarse)"),
+  elements: {
+    viewport: byId("sparkViewport"),
+    toggle: byId<HTMLButtonElement>("freeRoamToggle"),
+    pad: byId("movementPad"),
+    knob: byId("movementKnob"),
+    status: byId("movementStatus"),
+    lookHint: byId("mobileLookHint"),
+    onboarding: byId("mobileOnboarding"),
+    onboardingStart: byId<HTMLButtonElement>("startFreeRoam"),
+    onboardingDismiss: byId<HTMLButtonElement>("dismissMobileOnboarding"),
+  },
+  onModeChange: (active) => {
+    post({
+      source: "spatial-spark",
+      type: "control-mode",
+      mode: active ? "free-roam" : "orbit",
+    });
+  },
+});
+const enableMobileControlsForTest = (): void => mobileControls.setReady(true);
+if (__SPATIAL_E2E__) {
+  window.addEventListener("spatial:e2e-mobile-controls-ready", enableMobileControlsForTest);
+}
 
 let sparkRenderer: SparkRenderer | null = null;
 let splatMesh: SplatMesh | null = null;
 let webglRenderer: THREE.WebGLRenderer | null = null;
+let rendererCamera: THREE.PerspectiveCamera | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
@@ -105,10 +143,12 @@ let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
 let lastBroadcastDirection: THREE.Vector3 | null = null;
 
+bindChrome();
 void start().catch((error: unknown) => {
+  console.error("Spark scene initialisation failed", error);
   fail(
     "SCENE_INITIALISATION_FAILED",
-    error instanceof Error ? error.message : "The Spark renderer could not initialise.",
+    errorMessage(error, "The Spark renderer could not initialise."),
   );
 });
 
@@ -130,6 +170,7 @@ async function start(): Promise<void> {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x080b0d);
   const camera = new THREE.PerspectiveCamera(58, 1, 0.01, 10_000);
+  rendererCamera = camera;
   const renderer = new THREE.WebGLRenderer({
     canvas,
     context,
@@ -175,15 +216,14 @@ async function start(): Promise<void> {
             return min && max ? [{ min, max }] : [];
           })
         : [];
-      if (walkableBoxes.length && isWalkable(camera.position)) {
-        lastWalkablePosition = camera.position.clone();
-      }
+      const cameraAdjusted = anchorCameraToWalkable(camera);
       controlStatus.textContent = walkableBoxes.length
-        ? `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active`
+        ? `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active${cameraAdjusted ? " · view aligned" : ""}`
         : "";
       return;
     }
     if (Reflect.get(event.data, "type") === "sync-camera") {
+      mobileControls.suspend();
       const pose = Reflect.get(event.data, "cameraPose");
       if (!pose || typeof pose !== "object") return;
       const position = finiteVector3(Reflect.get(pose, "position"));
@@ -192,6 +232,7 @@ async function start(): Promise<void> {
       const fovDegrees = Number(Reflect.get(pose, "fovDegrees"));
       if (!position || !target || !Number.isFinite(fovDegrees)) return;
       camera.position.copy(position);
+      anchorCameraToWalkable(camera);
       camera.up.copy(up).normalize();
       camera.lookAt(target);
       camera.fov = Math.min(100, Math.max(20, fovDegrees));
@@ -203,6 +244,7 @@ async function start(): Promise<void> {
       return;
     }
     if (Reflect.get(event.data, "type") === "set-camera") {
+      mobileControls.suspend();
       const requestId = typeof Reflect.get(event.data, "requestId") === "string"
         ? String(Reflect.get(event.data, "requestId"))
         : null;
@@ -317,52 +359,34 @@ async function start(): Promise<void> {
   } else {
     frameScene(mesh, camera);
   }
+  anchorCameraToWalkable(camera);
   initialView = {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
   };
-
-  resetButton.addEventListener("click", () => {
-    if (!initialView) return;
-    camera.position.copy(initialView.position);
-    camera.quaternion.copy(initialView.quaternion);
-  });
-  helpButton.addEventListener("click", () => {
-    helpPanel.hidden = !helpPanel.hidden;
-    helpButton.setAttribute("aria-expanded", String(!helpPanel.hidden));
-  });
-  fullscreenButton.addEventListener("click", () => {
-    void runAction({
-      key: "renderer-fullscreen",
-      trigger: fullscreenButton,
-      pendingLabel: document.fullscreenElement ? "Exiting…" : "Entering…",
-      idleLabel: () => document.fullscreenElement ? "Exit fullscreen" : "Fullscreen",
-    }, async () => {
-      controlStatus.textContent = "";
-      try {
-        await toggleFullscreen();
-      } catch (error) {
-        controlStatus.textContent = error instanceof Error
-          ? `Fullscreen is unavailable: ${error.message}`
-          : "Fullscreen is unavailable in this browser.";
-      }
-    });
-  });
-  document.addEventListener("fullscreenchange", updateFullscreenControl);
-
+  let lastFrameAt = performance.now();
+  const forward = new THREE.Vector3();
   renderer.setAnimationLoop(() => {
+    const now = performance.now();
+    const deltaSeconds = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
+    lastFrameAt = now;
     controls.update(camera);
+    applyMobileMovement(camera, forward, deltaSeconds);
     if (walkableBoxes.length) {
       if (isWalkable(camera.position)) {
         lastWalkablePosition = camera.position.clone();
       } else if (lastWalkablePosition) {
         camera.position.copy(lastWalkablePosition);
+      } else {
+        anchorCameraToWalkable(camera);
       }
     }
     broadcastCameraUpdate(camera);
     renderer.render(scene, camera);
     if (!readySent) {
       readySent = true;
+      resetButton.disabled = false;
+      mobileControls.setReady(true);
       const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
       window.setTimeout(() => {
@@ -463,11 +487,21 @@ function readConfig(): {
   return { contentUrl, format, splatBudget, sceneRotationDegrees, initialCamera };
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object") {
+    const message = Reflect.get(error, "message");
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return fallback;
+}
+
 function readVector(value: string | null): Vector3Tuple | null {
   if (!value) return null;
   const parts = value.split(",").map(Number);
   if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return null;
-  return [parts[0], parts[1], parts[2]];
+  return [parts[0]!, parts[1]!, parts[2]!];
 }
 
 function finiteVector3(value: unknown): THREE.Vector3 | null {
@@ -488,6 +522,29 @@ function isWalkable(position: THREE.Vector3): boolean {
     position.y >= min.y - verticalPadding &&
     position.y <= max.y + verticalPadding
   );
+}
+
+function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
+  if (!walkableBoxes.length) {
+    lastWalkablePosition = null;
+    return false;
+  }
+  const nearest = nearestWalkablePoint(
+    camera.position.toArray() as Vector3Tuple,
+    walkableBoxes.map(({ min, max }) => ({
+      min: min.toArray() as Vector3Tuple,
+      max: max.toArray() as Vector3Tuple,
+    })),
+  );
+  if (!nearest) {
+    lastWalkablePosition = null;
+    return false;
+  }
+  const target = new THREE.Vector3().fromArray(nearest);
+  const adjusted = camera.position.distanceToSquared(target) > 1e-12;
+  camera.position.copy(target);
+  lastWalkablePosition = camera.position.clone();
+  return adjusted;
 }
 
 function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
@@ -511,7 +568,7 @@ function resize(renderer: THREE.WebGLRenderer, camera: THREE.PerspectiveCamera):
 }
 
 function pixelRatioFor(budgetMillions: number): number {
-  const mobile = matchMedia("(pointer: coarse)").matches;
+  const mobile = matchMedia("(any-pointer: coarse)").matches;
   const ceiling = mobile || budgetMillions <= 1 ? 1.35 : 1.75;
   return Math.min(window.devicePixelRatio || 1, ceiling);
 }
@@ -530,6 +587,8 @@ function setProgress(progress: number, detail: string): void {
 }
 
 function fail(code: string, message: string): void {
+  resetButton.disabled = true;
+  mobileControls.setReady(false);
   loading.classList.add("is-complete");
   loading.setAttribute("aria-hidden", "true");
   errorPanel.hidden = false;
@@ -548,12 +607,76 @@ function updateFullscreenControl(): void {
   fullscreenButton.setAttribute("aria-pressed", String(Boolean(document.fullscreenElement)));
 }
 
+function bindChrome(): void {
+  resetButton.addEventListener("click", resetView);
+  helpButton.addEventListener("click", toggleHelp);
+  fullscreenButton.addEventListener("click", requestFullscreen);
+  document.addEventListener("fullscreenchange", updateFullscreenControl);
+}
+
+function resetView(): void {
+  if (!initialView) return;
+  mobileControls.suspend();
+  const camera = activeCamera();
+  if (!camera) return;
+  camera.position.copy(initialView.position);
+  camera.quaternion.copy(initialView.quaternion);
+  if (walkableBoxes.length && isWalkable(camera.position)) {
+    lastWalkablePosition = camera.position.clone();
+  }
+  controlStatus.textContent = "View reset";
+}
+
+function toggleHelp(): void {
+  helpPanel.hidden = !helpPanel.hidden;
+  helpButton.setAttribute("aria-expanded", String(!helpPanel.hidden));
+}
+
+function requestFullscreen(): void {
+  void runAction({
+    key: "renderer-fullscreen",
+    trigger: fullscreenButton,
+    pendingLabel: document.fullscreenElement ? "Exiting…" : "Entering…",
+    idleLabel: () => document.fullscreenElement ? "Exit fullscreen" : "Fullscreen",
+  }, async () => {
+    controlStatus.textContent = "";
+    try {
+      await toggleFullscreen();
+    } catch (error) {
+      controlStatus.textContent = error instanceof Error
+        ? `Fullscreen is unavailable: ${error.message}`
+        : "Fullscreen is unavailable in this browser.";
+    }
+  });
+}
+
 async function toggleFullscreen(): Promise<void> {
   if (document.fullscreenElement) {
     await document.exitFullscreen();
     return;
   }
   await byId<HTMLElement>("sparkViewport").requestFullscreen();
+}
+
+function applyMobileMovement(
+  camera: THREE.PerspectiveCamera,
+  forward: THREE.Vector3,
+  deltaSeconds: number,
+): void {
+  const movement = mobileControls.movement;
+  if (Math.hypot(movement.x, movement.z) < 0.001 || deltaSeconds <= 0) return;
+  camera.getWorldDirection(forward);
+  camera.position.fromArray(planarCameraStep({
+    position: camera.position.toArray() as Vector3Tuple,
+    forward: forward.toArray() as Vector3Tuple,
+    movement,
+    speed: 1.4,
+    deltaSeconds,
+  }));
+}
+
+function activeCamera(): THREE.PerspectiveCamera | null {
+  return rendererCamera;
 }
 
 function formatBytes(value: number): string {
@@ -570,10 +693,18 @@ function formatCount(value: number): string {
 }
 
 function dispose(): void {
+  if (__SPATIAL_E2E__) {
+    window.removeEventListener("spatial:e2e-mobile-controls-ready", enableMobileControlsForTest);
+  }
   document.removeEventListener("fullscreenchange", updateFullscreenControl);
+  resetButton.removeEventListener("click", resetView);
+  helpButton.removeEventListener("click", toggleHelp);
+  fullscreenButton.removeEventListener("click", requestFullscreen);
+  mobileControls.dispose();
   resizeObserver?.disconnect();
   webglRenderer?.setAnimationLoop(null);
   splatMesh?.dispose();
   sparkRenderer?.dispose();
   webglRenderer?.dispose();
+  rendererCamera = null;
 }

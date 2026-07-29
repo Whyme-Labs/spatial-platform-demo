@@ -26,17 +26,65 @@
       </div>
 
       <div class="spark-controls" aria-label="Scene controls">
-        <button id="resetView" type="button" title="Reset view">Reset view</button>
-        <button id="toggleHelp" type="button" aria-expanded="false" aria-controls="controlHelp">Controls</button>
+        <button id="resetView" type="button" title="Reset view" disabled>Reset</button>
+        <button
+          id="freeRoamToggle"
+          class="spark-mobile-only"
+          type="button"
+          aria-pressed="false"
+          disabled
+          hidden
+        >Free roam</button>
+        <button id="toggleHelp" type="button" aria-expanded="false" aria-controls="controlHelp">Help</button>
         <button id="enterFullscreen" type="button">Fullscreen</button>
       </div>
       <p id="controlStatus" class="spark-control-status" role="status" aria-live="polite"></p>
 
       <div id="controlHelp" class="spark-help" hidden>
         <strong>Explore the scene</strong>
-        <span>Drag to look · two-finger drag to move · pinch or scroll to travel</span>
-        <span>Desktop: WASD to move · arrow keys to look · Shift for speed</span>
+        <span class="spark-mobile-only">Drag the scene to look · turn on Free roam for thumb movement · pinch to travel</span>
+        <span class="spark-desktop-only">Drag to look · two-finger drag to move · pinch or scroll to travel</span>
+        <span class="spark-desktop-only">Desktop: WASD to move · arrow keys to look · Shift for speed</span>
       </div>
+
+      <div
+        id="movementPad"
+        class="spark-movement-pad spark-mobile-only"
+        role="group"
+        aria-label="Movement joystick"
+        aria-describedby="movementStatus"
+        aria-disabled="true"
+        hidden
+      >
+        <span class="spark-movement-ring" aria-hidden="true"></span>
+        <span id="movementKnob" class="spark-movement-knob" aria-hidden="true"></span>
+        <span class="spark-movement-label" aria-hidden="true">MOVE</span>
+      </div>
+      <span id="movementStatus" class="spark-sr-only" role="status" aria-live="polite">Stopped</span>
+      <div id="mobileLookHint" class="spark-look-hint spark-mobile-only" hidden>
+        <span aria-hidden="true">↗</span>
+        <span>Drag scene to look</span>
+      </div>
+
+      <section
+        id="mobileOnboarding"
+        class="spark-mobile-onboarding spark-mobile-only"
+        role="dialog"
+        aria-labelledby="mobileOnboardingTitle"
+        hidden
+      >
+        <span class="spark-onboarding-kicker">TOUCH CONTROLS</span>
+        <strong id="mobileOnboardingTitle">Explore without learning game controls.</strong>
+        <ol>
+          <li><span>1</span><p><b>Look</b> Drag anywhere on the scene.</p></li>
+          <li><span>2</span><p><b>Walk</b> Use the left-thumb control in Free roam.</p></li>
+          <li><span>3</span><p><b>Jump</b> Use rooms or a guided visit for quick navigation.</p></li>
+        </ol>
+        <div class="spark-onboarding-actions">
+          <button id="startFreeRoam" type="button">Try Free roam</button>
+          <button id="dismissMobileOnboarding" type="button">Continue without it</button>
+        </div>
+      </section>
 
       <div class="spark-runtime">
         <span class="spark-runtime-dot"></span>

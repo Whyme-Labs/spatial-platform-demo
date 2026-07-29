@@ -1,7 +1,10 @@
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  define: {
+    __SPATIAL_E2E__: JSON.stringify(mode === "test"),
+  },
   build: {
     target: "es2022",
     outDir: "dist",
@@ -15,4 +18,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

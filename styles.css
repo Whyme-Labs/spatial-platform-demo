@@ -638,6 +638,7 @@ form[aria-busy="true"] .dialog-close {
   .review-panel { top:auto; bottom:12px; left:12px; width:calc(100% - 24px); max-height:58%; }
   .spatial-navigator { left:12px; bottom:12px; width:calc(100% - 24px); max-height:58%; }
   .navigator-trigger { left:12px; bottom:12px; }
+  .viewport.mobile-free-roam-active .navigator-trigger { bottom:158px; }
   .review-summary,.plan-grid { grid-template-columns:1fr; }
   .hosting-row,.review-line { align-items:flex-start; flex-direction:column; }
   .domain-row-heading { flex-direction:column; }

@@ -447,9 +447,11 @@ const cameraPoseSchema = z.object({
   up: cameraVectorSchema.optional(),
   fovDegrees: z.number().min(20).max(100).default(58),
 }).superRefine((camera, context) => {
-  const view = camera.target.map((coordinate, index) =>
-    coordinate - camera.position[index],
-  ) as [number, number, number];
+  const view: [number, number, number] = [
+    camera.target[0] - camera.position[0],
+    camera.target[1] - camera.position[1],
+    camera.target[2] - camera.position[2],
+  ];
   const viewLength = Math.hypot(...view);
   if (viewLength < 1e-9) {
     context.addIssue({

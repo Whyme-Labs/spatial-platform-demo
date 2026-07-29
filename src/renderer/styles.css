@@ -26,6 +26,25 @@ button {
   font: inherit;
 }
 
+[hidden] {
+  display: none !important;
+}
+
+.spark-mobile-only {
+  display: none !important;
+}
+
+.spark-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 #sparkCanvas {
   display: block;
   width: 100%;
@@ -245,6 +264,204 @@ button {
   text-align: right;
 }
 
+.spark-movement-pad {
+  position: absolute;
+  z-index: 10;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  width: 132px;
+  height: 132px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgb(212 255 88 / 8%) 0 34%, transparent 35%),
+    rgb(13 17 19 / 54%);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 28%);
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  backdrop-filter: blur(12px);
+}
+
+.spark-movement-pad:focus-visible {
+  box-shadow:
+    0 18px 48px rgb(0 0 0 / 28%),
+    0 0 0 2px #d4ff58;
+}
+
+.spark-movement-pad[data-active] {
+  border-color: rgb(212 255 88 / 38%);
+  background:
+    radial-gradient(circle, rgb(212 255 88 / 14%) 0 34%, transparent 35%),
+    rgb(13 17 19 / 66%);
+}
+
+.spark-movement-ring {
+  position: absolute;
+  width: 94px;
+  height: 94px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 50%;
+  box-shadow: inset 0 0 24px rgb(0 0 0 / 18%);
+}
+
+.spark-movement-ring::before,
+.spark-movement-ring::after {
+  position: absolute;
+  inset: 50% auto auto 50%;
+  background: rgb(255 255 255 / 10%);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.spark-movement-ring::before {
+  width: 1px;
+  height: 72px;
+}
+
+.spark-movement-ring::after {
+  width: 72px;
+  height: 1px;
+}
+
+.spark-movement-knob {
+  position: relative;
+  z-index: 2;
+  width: 48px;
+  height: 48px;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 50%;
+  background: linear-gradient(145deg, #e4ff8e, #b6e92d);
+  box-shadow:
+    0 9px 22px rgb(0 0 0 / 30%),
+    inset 0 1px 0 rgb(255 255 255 / 42%);
+  transition: transform 60ms linear;
+  will-change: transform;
+}
+
+.spark-movement-label {
+  position: absolute;
+  bottom: 8px;
+  color: rgb(255 255 255 / 48%);
+  font: 600 0.58rem/1 "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 0.14em;
+}
+
+.spark-look-hint {
+  position: absolute;
+  z-index: 9;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(24px, env(safe-area-inset-bottom));
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 999px;
+  background: rgb(13 17 19 / 58%);
+  color: #dce2dc;
+  font-size: 0.72rem;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+}
+
+.spark-look-hint > span:first-child {
+  color: #d4ff58;
+  font-size: 1rem;
+}
+
+.spark-mobile-onboarding {
+  position: absolute;
+  z-index: 14;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  width: min(370px, calc(100% - 24px));
+  max-height: calc(100dvh - 84px);
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 22px;
+  background: rgb(12 16 18 / 94%);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
+  backdrop-filter: blur(24px);
+}
+
+.spark-onboarding-kicker {
+  color: #d4ff58;
+  font: 600 0.65rem/1 "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 0.14em;
+}
+
+.spark-mobile-onboarding > strong {
+  display: block;
+  max-width: 16ch;
+  margin-top: 10px;
+  font-size: 1.2rem;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+
+.spark-mobile-onboarding ol {
+  display: grid;
+  margin: 20px 0;
+  padding: 0;
+  gap: 12px;
+  list-style: none;
+}
+
+.spark-mobile-onboarding li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.spark-mobile-onboarding li > span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgb(212 255 88 / 28%);
+  border-radius: 50%;
+  color: #d4ff58;
+  font: 600 0.66rem/1 "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.spark-mobile-onboarding p {
+  margin: 3px 0 0;
+  color: #b6beb8;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.spark-mobile-onboarding b {
+  color: #f4f6f1;
+  font-weight: 650;
+}
+
+.spark-onboarding-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.spark-onboarding-actions button {
+  min-height: 46px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 13px;
+  background: transparent;
+  color: #dce2dc;
+}
+
+.spark-onboarding-actions button:first-child {
+  border-color: #d4ff58;
+  background: #d4ff58;
+  color: #12160d;
+  font-weight: 680;
+}
+
 @keyframes spark-spin {
   to {
     transform: rotate(360deg);
@@ -259,30 +476,107 @@ button {
 }
 
 @media (max-width: 640px) {
-  .spark-controls {
-    right: max(10px, env(safe-area-inset-right));
-    bottom: max(10px, env(safe-area-inset-bottom));
-    max-width: calc(100% - 20px);
-    overflow-x: auto;
-  }
-
-  .spark-controls button {
-    min-width: max-content;
-    min-height: 42px;
-    padding: 0 12px;
-    font-size: 0.75rem;
-  }
-
-  .spark-runtime {
-    top: max(14px, env(safe-area-inset-top));
-    bottom: auto;
-  }
-
   .spark-help {
     right: 14px;
     bottom: calc(max(14px, env(safe-area-inset-bottom)) + 56px);
     left: 14px;
     max-width: none;
+  }
+}
+
+@media (any-pointer: coarse) {
+  .spark-mobile-only:not([hidden]) {
+    display: flex !important;
+  }
+
+  .spark-movement-pad.spark-mobile-only:not([hidden]) {
+    display: grid !important;
+  }
+
+  .spark-mobile-onboarding.spark-mobile-only:not([hidden]) {
+    display: block !important;
+  }
+
+  .spark-help .spark-mobile-only {
+    display: block !important;
+  }
+
+  .spark-desktop-only {
+    display: none !important;
+  }
+
+  .spark-controls {
+    top: max(10px, env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    bottom: auto;
+    gap: 4px;
+    max-width: calc(100% - 20px);
+    padding: 4px;
+  }
+
+  .spark-controls button {
+    min-width: max-content;
+    min-height: 44px;
+    padding: 0 11px;
+    font-size: 0.75rem;
+  }
+
+  .spark-controls #enterFullscreen {
+    display: none;
+  }
+
+  .spark-controls #freeRoamToggle {
+    min-width: 82px;
+    border: 1px solid rgb(212 255 88 / 22%);
+    color: #e1f4a9;
+  }
+
+  .spark-controls #freeRoamToggle[aria-pressed="true"] {
+    border-color: #d4ff58;
+    background: #d4ff58;
+    color: #12160d;
+    font-weight: 680;
+  }
+
+  .spark-runtime {
+    top: max(12px, env(safe-area-inset-top));
+    bottom: auto;
+    min-height: 40px;
+    padding: 0 11px;
+  }
+
+  .spark-runtime #sparkQuality {
+    display: none;
+  }
+
+  .spark-help {
+    top: calc(max(10px, env(safe-area-inset-top)) + 58px);
+    right: 10px;
+    bottom: auto;
+    left: 10px;
+    max-width: none;
+  }
+
+  .spark-control-status {
+    top: calc(max(10px, env(safe-area-inset-top)) + 60px);
+    right: max(12px, env(safe-area-inset-right));
+    bottom: auto;
+  }
+}
+
+@media (any-pointer: coarse) and (max-width: 360px) {
+  .spark-controls button {
+    padding: 0 9px;
+    font-size: 0.7rem;
+  }
+
+  .spark-runtime {
+    padding: 0 9px;
+    font-size: 0.68rem;
+  }
+
+  .spark-onboarding-actions {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -292,7 +586,8 @@ button {
   }
 
   .spark-loading,
-  .spark-progress i {
+  .spark-progress i,
+  .spark-movement-knob {
     transition: none;
   }
 }

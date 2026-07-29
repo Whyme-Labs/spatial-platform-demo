@@ -20,7 +20,7 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: "npm run build && vite preview --host 127.0.0.1 --port 8791 --strictPort",
+    command: "npm run build:e2e && vite preview --host 127.0.0.1 --port 8791 --strictPort",
     url: "http://127.0.0.1:8791/",
     reuseExistingServer: false,
     timeout: 180_000,

@@ -16,6 +16,7 @@
   },
   "include": [
     "src/client/**/*.ts",
+    "src/renderer/**/*.ts",
     "vite.config.ts"
   ]
 }

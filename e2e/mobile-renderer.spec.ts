@@ -1,0 +1,144 @@
+import { expect, test } from "@playwright/test";
+
+test.describe("touch-first Spark controls", () => {
+  test.use({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+
+  test("presents a bounded touch control surface with an explicit loading state", async ({ page }) => {
+    await page.goto("/renderer/index.html");
+
+    const freeRoam = page.getByRole("button", { name: "Free roam" });
+    await expect(freeRoam).toBeVisible();
+    await expect(freeRoam).toBeDisabled();
+    await expect(freeRoam).toHaveAttribute("aria-pressed", "false");
+    await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
+    await expect(page.getByText("The spatial scene could not be rendered.", {
+      exact: true,
+    })).toBeVisible();
+
+    const contract = await page.evaluate(() => {
+      const button = document.querySelector<HTMLElement>("#freeRoamToggle");
+      const toolbar = document.querySelector<HTMLElement>(".spark-controls");
+      if (!button || !toolbar) return null;
+      const buttonBounds = button.getBoundingClientRect();
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      return {
+        buttonHeight: buttonBounds.height,
+        toolbarRight: toolbarBounds.right,
+        toolbarTop: toolbarBounds.top,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(contract).not.toBeNull();
+    expect(contract!.buttonHeight).toBeGreaterThanOrEqual(44);
+    expect(contract!.toolbarRight).toBeLessThanOrEqual(contract!.viewportWidth + 1);
+    expect(contract!.toolbarTop).toBeGreaterThanOrEqual(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  });
+
+  test("onboards free roam, tracks thumb movement, and always releases to neutral", async ({ page }) => {
+    await page.goto("/renderer/index.html");
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("spatial:e2e-mobile-controls-ready"));
+    });
+
+    const freeRoam = page.locator("#freeRoamToggle");
+    const joystick = page.getByRole("group", { name: "Movement joystick" });
+    const movementStatus = page.locator("#movementStatus");
+    await expect(freeRoam).toBeEnabled();
+    await expect(page.getByRole("dialog", { name: "Explore without learning game controls." }))
+      .toBeVisible();
+
+    await page.getByRole("button", { name: "Try Free roam" }).click();
+    await expect(freeRoam).toHaveAttribute("aria-pressed", "true");
+    await expect(freeRoam).toHaveText("Exit roam");
+    await expect(joystick).toBeVisible();
+    await expect(page.getByText("Drag scene to look")).toBeVisible();
+    await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
+
+    await joystick.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      element.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 41,
+        pointerType: "touch",
+        clientX: centerX,
+        clientY: centerY,
+      }));
+      element.dispatchEvent(new PointerEvent("pointermove", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 41,
+        pointerType: "touch",
+        clientX: centerX + 18,
+        clientY: centerY - 50,
+      }));
+    });
+    await expect(movementStatus).toHaveText(/Moving forward and right/);
+
+    await joystick.evaluate((element) => {
+      element.dispatchEvent(new PointerEvent("pointercancel", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 41,
+        pointerType: "touch",
+      }));
+    });
+    await expect(movementStatus).toHaveText("Stopped");
+    await expect(page.locator("#movementKnob")).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
+
+    await joystick.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      element.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 42,
+        pointerType: "touch",
+        clientX: bounds.left + bounds.width / 2,
+        clientY: bounds.top + 12,
+      }));
+      window.dispatchEvent(new Event("blur"));
+    });
+    await expect(movementStatus).toHaveText("Stopped");
+
+    await joystick.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      element.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 43,
+        pointerType: "touch",
+        clientX: centerX,
+        clientY: centerY - 46,
+      }));
+      element.dispatchEvent(new PointerEvent("lostpointercapture", {
+        bubbles: true,
+        cancelable: false,
+        pointerId: 43,
+        pointerType: "touch",
+      }));
+    });
+    await expect(movementStatus).toHaveText("Stopped");
+
+    await freeRoam.click();
+    await expect(freeRoam).toHaveAttribute("aria-pressed", "false");
+    await expect(joystick).toBeHidden();
+    await expect(page.locator("#sparkViewport")).not.toHaveClass(/free-roam-active/);
+  });
+});
+
+test("does not add game controls for a fine-pointer desktop viewer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/renderer/index.html");
+
+  await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
+  await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
+});
