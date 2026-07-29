@@ -113,6 +113,9 @@ certification, or legal opinion.
   `8008` failure.
 - Worker and Container deployments have isolated staging/production bindings,
   generated binding types, observability, and dry-run gates.
+- GitHub CI uses read-only repository permissions and immutable action SHAs,
+  then repeats locked installation, dependency audit, application checks, and
+  the processor deployment dry-run. The repository is private.
 
 ## Verification evidence
 
@@ -195,6 +198,16 @@ their respective claims:
 - one customer-controlled Cloudflare for SaaS hostname;
 - uptime paging destination and provider recovery drill;
 - paid measurement briefs and qualified sign-off before accuracy/CAD claims.
+
+### Repository policy enforcement
+
+Severity: medium operations.
+
+The private GitHub repository has a CI release gate, but the current account
+plan does not permit branch protection for this private repository. Until that
+changes, a green check is evidence rather than enforced merge policy. Upgrade
+the repository plan or explicitly choose public visibility before requiring
+pull-request reviews and status checks on `main`.
 
 ## Dependency posture
 

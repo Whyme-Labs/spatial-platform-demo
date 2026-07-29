@@ -15,6 +15,13 @@ Production is intentionally served only from
 disabled in `wrangler.jsonc`; `npm run audit:production-config` fails if that
 canonical-origin boundary or the staging/production storage separation drifts.
 
+The GitHub `Release gate` workflow runs locked installation, dependency audit,
+the full application check, and a processor deployment dry-run for every push
+or pull request targeting `main`. Actions are pinned to immutable commit SHAs
+and receive read-only repository contents permission. Branch protection is a
+separate repository-plan control; do not treat a green workflow as mandatory
+review enforcement unless GitHub reports the rule active.
+
 Wrangler OAuth can expose several accounts to one operator. The repository's
 remote npm scripts therefore set this public account ID explicitly before
 invoking Wrangler; use those scripts for migration and deployment. For a
