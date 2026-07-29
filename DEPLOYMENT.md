@@ -88,7 +88,7 @@ staging Worker/Container, D1, R2, KV, and Queue deployment or canary operations
 used by the workflow. Do not place the operator's Wrangler OAuth credentials
 or any application secret in GitHub. After a successful manual dispatch, set
 `CLOUDFLARE_STAGING_ENABLED=true` to accept every successful `main` release
-gate automatically.
+gate automatically. Manual dispatches are accepted only from `main`.
 
 See [AUTHENTICATION.md](./AUTHENTICATION.md) for overlapping ES256 rotation.
 Rotating `SESSION_PEPPER` invalidates published-scene sessions. Rotate

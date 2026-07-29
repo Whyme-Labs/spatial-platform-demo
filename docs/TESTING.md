@@ -91,7 +91,8 @@ fails the run. The bounded, redacted report is written to
 The `Deploy and accept staging` GitHub workflow deploys the exact `main`
 revision that passed `Release gate`, then uploads this report as immutable CI
 evidence. Automatic staging deployment remains disabled until the scoped
-Cloudflare API token is installed and a manual workflow dispatch passes.
+Cloudflare API token is installed and a manual workflow dispatch from `main`
+passes.
 
 OTP is never bypassed in staging. Public acceptance verifies the anonymous and
 protected-route boundaries; a periodic operator smoke test must complete the

@@ -18,7 +18,10 @@ jobs:
     name: Deploy exact main revision and accept Cloudflare staging
     if: >-
       ${{
-        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main'
+        ) ||
         (
           vars.CLOUDFLARE_STAGING_ENABLED == 'true' &&
           github.event.workflow_run.conclusion == 'success' &&
