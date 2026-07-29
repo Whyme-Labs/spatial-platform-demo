@@ -56,7 +56,14 @@ export default defineConfig({
     }),
   ],
   test: {
-    exclude: ["**/node_modules/**", "**/.git/**", ".tools/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/.git/**",
+      ".tools/**",
+      "e2e/**",
+      "playwright-report/**",
+      "test-results/**",
+    ],
     setupFiles: ["./test/apply-migrations.ts"],
     // Each suite boots an isolated workerd runtime. Starting every suite at
     // once can exhaust local runner sockets and produce false ECONNRESET
@@ -68,5 +75,32 @@ export default defineConfig({
     // application assertion failure.
     testTimeout: 120_000,
     hookTimeout: 120_000,
+    coverage: {
+      provider: "istanbul",
+      include: [
+        "src/worker/**/*.ts",
+        "src/shared/**/*.ts",
+        "src/processor-cloud/**/*.ts",
+        "src/client/action-state.ts",
+        "src/client/floor-plan.ts",
+      ],
+      exclude: [
+        "src/worker/env.d.ts",
+      ],
+      reporter: [
+        "text-summary",
+        "json-summary",
+        "lcov",
+        "html",
+      ],
+      reportsDirectory: "coverage",
+      reportOnFailure: true,
+      thresholds: {
+        statements: 66,
+        branches: 50,
+        functions: 82,
+        lines: 74,
+      },
+    },
   },
 });

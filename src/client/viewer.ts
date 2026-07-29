@@ -323,8 +323,8 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type === "progress") {
-    setLoading(true, message.detail);
-    byId<HTMLElement>("progressBar").style.width = `${Math.min(96, Math.max(8, message.progress))}%`;
+    setLoading(false);
+    byId("rendererStatus").textContent = message.detail;
     return;
   }
   if (message.type === "error") {
@@ -811,13 +811,13 @@ function renderSceneReview(): void {
   for (const comment of activeReview.comments.slice(0, 6)) {
     const row = document.createElement("div");
     row.className = "scene-review-line";
-    row.textContent = `${comment.kind === "redaction" ? "Redaction" : "Comment"} · ${comment.status} — ${comment.body}`;
+    row.textContent = `${comment.kind === "redaction" ? "Redaction" : "Comment"} | ${comment.status}: ${comment.body}`;
     container.append(row);
   }
   for (const decision of activeReview.decisions.slice(0, 3)) {
     const row = document.createElement("div");
     row.className = `scene-review-line ${decision.decision}`;
-    row.textContent = `${decision.decision === "approved" ? "Approved" : "Changes requested"}${decision.note ? ` — ${decision.note}` : ""}`;
+    row.textContent = `${decision.decision === "approved" ? "Approved" : "Changes requested"}${decision.note ? `: ${decision.note}` : ""}`;
     container.append(row);
   }
 }

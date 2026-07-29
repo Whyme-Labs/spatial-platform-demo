@@ -1,0 +1,67 @@
+# Testing strategy
+
+Spatial Studio uses three complementary test layers. A change is production-ready
+only when the public behavior at its relevant seam is covered and the complete
+`npm run check` gate passes.
+
+## Test layers
+
+| Layer | Public seam | Command | Current scope |
+| --- | --- | --- | --- |
+| Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, OIDC helpers, processor validation, privacy detection, Turnstile verification |
+| Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
+| End to end | Production browser bundle | `npm run test:e2e` | Landing, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls and dropdowns, Spark renderer chrome |
+
+`npm test` runs all Worker unit and integration tests once. `npm run test:all`
+runs the instrumented Worker suite plus browser E2E.
+
+## Coverage
+
+`npm run test:coverage` uses Istanbul instrumentation because Cloudflare's
+Workers Vitest runtime does not expose native V8 coverage. Reports are written
+to `coverage/` in text summary, JSON summary, LCOV and HTML formats.
+
+The enforced baseline is:
+
+| Metric | Minimum |
+| --- | ---: |
+| Statements | 66% |
+| Branches | 50% |
+| Functions | 82% |
+| Lines | 74% |
+
+Coverage includes Worker, shared, processor-cloud, action-state and floor-plan
+TypeScript. Browser layout behavior is enforced through Playwright assertions
+rather than source-line coverage.
+
+## Responsive UI contract
+
+The browser suite tests 1440x1000, 1024x768, 768x1024, 390x844 and 320x568
+viewports. It fails when:
+
+- the document scrolls horizontally;
+- visible text leaves the Manrope and IBM Plex Mono system;
+- a visible button, text input, select or textarea is below 40 px high;
+- sign-in or Turnstile content escapes its dialog;
+- a short-screen dialog cannot scroll;
+- project fields or dropdowns exceed their parent width;
+- action clusters lose their minimum gap;
+- the project command grid does not collapse at the mobile breakpoint;
+- OTP submission sends duplicate requests or omits pending, failure and retry states.
+
+## Production gate
+
+`npm run check` runs:
+
+1. generated Cloudflare types;
+2. application and E2E TypeScript checks;
+3. action-state and control-wiring audits;
+4. production configuration audit;
+5. production build;
+6. instrumented unit/integration tests with coverage thresholds;
+7. Playwright E2E;
+8. Cloudflare production deployment dry run.
+
+Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
+All API responses used by UI-layout tests are explicit fixtures. Worker routing
+and binding behavior remains the responsibility of the integration suite.

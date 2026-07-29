@@ -7,6 +7,8 @@ dist/
 !.env.example
 worker-configuration.d.ts
 coverage/
+playwright-report/
+test-results/
 .tools/
 .cache/
 .playwright-cli/

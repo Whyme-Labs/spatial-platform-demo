@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0d0f0e" />
   <meta name="robots" content="noindex,nofollow" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b1320'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%23d6ff4b'/%3E%3C/svg%3E" />
-  <title>Spatial Studio — Production operations</title>
+  <title>Spatial Studio | Production operations</title>
 </head>
 <body class="studio-page">
   <div class="studio-shell">
@@ -58,10 +58,10 @@
       <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
 
       <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
-        <article class="summary-card"><span>Active projects</span><strong id="activeProjects">—</strong><small>Immutable version history</small></article>
-        <article class="summary-card"><span>Processing queue</span><strong id="processingJobs">—</strong><small>Leased by local or cloud agents</small></article>
-        <article class="summary-card"><span>Hosted assets</span><strong id="hostedAssets">—</strong><small id="hostedBytes">Private R2 storage</small></article>
-        <article class="summary-card accent"><span>Active releases</span><strong id="activeReleases">—</strong><small>Revocable in one operation</small></article>
+        <article class="summary-card"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
+        <article class="summary-card"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
+        <article class="summary-card"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
+        <article class="summary-card accent"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
       </section>
 
       <section id="studioGrid" class="studio-grid">
@@ -100,8 +100,8 @@
               <select id="projectSort">
                 <option value="updated_desc">Recently updated</option>
                 <option value="updated_asc">Oldest updated</option>
-                <option value="name_asc">Name A–Z</option>
-                <option value="name_desc">Name Z–A</option>
+                <option value="name_asc">Name A-Z</option>
+                <option value="name_desc">Name Z-A</option>
               </select>
             </label>
             <label>
@@ -247,7 +247,7 @@
       <span class="eyebrow">NEW SPATIAL PROJECT</span>
       <h2>Create the canonical project before ingest.</h2>
       <div class="mock-form-grid">
-        <label class="full"><span>Start from template</span><select id="newProjectTemplate" name="templateId"><option value="">No template — choose settings below</option></select></label>
+        <label class="full"><span>Start from template</span><select id="newProjectTemplate" name="templateId"><option value="">No template - choose settings below</option></select></label>
         <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
         <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
         <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
@@ -599,7 +599,7 @@
       <p>The invitation is project-scoped and expires automatically. Access can be revoked at any time.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Email address</span><input name="email" type="email" autocomplete="email" maxlength="254" required /></label>
-        <label><span>Access role</span><select name="role"><option value="customer_reviewer">Reviewer — comment and decide</option><option value="customer_readonly">Read only</option></select></label>
+        <label><span>Access role</span><select name="role"><option value="customer_reviewer">Reviewer - comment and decide</option><option value="customer_readonly">Read only</option></select></label>
         <label><span>Expires after</span><select name="expiresInDays"><option value="3">3 days</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label>
       </div>
       <button class="primary-button wide" type="submit">Send secure invitation</button>
@@ -678,7 +678,7 @@
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">POINT-CLOUD SEMANTICS</span>
       <h2>Propose walkable regions for human review.</h2>
-      <p>The processor inspects horizontal occupancy in a verified, registered Y-up metric PLY. It creates candidates only—never authored rooms or measurement claims.</p>
+      <p>The processor inspects horizontal occupancy in a verified, registered Y-up metric PLY. It creates candidates only, never authored rooms or measurement claims.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Registered PLY asset</span><select id="semanticInputAsset" name="inputAssetId" required></select></label>
         <label><span>Horizontal grid</span><input name="gridSizeM" type="number" min="0.05" max="2" step="0.05" value="0.25" required /></label>
@@ -880,7 +880,7 @@
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">RAW-SCENE REGISTRATION + CHANGE EVIDENCE</span>
       <h2>Align and compare two immutable PLY assets.</h2>
-      <p>The leased processor can estimate bounded yaw and translation before comparing voxel occupancy, centroids, and mean colour. Every transform remains quality-gated evidence for human review—not survey registration.</p>
+      <p>The leased processor can estimate bounded yaw and translation before comparing voxel occupancy, centroids, and mean colour. Every transform remains quality-gated evidence for human review, not survey registration.</p>
       <div class="mock-form-grid">
         <label><span>Baseline version</span><select id="rawChangeBaselineVersion" name="baselineVersionId" required></select></label>
         <label><span>Baseline PLY</span><select id="rawChangeBaselineAsset" name="baselineAssetId" required></select></label>
@@ -941,7 +941,7 @@
         <summary>Canonical trajectory JSON format</summary>
         <pre>{"points":[{"position":[0,1.5,0],"timestampMs":0},{"position":[1,1.5,0],"timestampMs":1000}]}</pre>
       </details>
-      <p class="field-note">Maximum 5,000 poses and 750 KiB. This checks path coverage only—not sharpness, exposure, occlusion, SLAM correctness, or reconstruction quality.</p>
+      <p class="field-note">Maximum 5,000 poses and 750 KiB. This checks path coverage only, not sharpness, exposure, occlusion, SLAM correctness, or reconstruction quality.</p>
       <button class="primary-button wide" type="submit">Analyze capture trajectory</button>
       <p id="captureCompletenessError" class="form-error" role="alert"></p>
     </form>

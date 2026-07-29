@@ -1,3 +1,6 @@
+import "@fontsource-variable/manrope";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-600.css";
 import { api, apiFile, ApiError } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
 import {
@@ -12,7 +15,7 @@ type TurnstileWidgetOptions = {
   sitekey: string;
   action: string;
   theme: "dark";
-  size: "flexible";
+  size: "compact" | "flexible";
   retry: "auto";
   "refresh-expired": "manual";
   "response-field": false;
@@ -2463,7 +2466,7 @@ function initialiseTurnstile(): Promise<void> {
       sitekey: config.turnstileSiteKey,
       action: config.turnstileAction,
       theme: "dark",
-      size: "flexible",
+      size: window.matchMedia("(max-width: 359px)").matches ? "compact" : "flexible",
       retry: "auto",
       "refresh-expired": "manual",
       "response-field": false,
@@ -3124,7 +3127,7 @@ async function refreshProjectPortfolioMetadata(): Promise<void> {
 function renderProjectTemplateOptions(): void {
   const select = byId<HTMLSelectElement>("newProjectTemplate");
   const selected = select.value;
-  select.replaceChildren(new Option("No template — choose settings below", ""));
+  select.replaceChildren(new Option("No template - choose settings below", ""));
   for (const template of state.projectTemplates) {
     select.append(new Option(template.name, template.id));
   }
@@ -4462,7 +4465,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     activity.append(element(
       "div",
       `decision-line ${decision.decision}`,
-      `${decision.decision === "approved" ? "Approved" : "Changes requested"} · ${decision.reviewer_name ?? decision.reviewer_email ?? "Reviewer"}${decision.note ? ` — ${decision.note}` : ""}`,
+      `${decision.decision === "approved" ? "Approved" : "Changes requested"} | ${decision.reviewer_name ?? decision.reviewer_email ?? "Reviewer"}${decision.note ? `: ${decision.note}` : ""}`,
     ));
   }
   if (!isReviewer() && detail.reviewers?.length) {
@@ -4621,7 +4624,7 @@ function renderHosting(): void {
     finance.append(row);
   }
   for (const alert of state.hosting.alerts.slice(0, 8)) {
-    finance.append(element("div", "alert-line", `${humanStatus(alert.kind)} · ${alert.label}${alert.detail ? ` — ${alert.detail}` : ""}`));
+    finance.append(element("div", "alert-line", `${humanStatus(alert.kind)} | ${alert.label}${alert.detail ? `: ${alert.detail}` : ""}`));
   }
   if (!state.hosting.invoices.length && !state.hosting.alerts.length && !state.hosting.checkouts.length) {
     finance.append(element("p", "muted-copy", "No invoices or operational alerts."));
@@ -5755,7 +5758,7 @@ function renderComparisonEvidence(
     decisionHistory.append(element(
       "div",
       `comparison-history-line ${decision.decision}`,
-      `${decision.decision === "approved" ? "Approved" : "Changes requested"} · ${decision.reviewer_name ?? decision.reviewer_email ?? "Reviewer"} · ${parseTimestamp(decision.created_at).toLocaleString()}${decision.note ? ` — ${decision.note}` : ""}`,
+      `${decision.decision === "approved" ? "Approved" : "Changes requested"} | ${decision.reviewer_name ?? decision.reviewer_email ?? "Reviewer"} | ${parseTimestamp(decision.created_at).toLocaleString()}${decision.note ? `: ${decision.note}` : ""}`,
     ));
   }
   container.append(decisionHistory);
@@ -5770,7 +5773,7 @@ function renderComparisonEvidence(
     commentHistory.append(element(
       "div",
       `comparison-history-line ${comment.status}`,
-      `${humanStatus(comment.kind)} · ${humanStatus(comment.status)} · ${comment.author_name ?? comment.author_email ?? "Reviewer"} · ${parseTimestamp(comment.created_at).toLocaleString()} — ${comment.body}`,
+      `${humanStatus(comment.kind)} | ${humanStatus(comment.status)} | ${comment.author_name ?? comment.author_email ?? "Reviewer"} | ${parseTimestamp(comment.created_at).toLocaleString()}: ${comment.body}`,
     ));
   }
   container.append(commentHistory);
@@ -6352,7 +6355,7 @@ function renderSpatial(): void {
     element(
       "p",
       "muted-copy",
-      "A leased processor can estimate bounded yaw and translation, enforce overlap/RMSE/ambiguity gates, then compare verified PLY occupancy, centroid movement, and mean colour. Results remain human-reviewed evidence—not survey or causation claims.",
+      "A leased processor can estimate bounded yaw and translation, enforce overlap/RMSE/ambiguity gates, then compare verified PLY occupancy, centroid movement, and mean colour. Results remain human-reviewed evidence, not survey or causation claims.",
     ),
   );
   const rawReports = spatial.rawChangeReports ?? [];
@@ -7882,8 +7885,8 @@ function renderGeometryChangeReport(projectId: string, report: GeometryChangeRep
     compactMetric("Comparable", summary.summary.comparable),
     compactMetric("Changed", summary.summary.changed),
     compactMetric("Added / removed", `${summary.summary.added} / ${summary.summary.removed}`),
-    compactMetric("P95 deviation", summary.summary.p95DeviationMm === null ? "—" : `${summary.summary.p95DeviationMm} mm`),
-    compactMetric("Maximum", summary.summary.maxDeviationMm === null ? "—" : `${summary.summary.maxDeviationMm} mm`),
+    compactMetric("P95 deviation", summary.summary.p95DeviationMm === null ? "-" : `${summary.summary.p95DeviationMm} mm`),
+    compactMetric("Maximum", summary.summary.maxDeviationMm === null ? "-" : `${summary.summary.maxDeviationMm} mm`),
   );
   card.append(metrics, renderGeometryChangeOverlay(summary));
 
@@ -8179,10 +8182,10 @@ function renderRawSceneChangeReport(report: RegisteredSceneChangeReport): HTMLEl
       compactMetric("Added / removed", `${summary.summary.addedVoxels} / ${summary.summary.removedVoxels}`),
       compactMetric("Common voxels", summary.summary.commonVoxels),
       compactMetric("P95 centroid", summary.summary.p95CentroidDisplacementMm === null
-        ? "—"
+        ? "-"
         : `${summary.summary.p95CentroidDisplacementMm} mm`),
       compactMetric("P95 colour", summary.summary.p95PhotometricDeltaPercent === null
-        ? "—"
+        ? "-"
         : `${summary.summary.p95PhotometricDeltaPercent}%`),
     );
     card.append(metrics);
@@ -8603,7 +8606,7 @@ function renderMeasurement(): void {
       row.append(element(
         "div",
         `measurement-result ${latestReport.result}`,
-        `${humanStatus(latestReport.result)} · ${latestReport.point_count} points · RMSE ${latestReport.rmse_mm?.toFixed(1) ?? "—"} mm · max ${latestReport.max_mm?.toFixed(1) ?? "—"} mm`,
+        `${humanStatus(latestReport.result)} | ${latestReport.point_count} points | RMSE ${latestReport.rmse_mm?.toFixed(1) ?? "-"} mm | max ${latestReport.max_mm?.toFixed(1) ?? "-"} mm`,
       ));
     }
     if (deliverable) {
@@ -9411,7 +9414,7 @@ function parseCaptureBundleValidation(value: string): CaptureBundleValidation | 
 }
 
 function captureBundleVersionNumber(versionId: string): number | string {
-  return state.selected?.versions.find((version) => version.id === versionId)?.version_number ?? "—";
+  return state.selected?.versions.find((version) => version.id === versionId)?.version_number ?? "-";
 }
 
 function openCaptureBundleReview(

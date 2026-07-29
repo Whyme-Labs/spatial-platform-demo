@@ -38,8 +38,22 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=low
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Run the application release gate
         run: npm run check
+
+      - name: Upload browser test evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Validate the processor deployment bundle
         run: npm run processor:cloud:dry-run

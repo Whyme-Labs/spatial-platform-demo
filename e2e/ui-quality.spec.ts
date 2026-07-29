@@ -1,0 +1,389 @@
+import { expect, test, type Page, type Route } from "@playwright/test";
+
+const viewports = [
+  { name: "desktop", width: 1440, height: 1000 },
+  { name: "laptop", width: 1024, height: 768 },
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "phone", width: 390, height: 844 },
+  { name: "narrow-phone", width: 320, height: 568 },
+] as const;
+
+const now = "2026-07-29T08:00:00.000Z";
+const organisationId = "11111111-1111-4111-8111-111111111111";
+const userId = "22222222-2222-4222-8222-222222222222";
+const projectId = "33333333-3333-4333-8333-333333333333";
+
+test.describe("responsive public surfaces", () => {
+  test("landing page preserves readable controls and layout at supported aspect ratios", async ({ page }) => {
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      await page.evaluate(() => document.fonts.ready);
+
+      await expect(page.getByRole("heading", { name: /Places, made explorable/i })).toBeVisible();
+      await expectResponsiveSurface(page, "body");
+    }
+  });
+
+  test("email OTP sign-in prevents duplicate submission and recovers for retry", async ({ page }) => {
+    await installTurnstileStub(page);
+    let otpRequests = 0;
+    let releaseFirstRequest!: () => void;
+    const firstRequestGate = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/session") {
+        return json(route, 200, { authenticated: false });
+      }
+      if (path === "/api/auth/config") {
+        return json(route, 200, {
+          turnstileSiteKey: "1x00000000000000000000AA",
+          turnstileAction: "otp_request",
+        });
+      }
+      if (path === "/api/auth/otp/request") {
+        otpRequests += 1;
+        if (otpRequests === 1) {
+          await firstRequestGate;
+          return json(route, 503, {
+            error: "Temporary email outage. Retry remains safe.",
+          });
+        }
+        return json(route, 200, {
+          challengeId: "44444444-4444-4444-8444-444444444444",
+          expiresInSeconds: 600,
+          retryAfterSeconds: 60,
+          message: "If the address is authorised, a code has been sent.",
+        });
+      }
+      return json(route, 404, { error: `Unmocked route: ${request.method()} ${path}` });
+    });
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/studio.html");
+    const dialog = page.locator("#loginDialog");
+    const form = page.locator("#loginForm");
+    const submit = page.locator("#loginSubmit");
+    await expect(dialog).toBeVisible();
+    await page.locator("#loginEmail").fill("operator@example.com");
+    await expect(submit).toBeEnabled();
+
+    await submit.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+      (button as HTMLButtonElement).click();
+    });
+    await expect.poll(() => otpRequests).toBe(1);
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveText("Sending code…");
+    await expect(form).toHaveAttribute("aria-busy", "true");
+    releaseFirstRequest();
+    await expect(page.locator("#loginError")).toContainText("Temporary email outage");
+    expect(otpRequests).toBe(1);
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveText("Email me a code");
+    await expect(form).not.toHaveAttribute("aria-busy");
+
+    await submit.click();
+    await expect(page.locator("#otpField")).toHaveClass(/active/);
+    await expect(page.locator("#loginEmail")).toHaveAttribute("readonly", "");
+    expect(otpRequests).toBe(2);
+
+    await expectResponsiveSurface(page, "#loginDialog");
+  });
+
+  test("sign-in dialog and Turnstile stay contained on narrow and short screens", async ({ page }) => {
+    await installTurnstileStub(page);
+    await mockAnonymousAuth(page);
+
+    for (const viewport of viewports.slice(3)) {
+      await page.setViewportSize(viewport);
+      await page.goto("/studio.html");
+      await expect(page.locator("#loginDialog")).toBeVisible();
+      await expect.poll(() => page.evaluate(() => {
+        return (window as typeof window & { __turnstileOptions?: { size?: string } })
+          .__turnstileOptions?.size ?? null;
+      })).toBe(viewport.width < 360 ? "compact" : "flexible");
+
+      const geometry = await page.locator("#loginDialog").evaluate((dialog) => {
+        const bounds = dialog.getBoundingClientRect();
+        const form = dialog.querySelector("form");
+        const widget = dialog.querySelector("#turnstileWidget");
+        return {
+          left: bounds.left,
+          right: bounds.right,
+          viewportWidth: window.innerWidth,
+          formOverflowY: form ? getComputedStyle(form).overflowY : null,
+          formClientHeight: form?.clientHeight ?? null,
+          formScrollHeight: form?.scrollHeight ?? null,
+          widgetFits: widget ? widget.scrollWidth <= widget.clientWidth + 1 : false,
+        };
+      });
+      expect(geometry.left).toBeGreaterThanOrEqual(-1);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+      expect(geometry.formOverflowY).toBe("auto");
+      expect(geometry.formClientHeight).not.toBeNull();
+      expect(geometry.formScrollHeight).not.toBeNull();
+      if (viewport.height <= 568) {
+        expect(geometry.formScrollHeight!).toBeGreaterThan(geometry.formClientHeight!);
+      }
+      expect(geometry.widgetFits).toBe(true);
+      await expectResponsiveSurface(page, "#loginDialog");
+    }
+  });
+});
+
+test.describe("authenticated studio UI", () => {
+  test.beforeEach(async ({ page }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    await page.goto("/studio.html#projects");
+    await expect(page.getByRole("heading", {
+      name: "From immutable source to approved spatial release.",
+    })).toBeVisible();
+  });
+
+  test("studio shell uses the shared type system and responsive control layout", async ({ page }) => {
+    const sort = page.locator("#projectSort");
+    await sort.selectOption("name_asc");
+    await expect(sort).toHaveValue("name_asc");
+
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+      await expectResponsiveSurface(page, ".studio-shell");
+
+      const contract = await page.evaluate(() => {
+        const commandBar = document.querySelector(".project-command-bar");
+        const search = document.querySelector("#projectSearch");
+        const selects = [...document.querySelectorAll<HTMLSelectElement>(
+          ".studio-shell select:not([hidden])",
+        )].filter((element) => element.getClientRects().length > 0);
+        const gaps = [...document.querySelectorAll<HTMLElement>(
+          ".studio-header-actions, .filter-row, .project-command-bar",
+        )].filter((element) => element.getClientRects().length > 0)
+          .map((element) => Number.parseFloat(getComputedStyle(element).gap || "0"));
+        return {
+          commandColumns: commandBar ? getComputedStyle(commandBar).gridTemplateColumns : null,
+          searchTextOverflow: search ? getComputedStyle(search).textOverflow : null,
+          searchMinWidth: search ? getComputedStyle(search).minWidth : null,
+          selects: selects.map((select) => ({
+            height: select.getBoundingClientRect().height,
+            width: select.getBoundingClientRect().width,
+            parentWidth: select.parentElement?.getBoundingClientRect().width ?? 0,
+            fontFamily: getComputedStyle(select).fontFamily,
+          })),
+          gaps,
+        };
+      });
+
+      expect(contract.searchTextOverflow).toBe("ellipsis");
+      expect(contract.searchMinWidth).toBe("0px");
+      expect(contract.selects.length).toBeGreaterThan(0);
+      for (const select of contract.selects) {
+        expect(select.height).toBeGreaterThanOrEqual(44);
+        expect(select.width).toBeLessThanOrEqual(select.parentWidth + 1);
+        expect(select.fontFamily).toContain("Manrope");
+      }
+      expect(contract.gaps.every((gap) => gap >= 10)).toBe(true);
+      if (viewport.width <= 640) {
+        expect(contract.commandColumns?.trim().split(/\s+/)).toHaveLength(1);
+      } else {
+        expect(contract.commandColumns?.trim().split(/\s+/)).toHaveLength(2);
+      }
+    }
+  });
+});
+
+test.describe("Spark renderer chrome", () => {
+  test("renderer error and navigation controls remain usable on desktop and mobile", async ({ page }) => {
+    for (const viewport of [viewports[0], viewports[3], viewports[4]]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/renderer/index.html");
+      await expect(page.getByText("The spatial scene could not be rendered.", {
+        exact: true,
+      })).toBeVisible();
+      await expectResponsiveSurface(page, "body");
+    }
+  });
+});
+
+async function expectResponsiveSurface(page: Page, rootSelector: string): Promise<void> {
+  const result = await page.evaluate((selector) => {
+    const root = document.querySelector(selector);
+    if (!root) return null;
+    const visible = [...root.querySelectorAll<HTMLElement>("*")].filter((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        rect.width > 0 &&
+        rect.height > 0;
+    });
+    const controls = visible.filter((element) => {
+      if (element instanceof HTMLInputElement) {
+        return !["checkbox", "radio", "hidden"].includes(element.type);
+      }
+      return element instanceof HTMLButtonElement ||
+        element instanceof HTMLSelectElement ||
+        element instanceof HTMLTextAreaElement;
+    });
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      fonts: [...new Set(visible.map((element) => getComputedStyle(element).fontFamily))],
+      undersizedControls: controls.map((element) => ({
+        label: element.textContent?.trim() || element.getAttribute("aria-label") || element.tagName,
+        height: element.getBoundingClientRect().height,
+      })).filter((control) => control.height < 39.5),
+    };
+  }, rootSelector);
+
+  expect(result).not.toBeNull();
+  expect(result!.documentWidth).toBeLessThanOrEqual(result!.viewportWidth + 1);
+  expect(result!.undersizedControls).toEqual([]);
+  expect(result!.fonts.every((font) => (
+    font.includes("Manrope") || font.includes("IBM Plex Mono")
+  ))).toBe(true);
+}
+
+async function installTurnstileStub(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const state = {
+      options: null as null | {
+        size?: string;
+        callback: (token: string) => void;
+      },
+    };
+    (window as typeof window & {
+      __turnstileOptions?: typeof state.options;
+      turnstile?: unknown;
+    }).turnstile = {
+      render(container: HTMLElement, options: typeof state.options) {
+        if (!options) throw new Error("Turnstile options missing");
+        state.options = options;
+        (window as typeof window & { __turnstileOptions?: typeof state.options })
+          .__turnstileOptions = options;
+        const testWidget = document.createElement("div");
+        testWidget.dataset.testTurnstile = "ready";
+        testWidget.textContent = "Security check ready";
+        testWidget.style.width = "100%";
+        testWidget.style.minHeight = "44px";
+        container.replaceChildren(testWidget);
+        queueMicrotask(() => options.callback("test-turnstile-token"));
+        return "test-turnstile";
+      },
+      reset() {
+        if (state.options) queueMicrotask(() => state.options?.callback("test-turnstile-token"));
+      },
+      remove() {
+        state.options = null;
+      },
+    };
+  });
+}
+
+async function mockAnonymousAuth(page: Page): Promise<void> {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/auth/session") return json(route, 200, { authenticated: false });
+    if (path === "/api/auth/config") {
+      return json(route, 200, {
+        turnstileSiteKey: "1x00000000000000000000AA",
+        turnstileAction: "otp_request",
+      });
+    }
+    return json(route, 404, { error: `Unmocked route: ${route.request().method()} ${path}` });
+  });
+}
+
+async function mockAuthenticatedStudio(page: Page): Promise<void> {
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const user = {
+      userId,
+      organisationId,
+      email: "qa@whymelabs.com",
+      displayName: "UI QA",
+      role: "platform_admin",
+    };
+    const project = {
+      id: projectId,
+      name: "Responsive indoor scene",
+      slug: "responsive-indoor-scene",
+      status: "INGESTED",
+      captureAdapter: "open-import",
+      deliveryTemplate: "venue-navigator",
+      notes: "Stable UI acceptance fixture.",
+      customerName: "WhyMe Labs",
+      customFields: {},
+      latestVersionId: null,
+      latestVersionNumber: null,
+      activeReleaseSlug: null,
+      updatedAt: now,
+    };
+
+    if (path === "/api/auth/session") return json(route, 200, { authenticated: true, user });
+    if (path === "/api/auth/organisations") {
+      return json(route, 200, {
+        currentOrganisationId: organisationId,
+        organisations: [{
+          id: organisationId,
+          name: "WhyMe Labs",
+          slug: "whymelabs",
+          role: "platform_admin",
+          membershipUpdatedAt: now,
+          current: true,
+        }],
+      });
+    }
+    if (path === "/api/review/inbox") return json(route, 200, { projects: [] });
+    if (path === "/api/dashboard") {
+      return json(route, 200, {
+        activeProjects: 1,
+        processingJobs: 0,
+        hostedAssets: 0,
+        hostedBytes: 0,
+        activeReleases: 0,
+      });
+    }
+    if (path === "/api/projects" && method === "GET") {
+      return json(route, 200, { projects: [project] });
+    }
+    if (path === "/api/jobs") return json(route, 200, { jobs: [] });
+    if (path === "/api/releases") return json(route, 200, { releases: [] });
+    if (path === "/api/hosting") {
+      return json(route, 200, {
+        paymentProviderConfigured: false,
+        plans: [],
+        subscriptions: [],
+        checkouts: [],
+        invoices: [],
+        alerts: [],
+        lifecycleRuns: [],
+      });
+    }
+    if (path === "/api/team") return json(route, 200, { members: [], invitations: [] });
+    if (path === "/api/team/identity-providers") return json(route, 200, { providers: [] });
+    if (path === "/api/capture-agents") return json(route, 200, { credentials: [] });
+    if (path === "/api/project-templates") return json(route, 200, { templates: [] });
+    if (path === "/api/project-views") return json(route, 200, { views: [] });
+    if (path === "/api/project-fields") return json(route, 200, { fields: [] });
+    if (path === "/api/uploads/recoverable") return json(route, 200, { uploads: [] });
+    if (path.startsWith("/api/projects/asset-handoffs") && method === "GET") {
+      return json(route, 200, { handoffs: [] });
+    }
+    return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
+  });
+}
+
+function json(route: Route, status: number, body: unknown): Promise<void> {
+  return route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+}
