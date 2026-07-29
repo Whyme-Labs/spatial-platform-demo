@@ -68,6 +68,16 @@ describe("processing agent core", () => {
       failureClass: "configuration",
       retryable: false,
     }));
+    expect(() => parsePosterCameraJson(JSON.stringify({
+      position: [0, 0, 0],
+      target: [0, 0, -1],
+      up: [0, 0, 2],
+      fovDegrees: 58,
+    }))).toThrowError(expect.objectContaining({
+      code: "POSTER_CAMERA_INVALID",
+      failureClass: "configuration",
+      retryable: false,
+    }));
   });
 
   it("validates a Gaussian PLY before invoking Spark", () => {

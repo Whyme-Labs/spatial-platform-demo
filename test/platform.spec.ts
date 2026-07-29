@@ -1721,6 +1721,39 @@ describe("Spatial Studio Worker", () => {
     expect(repeatedApprovalResponse.status).toBe(200);
     await expect(repeatedApprovalResponse.json()).resolves.toMatchObject({ idempotent: true });
 
+    for (const [slug, initialCamera] of [
+      ["invalid-camera-target", {
+        position: [0, 0, 0],
+        target: [0, 0, 0],
+        up: [0, 1, 0],
+        fovDegrees: 58,
+      }],
+      ["invalid-camera-up", {
+        position: [0, 0, 0],
+        target: [0, 0, -1],
+        up: [0, 0, 2],
+        fovDegrees: 58,
+      }],
+    ] as const) {
+      const invalidCameraResponse = await exports.default.fetch(
+        `${origin}/api/projects/${project.id}/releases`,
+        {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({
+            slug,
+            accessPolicy: "public",
+            viewerConfig: {
+              title: "Invalid camera",
+              measurementDisclaimer: "Visual experience only.",
+              initialCamera,
+            },
+          }),
+        },
+      );
+      expect(invalidCameraResponse.status).toBe(400);
+    }
+
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {

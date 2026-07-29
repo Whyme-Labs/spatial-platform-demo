@@ -10171,17 +10171,32 @@ function parseReleaseInitialCamera(form: FormData): {
   if (!position || !target) {
     throw new Error("Starting camera position and target are both required.");
   }
+  if ([...position, ...target].some((coordinate) => Math.abs(coordinate) > 1_000_000)) {
+    throw new Error("Starting camera coordinates must be between -1,000,000 and 1,000,000.");
+  }
+  const view: [number, number, number] = [
+    target[0] - position[0],
+    target[1] - position[1],
+    target[2] - position[2],
+  ];
   if (
-    Math.hypot(
-      position[0] - target[0],
-      position[1] - target[1],
-      position[2] - target[2],
-    ) < 1e-9
+    Math.hypot(...view) < 1e-9
   ) {
     throw new Error("Starting camera position and target must differ.");
   }
   const up = parsePosition(String(form.get("initialCameraUp") ?? "")) ?? [0, 1, 0];
+  if (up.some((coordinate) => Math.abs(coordinate) > 1_000_000)) {
+    throw new Error("Camera up coordinates must be between -1,000,000 and 1,000,000.");
+  }
   if (Math.hypot(...up) < 1e-9) throw new Error("Camera up must be a non-zero vector.");
+  const crossLength = Math.hypot(
+    view[1] * up[2] - view[2] * up[1],
+    view[2] * up[0] - view[0] * up[2],
+    view[0] * up[1] - view[1] * up[0],
+  );
+  if (crossLength / (Math.hypot(...view) * Math.hypot(...up)) < 1e-8) {
+    throw new Error("Camera up must not be parallel to its viewing direction.");
+  }
   const fovDegrees = Number(form.get("initialCameraFov") ?? 58);
   if (!Number.isFinite(fovDegrees) || fovDegrees < 20 || fovDegrees > 100) {
     throw new Error("Field of view must be between 20 and 100 degrees.");

@@ -520,6 +520,11 @@ async function processNextJob() {
         web: { fileName: basename(radPath), sizeBytes: radMetadata.sizeBytes, sha256: radMetadata.sha256 },
         poster: { fileName: basename(posterPath), sizeBytes: posterMetadata.sizeBytes, sha256: posterMetadata.sha256 },
       },
+      rendering: {
+        posterCamera: configuration.posterCamera
+          ? { mode: "authored", ...configuration.posterCamera }
+          : { mode: "auto" },
+      },
       checks: {
         sourceBytesVerified: true,
         sourceHashVerified: job.input.sha256 ? true : "not_supplied",
@@ -562,6 +567,7 @@ async function processNextJob() {
             splatTransform: "3.1.7",
             node: process.version,
             processor: "0.7.0",
+            posterCamera: configuration.posterCamera ? "authored" : "auto",
           },
         },
       }),

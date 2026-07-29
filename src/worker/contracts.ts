@@ -434,11 +434,52 @@ export const qaDecisionSchema = z.object({
   notes: z.string().trim().max(4000).optional(),
 });
 
+const cameraCoordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);
+const cameraVectorSchema = z.tuple([
+  cameraCoordinateSchema,
+  cameraCoordinateSchema,
+  cameraCoordinateSchema,
+]);
+
 const cameraPoseSchema = z.object({
-  position: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
-  target: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
-  up: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
+  position: cameraVectorSchema,
+  target: cameraVectorSchema,
+  up: cameraVectorSchema.optional(),
   fovDegrees: z.number().min(20).max(100).default(58),
+}).superRefine((camera, context) => {
+  const view = camera.target.map((coordinate, index) =>
+    coordinate - camera.position[index],
+  ) as [number, number, number];
+  const viewLength = Math.hypot(...view);
+  if (viewLength < 1e-9) {
+    context.addIssue({
+      code: "custom",
+      path: ["target"],
+      message: "Camera target must differ from its position",
+    });
+  }
+  if (!camera.up) return;
+  const upLength = Math.hypot(...camera.up);
+  if (upLength < 1e-9) {
+    context.addIssue({
+      code: "custom",
+      path: ["up"],
+      message: "Camera up vector must be non-zero",
+    });
+    return;
+  }
+  const crossLength = Math.hypot(
+    view[1] * camera.up[2] - view[2] * camera.up[1],
+    view[2] * camera.up[0] - view[0] * camera.up[2],
+    view[0] * camera.up[1] - view[1] * camera.up[0],
+  );
+  if (viewLength >= 1e-9 && crossLength / (viewLength * upLength) < 1e-8) {
+    context.addIssue({
+      code: "custom",
+      path: ["up"],
+      message: "Camera up vector must not be parallel to its viewing direction",
+    });
+  }
 });
 
 export const reviewerInvitationSchema = z.object({
@@ -1150,12 +1191,7 @@ export const releaseInputSchema = z.object({
     measurementDisclaimer: z.string().trim().min(1).max(500),
     splatBudgetMillions: z.number().min(0.25).max(8).default(2),
     sceneRotationDegrees: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
-    initialCamera: z.object({
-      position: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
-      target: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]),
-      up: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
-      fovDegrees: z.number().min(20).max(100).default(58),
-    }).optional(),
+    initialCamera: cameraPoseSchema.optional(),
   }),
 });
 

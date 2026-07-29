@@ -360,6 +360,21 @@ export function parsePosterCameraJson(value) {
       { failureClass: "configuration", retryable: false },
     );
   }
+  const view = target.map((coordinate, index) => coordinate - position[index]);
+  const viewLength = Math.hypot(...view);
+  const upLength = Math.hypot(...up);
+  const crossLength = Math.hypot(
+    view[1] * up[2] - view[2] * up[1],
+    view[2] * up[0] - view[0] * up[2],
+    view[0] * up[1] - view[1] * up[0],
+  );
+  if (crossLength / (viewLength * upLength) < 1e-8) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_INVALID",
+      "PROCESSOR_POSTER_CAMERA_JSON.up must not be parallel to the viewing direction",
+      { failureClass: "configuration", retryable: false },
+    );
+  }
   const fovDegrees = parsed?.fovDegrees ?? 58;
   if (
     typeof fovDegrees !== "number" ||
