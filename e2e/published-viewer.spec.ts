@@ -48,6 +48,16 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
             type: 'control-mode',
             mode: 'orbit'
           }, location.origin)">Exit roam</button>
+          <button id="open-onboarding" onclick="parent.postMessage({
+            source: 'spatial-spark',
+            type: 'control-onboarding',
+            visible: true
+          }, location.origin)">Open onboarding</button>
+          <button id="close-onboarding" onclick="parent.postMessage({
+            source: 'spatial-spark',
+            type: 'control-onboarding',
+            visible: false
+          }, location.origin)">Close onboarding</button>
           <script>
             setTimeout(() => {
               parent.postMessage({
@@ -74,6 +84,10 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(viewport).toHaveClass(/mobile-free-roam-active/);
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Exit roam" }).click();
   await expect(viewport).not.toHaveClass(/mobile-free-roam-active/);
+  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Open onboarding" }).click();
+  await expect(viewport).toHaveClass(/mobile-controls-onboarding/);
+  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Close onboarding" }).click();
+  await expect(viewport).not.toHaveClass(/mobile-controls-onboarding/);
 });
 
 function json(route: Route, body: unknown): Promise<void> {

@@ -82,6 +82,11 @@ type RendererMessage =
       source: "spatial-spark";
       type: "control-mode";
       mode: "orbit" | "free-roam";
+    }
+  | {
+      source: "spatial-spark";
+      type: "control-onboarding";
+      visible: boolean;
     };
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -122,6 +127,13 @@ const mobileControls = new MobileControlSurface({
       source: "spatial-spark",
       type: "control-mode",
       mode: active ? "free-roam" : "orbit",
+    });
+  },
+  onOnboardingChange: (visible) => {
+    post({
+      source: "spatial-spark",
+      type: "control-onboarding",
+      visible,
     });
   },
 });

@@ -162,7 +162,9 @@ export class MobileControlSurface {
   private readonly coarsePointer: MediaQueryList;
   private readonly storage: Pick<Storage, "getItem" | "setItem"> | null;
   private readonly onModeChange: (active: boolean) => void;
+  private readonly onOnboardingChange: (visible: boolean) => void;
   private lastReportedActive = false;
+  private lastReportedOnboarding = false;
   private disposed = false;
 
   constructor({
@@ -170,16 +172,19 @@ export class MobileControlSurface {
     coarsePointer,
     storage = safeLocalStorage(),
     onModeChange = () => {},
+    onOnboardingChange = () => {},
   }: {
     elements: MobileControlSurfaceElements;
     coarsePointer: MediaQueryList;
     storage?: Pick<Storage, "getItem" | "setItem"> | null;
     onModeChange?: (active: boolean) => void;
+    onOnboardingChange?: (visible: boolean) => void;
   }) {
     this.elements = elements;
     this.coarsePointer = coarsePointer;
     this.storage = storage;
     this.onModeChange = onModeChange;
+    this.onOnboardingChange = onOnboardingChange;
     this.model.setTouchCapable(coarsePointer.matches);
     this.bind();
     this.render();
@@ -335,12 +340,14 @@ export class MobileControlSurface {
       this.lastReportedActive = state.active;
       this.onModeChange(state.active);
     }
+    this.reportOnboarding();
   }
 
   private offerOnboarding(): void {
     const state = this.model.state;
     if (!state.touchCapable || !state.ready || state.active || this.hasSeenOnboarding()) return;
     this.elements.onboarding.hidden = false;
+    this.reportOnboarding();
   }
 
   private dismissOnboarding(): void {
@@ -358,6 +365,13 @@ export class MobileControlSurface {
     } catch {
       return false;
     }
+  }
+
+  private reportOnboarding(): void {
+    const visible = !this.elements.onboarding.hidden;
+    if (visible === this.lastReportedOnboarding) return;
+    this.lastReportedOnboarding = visible;
+    this.onOnboardingChange(visible);
   }
 }
 
