@@ -1,8 +1,5 @@
 import * as THREE from "three";
-import {
-  alignPointerLookToScreen,
-  createSpatialLookControls,
-} from "../../src/renderer/look-controls";
+import { createSpatialLookControls } from "../../src/renderer/look-controls";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#controlCanvas");
 if (!canvas) throw new Error("Missing pointer-control canvas");
@@ -36,18 +33,34 @@ const initialDirection = camera.getWorldDirection(new THREE.Vector3());
 const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(initialQuaternion);
 const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(initialQuaternion);
 const controls = createSpatialLookControls(canvas);
-alignPointerLookToScreen(controls, camera);
+controls.align(camera);
+
+function cameraState(): {
+  position: number[];
+  direction: number[];
+  up: number[];
+  right: number[];
+} {
+  return {
+    position: camera.position.toArray(),
+    direction: camera.getWorldDirection(new THREE.Vector3()).toArray(),
+    up: new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).toArray(),
+    right: new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).toArray(),
+  };
+}
 
 function updateProbe(): void {
-  controls.update(camera);
+  controls.update(camera, 1 / 60);
   const direction = camera.getWorldDirection(new THREE.Vector3());
   const delta = direction.sub(initialDirection);
   document.body.dataset.lookProbe = JSON.stringify({
     up: delta.dot(screenUp),
     right: delta.dot(screenRight),
   });
+  document.body.dataset.cameraState = JSON.stringify(cameraState());
   requestAnimationFrame(updateProbe);
 }
 
 document.body.dataset.lookProbe = JSON.stringify({ up: 0, right: 0 });
+document.body.dataset.cameraState = JSON.stringify(cameraState());
 requestAnimationFrame(updateProbe);

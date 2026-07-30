@@ -9,10 +9,8 @@ import { runAction } from "../client/action-state";
 import {
   MobileControlSurface,
   nearestWalkablePoint,
-  planarCameraStep,
 } from "./mobile-controls";
 import {
-  alignPointerLookToScreen,
   createSpatialLookControls,
 } from "./look-controls";
 
@@ -247,7 +245,7 @@ async function start(): Promise<void> {
       anchorCameraToWalkable(camera);
       camera.up.copy(up).normalize();
       camera.lookAt(target);
-      alignPointerLookToScreen(controls, camera);
+      controls.align(camera);
       camera.fov = Math.min(100, Math.max(20, fovDegrees));
       camera.updateProjectionMatrix();
       const direction = camera.getWorldDirection(new THREE.Vector3());
@@ -297,7 +295,7 @@ async function start(): Promise<void> {
       camera.position.fromArray(pose.position);
       camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
       camera.lookAt(new THREE.Vector3().fromArray(pose.target));
-      alignPointerLookToScreen(controls, camera);
+      controls.align(camera);
       if (typeof pose.fovDegrees === "number") camera.fov = Math.min(100, Math.max(20, pose.fovDegrees));
       camera.updateProjectionMatrix();
       if (walkableBoxes.length && isWalkable(camera.position)) lastWalkablePosition = camera.position.clone();
@@ -374,19 +372,17 @@ async function start(): Promise<void> {
     frameScene(mesh, camera);
   }
   anchorCameraToWalkable(camera);
-  alignPointerLookToScreen(controls, camera);
+  controls.align(camera);
   initialView = {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
   };
   let lastFrameAt = performance.now();
-  const forward = new THREE.Vector3();
   renderer.setAnimationLoop(() => {
     const now = performance.now();
     const deltaSeconds = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
     lastFrameAt = now;
-    controls.update(camera);
-    applyMobileMovement(camera, forward, deltaSeconds);
+    controls.update(camera, deltaSeconds, mobileControls.movement);
     if (walkableBoxes.length) {
       if (isWalkable(camera.position)) {
         lastWalkablePosition = camera.position.clone();
@@ -635,7 +631,7 @@ function resetView(): void {
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
-  if (rendererControls) alignPointerLookToScreen(rendererControls, camera);
+  rendererControls?.align(camera);
   if (walkableBoxes.length && isWalkable(camera.position)) {
     lastWalkablePosition = camera.position.clone();
   }
@@ -673,23 +669,6 @@ async function toggleFullscreen(): Promise<void> {
   await byId<HTMLElement>("sparkViewport").requestFullscreen();
 }
 
-function applyMobileMovement(
-  camera: THREE.PerspectiveCamera,
-  forward: THREE.Vector3,
-  deltaSeconds: number,
-): void {
-  const movement = mobileControls.movement;
-  if (Math.hypot(movement.x, movement.z) < 0.001 || deltaSeconds <= 0) return;
-  camera.getWorldDirection(forward);
-  camera.position.fromArray(planarCameraStep({
-    position: camera.position.toArray() as Vector3Tuple,
-    forward: forward.toArray() as Vector3Tuple,
-    movement,
-    speed: 1.4,
-    deltaSeconds,
-  }));
-}
-
 function activeCamera(): THREE.PerspectiveCamera | null {
   return rendererCamera;
 }
@@ -716,6 +695,7 @@ function dispose(): void {
   helpButton.removeEventListener("click", toggleHelp);
   fullscreenButton.removeEventListener("click", requestFullscreen);
   mobileControls.dispose();
+  rendererControls?.dispose();
   resizeObserver?.disconnect();
   webglRenderer?.setAnimationLoop(null);
   splatMesh?.dispose();
