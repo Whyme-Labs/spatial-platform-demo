@@ -41,6 +41,13 @@ function rectangularSurface(
   return points;
 }
 
+function horizontalPolygonArea(points: Array<[number, number, number]>): number {
+  return Math.abs(points.reduce((sum, point, index) => {
+    const next = points[(index + 1) % points.length]!;
+    return sum + point[0] * next[2] - next[0] * point[2];
+  }, 0)) / 2;
+}
+
 describe("registered point-cloud semantic candidates", () => {
   it("extracts a deterministic walkable polygon from the lower horizontal support surface", () => {
     const floor = rectangularSurface(0, 4, 0, 3, 0);
@@ -119,6 +126,28 @@ describe("registered point-cloud semantic candidates", () => {
       [1, 0, 4],
       [0, 0, 4],
     ]);
+  });
+
+  it("reports the authored polygon area when an occupancy component contains a hole", () => {
+    const ring = rectangularSurface(0, 4, 0, 4, 0, 0.5).filter(
+      ([x, , z]) => !(x > 1 && x < 3 && z > 1 && z < 3),
+    );
+    const signature = parsePlySceneSignature(asciiPly(ring), {
+      voxelSizeM: 0.1,
+      maximumSamplePoints: 100_000,
+    });
+
+    const report = extractWalkableSemanticCandidates(signature, {
+      gridSizeM: 0.5,
+      floorBandM: 0.15,
+      minimumAreaM2: 2,
+      maximumCandidates: 8,
+    });
+
+    expect(report.candidates).toHaveLength(1);
+    expect(report.candidates[0].area).toBe(
+      horizontalPolygonArea(report.candidates[0].geometry.points),
+    );
   });
 
   it("normalizes a scaled Z-up source before extracting metric walkable geometry", () => {
