@@ -593,6 +593,12 @@ export const retentionPolicySchema = z.object({
 
 const point3Schema = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
 const polygon3Schema = z.array(point3Schema).min(3).max(2000);
+const sourceToWorldTransformSchema = z.object({
+  sourceUpAxis: z.enum(["Y", "Z"]),
+  metresPerSourceUnit: z.number().positive().max(10_000),
+  yawDegrees: z.number().finite().min(-360).max(360).default(0),
+  translationMetres: point3Schema.default([0, 0, 0]),
+});
 
 export const sceneEntitySchema = z.object({
   clientOperationId: z.string().uuid().optional(),
@@ -617,11 +623,39 @@ export const sceneEntitySchema = z.object({
   sortOrder: z.number().int().min(0).max(100000).default(0),
 });
 
+export const navigationObstacleSchema = z.object({
+  clientOperationId: z.string().uuid().optional(),
+  versionId: z.string().uuid(),
+  label: z.string().trim().min(1).max(120),
+  geometry: z.object({
+    type: z.literal("box"),
+    points: z.tuple([point3Schema, point3Schema]),
+  }).superRefine((geometry, context) => {
+    const [first, second] = geometry.points;
+    if (
+      Math.abs(first[0] - second[0]) < 0.01 ||
+      Math.abs(first[1] - second[1]) < 0.01 ||
+      Math.abs(first[2] - second[2]) < 0.01
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["points"],
+        message: "An obstacle must have non-zero width, height, and depth",
+      });
+    }
+  }),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const semanticExtractionSchema = z.object({
   clientOperationId: z.string().uuid(),
   versionId: z.string().uuid(),
   inputAssetId: z.string().uuid(),
-  coordinateAssurance: z.literal("registered_y_up_metric_frame"),
+  coordinateAssurance: z.enum([
+    "registered_y_up_metric_frame",
+    "authored_source_to_world_v1",
+  ]),
+  sourceToWorld: sourceToWorldTransformSchema.optional(),
   registrationEvidence: z.string().trim().min(10).max(2000),
   gridSizeM: z.number().min(0.05).max(2).default(0.25),
   floorBandM: z.number().min(0.05).max(0.5).default(0.15),
@@ -629,6 +663,21 @@ export const semanticExtractionSchema = z.object({
   maximumCandidates: z.number().int().min(1).max(100).default(24),
   maximumSamplePoints: z.number().int().min(1_000).max(10_000_000).default(2_000_000),
   elevationHintM: z.number().finite().nullable().optional(),
+}).superRefine((value, context) => {
+  if (value.coordinateAssurance === "authored_source_to_world_v1" && !value.sourceToWorld) {
+    context.addIssue({
+      code: "custom",
+      path: ["sourceToWorld"],
+      message: "An authored source-to-world transform is required for this coordinate assurance",
+    });
+  }
+  if (value.coordinateAssurance === "registered_y_up_metric_frame" && value.sourceToWorld) {
+    context.addIssue({
+      code: "custom",
+      path: ["sourceToWorld"],
+      message: "A pre-registered Y-up metric source must not declare a second transform",
+    });
+  }
 });
 
 export const semanticExtractionReviewSchema = z.object({
@@ -678,7 +727,10 @@ export const workerSemanticExtractionCompletionSchema = z.object({
   }),
   report: z.object({
     schemaVersion: z.literal("1.0.0"),
-    method: z.literal("registered-ply-walkable-candidates-v1"),
+    method: z.enum([
+      "registered-ply-walkable-candidates-v1",
+      "registered-ply-walkable-candidates-v2",
+    ]),
     result: z.literal("candidates_ready"),
     source: z.record(z.string(), z.unknown()),
     parameters: z.record(z.string(), z.unknown()),
@@ -1193,6 +1245,7 @@ export const releaseInputSchema = z.object({
     measurementDisclaimer: z.string().trim().min(1).max(500),
     splatBudgetMillions: z.number().min(0.25).max(8).default(2),
     sceneRotationDegrees: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
+    sourceToWorld: sourceToWorldTransformSchema.optional(),
     initialCamera: cameraPoseSchema.optional(),
   }),
 });

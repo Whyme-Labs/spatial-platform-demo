@@ -1754,6 +1754,48 @@ describe("Spatial Studio Worker", () => {
       expect(invalidCameraResponse.status).toBe(400);
     }
 
+    const snapshotEntityResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/entities`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId: completed.asset.versionId,
+          kind: "room",
+          label: "Published walkable room",
+          geometry: {
+            type: "polygon",
+            points: [[0, 0, 0], [4, 0, 0], [4, 0, 1], [1, 0, 1], [1, 0, 4], [0, 0, 4]],
+          },
+          metadata: {},
+        }),
+      },
+    );
+    expect(snapshotEntityResponse.status).toBe(201);
+    const snapshotEntity = await snapshotEntityResponse.json<{ entity: { id: string } }>();
+    const snapshotObstacleResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-obstacles`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId: completed.asset.versionId,
+          label: "Published table",
+          geometry: {
+            type: "box",
+            points: [[1.5, 0, 0.2], [2.5, 0.9, 0.8]],
+          },
+          metadata: {},
+        }),
+      },
+    );
+    expect(snapshotObstacleResponse.status).toBe(201);
+    const snapshotObstacle = await snapshotObstacleResponse.json<{
+      obstacle: { id: string };
+    }>();
+
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -1828,6 +1870,17 @@ describe("Spatial Studio Worker", () => {
     expect(manifestResponse.status).toBe(200);
     const manifest = await manifestResponse.json<{
       scene: { contentUrl: string };
+      spatial: {
+        entities: Array<{ id: string; label: string }>;
+        navigationMesh: { indices: number[]; sourceEntityIds: string[] };
+        obstacleProxy: {
+          boxes: Array<{
+            entityId: string;
+            min: [number, number, number];
+            max: [number, number, number];
+          }>;
+        };
+      };
       viewer: {
         initialCamera: {
           position: [number, number, number];
@@ -1839,6 +1892,46 @@ describe("Spatial Studio Worker", () => {
     }>();
     expect(manifest.scene.contentUrl).toContain("/scene.rad?token=");
     expect(manifest.viewer.initialCamera.up).toEqual([-0.01, -0.87, -0.49]);
+    expect(manifest.spatial).toMatchObject({
+      entities: [{ id: snapshotEntity.entity.id, label: "Published walkable room" }],
+      navigationMesh: {
+        sourceEntityIds: [snapshotEntity.entity.id],
+      },
+    });
+    expect(manifest.spatial.navigationMesh.indices).toHaveLength(12);
+    expect(manifest.spatial.obstacleProxy).toEqual({
+      version: "authored-obstacle-boxes-v1",
+      boxes: [{
+        entityId: snapshotObstacle.obstacle.id,
+        label: "Published table",
+        min: [1.5, 0, 0.2],
+        max: [2.5, 0.9, 0.8],
+      }],
+    });
+
+    const archiveSnapshotEntity = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/entities/${snapshotEntity.entity.id}`,
+      { method: "DELETE", headers: { cookie } },
+    );
+    expect(archiveSnapshotEntity.status).toBe(204);
+    const archiveSnapshotObstacle = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-obstacles/${snapshotObstacle.obstacle.id}`,
+      { method: "DELETE", headers: { cookie } },
+    );
+    expect(archiveSnapshotObstacle.status).toBe(204);
+    const immutableManifestResponse = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(immutableManifestResponse.status).toBe(200);
+    await expect(immutableManifestResponse.json()).resolves.toMatchObject({
+      spatial: {
+        entities: [{ id: snapshotEntity.entity.id, label: "Published walkable room" }],
+        navigationMesh: { sourceEntityIds: [snapshotEntity.entity.id] },
+        obstacleProxy: {
+          boxes: [{ entityId: snapshotObstacle.obstacle.id, label: "Published table" }],
+        },
+      },
+    });
 
     const customHostname = `published-${crypto.randomUUID().slice(0, 8)}.customer.test`;
     const customDomainId = crypto.randomUUID();
@@ -2384,6 +2477,47 @@ describe("Spatial Studio Worker", () => {
     expect(entityResponse.status).toBe(201);
     const entity = await entityResponse.json<{ entity: { id: string } }>();
 
+    const doorwayResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/entities`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId,
+          kind: "doorway",
+          label: "Gallery connector",
+          geometry: {
+            type: "box",
+            points: [[-0.4, 0, 2.8], [0.4, 2.2, 3.3]],
+          },
+          metadata: {},
+        }),
+      },
+    );
+    expect(doorwayResponse.status).toBe(201);
+    const doorway = await doorwayResponse.json<{ entity: { id: string } }>();
+
+    const obstacleResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-obstacles`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId,
+          label: "Display plinth",
+          geometry: {
+            type: "box",
+            points: [[-0.5, 0, -0.5], [0.5, 1.2, 0.5]],
+          },
+          metadata: { authoredFrom: "reviewed-plan" },
+        }),
+      },
+    );
+    expect(obstacleResponse.status).toBe(201);
+    const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
+
     const routeResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/routes`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -2438,18 +2572,43 @@ describe("Spatial Studio Worker", () => {
     expect(workspace.status).toBe(200);
     await expect(workspace.json()).resolves.toMatchObject({
       version: { id: versionId, version_number: 1 },
-      entities: [{ id: entity.entity.id, kind: "room", label: "Gallery one" }],
+      entities: [
+        { id: doorway.entity.id, kind: "doorway", label: "Gallery connector" },
+        { id: entity.entity.id, kind: "room", label: "Gallery one" },
+      ],
       routes: [{ label: "First visit", accessibility: "step_free" }],
       privacyRegions: [{ label: "Personal photograph", status: "approved" }],
       deliveryPolicy: { adaptive_quality: 1, mobile_lite_budget: 0.75 },
       collisionProxy: {
         version: "box-union-v1",
-        boxes: [{ entityId: entity.entity.id, label: "Gallery one", min: [-2, 0, -3], max: [2, 2.8, 3] }],
+        boxes: [
+          { entityId: entity.entity.id, label: "Gallery one", min: [-2, 0, -3], max: [2, 2.8, 3] },
+          { entityId: doorway.entity.id, label: "Gallery connector", min: [-0.4, 0, 2.8], max: [0.4, 2.2, 3.3] },
+        ],
       },
       navigationMesh: {
         version: "room-box-triangles-v1",
-        indices: [0, 1, 2, 0, 2, 3],
-        sourceEntityIds: [entity.entity.id],
+        indices: [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+        sourceEntityIds: [entity.entity.id, doorway.entity.id],
+      },
+      navigationObstacles: [{
+        id: obstacle.obstacle.id,
+        label: "Display plinth",
+      }],
+      obstacleProxy: {
+        version: "authored-obstacle-boxes-v1",
+        boxes: [{
+          entityId: obstacle.obstacle.id,
+          label: "Display plinth",
+          min: [-0.5, 0, -0.5],
+          max: [0.5, 1.2, 0.5],
+        }],
+      },
+      navigationProfile: {
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
       },
     });
   });

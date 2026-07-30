@@ -532,6 +532,7 @@ export function extractWalkableSemanticCandidates(signature, {
   minimumAreaM2 = 2,
   maximumCandidates = 24,
   elevationHintM = null,
+  sourceToWorld = null,
 } = {}) {
   if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) {
     throw new ProcessingAgentError(
@@ -540,6 +541,9 @@ export function extractWalkableSemanticCandidates(signature, {
       { failureClass: "input_validation", retryable: false },
     );
   }
+  const registeredSignature = sourceToWorld
+    ? normalizeSourceToWorldSignature(signature, sourceToWorld)
+    : signature;
   if (!Number.isFinite(gridSizeM) || gridSizeM < 0.05 || gridSizeM > 2) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_PARAMETERS",
@@ -578,7 +582,7 @@ export function extractWalkableSemanticCandidates(signature, {
 
   const minimumCells = Math.ceil(minimumAreaM2 / (gridSizeM * gridSizeM));
   const layers = new Map();
-  for (const voxel of signature.voxels.values()) {
+  for (const voxel of registeredSignature.voxels.values()) {
     const [x, y, z] = voxel.centroid ?? [];
     if (![x, y, z].every(Number.isFinite)) continue;
     const layerIndex = Math.round(y / floorBandM);
@@ -667,15 +671,20 @@ export function extractWalkableSemanticCandidates(signature, {
   });
   return {
     schemaVersion: "1.0.0",
-    method: "registered-ply-walkable-candidates-v1",
+    method: sourceToWorld
+      ? "registered-ply-walkable-candidates-v2"
+      : "registered-ply-walkable-candidates-v1",
     result: "candidates_ready",
     source: {
-      format: signature.format,
-      vertexCount: signature.vertexCount,
-      sampledPointCount: signature.sampledPointCount,
-      samplingStride: signature.samplingStride,
-      voxelCount: signature.voxelCount,
-      coordinateAssurance: "registered_y_up_metric_frame",
+      format: registeredSignature.format,
+      vertexCount: registeredSignature.vertexCount,
+      sampledPointCount: registeredSignature.sampledPointCount,
+      samplingStride: registeredSignature.samplingStride,
+      voxelCount: registeredSignature.voxelCount,
+      coordinateAssurance: sourceToWorld
+        ? "authored_source_to_world_v1"
+        : "registered_y_up_metric_frame",
+      ...(sourceToWorld ? { sourceToWorld } : {}),
     },
     parameters: {
       gridSizeM,
@@ -694,11 +703,97 @@ export function extractWalkableSemanticCandidates(signature, {
     humanReviewRequired: true,
     limitations: [
       "Candidates are occupancy-derived walkable proxies, not walls, legal rooms, accessibility certification, or survey evidence.",
-      "The source must already use metres in a registered Y-up coordinate frame; this method does not register or calibrate it.",
+      sourceToWorld
+        ? "The declared source-to-world transform is operator-authored evidence; this method applies but does not independently verify its scale, gravity axis, yaw, or translation."
+        : "The source must already use metres in a registered Y-up coordinate frame; this method does not register or calibrate it.",
       "Ceilings, furniture, sparse floors, stairs, glass, and multi-level overlap may require a supplied elevation hint or manual authoring.",
       "No candidate becomes an authored entity until an operator reviews and explicitly accepts it.",
     ],
     generatedAt: new Date().toISOString(),
+  };
+}
+
+export function normalizeSourceToWorldSignature(signature, sourceToWorld) {
+  if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) {
+    throw new ProcessingAgentError(
+      "INVALID_SEMANTIC_SOURCE",
+      "A non-empty PLY signature is required for source-to-world normalization",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  const sourceUpAxis = sourceToWorld?.sourceUpAxis;
+  const metresPerSourceUnit = Number(sourceToWorld?.metresPerSourceUnit);
+  const yawDegrees = Number(sourceToWorld?.yawDegrees);
+  const translationMetres = sourceToWorld?.translationMetres;
+  if (
+    !["Y", "Z"].includes(sourceUpAxis) ||
+    !Number.isFinite(metresPerSourceUnit) ||
+    metresPerSourceUnit <= 0 ||
+    metresPerSourceUnit > 10_000 ||
+    !Number.isFinite(yawDegrees) ||
+    !Array.isArray(translationMetres) ||
+    translationMetres.length !== 3 ||
+    !translationMetres.every(Number.isFinite)
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_SOURCE_TO_WORLD",
+      "Source-to-world normalization requires an up axis, positive metric scale, finite yaw, and finite translation",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+
+  const voxelSizeM = signature.voxelSizeM * metresPerSourceUnit;
+  const voxels = new Map();
+  const bounds = {
+    min: [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY],
+    max: [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY],
+  };
+  const yawRadians = yawDegrees * Math.PI / 180;
+  for (const source of signature.voxels.values()) {
+    const [sourceX, sourceY, sourceZ] = source.centroid;
+    const normalized = sourceUpAxis === "Z"
+      ? [sourceX, sourceZ, -sourceY]
+      : [sourceX, sourceY, sourceZ];
+    const scaled = normalized.map((value) => value * metresPerSourceUnit);
+    const rotated = rotateY(scaled, yawRadians);
+    const centroid = rotated.map((value, axis) => value + translationMetres[axis]);
+    const key = centroid.map((value) => voxelCoordinate(value, voxelSizeM)).join(",");
+    const target = voxels.get(key) ?? {
+      key,
+      count: 0,
+      position: [0, 0, 0],
+      color: [0, 0, 0],
+      colorCount: 0,
+    };
+    target.count += source.count;
+    for (let axis = 0; axis < 3; axis += 1) {
+      target.position[axis] += centroid[axis] * source.count;
+      bounds.min[axis] = Math.min(bounds.min[axis], centroid[axis]);
+      bounds.max[axis] = Math.max(bounds.max[axis], centroid[axis]);
+    }
+    if (source.meanColor) {
+      for (let channel = 0; channel < 3; channel += 1) {
+        target.color[channel] += source.meanColor[channel] * source.count;
+      }
+      target.colorCount += source.count;
+    }
+    voxels.set(key, target);
+  }
+  for (const voxel of voxels.values()) {
+    voxel.centroid = voxel.position.map((value) => value / voxel.count);
+    voxel.meanColor = voxel.colorCount
+      ? voxel.color.map((value) => value / voxel.colorCount)
+      : null;
+    delete voxel.position;
+    delete voxel.color;
+  }
+  return {
+    ...signature,
+    voxelSizeM,
+    voxelCount: voxels.size,
+    bounds,
+    voxels,
+    sourceToWorld,
   };
 }
 

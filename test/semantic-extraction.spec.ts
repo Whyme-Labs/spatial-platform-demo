@@ -116,6 +116,48 @@ describe("registered point-cloud semantic candidates", () => {
     ]);
   });
 
+  it("normalizes a scaled Z-up source before extracting metric walkable geometry", () => {
+    const canonicalFloor = rectangularSurface(0, 4, 0, 3, 0);
+    const zUpSource = canonicalFloor.map(([x, y, z]) =>
+      [x / 2, -z / 2, y / 2] as [number, number, number]
+    );
+    const signature = parsePlySceneSignature(asciiPly(zUpSource), {
+      voxelSizeM: 0.05,
+      maximumSamplePoints: 100_000,
+    });
+    const sourceToWorld = {
+      sourceUpAxis: "Z",
+      metresPerSourceUnit: 2,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    } as const;
+
+    const report = extractWalkableSemanticCandidates(signature, {
+      gridSizeM: 0.5,
+      floorBandM: 0.15,
+      minimumAreaM2: 2,
+      maximumCandidates: 8,
+      sourceToWorld,
+    });
+
+    expect(report.method).toBe("registered-ply-walkable-candidates-v2");
+    expect(report.source).toMatchObject({
+      coordinateAssurance: "authored_source_to_world_v1",
+      sourceToWorld,
+    });
+    expect(report.summary).toMatchObject({
+      inferredFloorElevationM: 0,
+      candidateCount: 1,
+      totalCandidateAreaM2: 12,
+    });
+    expect(report.candidates[0].geometry.points).toEqual([
+      [0, 0, 0],
+      [4, 0, 0],
+      [4, 0, 3],
+      [0, 0, 3],
+    ]);
+  });
+
   it("fails closed when the registered PLY has no credible horizontal support", () => {
     const signature = parsePlySceneSignature(asciiPly([
       [0, 0, 0],

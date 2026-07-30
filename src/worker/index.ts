@@ -45,6 +45,7 @@ import {
   reviewerInvitationSchema,
   retentionPolicySchema,
   sceneEntitySchema,
+  navigationObstacleSchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
@@ -507,7 +508,9 @@ type SemanticExtractionRow = {
   version_id: string;
   input_asset_id: string;
   job_id: string;
-  method: "registered-ply-walkable-candidates-v1";
+  method:
+    | "registered-ply-walkable-candidates-v1"
+    | "registered-ply-walkable-candidates-v2";
   status: "QUEUED" | "PROCESSING" | "READY_FOR_REVIEW" | "REVIEWED" | "FAILED";
   parameters_json: string;
   summary_json: string | null;
@@ -684,6 +687,7 @@ type ReleaseRow = {
   access_policy: string;
   access_token_hash: string | null;
   viewer_config_json: string;
+  spatial_snapshot_json: string | null;
   published_at: string;
   expires_at: string | null;
   revoked_at: string | null;
@@ -6243,9 +6247,12 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     floorplanExtractions: [],
     floorplanRevisions: [],
     floorplanExports: [],
+    navigationObstacles: [],
     deliveryPolicy: null,
     collisionProxy: { version: "box-union-v1", boxes: [] },
     navigationMesh: { version: "room-box-triangles-v1", vertices: [], indices: [], sourceEntityIds: [] },
+    obstacleProxy: { version: "authored-obstacle-boxes-v1", boxes: [] },
+    navigationProfile: defaultNavigationProfile,
   });
   const version = await context.env.DB.prepare(
     "SELECT id, version_number FROM scene_versions WHERE id = ? AND project_id = ?",
@@ -6349,9 +6356,15 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE e.project_id = ? AND e.version_id = ? AND e.organisation_id = ?
       ORDER BY e.created_at DESC LIMIT 300
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT * FROM scene_navigation_obstacles
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ? AND status = 'active'
+      ORDER BY label, created_at
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
-  const runtime = buildSpatialRuntime(entities);
+  const navigationObstacles = requiredBatchResult(results, 15).results;
+  const runtime = buildSpatialRuntime(entities, navigationObstacles);
   return context.json({
     version,
     entities,
@@ -6373,8 +6386,11 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       download_url:
         `/api/projects/${access.project.id}/spatial/floorplan-exports/${String(row.id)}/download`,
     })),
+    navigationObstacles,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
+    obstacleProxy: runtime.obstacleProxy,
+    navigationProfile: runtime.navigationProfile,
   });
 });
 
@@ -6440,6 +6456,78 @@ app.delete("/api/projects/:projectId/spatial/entities/:entityId", async (context
   `).bind(context.req.param("entityId"), context.req.param("projectId"), auth.organisationId).first();
   if (!result) return notFound(context, "Spatial entity not found");
   await audit(context, auth, "spatial.entity.archive", "scene_entity", context.req.param("entityId"));
+  return context.body(null, 204);
+});
+
+app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationObstacleSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+  );
+  if (!project) return notFound(context, "Project not found");
+  const version = await context.env.DB.prepare(
+    "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
+  ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Scene version not found");
+  if (parsed.data.clientOperationId) {
+    const existing = await context.env.DB.prepare(`
+      SELECT * FROM scene_navigation_obstacles
+      WHERE organisation_id = ? AND client_operation_id = ?
+    `).bind(auth.organisationId, parsed.data.clientOperationId).first();
+    if (existing) return context.json({ obstacle: existing, idempotent: true });
+  }
+  const id = crypto.randomUUID();
+  await context.env.DB.prepare(`
+    INSERT INTO scene_navigation_obstacles
+      (id, organisation_id, project_id, version_id, label, bounds_json,
+        metadata_json, client_operation_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.label,
+    JSON.stringify(parsed.data.geometry),
+    JSON.stringify(parsed.data.metadata),
+    parsed.data.clientOperationId ?? null,
+    auth.userId,
+  ).run();
+  await audit(context, auth, "spatial.navigation_obstacle.create", "scene_navigation_obstacle", id, {
+    versionId: version.id,
+    label: parsed.data.label,
+  });
+  return context.json({ obstacle: { id, ...parsed.data } }, 201);
+});
+
+app.delete("/api/projects/:projectId/spatial/navigation-obstacles/:obstacleId", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const result = await context.env.DB.prepare(`
+    UPDATE scene_navigation_obstacles
+    SET status = 'archived', updated_at = datetime('now')
+    WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
+    RETURNING id
+  `).bind(
+    context.req.param("obstacleId"),
+    context.req.param("projectId"),
+    auth.organisationId,
+  ).first();
+  if (!result) return notFound(context, "Navigation obstacle not found");
+  await audit(
+    context,
+    auth,
+    "spatial.navigation_obstacle.archive",
+    "scene_navigation_obstacle",
+    context.req.param("obstacleId"),
+  );
   return context.body(null, 204);
 });
 
@@ -7102,6 +7190,9 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
   const jobId = crypto.randomUUID();
   const parameters = {
     coordinateAssurance: parsed.data.coordinateAssurance,
+    ...(parsed.data.sourceToWorld
+      ? { sourceToWorld: parsed.data.sourceToWorld }
+      : {}),
     registrationEvidence: parsed.data.registrationEvidence,
     gridSizeM: parsed.data.gridSizeM,
     floorBandM: parsed.data.floorBandM,
@@ -10329,6 +10420,14 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       report: ["Semantic report coordinate assurance differs from the queued job"],
     });
   }
+  if (
+    JSON.stringify(Reflect.get(parsed.data.report.source, "sourceToWorld") ?? null) !==
+      JSON.stringify(Reflect.get(serverParameters as object, "sourceToWorld") ?? null)
+  ) {
+    return validationError(context, {
+      report: ["Semantic report source-to-world transform differs from the queued job"],
+    });
+  }
   const candidateKeys = new Set(parsed.data.report.candidates.map((candidate) => candidate.candidateKey));
   if (candidateKeys.size !== parsed.data.report.candidates.length) {
     return validationError(context, { report: ["Semantic candidate keys must be unique"] });
@@ -11006,11 +11105,19 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     : null;
   const accessTokenHash = rawAccessToken ? await sha256Hex(`${rawAccessToken}:${context.env.SESSION_PEPPER}`) : null;
   const publishedAt = new Date().toISOString();
+  const spatialSnapshot = await captureSpatialSnapshot(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+    approved.id,
+  );
   await context.env.DB.batch([
     context.env.DB.prepare(`
       INSERT INTO releases
-        (id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id, access_policy, access_token_hash, viewer_config_json, published_at, expires_at, created_by, client_operation_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id,
+          access_policy, access_token_hash, viewer_config_json, spatial_snapshot_json,
+          published_at, expires_at, created_by, client_operation_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       releaseId,
       auth.organisationId,
@@ -11021,6 +11128,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       parsed.data.accessPolicy,
       accessTokenHash,
       JSON.stringify(parsed.data.viewerConfig),
+      JSON.stringify(spatialSnapshot),
       publishedAt,
       parsed.data.expiresAt ?? null,
       auth.userId,
@@ -11158,9 +11266,30 @@ app.get("/api/releases/:slug/manifest", async (context) => {
         desktop_standard_budget, desktop_high_budget, max_initial_bytes
       FROM project_delivery_policies WHERE project_id = ? AND organisation_id = ?
     `).bind(release.project_id, release.organisation_id),
+    context.env.DB.prepare(`
+      SELECT id, label, bounds_json, metadata_json
+      FROM scene_navigation_obstacles
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ? AND status = 'active'
+      ORDER BY label, created_at
+    `).bind(release.project_id, release.version_id, release.organisation_id),
   ]);
   const spatialEntities = requiredBatchResult(spatial, 0).results;
-  const spatialRuntime = buildSpatialRuntime(spatialEntities);
+  const navigationObstacles = requiredBatchResult(spatial, 4).results;
+  const spatialRuntime = buildSpatialRuntime(spatialEntities, navigationObstacles);
+  const liveSpatial = {
+    schemaVersion: "spatial-runtime-v5",
+    entities: spatialEntities,
+    routes: requiredBatchResult(spatial, 1).results,
+    routeStops: requiredBatchResult(spatial, 2).results,
+    navigationObstacles,
+    collisionProxy: spatialRuntime.collisionProxy,
+    navigationMesh: spatialRuntime.navigationMesh,
+    obstacleProxy: spatialRuntime.obstacleProxy,
+    navigationProfile: spatialRuntime.navigationProfile,
+  };
+  const publishedSpatial = release.spatial_snapshot_json
+    ? parseSpatialSnapshot(release.spatial_snapshot_json) ?? liveSpatial
+    : liveSpatial;
   return context.json({
     schemaVersion: "1.0.0",
     release: {
@@ -11193,13 +11322,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       accentColor: theme?.accent_color ?? "#d6ff4b",
       surfaceColor: theme?.surface_color ?? "#0d0f0e",
     },
-    spatial: {
-      entities: spatialEntities,
-      routes: requiredBatchResult(spatial, 1).results,
-      routeStops: requiredBatchResult(spatial, 2).results,
-      collisionProxy: spatialRuntime.collisionProxy,
-      navigationMesh: spatialRuntime.navigationMesh,
-    },
+    spatial: publishedSpatial,
     deliveryPolicy: requiredBatchResult(spatial, 3).results[0] ?? {
       adaptive_quality: 1,
       mobile_lite_budget: 0.75,
@@ -15843,7 +15966,90 @@ type RuntimeBox = {
   max: [number, number, number];
 };
 
-function buildSpatialRuntime(rows: unknown[]): {
+type RuntimeObstacleBox = {
+  entityId: string;
+  label: string;
+  min: [number, number, number];
+  max: [number, number, number];
+};
+
+const defaultNavigationProfile = {
+  agentRadius: 0.22,
+  agentHeight: 1.8,
+  eyeHeight: 1.6,
+  maxStepMetres: 0.1,
+} as const;
+
+async function captureSpatialSnapshot(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<Record<string, unknown>> {
+  const results = await database.batch([
+    database.prepare(`
+      SELECT id, parent_id, kind, label, description, position_json, geometry_json,
+        metadata_json, sort_order
+      FROM scene_entities
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ? AND status = 'active'
+      ORDER BY kind, sort_order, label
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT id, label, description, accessibility, estimated_seconds
+      FROM scene_routes
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ? AND status = 'active'
+      ORDER BY created_at
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT rs.route_id, rs.entity_id, rs.sequence_number, rs.camera_pose_json, rs.narration
+      FROM scene_route_stops rs
+      JOIN scene_routes r ON r.id = rs.route_id
+      WHERE r.organisation_id = ? AND r.project_id = ? AND r.version_id = ?
+        AND r.status = 'active'
+      ORDER BY rs.route_id, rs.sequence_number
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT id, label, bounds_json, metadata_json
+      FROM scene_navigation_obstacles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ? AND status = 'active'
+      ORDER BY label, created_at
+    `).bind(organisationId, projectId, versionId),
+  ]);
+  const entities = requiredBatchResult(results, 0).results;
+  const obstacles = requiredBatchResult(results, 3).results;
+  const runtime = buildSpatialRuntime(entities, obstacles);
+  return {
+    schemaVersion: "spatial-runtime-v5",
+    entities,
+    routes: requiredBatchResult(results, 1).results,
+    routeStops: requiredBatchResult(results, 2).results,
+    navigationObstacles: obstacles,
+    collisionProxy: runtime.collisionProxy,
+    navigationMesh: runtime.navigationMesh,
+    obstacleProxy: runtime.obstacleProxy,
+    navigationProfile: runtime.navigationProfile,
+  };
+}
+
+function parseSpatialSnapshot(value: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  if (Reflect.get(parsed, "schemaVersion") !== "spatial-runtime-v5") return null;
+  if (
+    !Array.isArray(Reflect.get(parsed, "entities")) ||
+    !Array.isArray(Reflect.get(parsed, "routes")) ||
+    !Array.isArray(Reflect.get(parsed, "routeStops")) ||
+    !Reflect.get(parsed, "navigationMesh")
+  ) return null;
+  return parsed as Record<string, unknown>;
+}
+
+function buildSpatialRuntime(rows: unknown[], obstacleRows: unknown[] = []): {
   collisionProxy: { version: "box-union-v1"; boxes: RuntimeBox[] };
   navigationMesh: {
     version: "room-box-triangles-v1" | "authored-polygon-triangles-v2";
@@ -15851,10 +16057,15 @@ function buildSpatialRuntime(rows: unknown[]): {
     indices: number[];
     sourceEntityIds: string[];
   };
+  obstacleProxy: {
+    version: "authored-obstacle-boxes-v1";
+    boxes: RuntimeObstacleBox[];
+  };
+  navigationProfile: typeof defaultNavigationProfile;
 } {
   const regions: Array<{
     entityId: string;
-    kind: "floor" | "room";
+    kind: "floor" | "room" | "doorway";
     label: string;
     box: RuntimeBox;
     polygon: Array<[number, number, number]> | null;
@@ -15862,7 +16073,7 @@ function buildSpatialRuntime(rows: unknown[]): {
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const kind = Reflect.get(row, "kind");
-    if (kind !== "floor" && kind !== "room") continue;
+    if (kind !== "floor" && kind !== "room" && kind !== "doorway") continue;
     const geometryJson = Reflect.get(row, "geometry_json");
     if (typeof geometryJson !== "string") continue;
     let geometry: unknown;
@@ -15919,9 +16130,13 @@ function buildSpatialRuntime(rows: unknown[]): {
     });
   }
 
-  const walkable = regions.some((region) => region.kind === "room")
+  const primaryWalkable = regions.some((region) => region.kind === "room")
     ? regions.filter((region) => region.kind === "room")
-    : regions;
+    : regions.filter((region) => region.kind === "floor");
+  const walkable = [
+    ...primaryWalkable,
+    ...regions.filter((region) => region.kind === "doorway"),
+  ];
   const boxes = walkable.map((region) => region.box);
   const vertices: Array<[number, number, number]> = [];
   const indices: number[] = [];
@@ -15945,6 +16160,39 @@ function buildSpatialRuntime(rows: unknown[]): {
       indices.push(offset, offset + 1, offset + 2, offset, offset + 2, offset + 3);
     }
   }
+  const obstacleBoxes = obstacleRows.flatMap((row): RuntimeObstacleBox[] => {
+    if (!row || typeof row !== "object") return [];
+    const boundsJson = Reflect.get(row, "bounds_json");
+    if (typeof boundsJson !== "string") return [];
+    let geometry: unknown;
+    try {
+      geometry = JSON.parse(boundsJson);
+    } catch {
+      return [];
+    }
+    if (!geometry || typeof geometry !== "object" || Reflect.get(geometry, "type") !== "box") {
+      return [];
+    }
+    const points = Reflect.get(geometry, "points");
+    if (!Array.isArray(points) || points.length !== 2) return [];
+    const first = finitePoint3(points[0]);
+    const second = finitePoint3(points[1]);
+    if (!first || !second) return [];
+    return [{
+      entityId: String(Reflect.get(row, "id") ?? ""),
+      label: String(Reflect.get(row, "label") ?? "Obstacle"),
+      min: [
+        Math.min(first[0], second[0]),
+        Math.min(first[1], second[1]),
+        Math.min(first[2], second[2]),
+      ],
+      max: [
+        Math.max(first[0], second[0]),
+        Math.max(first[1], second[1]),
+        Math.max(first[2], second[2]),
+      ],
+    }];
+  });
   return {
     collisionProxy: { version: "box-union-v1", boxes },
     navigationMesh: {
@@ -15955,6 +16203,11 @@ function buildSpatialRuntime(rows: unknown[]): {
       indices,
       sourceEntityIds: walkable.map((region) => region.entityId),
     },
+    obstacleProxy: {
+      version: "authored-obstacle-boxes-v1",
+      boxes: obstacleBoxes,
+    },
+    navigationProfile: defaultNavigationProfile,
   };
 }
 

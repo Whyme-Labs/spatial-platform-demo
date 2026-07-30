@@ -421,6 +421,12 @@ type VersionComparison = {
     viewer: {
       splatBudgetMillions?: number;
       sceneRotationDegrees?: [number, number, number];
+      sourceToWorld?: {
+        sourceUpAxis: "Y" | "Z";
+        metresPerSourceUnit: number;
+        yawDegrees: number;
+        translationMetres: [number, number, number];
+      };
       initialCamera?: {
         position: [number, number, number];
         target: [number, number, number];
@@ -942,6 +948,22 @@ type SpatialWorkspace = {
   deliveryPolicy: Record<string, unknown> | null;
   collisionProxy: { version: string; boxes: Array<{ entityId: string; label: string; min: number[]; max: number[] }> };
   navigationMesh: { version: string; vertices: number[][]; indices: number[]; sourceEntityIds: string[] };
+  navigationObstacles: Array<{
+    id: string;
+    label: string;
+    bounds_json: string;
+    metadata_json: string;
+  }>;
+  obstacleProxy: {
+    version: string;
+    boxes: Array<{ entityId: string; label: string; min: number[]; max: number[] }>;
+  };
+  navigationProfile: {
+    agentRadius: number;
+    agentHeight: number;
+    eyeHeight: number;
+    maxStepMetres: number;
+  };
 };
 type MeasurementWorkspace = {
   briefs: Array<{
@@ -5772,6 +5794,12 @@ function comparisonRendererUrl(renderable: VersionComparison["renderables"][numb
   url.searchParams.set("budget", String(renderable.viewer?.splatBudgetMillions ?? 1.25));
   const rotation = renderable.viewer?.sceneRotationDegrees;
   if (rotation) url.searchParams.set("rotation", rotation.join(","));
+  if (renderable.viewer?.sourceToWorld) {
+    url.searchParams.set(
+      "sourceToWorld",
+      JSON.stringify(renderable.viewer.sourceToWorld),
+    );
+  }
   const camera = renderable.viewer?.initialCamera;
   if (camera) {
     url.searchParams.set("camera", camera.position.join(","));
@@ -6038,7 +6066,29 @@ function renderSpatial(): void {
     }
     hierarchy.append(group);
   }
-  const add = element("button", "primary-button wide", "Add floor, room, doorway, or POI");
+  const obstacleGroup = element("div", "semantic-group");
+  obstacleGroup.append(element(
+    "strong",
+    "",
+    `Navigation obstacles · ${spatial.navigationObstacles.length}`,
+  ));
+  for (const obstacle of spatial.navigationObstacles) {
+    const row = element("div", "semantic-row");
+    row.append(element("span", "", obstacle.label));
+    const remove = element("button", "danger-button", "Archive");
+    remove.addEventListener("click", () => {
+      if (!confirm(`Archive navigation obstacle ${obstacle.label}?`)) return;
+      void runAction({
+        key: `archive-navigation-obstacle:${obstacle.id}`,
+        trigger: remove,
+        pendingLabel: "Archiving…",
+      }, () => archiveNavigationObstacle(obstacle.id));
+    });
+    row.append(remove);
+    obstacleGroup.append(row);
+  }
+  hierarchy.append(obstacleGroup);
+  const add = element("button", "primary-button wide", "Add structure or navigation obstacle");
   add.addEventListener("click", () => {
     byId<HTMLFormElement>("entityForm").reset();
     byId("entityError").textContent = "";
@@ -6177,6 +6227,8 @@ function renderSpatial(): void {
     element("h3", "", "Routes and walkable runtime"),
     projectFact("Collision regions", String(spatial.collisionProxy.boxes.length)),
     projectFact("Navigation triangles", String(Math.floor(spatial.navigationMesh.indices.length / 3))),
+    projectFact("Navigation obstacles", String(spatial.obstacleProxy.boxes.length)),
+    projectFact("Agent clearance", `${spatial.navigationProfile.agentRadius.toFixed(2)} m radius`),
   );
   if (!spatial.routes.length) routes.append(element("p", "muted-copy", "No guided route yet."));
   for (const route of spatial.routes) {
@@ -6722,7 +6774,17 @@ async function queueSemanticExtraction(form: FormData): Promise<void> {
   const body = {
     versionId: version.id,
     inputAssetId: String(form.get("inputAssetId") ?? ""),
-    coordinateAssurance: "registered_y_up_metric_frame",
+    coordinateAssurance: "authored_source_to_world_v1",
+    sourceToWorld: {
+      sourceUpAxis: String(form.get("sourceUpAxis") ?? "Y"),
+      metresPerSourceUnit: Number(form.get("metresPerSourceUnit") ?? 1),
+      yawDegrees: Number(form.get("yawDegrees") ?? 0),
+      translationMetres: [
+        Number(form.get("translationX") ?? 0),
+        Number(form.get("translationY") ?? 0),
+        Number(form.get("translationZ") ?? 0),
+      ],
+    },
     registrationEvidence: String(form.get("registrationEvidence") ?? "").trim(),
     gridSizeM: Number(form.get("gridSizeM") ?? 0.25),
     floorBandM: Number(form.get("floorBandM") ?? 0.15),
@@ -7436,12 +7498,34 @@ async function createSpatialEntity(form: FormData): Promise<void> {
   if (!project || !version) throw new Error("Open an immutable scene version first.");
   const position = parsePosition(String(form.get("position") ?? ""));
   const geometry = parseWalkableBounds(String(form.get("bounds") ?? ""));
+  const kind = String(form.get("kind") ?? "room");
+  if (kind === "navigation_obstacle") {
+    if (!geometry || geometry.type !== "box") {
+      throw new Error("Navigation obstacles require two opposing bounds corners.");
+    }
+    await api(`/api/projects/${project.id}/spatial/navigation-obstacles`, {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        versionId: version.id,
+        label: String(form.get("label") ?? ""),
+        geometry,
+        metadata: {
+          description: optionalString(form.get("description")) ?? null,
+        },
+      }),
+    });
+    entityDialog.close();
+    showToast("Navigation obstacle added");
+    await loadSpatialWorkspace(project.id);
+    return;
+  }
   await api(`/api/projects/${project.id}/spatial/entities`, {
     method: "POST",
     body: JSON.stringify({
       clientOperationId: crypto.randomUUID(),
       versionId: version.id,
-      kind: String(form.get("kind") ?? "room"),
+      kind,
       label: String(form.get("label") ?? ""),
       description: optionalString(form.get("description")) ?? null,
       position,
@@ -7451,6 +7535,17 @@ async function createSpatialEntity(form: FormData): Promise<void> {
   });
   entityDialog.close();
   showToast("Spatial entity added");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function archiveNavigationObstacle(obstacleId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) return;
+  await api(
+    `/api/projects/${project.id}/spatial/navigation-obstacles/${obstacleId}`,
+    { method: "DELETE" },
+  );
+  showToast("Navigation obstacle archived");
   await loadSpatialWorkspace(project.id);
 }
 
@@ -10171,6 +10266,17 @@ function openReleaseDialog(): void {
   const title = form.elements.namedItem("title");
   if (slug instanceof HTMLInputElement) slug.value = state.selected.project.activeReleaseSlug ?? state.selected.project.slug;
   if (title instanceof HTMLInputElement) title.value = state.selected.project.name;
+  const latestTransform = latestSemanticSourceToWorld();
+  const applyTransform = form.elements.namedItem("applySourceToWorld");
+  if (applyTransform instanceof HTMLInputElement) applyTransform.checked = Boolean(latestTransform);
+  if (latestTransform) {
+    setFormValue(form, "releaseSourceUpAxis", latestTransform.sourceUpAxis);
+    setFormValue(form, "releaseMetresPerSourceUnit", String(latestTransform.metresPerSourceUnit));
+    setFormValue(form, "releaseYawDegrees", String(latestTransform.yawDegrees));
+    setFormValue(form, "releaseTranslationX", String(latestTransform.translationMetres[0]));
+    setFormValue(form, "releaseTranslationY", String(latestTransform.translationMetres[1]));
+    setFormValue(form, "releaseTranslationZ", String(latestTransform.translationMetres[2]));
+  }
   releaseOperationId = crypto.randomUUID();
   byId("releaseError").textContent = "";
   releaseDialog.showModal();
@@ -10182,6 +10288,7 @@ async function publishRelease(form: FormData): Promise<void> {
   const expiresAtValue = optionalString(form.get("expiresAt"));
   try {
     const initialCamera = parseReleaseInitialCamera(form);
+    const sourceToWorld = parseReleaseSourceToWorld(form);
     const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
       `/api/projects/${state.selected.project.id}/releases`,
       {
@@ -10196,7 +10303,8 @@ async function publishRelease(form: FormData): Promise<void> {
             subtitle: optionalString(form.get("subtitle")),
             captureDate: optionalString(form.get("captureDate")),
             measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
-            splatBudgetMillions: 2,
+            splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
+            ...(sourceToWorld ? { sourceToWorld } : {}),
             ...(initialCamera ? { initialCamera } : {}),
           },
         }),
@@ -10212,6 +10320,68 @@ async function publishRelease(form: FormData): Promise<void> {
   } catch (error) {
     byId("releaseError").textContent = errorMessage(error);
   }
+}
+
+function latestSemanticSourceToWorld(): {
+  sourceUpAxis: "Y" | "Z";
+  metresPerSourceUnit: number;
+  yawDegrees: number;
+  translationMetres: [number, number, number];
+} | null {
+  for (const extraction of state.spatial?.semanticExtractions ?? []) {
+    try {
+      const parameters = JSON.parse(extraction.parameters_json) as Record<string, unknown>;
+      const transform = parameters.sourceToWorld;
+      if (!transform || typeof transform !== "object") continue;
+      const sourceUpAxis = Reflect.get(transform, "sourceUpAxis");
+      const metresPerSourceUnit = Number(Reflect.get(transform, "metresPerSourceUnit"));
+      const yawDegrees = Number(Reflect.get(transform, "yawDegrees"));
+      const translationMetres = Reflect.get(transform, "translationMetres");
+      if (
+        (sourceUpAxis === "Y" || sourceUpAxis === "Z") &&
+        Number.isFinite(metresPerSourceUnit) &&
+        Number.isFinite(yawDegrees) &&
+        validNumberTuple(translationMetres)
+      ) {
+        return { sourceUpAxis, metresPerSourceUnit, yawDegrees, translationMetres };
+      }
+    } catch {
+      // Ignore legacy or malformed extraction evidence.
+    }
+  }
+  return null;
+}
+
+function parseReleaseSourceToWorld(form: FormData): {
+  sourceUpAxis: "Y" | "Z";
+  metresPerSourceUnit: number;
+  yawDegrees: number;
+  translationMetres: [number, number, number];
+} | null {
+  if (form.get("applySourceToWorld") !== "on") return null;
+  const sourceUpAxis = String(form.get("releaseSourceUpAxis") ?? "Y");
+  const metresPerSourceUnit = Number(form.get("releaseMetresPerSourceUnit") ?? 1);
+  const yawDegrees = Number(form.get("releaseYawDegrees") ?? 0);
+  const translationMetres: [number, number, number] = [
+    Number(form.get("releaseTranslationX") ?? 0),
+    Number(form.get("releaseTranslationY") ?? 0),
+    Number(form.get("releaseTranslationZ") ?? 0),
+  ];
+  if (
+    (sourceUpAxis !== "Y" && sourceUpAxis !== "Z") ||
+    !Number.isFinite(metresPerSourceUnit) ||
+    metresPerSourceUnit <= 0 ||
+    !Number.isFinite(yawDegrees) ||
+    translationMetres.some((value) => !Number.isFinite(value))
+  ) {
+    throw new Error("The source-to-world transform must use a valid axis, scale, yaw, and translation.");
+  }
+  return {
+    sourceUpAxis,
+    metresPerSourceUnit,
+    yawDegrees,
+    translationMetres,
+  };
 }
 
 function parseReleaseInitialCamera(form: FormData): {

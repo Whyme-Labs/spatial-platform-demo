@@ -323,11 +323,18 @@ async function processNextJob() {
       }
       await heartbeat(job.id, lease.leaseToken, 35, "Building bounded registered PLY occupancy");
       const sourceBytes = await readFile(sourcePath);
+      const sourceToWorld = job.semanticConfig.sourceToWorld &&
+        typeof job.semanticConfig.sourceToWorld === "object"
+        ? job.semanticConfig.sourceToWorld
+        : null;
+      const metresPerSourceUnit = sourceToWorld
+        ? Number(sourceToWorld.metresPerSourceUnit)
+        : 1;
       const signature = parsePlySceneSignature(sourceBytes, {
         voxelSizeM: Math.max(0.05, Math.min(
           Number(job.semanticConfig.gridSizeM) / 2,
           Number(job.semanticConfig.floorBandM),
-        )),
+        )) / metresPerSourceUnit,
         maximumSamplePoints: Number(job.semanticConfig.maximumSamplePoints),
       });
       await heartbeat(job.id, lease.leaseToken, 68, "Extracting reviewable walkable polygons");
@@ -339,6 +346,7 @@ async function processNextJob() {
         elevationHintM: job.semanticConfig.elevationHintM === null
           ? null
           : Number(job.semanticConfig.elevationHintM),
+        sourceToWorld,
       });
       report.semanticExtractionId = job.semanticExtractionId;
       report.source = {
@@ -349,6 +357,7 @@ async function processNextJob() {
         sha256: download.sha256,
         coordinateAssurance: String(job.semanticConfig.coordinateAssurance),
         registrationEvidence: String(job.semanticConfig.registrationEvidence),
+        ...(sourceToWorld ? { sourceToWorld } : {}),
       };
       const reportPath = join(workDirectory, `semantic-candidates-${job.semanticExtractionId}.json`);
       await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, {
@@ -375,7 +384,9 @@ async function processNextJob() {
             toolVersions: {
               node: process.version,
               processor: "0.7.0",
-              extractor: "registered-ply-walkable-candidates-v1",
+              extractor: sourceToWorld
+                ? "registered-ply-walkable-candidates-v2"
+                : "registered-ply-walkable-candidates-v1",
             },
           },
         }),

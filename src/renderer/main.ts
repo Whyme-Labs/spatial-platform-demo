@@ -13,6 +13,15 @@ import {
 import {
   createSpatialLookControls,
 } from "./look-controls";
+import {
+  isNavigationPointAllowed,
+  isNavigationTransitionAllowed,
+  nearestNavigationPoint,
+  parseNavigationRuntimeMessage,
+  type NavigationRuntime,
+  type SourceToWorldTransform,
+  type Vector3Tuple,
+} from "../shared/navigation-runtime";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -21,7 +30,6 @@ const parentOrigin = location.origin;
 const startedAt = performance.now();
 
 type SparkSceneFormat = "rad" | "spz" | "sog";
-type Vector3Tuple = [number, number, number];
 type WalkableBoundarySource = "authored" | "none";
 
 type RendererMessage =
@@ -157,6 +165,7 @@ let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
 let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
+let navigationRuntime: NavigationRuntime | null = null;
 let walkableBoundarySource: WalkableBoundarySource = "none";
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
@@ -233,14 +242,27 @@ async function start(): Promise<void> {
             return min && max ? [{ min, max }] : [];
           })
         : [];
-      if (authoredBoxes.length) {
+      const authoredRuntime = parseNavigationRuntimeMessage(
+        event.data,
+        authoredBoxes.map((box) => ({
+          min: box.min.toArray() as Vector3Tuple,
+          max: box.max.toArray() as Vector3Tuple,
+        })),
+      );
+      if (authoredRuntime) {
+        navigationRuntime = authoredRuntime;
         walkableBoxes = authoredBoxes;
+        if (!walkableBoxes.length) {
+          const bounds = navigationMeshBounds(authoredRuntime);
+          if (bounds) walkableBoxes = [bounds];
+        }
         walkableBoundarySource = "authored";
         setMovementAvailability(controls, true);
         const cameraAdjusted = anchorCameraToWalkable(camera);
         controlStatus.textContent =
-          `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active${cameraAdjusted ? " · view aligned" : ""}`;
+          `${Math.floor(authoredRuntime.navigationMesh.indices.length / 3)} navigation triangles · ${authoredRuntime.obstacleBoxes.length} obstacle${authoredRuntime.obstacleBoxes.length === 1 ? "" : "s"}${cameraAdjusted ? " · view aligned" : ""}`;
       } else {
+        navigationRuntime = null;
         walkableBoxes = [];
         walkableBoundarySource = "none";
         setMovementAvailability(controls, false);
@@ -295,7 +317,7 @@ async function start(): Promise<void> {
         return;
       }
       const requestedPosition = new THREE.Vector3().fromArray(pose.position);
-      if (walkableBoxes.length && !isWalkable(requestedPosition)) {
+      if (navigationRuntime && !isCameraPositionAllowed(requestedPosition)) {
         if (requestId) {
           post({
             source: "spatial-spark",
@@ -314,7 +336,9 @@ async function start(): Promise<void> {
       controls.align(camera);
       if (typeof pose.fovDegrees === "number") camera.fov = Math.min(100, Math.max(20, pose.fovDegrees));
       camera.updateProjectionMatrix();
-      if (walkableBoxes.length && isWalkable(camera.position)) lastWalkablePosition = camera.position.clone();
+      if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
+        lastWalkablePosition = camera.position.clone();
+      }
       if (requestId) {
         post({
           source: "spatial-spark",
@@ -360,7 +384,22 @@ async function start(): Promise<void> {
       setProgress(progress, detail);
     },
   });
-  if (config.sceneRotationDegrees) {
+  if (config.sourceToWorld) {
+    const upAxisRotation = new THREE.Quaternion();
+    if (config.sourceToWorld.sourceUpAxis === "Z") {
+      upAxisRotation.setFromAxisAngle(
+        new THREE.Vector3(1, 0, 0),
+        -Math.PI / 2,
+      );
+    }
+    const yawRotation = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0),
+      THREE.MathUtils.degToRad(config.sourceToWorld.yawDegrees),
+    );
+    mesh.quaternion.copy(yawRotation.multiply(upAxisRotation));
+    mesh.scale.setScalar(config.sourceToWorld.metresPerSourceUnit);
+    mesh.position.fromArray(config.sourceToWorld.translationMetres);
+  } else if (config.sceneRotationDegrees) {
     mesh.rotation.set(
       THREE.MathUtils.degToRad(config.sceneRotationDegrees[0]),
       THREE.MathUtils.degToRad(config.sceneRotationDegrees[1]),
@@ -402,9 +441,15 @@ async function start(): Promise<void> {
     const now = performance.now();
     const deltaSeconds = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
     lastFrameAt = now;
+    const movementStart = lastWalkablePosition?.clone() ?? camera.position.clone();
     controls.update(camera, deltaSeconds, mobileControls.movement);
-    if (walkableBoxes.length) {
-      if (isWalkable(camera.position)) {
+    if (navigationRuntime) {
+      const destination = camera.position.toArray() as Vector3Tuple;
+      const origin = movementStart.toArray() as Vector3Tuple;
+      if (
+        isNavigationPointAllowed(destination, navigationRuntime) &&
+        isNavigationTransitionAllowed(origin, destination, navigationRuntime)
+      ) {
         lastWalkablePosition = camera.position.clone();
       } else if (lastWalkablePosition) {
         camera.position.copy(lastWalkablePosition);
@@ -477,6 +522,7 @@ function readConfig(): {
   format: SparkSceneFormat;
   splatBudget: number;
   sceneRotationDegrees: Vector3Tuple | null;
+  sourceToWorld: SourceToWorldTransform | null;
   initialCamera: {
     position: Vector3Tuple;
     target: Vector3Tuple;
@@ -506,6 +552,7 @@ function readConfig(): {
     ? Math.min(8, Math.max(0.25, rawBudget))
     : 2;
   const sceneRotationDegrees = readVector(params.get("rotation"));
+  const sourceToWorld = readSourceToWorld(params.get("sourceToWorld"));
   const cameraPosition = readVector(params.get("camera"));
   const cameraTarget = readVector(params.get("target"));
   const cameraUp = readVector(params.get("up"));
@@ -514,7 +561,14 @@ function readConfig(): {
   const initialCamera = cameraPosition && cameraTarget
     ? { position: cameraPosition, target: cameraTarget, up: cameraUp, fovDegrees }
     : null;
-  return { contentUrl, format, splatBudget, sceneRotationDegrees, initialCamera };
+  return {
+    contentUrl,
+    format,
+    splatBudget,
+    sceneRotationDegrees,
+    sourceToWorld,
+    initialCamera,
+  };
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -534,6 +588,35 @@ function readVector(value: string | null): Vector3Tuple | null {
   return [parts[0]!, parts[1]!, parts[2]!];
 }
 
+function readSourceToWorld(value: string | null): SourceToWorldTransform | null {
+  if (!value) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const sourceUpAxis = Reflect.get(parsed, "sourceUpAxis");
+  const metresPerSourceUnit = Number(Reflect.get(parsed, "metresPerSourceUnit"));
+  const yawDegrees = Number(Reflect.get(parsed, "yawDegrees"));
+  const translationMetres = finiteTuple(Reflect.get(parsed, "translationMetres"));
+  if (
+    (sourceUpAxis !== "Y" && sourceUpAxis !== "Z") ||
+    !Number.isFinite(metresPerSourceUnit) ||
+    metresPerSourceUnit <= 0 ||
+    metresPerSourceUnit > 10_000 ||
+    !Number.isFinite(yawDegrees) ||
+    !translationMetres
+  ) return null;
+  return {
+    sourceUpAxis,
+    metresPerSourceUnit,
+    yawDegrees,
+    translationMetres,
+  };
+}
+
 function finiteVector3(value: unknown): THREE.Vector3 | null {
   if (!Array.isArray(value) || value.length !== 3) return null;
   const coordinates = value.map(Number);
@@ -541,20 +624,58 @@ function finiteVector3(value: unknown): THREE.Vector3 | null {
   return new THREE.Vector3(coordinates[0], coordinates[1], coordinates[2]);
 }
 
-function isWalkable(position: THREE.Vector3): boolean {
-  const horizontalPadding = 0.05;
-  const verticalPadding = 0.35;
-  return walkableBoxes.some(({ min, max }) =>
-    position.x >= min.x - horizontalPadding &&
-    position.x <= max.x + horizontalPadding &&
-    position.z >= min.z - horizontalPadding &&
-    position.z <= max.z + horizontalPadding &&
-    position.y >= min.y - verticalPadding &&
-    position.y <= max.y + verticalPadding
+function finiteTuple(value: unknown): Vector3Tuple | null {
+  if (!Array.isArray(value) || value.length !== 3) return null;
+  const coordinates = value.map(Number);
+  if (coordinates.some((coordinate) => !Number.isFinite(coordinate))) return null;
+  return [coordinates[0]!, coordinates[1]!, coordinates[2]!];
+}
+
+function isCameraPositionAllowed(position: THREE.Vector3): boolean {
+  return navigationRuntime
+    ? isNavigationPointAllowed(position.toArray() as Vector3Tuple, navigationRuntime)
+    : false;
+}
+
+function navigationMeshBounds(
+  runtime: NavigationRuntime,
+): { min: THREE.Vector3; max: THREE.Vector3 } | null {
+  if (!runtime.navigationMesh.vertices.length) return null;
+  const minimum = new THREE.Vector3(
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
   );
+  const maximum = new THREE.Vector3(
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+  );
+  for (const vertex of runtime.navigationMesh.vertices) {
+    minimum.min(new THREE.Vector3().fromArray(vertex));
+    maximum.max(new THREE.Vector3().fromArray(vertex));
+  }
+  minimum.y -= 0.5;
+  maximum.y += runtime.profile.agentHeight + 0.5;
+  return { min: minimum, max: maximum };
 }
 
 function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
+  if (navigationRuntime) {
+    const nearest = nearestNavigationPoint(
+      camera.position.toArray() as Vector3Tuple,
+      navigationRuntime,
+    );
+    if (!nearest) {
+      lastWalkablePosition = null;
+      return false;
+    }
+    const target = new THREE.Vector3().fromArray(nearest);
+    const adjusted = camera.position.distanceToSquared(target) > 1e-12;
+    camera.position.copy(target);
+    lastWalkablePosition = camera.position.clone();
+    return adjusted;
+  }
   if (!walkableBoxes.length) {
     lastWalkablePosition = null;
     return false;
@@ -674,7 +795,7 @@ function resetView(): void {
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
   rendererControls?.align(camera);
-  if (walkableBoxes.length && isWalkable(camera.position)) {
+  if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
     lastWalkablePosition = camera.position.clone();
   }
   controlStatus.textContent = "View reset";

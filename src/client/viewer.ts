@@ -12,6 +12,7 @@ import {
   type FloorPlan,
   type PlanRoom,
 } from "./floor-plan";
+import type { SourceToWorldTransform } from "../shared/navigation-runtime";
 import "../../styles.css";
 
 type ReleaseManifest = {
@@ -44,6 +45,7 @@ type ReleaseManifest = {
     measurementDisclaimer: string;
     splatBudgetMillions?: number;
     sceneRotationDegrees?: [number, number, number];
+    sourceToWorld?: SourceToWorldTransform;
     initialCamera?: {
       position: [number, number, number];
       target: [number, number, number];
@@ -97,6 +99,21 @@ type ReleaseManifest = {
       vertices: Array<[number, number, number]>;
       indices: number[];
       sourceEntityIds: string[];
+    };
+    obstacleProxy: {
+      version: string;
+      boxes: Array<{
+        entityId: string;
+        label: string;
+        min: [number, number, number];
+        max: [number, number, number];
+      }>;
+    };
+    navigationProfile: {
+      agentRadius: number;
+      agentHeight: number;
+      eyeHeight: number;
+      maxStepMetres: number;
     };
   };
   deliveryPolicy?: {
@@ -276,6 +293,12 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     rendererUrl.searchParams.set("budget", String(manifest.viewer.splatBudgetMillions ?? manifestBudget(manifest)));
     if (manifest.viewer.sceneRotationDegrees) {
       rendererUrl.searchParams.set("rotation", manifest.viewer.sceneRotationDegrees.join(","));
+    }
+    if (manifest.viewer.sourceToWorld) {
+      rendererUrl.searchParams.set(
+        "sourceToWorld",
+        JSON.stringify(manifest.viewer.sourceToWorld),
+      );
     }
     if (manifest.viewer.initialCamera) {
       rendererUrl.searchParams.set("camera", manifest.viewer.initialCamera.position.join(","));
@@ -725,12 +748,15 @@ function setRendererCamera(cameraPose: CameraPose): Promise<CameraPose> {
 }
 
 function sendSpatialRuntime(): void {
-  const collisionProxy = activeManifest?.spatial?.collisionProxy;
-  if (!collisionProxy) return;
+  const spatial = activeManifest?.spatial;
+  if (!spatial) return;
   frame.contentWindow?.postMessage({
     source: "spatial-host",
     type: "set-spatial-runtime",
-    collisionBoxes: collisionProxy.boxes,
+    collisionBoxes: spatial.collisionProxy.boxes,
+    navigationMesh: spatial.navigationMesh,
+    obstacleBoxes: spatial.obstacleProxy?.boxes ?? [],
+    navigationProfile: spatial.navigationProfile,
   }, location.origin);
 }
 
