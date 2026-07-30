@@ -17,10 +17,62 @@ export type ApiRequestInit = RequestInit & {
   retries?: number;
 };
 
-let refreshPromise: Promise<boolean> | null = null;
+export const AUTH_SESSION_EXPIRED_EVENT = "spatial-auth-session-expired";
+
+const AUTH_SESSION_STORAGE_KEY = "spatial.auth.session-state.v1";
+const AUTH_REFRESH_LOCK = "spatial.auth.refresh.v1";
+const UNAUTHENTICATED_API_PATHS = new Set([
+  "/api/auth/config",
+  "/api/auth/refresh",
+  "/api/auth/session",
+]);
+
+type AuthSessionMarker = {
+  generation: string;
+  status: "authenticated" | "signed-out";
+  updatedAt: number;
+};
+
+type RefreshOutcome = "refreshed" | "expired" | "unavailable";
+
+let refreshPromise: Promise<RefreshOutcome> | null = null;
+let authExpiryNotified = false;
+let memoryAuthMarker: AuthSessionMarker | null = null;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== AUTH_SESSION_STORAGE_KEY) return;
+    const marker = parseAuthMarker(event.newValue);
+    memoryAuthMarker = marker;
+    if (marker?.status === "authenticated") {
+      authExpiryNotified = false;
+      return;
+    }
+    if (marker?.status === "signed-out" && !authExpiryNotified) {
+      authExpiryNotified = true;
+      dispatchAuthExpired();
+    }
+  });
+}
 
 export async function api<T>(path: string, init: ApiRequestInit = {}): Promise<T> {
   return apiRequest<T>(path, init, true);
+}
+
+export async function restoreAuthenticationSession(): Promise<boolean> {
+  const outcome = await refreshSession(readAuthMarker()?.generation ?? null);
+  if (outcome === "unavailable") throw refreshUnavailableError();
+  return outcome === "refreshed";
+}
+
+export function markAuthenticationEstablished(): void {
+  authExpiryNotified = false;
+  writeAuthMarker("authenticated");
+}
+
+export function markAuthenticationSignedOut(): void {
+  authExpiryNotified = true;
+  writeAuthMarker("signed-out");
 }
 
 export async function apiFile(
@@ -41,14 +93,17 @@ async function apiRequest<T>(
 
   while (true) {
     try {
+      const requestAuthGeneration = readAuthMarker()?.generation ?? null;
       const response = await timedFetch(path, init, method);
-      if (
-        response.status === 401 &&
-        allowRefresh &&
-        !path.startsWith("/api/auth/")
-      ) {
-        const refreshed = await refreshSession();
-        if (refreshed) return apiRequest<T>(path, { ...init, retries: 0 }, false);
+      if (response.status === 401 && isProtectedApiPath(path)) {
+        if (allowRefresh) {
+          const outcome = await refreshSession(requestAuthGeneration);
+          if (outcome === "refreshed") {
+            return apiRequest<T>(path, { ...init, retries: 0 }, false);
+          }
+          if (outcome === "unavailable") throw refreshUnavailableError();
+        }
+        notifyAuthExpired();
       }
       if (shouldRetryStatus(response.status) && attempt < retries) {
         await waitForRetry(response, attempt, init.signal);
@@ -94,10 +149,17 @@ async function apiFileRequest(
   let attempt = 0;
   while (true) {
     try {
+      const requestAuthGeneration = readAuthMarker()?.generation ?? null;
       const response = await timedFetch(path, init, method);
-      if (response.status === 401 && allowRefresh && !path.startsWith("/api/auth/")) {
-        const refreshed = await refreshSession();
-        if (refreshed) return apiFileRequest(path, { ...init, retries: 0 }, false);
+      if (response.status === 401 && isProtectedApiPath(path)) {
+        if (allowRefresh) {
+          const outcome = await refreshSession(requestAuthGeneration);
+          if (outcome === "refreshed") {
+            return apiFileRequest(path, { ...init, retries: 0 }, false);
+          }
+          if (outcome === "unavailable") throw refreshUnavailableError();
+        }
+        notifyAuthExpired();
       }
       if (shouldRetryStatus(response.status) && attempt < retries) {
         await waitForRetry(response, attempt, init.signal);
@@ -176,23 +238,134 @@ async function timedFetch(
   }
 }
 
-async function refreshSession(): Promise<boolean> {
+async function refreshSession(
+  requestAuthGeneration: string | null,
+): Promise<RefreshOutcome> {
   if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
+  refreshPromise = coordinateRefresh(requestAuthGeneration)
+    .finally(() => {
+      refreshPromise = null;
+    });
+  return refreshPromise;
+}
+
+async function coordinateRefresh(
+  requestAuthGeneration: string | null,
+): Promise<RefreshOutcome> {
+  const refresh = async (): Promise<RefreshOutcome> => {
+    const currentMarker = readAuthMarker();
+    if (
+      currentMarker &&
+      currentMarker.generation !== requestAuthGeneration
+    ) {
+      return currentMarker.status === "authenticated" ? "refreshed" : "expired";
+    }
     try {
       const response = await timedFetch(
         "/api/auth/refresh",
         { method: "POST", timeoutMs: 15_000 },
         "POST",
       );
-      return response.ok;
+      if (response.status === 200) {
+        markAuthenticationEstablished();
+        return "refreshed";
+      }
+      if (response.status === 204 || response.status === 401 || response.status === 403) {
+        return "expired";
+      }
+      return "unavailable";
     } catch {
-      return false;
-    } finally {
-      refreshPromise = null;
+      return "unavailable";
     }
-  })();
-  return refreshPromise;
+  };
+
+  if (navigator.locks?.request) {
+    return navigator.locks.request(AUTH_REFRESH_LOCK, { mode: "exclusive" }, refresh);
+  }
+  return refresh();
+}
+
+function isProtectedApiPath(path: string): boolean {
+  if (!path.startsWith("/api/")) return false;
+  if (UNAUTHENTICATED_API_PATHS.has(path)) return false;
+  return !path.startsWith("/api/auth/otp/") &&
+    !path.startsWith("/api/auth/oidc/");
+}
+
+function refreshUnavailableError(): ApiError {
+  return new ApiError(
+    "Your session could not be refreshed. Check your connection and retry.",
+    503,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
+}
+
+function notifyAuthExpired(): void {
+  if (authExpiryNotified) return;
+  authExpiryNotified = true;
+  writeAuthMarker("signed-out");
+  dispatchAuthExpired();
+  void clearBrowserAuthSession();
+}
+
+function dispatchAuthExpired(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT));
+}
+
+async function clearBrowserAuthSession(): Promise<void> {
+  try {
+    await fetch("/api/auth/session", {
+      method: "DELETE",
+      credentials: "same-origin",
+    });
+  } catch {
+    // Local state is already safe; a later sign-in overwrites expired cookies.
+  }
+}
+
+function readAuthMarker(): AuthSessionMarker | null {
+  if (typeof window === "undefined") return memoryAuthMarker;
+  try {
+    const marker = parseAuthMarker(window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY));
+    memoryAuthMarker = marker;
+    return marker;
+  } catch {
+    return memoryAuthMarker;
+  }
+}
+
+function writeAuthMarker(status: AuthSessionMarker["status"]): void {
+  const marker: AuthSessionMarker = {
+    generation: crypto.randomUUID(),
+    status,
+    updatedAt: Date.now(),
+  };
+  memoryAuthMarker = marker;
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(marker));
+  } catch {
+    // The in-memory marker still provides same-tab single-flight behaviour.
+  }
+}
+
+function parseAuthMarker(value: string | null): AuthSessionMarker | null {
+  if (!value) return null;
+  try {
+    const marker = JSON.parse(value) as Partial<AuthSessionMarker>;
+    if (
+      typeof marker.generation !== "string" ||
+      (marker.status !== "authenticated" && marker.status !== "signed-out") ||
+      typeof marker.updatedAt !== "number"
+    ) return null;
+    return marker as AuthSessionMarker;
+  } catch {
+    return null;
+  }
 }
 
 async function readResponse<T>(response: Response): Promise<T> {

@@ -1,7 +1,15 @@
 import "@fontsource-variable/manrope";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
-import { api, apiFile, ApiError } from "./api";
+import {
+  api,
+  apiFile,
+  ApiError,
+  AUTH_SESSION_EXPIRED_EVENT,
+  markAuthenticationEstablished,
+  markAuthenticationSignedOut,
+  restoreAuthenticationSession,
+} from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
 import {
   captureAdapterProfiles,
@@ -1282,15 +1290,19 @@ async function initialise(): Promise<void> {
     >("/api/auth/session");
     if (!session.authenticated) {
       try {
-        await api("/api/auth/refresh", { method: "POST" });
-        session = await api<
-          { authenticated: true; user: User } | { authenticated: false }
-        >("/api/auth/session");
-      } catch {
+        const restored = await restoreAuthenticationSession();
+        if (restored) {
+          session = await api<
+            { authenticated: true; user: User } | { authenticated: false }
+          >("/api/auth/session");
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.retryable) throw error;
         // A missing or expired refresh session is the expected anonymous path.
       }
     }
     if (!session.authenticated) {
+      markAuthenticationSignedOut();
       if (ssoStatus === "error") {
         byId("loginError").textContent = enterpriseLoginErrorMessage(ssoCode);
       }
@@ -1299,6 +1311,7 @@ async function initialise(): Promise<void> {
       clearSsoReturnParameters();
       return;
     }
+    markAuthenticationEstablished();
     state.user = session.user;
     renderIdentity();
     await refreshAll();
@@ -1314,10 +1327,15 @@ async function initialise(): Promise<void> {
       return;
     }
     showNotice(errorMessage(error), "error");
+    if (!loginDialog.open) loginDialog.showModal();
+    beginTurnstileInitialisation();
   }
 }
 
 function bindInterface(): void {
+  window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, () => {
+    transitionToSignedOut("Your session expired. Sign in again.");
+  });
   window.addEventListener("spatial-action-start", clearNotice);
   window.addEventListener("spatial-action-error", (event) => {
     const message = event instanceof CustomEvent && typeof event.detail?.message === "string"
@@ -2315,6 +2333,7 @@ async function handleSignIn(form: FormData): Promise<void> {
       code: String(form.get("code") ?? ""),
     }),
   });
+  markAuthenticationEstablished();
   state.user = result.user;
   loginDialog.close();
   resetLogin();
@@ -2786,19 +2805,45 @@ function activateView(
 async function signOut(): Promise<void> {
   try {
     await api<void>("/api/auth/session", { method: "DELETE" });
-    state.user = null;
-    state.organisations = [];
-    clearTenantWorkspace();
-    renderIdentity();
-    renderProjects();
-    renderJobs();
-    renderReleases();
-    byId("projectDetail").hidden = true;
-    window.history.replaceState(null, "", "#projects");
-    loginDialog.showModal();
+    markAuthenticationSignedOut();
+    transitionToSignedOut();
   } catch (error) {
     showNotice(errorMessage(error), "error");
   }
+}
+
+function transitionToSignedOut(message = ""): void {
+  state.user = null;
+  state.organisations = [];
+  rawSceneChangePollGeneration += 1;
+  semanticExtractionPollGeneration += 1;
+  floorplanExtractionPollGeneration += 1;
+  comparisonGeneration += 1;
+  clearAssetHandoffPoll();
+  clearTenantWorkspace();
+  renderIdentity();
+  renderProjectControls();
+  renderProjectTemplateOptions();
+  renderProjects();
+  renderJobs();
+  renderReleases();
+  renderReviews();
+  renderHosting();
+  renderTeam();
+  renderSpatial();
+  renderMeasurement();
+  byId("activeProjects").textContent = "-";
+  byId("processingJobs").textContent = "-";
+  byId("hostedAssets").textContent = "-";
+  byId("hostedBytes").textContent = "Private R2 storage";
+  byId("activeReleases").textContent = "-";
+  byId("projectDetail").hidden = true;
+  clearNotice();
+  resetLogin();
+  byId("loginError").textContent = message;
+  window.history.replaceState(null, "", "#projects");
+  if (!loginDialog.open) loginDialog.showModal();
+  beginTurnstileInitialisation();
 }
 
 async function refreshAll(): Promise<void> {
@@ -2898,7 +2943,11 @@ async function refreshAll(): Promise<void> {
         await ensureProjectWorkspace(requestedView, true);
       }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) loginDialog.showModal();
+      if (error instanceof ApiError && error.status === 401) {
+        if (state.user || !loginDialog.open) {
+          transitionToSignedOut("Your session expired. Sign in again.");
+        }
+      }
       else showNotice(errorMessage(error), "error");
     }
   });
@@ -4066,6 +4115,7 @@ async function switchOrganisation(): Promise<void> {
     method: "POST",
     body: JSON.stringify({ organisationId }),
   });
+  markAuthenticationEstablished();
   clearTenantWorkspace();
   state.user = result.user;
   renderIdentity();

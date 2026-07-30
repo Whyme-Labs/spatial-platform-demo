@@ -196,6 +196,243 @@ test.describe("authenticated studio UI", () => {
   });
 });
 
+test.describe("studio authentication lifecycle", () => {
+  test("recovers a persisted session through the refresh cookie on page load", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let sessionRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/session") {
+        sessionRequests += 1;
+        if (sessionRequests === 1) {
+          return json(route, 200, { authenticated: false });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        return json(route, 200, { refreshed: true });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+
+    await expect(page.getByRole("heading", {
+      name: "From immutable source to approved spatial release.",
+    })).toBeVisible();
+    await expect.poll(() => sessionRequests).toBe(2);
+    await expect.poll(() => refreshRequests).toBe(1);
+    await expect(page.locator("#loginDialog")).not.toBeVisible();
+  });
+
+  test("refreshes once and retries a protected request after access expiry", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let organisationRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/organisations") {
+        organisationRequests += 1;
+        if (organisationRequests === 2) {
+          return json(route, 401, { error: "Access token expired" });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        return json(route, 200, { refreshed: true });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+    await page.locator("#refreshButton").click();
+    await expect.poll(() => organisationRequests).toBe(3);
+    await expect.poll(() => refreshRequests).toBe(1);
+    await expect(page.locator("#refreshButton")).toHaveText("Refresh");
+    await expect(page.locator("#loginDialog")).not.toBeVisible();
+  });
+
+  test("returns to sign-in when an expired access token cannot be refreshed", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let organisationRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/organisations") {
+        organisationRequests += 1;
+        if (organisationRequests === 2) {
+          return json(route, 401, { error: "Access token expired" });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        return json(route, 401, { error: "Refresh token expired" });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+    await page.locator("#refreshButton").click();
+    await expect(page.locator("#loginDialog")).toBeVisible();
+    await expect.poll(() => refreshRequests).toBe(1);
+    await expect(page.locator("#loginError")).toContainText(
+      "Your session expired. Sign in again.",
+    );
+    await expect(page.locator("#workspaceName")).toHaveText("Sign in required");
+    await expect(page.locator("#signOutButton")).toBeHidden();
+  });
+
+  test("treats a no-content refresh as an expired session", async ({ page }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let organisationRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/organisations") {
+        organisationRequests += 1;
+        if (organisationRequests === 2) {
+          return json(route, 401, { error: "Access token expired" });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        return route.fulfill({ status: 204 });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+    await page.locator("#refreshButton").click();
+    await expect(page.locator("#loginDialog")).toBeVisible();
+    await expect.poll(() => refreshRequests).toBe(1);
+    await expect(page.locator("#loginError")).toContainText(
+      "Your session expired. Sign in again.",
+    );
+    await expect(page.locator("#workspaceName")).toHaveText("Sign in required");
+  });
+
+  test("coordinates refresh-token rotation across open studio tabs", async ({
+    context,
+  }) => {
+    const pages = [await context.newPage(), await context.newPage()];
+    const organisationRequests = [0, 0];
+    let refreshRequests = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+
+    for (const [index, studioPage] of pages.entries()) {
+      await installTurnstileStub(studioPage);
+      await mockAuthenticatedStudio(studioPage);
+      await studioPage.route("**/api/**", async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path === "/api/auth/organisations") {
+          organisationRequests[index] = (organisationRequests[index] ?? 0) + 1;
+          if (organisationRequests[index] === 2) {
+            return json(route, 401, { error: "Access token expired" });
+          }
+          return route.fallback();
+        }
+        if (path === "/api/auth/refresh") {
+          refreshRequests += 1;
+          await refreshGate;
+          return json(route, 200, { refreshed: true });
+        }
+        return route.fallback();
+      });
+    }
+
+    await Promise.all(pages.map((studioPage) => studioPage.goto("/studio.html#projects")));
+    await Promise.all(pages.map((studioPage) =>
+      expect(studioPage.getByRole("button", { name: "Manage" })).toBeVisible()
+    ));
+
+    await Promise.all(pages.map((studioPage) => studioPage.locator("#refreshButton").click()));
+    await Promise.all(pages.map((studioPage) =>
+      expect(studioPage.locator("#refreshButton")).toHaveAttribute("aria-busy", "true")
+    ));
+    await expect.poll(() => refreshRequests).toBe(1);
+    releaseRefresh();
+
+    await expect.poll(() => organisationRequests).toEqual([3, 3]);
+    await Promise.all(pages.map((studioPage) =>
+      expect(studioPage.locator("#refreshButton")).toHaveText("Refresh")
+    ));
+    expect(refreshRequests).toBe(1);
+    await Promise.all(pages.map((studioPage) =>
+      expect(studioPage.locator("#loginDialog")).not.toBeVisible()
+    ));
+  });
+
+  test("propagates terminal session expiry to every open studio tab", async ({
+    context,
+  }) => {
+    const primary = await context.newPage();
+    const secondary = await context.newPage();
+    for (const studioPage of [primary, secondary]) {
+      await installTurnstileStub(studioPage);
+      await mockAuthenticatedStudio(studioPage);
+    }
+    let organisationRequests = 0;
+    await primary.route("**/api/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/auth/organisations") {
+        organisationRequests += 1;
+        if (organisationRequests === 2) {
+          return json(route, 401, { error: "Access token expired" });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        return json(route, 401, { error: "Refresh token expired" });
+      }
+      return route.fallback();
+    });
+
+    await Promise.all([
+      primary.goto("/studio.html#projects"),
+      secondary.goto("/studio.html#projects"),
+    ]);
+    await Promise.all([primary, secondary].map((studioPage) =>
+      expect(studioPage.getByRole("button", { name: "Manage" })).toBeVisible()
+    ));
+
+    await primary.locator("#refreshButton").click();
+
+    for (const studioPage of [primary, secondary]) {
+      await expect(studioPage.locator("#loginDialog")).toBeVisible();
+      await expect(studioPage.locator("#loginError")).toContainText(
+        "Your session expired. Sign in again.",
+      );
+      await expect(studioPage.locator("#workspaceName")).toHaveText("Sign in required");
+      await expect(studioPage.locator("#signOutButton")).toBeHidden();
+    }
+  });
+});
+
 test.describe("Spark renderer chrome", () => {
   test("renderer error and navigation controls remain usable on desktop and mobile", async ({ page }) => {
     for (const viewport of [viewports[0], viewports[3], viewports[4]]) {
