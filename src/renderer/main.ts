@@ -1,7 +1,6 @@
 import "@fontsource-variable/manrope";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import {
-  SparkControls,
   SparkRenderer,
   SplatMesh,
 } from "@sparkjsdev/spark";
@@ -12,6 +11,10 @@ import {
   nearestWalkablePoint,
   planarCameraStep,
 } from "./mobile-controls";
+import {
+  alignPointerLookToScreen,
+  createSpatialLookControls,
+} from "./look-controls";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -146,6 +149,7 @@ let sparkRenderer: SparkRenderer | null = null;
 let splatMesh: SplatMesh | null = null;
 let webglRenderer: THREE.WebGLRenderer | null = null;
 let rendererCamera: THREE.PerspectiveCamera | null = null;
+let rendererControls: ReturnType<typeof createSpatialLookControls> | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
@@ -208,12 +212,8 @@ async function start(): Promise<void> {
   scene.add(spark);
   qualityLabel.textContent = `${formatCount(budgetSplats)} splat budget`;
 
-  const controls = new SparkControls({ canvas });
-  controls.fpsMovement.moveSpeed = 1.4;
-  controls.fpsMovement.shiftMultiplier = 3;
-  controls.pointerControls.scrollSpeed = 0.8;
-  controls.pointerControls.moveInertia = 0.82;
-  controls.pointerControls.rotateInertia = 0.78;
+  const controls = createSpatialLookControls(canvas);
+  rendererControls = controls;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
@@ -247,6 +247,7 @@ async function start(): Promise<void> {
       anchorCameraToWalkable(camera);
       camera.up.copy(up).normalize();
       camera.lookAt(target);
+      alignPointerLookToScreen(controls, camera);
       camera.fov = Math.min(100, Math.max(20, fovDegrees));
       camera.updateProjectionMatrix();
       const direction = camera.getWorldDirection(new THREE.Vector3());
@@ -296,6 +297,7 @@ async function start(): Promise<void> {
       camera.position.fromArray(pose.position);
       camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
       camera.lookAt(new THREE.Vector3().fromArray(pose.target));
+      alignPointerLookToScreen(controls, camera);
       if (typeof pose.fovDegrees === "number") camera.fov = Math.min(100, Math.max(20, pose.fovDegrees));
       camera.updateProjectionMatrix();
       if (walkableBoxes.length && isWalkable(camera.position)) lastWalkablePosition = camera.position.clone();
@@ -372,6 +374,7 @@ async function start(): Promise<void> {
     frameScene(mesh, camera);
   }
   anchorCameraToWalkable(camera);
+  alignPointerLookToScreen(controls, camera);
   initialView = {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
@@ -633,6 +636,7 @@ function resetView(): void {
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
+  if (rendererControls) alignPointerLookToScreen(rendererControls, camera);
   if (walkableBoxes.length && isWalkable(camera.position)) {
     lastWalkablePosition = camera.position.clone();
   }
@@ -719,4 +723,5 @@ function dispose(): void {
   sparkRenderer?.dispose();
   webglRenderer?.dispose();
   rendererCamera = null;
+  rendererControls = null;
 }

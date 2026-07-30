@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pointer controls contract</title>
+    <style>
+      html,
+      body,
+      canvas {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      canvas {
+        display: block;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="controlCanvas"></canvas>
+    <script type="module" src="./pointer-controls.ts"></script>
+  </body>
+</html>
