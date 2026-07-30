@@ -58,6 +58,15 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
             type: 'control-onboarding',
             visible: false
           }, location.origin)">Close onboarding</button>
+          <button id="renderer-ready" onclick="parent.postMessage({
+            source: 'spatial-spark',
+            type: 'ready',
+            runtime: 'spark',
+            version: '2.1.0',
+            timeToFirstFrameMs: 1200,
+            format: 'rad',
+            splatBudget: 2000000
+          }, location.origin)">Renderer ready</button>
           <script>
             setTimeout(() => {
               parent.postMessage({
@@ -75,9 +84,15 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await page.goto("/s/loading-handoff", { waitUntil: "commit" });
 
   const parentLoader = page.locator("#loadingOverlay");
+  const releaseInfo = page.locator("#releaseInfo");
   await expect(parentLoader).toBeVisible();
+  await expect(releaseInfo).toBeHidden();
   await expect(page.frameLocator("#rendererFrame").getByRole("status")).toBeVisible();
   await expect(parentLoader).toBeHidden();
+  await expect(releaseInfo).toBeHidden();
+
+  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Renderer ready" }).click();
+  await expect(releaseInfo).toBeVisible();
 
   const viewport = page.locator("#viewport");
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Free roam" }).click();

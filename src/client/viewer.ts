@@ -252,6 +252,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId("viewport").classList.remove("mobile-controls-onboarding");
   errorPanel.hidden = true;
   releaseInfo.hidden = true;
+  byId("reviewPanel").hidden = true;
   frame.hidden = true;
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
 
@@ -358,6 +359,8 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
   setLoading(false);
   rendererReady = true;
+  releaseInfo.hidden = false;
+  byId("reviewPanel").hidden = !reviewMode;
   setNavigatorReady(true);
   byId("rendererStatus").textContent = `Spark ${message.version} ready`;
   sendSpatialRuntime();
@@ -398,8 +401,6 @@ function applyManifest(manifest: ReleaseManifest): void {
     const brand = document.querySelector<HTMLElement>("#releaseApp .brand strong");
     if (brand && manifest.theme.brandName) brand.textContent = manifest.theme.brandName;
   }
-  releaseInfo.hidden = false;
-  byId("reviewPanel").hidden = !reviewMode;
   renderSpatialNavigator(manifest);
 }
 
