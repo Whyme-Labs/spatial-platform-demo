@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { Earcut } from "three/src/extras/Earcut.js";
 import {
   manualJobCompletionSchema,
   customDomainSchema,
@@ -16912,66 +16913,115 @@ function navigationProfileFromRow(
   return { worldUnit, agentRadius, agentHeight, eyeHeight, maxStepMetres };
 }
 
-function triangulateWalkablePolygon(points: Array<[number, number, number]>): number[] {
-  if (points.length === 3) return [0, 1, 2];
-  const area = points.reduce((sum, point, index) => {
-    const next = points[(index + 1) % points.length]!;
-    return sum + point[0] * next[2] - next[0] * point[2];
-  }, 0) / 2;
-  const remaining = [...points.keys()];
-  if (area < 0) remaining.reverse();
-  const triangles: number[] = [];
-  let guard = points.length * points.length;
-  while (remaining.length > 3 && guard > 0) {
-    let clipped = false;
-    for (let cursor = 0; cursor < remaining.length; cursor += 1) {
-      const previous = remaining[(cursor + remaining.length - 1) % remaining.length]!;
-      const current = remaining[cursor]!;
-      const next = remaining[(cursor + 1) % remaining.length]!;
-      if (!walkableConvex(points[previous]!, points[current]!, points[next]!)) continue;
-      if (remaining.some((candidate) =>
-        candidate !== previous && candidate !== current && candidate !== next &&
-        pointInWalkableTriangle(points[candidate]!, points[previous]!, points[current]!, points[next]!))) {
-        continue;
-      }
-      triangles.push(previous, current, next);
-      remaining.splice(cursor, 1);
-      clipped = true;
-      break;
-    }
-    if (!clipped) return [];
-    guard -= 1;
+export function triangulateWalkablePolygon(points: Array<[number, number, number]>): number[] {
+  const ring = points
+    .map((point, index) => ({ point, index }))
+    .filter((entry, index, entries) =>
+      index === 0 || !sameWalkablePoint(entry.point, entries[index - 1]!.point));
+  if (
+    ring.length > 1 &&
+    sameWalkablePoint(ring[0]!.point, ring[ring.length - 1]!.point)
+  ) {
+    ring.pop();
   }
-  if (remaining.length === 3) triangles.push(remaining[0]!, remaining[1]!, remaining[2]!);
-  return triangles;
+  if (ring.length < 3) return [];
+  const rings = splitWalkableRings(ring);
+  const sourceWinding = Math.sign(walkableRingArea(ring));
+  if (!sourceWinding) return [];
+  const outerRings = rings
+    .filter((candidate) => walkableRingArea(candidate) * sourceWinding > 1e-9)
+    .sort((left, right) =>
+      Math.abs(walkableRingArea(left)) - Math.abs(walkableRingArea(right)));
+  const holeRings = rings.filter((candidate) =>
+    walkableRingArea(candidate) * sourceWinding < -1e-9);
+  const holesByOuter = new Map(outerRings.map((outer) => [outer, [] as typeof holeRings]));
+  for (const hole of holeRings) {
+    const owner = outerRings.find((outer) =>
+      walkablePointInRing(hole[0]!.point, outer));
+    if (owner) holesByOuter.get(owner)!.push(hole);
+  }
+  return outerRings.flatMap((outer) =>
+    triangulateSimpleWalkableRing(outer, holesByOuter.get(outer) ?? []));
 }
 
-function walkableConvex(
-  previous: [number, number, number],
-  current: [number, number, number],
-  next: [number, number, number],
-): boolean {
-  return (current[0] - previous[0]) * (next[2] - current[2]) -
-    (current[2] - previous[2]) * (next[0] - current[0]) > 1e-9;
+function splitWalkableRings(
+  ring: Array<{ point: [number, number, number]; index: number }>,
+): Array<Array<{ point: [number, number, number]; index: number }>> {
+  for (let first = 0; first < ring.length; first += 1) {
+    for (let second = first + 2; second < ring.length; second += 1) {
+      if (first === 0 && second === ring.length - 1) continue;
+      if (!sameWalkablePoint(ring[first]!.point, ring[second]!.point)) continue;
+      const left = ring.slice(first, second);
+      const right = [...ring.slice(second), ...ring.slice(0, first)];
+      if (left.length < 3 || right.length < 3) continue;
+      return [
+        ...splitWalkableRings(left),
+        ...splitWalkableRings(right),
+      ];
+    }
+  }
+  return [ring];
 }
 
-function pointInWalkableTriangle(
-  point: [number, number, number],
+function triangulateSimpleWalkableRing(
+  outer: Array<{ point: [number, number, number]; index: number }>,
+  holes: Array<Array<{ point: [number, number, number]; index: number }>>,
+): number[] {
+  const flattened = [outer, ...holes].flat();
+  const holeIndices: number[] = [];
+  let offset = outer.length;
+  for (const hole of holes) {
+    holeIndices.push(offset);
+    offset += hole.length;
+  }
+  const data = flattened.flatMap(({ point }) => [point[0], point[2]]);
+  return Earcut.triangulate(data, holeIndices, 2).map((index) =>
+    flattened[index]!.index);
+}
+
+function walkableRingArea(
+  ring: Array<{ point: [number, number, number] }>,
+): number {
+  return ring.reduce((sum, entry, index) => {
+    const next = ring[(index + 1) % ring.length]!;
+    return sum + entry.point[0] * next.point[2] - next.point[0] * entry.point[2];
+  }, 0) / 2;
+}
+
+function sameWalkablePoint(
   first: [number, number, number],
   second: [number, number, number],
-  third: [number, number, number],
 ): boolean {
-  const sign = (
-    left: [number, number, number],
-    right: [number, number, number],
-    target: [number, number, number],
-  ) => (left[0] - target[0]) * (right[2] - target[2]) -
-    (right[0] - target[0]) * (left[2] - target[2]);
-  const d1 = sign(point, first, second);
-  const d2 = sign(point, second, third);
-  const d3 = sign(point, third, first);
-  return !((d1 < -1e-9 || d2 < -1e-9 || d3 < -1e-9) &&
-    (d1 > 1e-9 || d2 > 1e-9 || d3 > 1e-9));
+  return Math.abs(first[0] - second[0]) <= 1e-9 &&
+    Math.abs(first[2] - second[2]) <= 1e-9;
+}
+
+function walkablePointInRing(
+  point: [number, number, number],
+  ring: Array<{ point: [number, number, number] }>,
+): boolean {
+  let inside = false;
+  for (let index = 0; index < ring.length; index += 1) {
+    const first = ring[index]!.point;
+    const second = ring[(index + 1) % ring.length]!.point;
+    const cross = (point[0] - first[0]) * (second[2] - first[2]) -
+      (point[2] - first[2]) * (second[0] - first[0]);
+    if (
+      Math.abs(cross) <= 1e-9 &&
+      point[0] >= Math.min(first[0], second[0]) - 1e-9 &&
+      point[0] <= Math.max(first[0], second[0]) + 1e-9 &&
+      point[2] >= Math.min(first[2], second[2]) - 1e-9 &&
+      point[2] <= Math.max(first[2], second[2]) + 1e-9
+    ) return true;
+    if (
+      (first[2] > point[2]) !== (second[2] > point[2]) &&
+      point[0] < (second[0] - first[0]) * (point[2] - first[2]) /
+        (second[2] - first[2]) + first[0]
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }
 
 function finitePoint3(value: unknown): [number, number, number] | null {
