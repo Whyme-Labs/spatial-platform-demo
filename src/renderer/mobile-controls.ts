@@ -438,60 +438,6 @@ export function nearestWalkablePoint(
   return nearest;
 }
 
-/**
- * Builds a conservative navigation envelope when a release does not include
- * authored room-level collision. The opening camera is included so a valid
- * curated view is never rejected merely because it sits just outside the
- * rendered splat bounds.
- */
-export function createFallbackWalkableBounds(
-  sceneBounds: WalkableBounds,
-  openingPosition: [number, number, number],
-): WalkableBounds | null {
-  const coordinates = [...sceneBounds.min, ...sceneBounds.max];
-  if (coordinates.some((coordinate) => !Number.isFinite(coordinate))) return null;
-
-  const minimum = sceneBounds.min.map((value, index) =>
-    Math.min(value, sceneBounds.max[index]!)
-  ) as [number, number, number];
-  const maximum = sceneBounds.max.map((value, index) =>
-    Math.max(value, sceneBounds.min[index]!)
-  ) as [number, number, number];
-  const extents = maximum.map((value, index) => value - minimum[index]!) as [
-    number,
-    number,
-    number,
-  ];
-  if (extents.every((extent) => extent < 1e-8)) return null;
-
-  const margin = extents.map((extent) => Math.max(0.35, extent * 0.08)) as [
-    number,
-    number,
-    number,
-  ];
-  const fallback: WalkableBounds = {
-    min: minimum.map((value, index) => value - margin[index]!) as [
-      number,
-      number,
-      number,
-    ],
-    max: maximum.map((value, index) => value + margin[index]!) as [
-      number,
-      number,
-      number,
-    ],
-  };
-
-  if (openingPosition.every((coordinate) => Number.isFinite(coordinate))) {
-    for (let index = 0; index < 3; index += 1) {
-      fallback.min[index] = Math.min(fallback.min[index]!, openingPosition[index]!);
-      fallback.max[index] = Math.max(fallback.max[index]!, openingPosition[index]!);
-    }
-  }
-
-  return fallback;
-}
-
 export function movementDescription(movement: PlanarMovement): string {
   const magnitude = Math.hypot(movement.x, movement.z);
   if (magnitude < 0.01) return "Stopped";

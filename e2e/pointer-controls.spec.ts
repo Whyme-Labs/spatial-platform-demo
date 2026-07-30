@@ -152,6 +152,25 @@ test.describe("spatial navigation direction", () => {
       expect(coordinate).toBeLessThanOrEqual(bounds.max[index]! + 1e-6);
     }
   });
+
+  test("look-only scenes reject travel without disabling camera look", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?translation=disabled");
+    const initial = await readCameraState(page);
+
+    for (let index = 0; index < 8; index += 1) {
+      await page.mouse.wheel(0, -80);
+    }
+    await page.keyboard.down("ArrowUp");
+    await page.waitForTimeout(180);
+    await page.keyboard.up("ArrowUp");
+    const afterTravel = await readCameraState(page);
+
+    expect(vectorLength(subtract(afterTravel.position, initial.position))).toBeLessThan(0.001);
+
+    await drag(page, { x: 500, y: 320 }, { x: 400, y: 320 });
+    const afterLook = await readCameraState(page);
+    expect(vectorLength(subtract(afterLook.direction, initial.direction))).toBeGreaterThan(0.02);
+  });
 });
 
 async function drag(

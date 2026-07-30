@@ -86,6 +86,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   const parentLoader = page.locator("#loadingOverlay");
   const releaseInfo = page.locator("#releaseInfo");
   const rendererFrame = page.locator("#rendererFrame");
+  await expect(rendererFrame).toHaveAttribute("allowfullscreen", "");
   await expect(parentLoader).toBeVisible();
   await expect(releaseInfo).toBeHidden();
   await expect(rendererFrame).toHaveClass(/is-loading/);

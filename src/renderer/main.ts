@@ -7,7 +7,6 @@ import {
 import * as THREE from "three";
 import { runAction } from "../client/action-state";
 import {
-  createFallbackWalkableBounds,
   MobileControlSurface,
   nearestWalkablePoint,
 } from "./mobile-controls";
@@ -23,7 +22,7 @@ const startedAt = performance.now();
 
 type SparkSceneFormat = "rad" | "spz" | "sog";
 type Vector3Tuple = [number, number, number];
-type WalkableBoundarySource = "authored" | "scene" | "none";
+type WalkableBoundarySource = "authored" | "none";
 
 type RendererMessage =
   | {
@@ -112,11 +111,15 @@ const helpButton = byId<HTMLButtonElement>("toggleHelp");
 const helpPanel = byId<HTMLElement>("controlHelp");
 const fullscreenButton = byId<HTMLButtonElement>("enterFullscreen");
 const controlStatus = byId<HTMLElement>("controlStatus");
+const freeRoamToggle = byId<HTMLButtonElement>("freeRoamToggle");
+const mobileMovementHelp = byId<HTMLElement>("mobileMovementHelp");
+const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
+const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
 const mobileControls = new MobileControlSurface({
   coarsePointer: matchMedia("(any-pointer: coarse)"),
   elements: {
     viewport: byId("sparkViewport"),
-    toggle: byId<HTMLButtonElement>("freeRoamToggle"),
+    toggle: freeRoamToggle,
     pad: byId("movementPad"),
     knob: byId("movementKnob"),
     status: byId("movementStatus"),
@@ -214,6 +217,7 @@ async function start(): Promise<void> {
   qualityLabel.textContent = `${formatCount(budgetSplats)} splat budget`;
 
   const controls = createSpatialLookControls(canvas);
+  controls.setTranslationEnabled(false);
   rendererControls = controls;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
@@ -232,15 +236,15 @@ async function start(): Promise<void> {
       if (authoredBoxes.length) {
         walkableBoxes = authoredBoxes;
         walkableBoundarySource = "authored";
-        controls.setNavigationBounds(walkableBoxes);
+        setMovementAvailability(controls, true);
         const cameraAdjusted = anchorCameraToWalkable(camera);
         controlStatus.textContent =
           `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active${cameraAdjusted ? " · view aligned" : ""}`;
-      } else if (walkableBoundarySource !== "scene") {
+      } else {
         walkableBoxes = [];
         walkableBoundarySource = "none";
-        controls.setNavigationBounds([]);
-        controlStatus.textContent = "";
+        setMovementAvailability(controls, false);
+        controlStatus.textContent = "Look-only preview · drag to look around";
       }
       return;
     }
@@ -383,7 +387,10 @@ async function start(): Promise<void> {
   } else {
     frameScene(mesh, camera);
   }
-  ensureSceneNavigationBoundary(mesh, camera, controls);
+  setMovementAvailability(controls, walkableBoundarySource === "authored");
+  if (walkableBoundarySource === "none") {
+    controlStatus.textContent = "Look-only preview · drag to look around";
+  }
   anchorCameraToWalkable(camera);
   controls.align(camera);
   initialView = {
@@ -410,7 +417,7 @@ async function start(): Promise<void> {
     if (!readySent) {
       readySent = true;
       resetButton.disabled = false;
-      mobileControls.setReady(true);
+      setMovementAvailability(controls, walkableBoundarySource === "authored");
       const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
       loading.classList.add("is-complete");
@@ -570,37 +577,26 @@ function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
   return adjusted;
 }
 
-function ensureSceneNavigationBoundary(
-  mesh: SplatMesh,
-  camera: THREE.PerspectiveCamera,
+function setMovementAvailability(
   controls: ReturnType<typeof createSpatialLookControls>,
+  available: boolean,
 ): void {
-  if (walkableBoundarySource === "authored" || walkableBoxes.length) {
-    controls.setNavigationBounds(walkableBoxes);
-    return;
-  }
-
-  mesh.updateMatrixWorld(true);
-  const worldBounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
-  const fallback = createFallbackWalkableBounds(
-    {
-      min: worldBounds.min.toArray() as Vector3Tuple,
-      max: worldBounds.max.toArray() as Vector3Tuple,
-    },
-    camera.position.toArray() as Vector3Tuple,
-  );
-  if (!fallback) {
-    controls.setNavigationBounds([]);
-    return;
-  }
-
-  walkableBoxes = [{
-    min: new THREE.Vector3().fromArray(fallback.min),
-    max: new THREE.Vector3().fromArray(fallback.max),
-  }];
-  walkableBoundarySource = "scene";
-  controls.setNavigationBounds(walkableBoxes);
-  controlStatus.textContent = "Scene safety boundary active";
+  controls.setTranslationEnabled(available);
+  controls.setNavigationBounds(available ? walkableBoxes : []);
+  mobileControls.setReady(available && readySent);
+  freeRoamToggle.textContent = available
+    ? (mobileControls.active ? "Exit roam" : "Free roam")
+    : "Look only";
+  freeRoamToggle.title = available
+    ? "Enable touch-friendly movement"
+    : "Walking is unavailable until this scene has a navigation map";
+  mobileMovementHelp.textContent = available
+    ? "Drag to look · use the Free roam joystick to move"
+    : "Drag to look · walking is unavailable for this scene";
+  desktopMovementHelp.textContent = available
+    ? "Drag to look · scroll or two-finger swipe to travel"
+    : "Drag to look · walking is unavailable for this scene";
+  desktopKeyboardHelp.hidden = !available;
 }
 
 function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {

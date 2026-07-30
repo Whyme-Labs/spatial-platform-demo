@@ -133,6 +133,49 @@ test.describe("touch-first Spark controls", () => {
     await expect(joystick).toBeHidden();
     await expect(page.locator("#sparkViewport")).not.toHaveClass(/free-roam-active/);
   });
+
+  test("keeps releases without authored navigation in an explicit look-only mode", async ({
+    page,
+  }) => {
+    await page.route("**/asset/test-scene.spz", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/octet-stream",
+        body: "invalid-spz-fixture",
+      })
+    );
+    await page.goto("/renderer/index.html?content=/asset/test-scene.spz&format=spz");
+    await expect(page.getByText(
+      "The spatial scene could not be rendered.",
+      { exact: true },
+    )).toBeVisible();
+    await page.evaluate(() => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: {
+          source: "spatial-host",
+          type: "set-spatial-runtime",
+          collisionBoxes: [],
+        },
+        origin: location.origin,
+        source: window,
+      }));
+    });
+
+    const lookOnly = page.getByRole("button", { name: "Look only" });
+    await expect(lookOnly).toBeVisible();
+    await expect(lookOnly).toBeDisabled();
+    await expect(lookOnly).toHaveAttribute(
+      "title",
+      "Walking is unavailable until this scene has a navigation map",
+    );
+
+    await page.getByRole("button", { name: "Help" }).click();
+    await expect(page.locator("#mobileMovementHelp")).toHaveText(
+      "Drag to look · walking is unavailable for this scene",
+    );
+    await expect(page.locator("#mobileMovementHelp")).toBeVisible();
+    await expect(page.locator("#desktopKeyboardHelp")).toHaveAttribute("hidden", "");
+  });
 });
 
 test("does not add game controls for a fine-pointer desktop viewer", async ({ page }) => {

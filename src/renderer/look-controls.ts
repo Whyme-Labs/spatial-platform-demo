@@ -31,6 +31,7 @@ export class SpatialNavigationControls {
   private readonly activeKeys = new Set<string>();
   private readonly activeTouches = new Set<number>();
   private navigationBounds: NavigationBounds[] = [];
+  private translationEnabled = true;
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -78,6 +79,14 @@ export class SpatialNavigationControls {
     });
   }
 
+  setTranslationEnabled(enabled: boolean): void {
+    this.translationEnabled = enabled;
+    if (enabled) return;
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
+    this.activeKeys.clear();
+  }
+
   update(
     camera: THREE.PerspectiveCamera,
     deltaSeconds: number,
@@ -87,6 +96,12 @@ export class SpatialNavigationControls {
       ? camera.position.clone()
       : null;
     const lookUpdated = this.applyLook(camera);
+    if (!this.translationEnabled) {
+      this.wheelDeltaX = 0;
+      this.wheelDeltaY = 0;
+      this.activeKeys.clear();
+      return lookUpdated;
+    }
     const wheelUpdated = this.applyWheel(camera);
     const movementUpdated = this.applyMovement(
       camera,

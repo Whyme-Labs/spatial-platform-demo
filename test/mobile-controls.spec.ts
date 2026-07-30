@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  createFallbackWalkableBounds,
   MobileControlModel,
   nearestWalkablePoint,
   planarCameraStep,
@@ -87,20 +86,6 @@ describe("mobile free-roam controls", () => {
       ],
     )).toEqual([10, 1.6, 10]);
     expect(nearestWalkablePoint([0, 0, 0], [])).toBeNull();
-  });
-
-  it("derives a padded fallback boundary from the splat and useful opening view", () => {
-    expect(createFallbackWalkableBounds(
-      { min: [0, 0, 0], max: [10, 3, 8] },
-      [5, 1.6, 12],
-    )).toEqual({
-      min: [-0.8, -0.35, -0.64],
-      max: [10.8, 3.35, 12],
-    });
-    expect(createFallbackWalkableBounds(
-      { min: [Number.NaN, 0, 0], max: [1, 1, 1] },
-      [0, 0, 0],
-    )).toBeNull();
   });
 });
 

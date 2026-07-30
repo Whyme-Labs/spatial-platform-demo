@@ -34,7 +34,8 @@ const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(initialQuaternion);
 const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(initialQuaternion);
 const controls = createSpatialLookControls(canvas);
 controls.align(camera);
-const requestedBoundary = new URL(location.href).searchParams.get("boundary") === "1";
+const fixtureParameters = new URL(location.href).searchParams;
+const requestedBoundary = fixtureParameters.get("boundary") === "1";
 if (requestedBoundary) {
   const padding = new THREE.Vector3(0.2, 0.2, 0.2);
   const boundary = {
@@ -46,6 +47,9 @@ if (requestedBoundary) {
     min: boundary.min.toArray(),
     max: boundary.max.toArray(),
   });
+}
+if (fixtureParameters.get("translation") === "disabled") {
+  controls.setTranslationEnabled(false);
 }
 
 function cameraState(): {
