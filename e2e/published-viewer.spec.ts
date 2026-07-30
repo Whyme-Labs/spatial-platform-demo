@@ -29,6 +29,31 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       measurementDisclaimer: "Test scene only.",
       splatBudgetMillions: 2,
     },
+    spatial: {
+      entities: [],
+      routes: [],
+      routeStops: [],
+      collisionProxy: {
+        version: "box-union-v1",
+        boxes: [{ entityId: "room", label: "Room", min: [0, 0, 0], max: [4, 3, 4] }],
+      },
+      navigationMesh: {
+        version: "authored-polygon-triangles-v2",
+        vertices: [[0, 0, 0], [4, 0, 0], [4, 0, 4], [0, 0, 4]],
+        indices: [0, 1, 2, 0, 2, 3],
+        sourceEntityIds: ["room"],
+      },
+      obstacleProxy: {
+        version: "authored-obstacle-boxes-v1",
+        boxes: [{ entityId: "table", label: "Table", min: [1, 0, 1], max: [2, 1, 2] }],
+      },
+      navigationProfile: {
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
+      },
+    },
   }));
   await page.route("**/api/releases/loading-handoff/telemetry", (route) => json(route, {}));
   await page.route("**/renderer/index.html?*", (route) => route.fulfill({
@@ -68,6 +93,11 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
             splatBudget: 2000000
           }, location.origin)">Renderer ready</button>
           <script>
+            window.addEventListener("message", (event) => {
+              if (event.data?.type === "set-spatial-runtime") {
+                window.runtimeMessage = event.data;
+              }
+            });
             setTimeout(() => {
               parent.postMessage({
                 source: "spatial-spark",
@@ -113,6 +143,26 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(parentLoader).toBeHidden();
   await expect(releaseInfo).toBeVisible();
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => Reflect.get(window, "runtimeMessage"),
+  )).toMatchObject({
+    type: "set-spatial-runtime",
+    navigationMesh: {
+      indices: [0, 1, 2, 0, 2, 3],
+      sourceEntityIds: ["room"],
+    },
+    obstacleBoxes: [{
+      entityId: "table",
+      min: [1, 0, 1],
+      max: [2, 1, 2],
+    }],
+    navigationProfile: {
+      agentRadius: 0.22,
+      agentHeight: 1.8,
+      eyeHeight: 1.6,
+      maxStepMetres: 0.1,
+    },
+  });
 
   const viewport = page.locator("#viewport");
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Free roam" }).click();

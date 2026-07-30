@@ -4,6 +4,10 @@ import {
   parsePlySceneSignature,
   ProcessingAgentError,
 } from "../scripts/processing-agent-core.mjs";
+import {
+  releaseInputSchema,
+  semanticExtractionSchema,
+} from "../src/worker/contracts";
 
 function asciiPly(points: Array<[number, number, number]>): Buffer {
   return Buffer.from([
@@ -180,5 +184,50 @@ describe("registered point-cloud semantic candidates", () => {
       retryable: false,
       failureClass: "input_validation",
     }));
+  });
+});
+
+describe("v5 coordinate contracts", () => {
+  it("fails closed when authored coordinate assurance omits its transform", () => {
+    const result = semanticExtractionSchema.safeParse({
+      clientOperationId: crypto.randomUUID(),
+      versionId: crypto.randomUUID(),
+      inputAssetId: crypto.randomUUID(),
+      coordinateAssurance: "authored_source_to_world_v1",
+      registrationEvidence: "A measured control distance established the metric scale.",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.sourceToWorld).toContain(
+        "An authored source-to-world transform is required for this coordinate assurance",
+      );
+    }
+  });
+
+  it("accepts one transform contract for extraction and the immutable viewer release", () => {
+    const sourceToWorld = {
+      sourceUpAxis: "Z",
+      metresPerSourceUnit: 0.42,
+      yawDegrees: 12,
+      translationMetres: [1, 0, -2],
+    } as const;
+    expect(semanticExtractionSchema.safeParse({
+      clientOperationId: crypto.randomUUID(),
+      versionId: crypto.randomUUID(),
+      inputAssetId: crypto.randomUUID(),
+      coordinateAssurance: "authored_source_to_world_v1",
+      sourceToWorld,
+      registrationEvidence: "A measured control distance established the metric scale.",
+    }).success).toBe(true);
+    expect(releaseInputSchema.safeParse({
+      slug: "v5-room",
+      accessPolicy: "unlisted",
+      viewerConfig: {
+        title: "V5 room",
+        measurementDisclaimer: "Indicative visual navigation only.",
+        sourceToWorld,
+      },
+    }).success).toBe(true);
   });
 });
