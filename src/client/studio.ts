@@ -6618,7 +6618,11 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
 }
 
 async function loadSpatialWorkspace(projectId: string): Promise<void> {
-  const workspace = await api<SpatialWorkspace>(`/api/projects/${projectId}/spatial`);
+  const versionId = state.selected?.project.id === projectId
+    ? state.selected.versions[0]?.id
+    : undefined;
+  const query = versionId ? `?versionId=${encodeURIComponent(versionId)}` : "";
+  const workspace = await api<SpatialWorkspace>(`/api/projects/${projectId}/spatial${query}`);
   if (state.selected?.project.id !== projectId) return;
   state.spatial = workspace;
   state.spatialProjectId = projectId;
@@ -8761,7 +8765,10 @@ async function selectProject(
 ): Promise<void> {
   try {
     const detail = await api<ProjectDetail>(`/api/projects/${projectId}`);
-    if (state.selected?.project.id !== projectId) {
+    const selectedVersionChanged =
+      state.selected?.project.id === projectId &&
+      state.selected.versions[0]?.id !== detail.versions[0]?.id;
+    if (state.selected?.project.id !== projectId || selectedVersionChanged) {
       state.spatial = null;
       state.spatialProjectId = null;
       state.measurement = null;
