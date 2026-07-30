@@ -1174,6 +1174,7 @@ const reviewerDialog = byId<HTMLDialogElement>("reviewerDialog");
 const deliveryDialog = byId<HTMLDialogElement>("deliveryDialog");
 const domainDialog = byId<HTMLDialogElement>("domainDialog");
 const entityDialog = byId<HTMLDialogElement>("entityDialog");
+const navigationProfileDialog = byId<HTMLDialogElement>("navigationProfileDialog");
 const semanticExtractionDialog = byId<HTMLDialogElement>("semanticExtractionDialog");
 const semanticReviewDialog = byId<HTMLDialogElement>("semanticReviewDialog");
 const floorplanExtractionDialog = byId<HTMLDialogElement>("floorplanExtractionDialog");
@@ -1222,6 +1223,7 @@ let assetHandoffRetryOperationId: string | null = null;
 let assetHandoffCancelOperationId: string | null = null;
 let assetHandoffPollTimer: number | null = null;
 let projectViewsInitialised = false;
+let editingSpatialEntity: SpatialEntity | null = null;
 let releaseOperationId: string | null = null;
 let reviewerOperationId: string | null = null;
 let teamInvitationOperationId: string | null = null;
@@ -1378,6 +1380,7 @@ function bindInterface(): void {
   const deliveryForm = byId<HTMLFormElement>("deliveryForm");
   const domainForm = byId<HTMLFormElement>("domainForm");
   const entityForm = byId<HTMLFormElement>("entityForm");
+  const navigationProfileForm = byId<HTMLFormElement>("navigationProfileForm");
   const semanticExtractionForm = byId<HTMLFormElement>("semanticExtractionForm");
   const semanticReviewForm = byId<HTMLFormElement>("semanticReviewForm");
   const floorplanExtractionForm = byId<HTMLFormElement>("floorplanExtractionForm");
@@ -1412,6 +1415,7 @@ function bindInterface(): void {
     deliveryForm,
     domainForm,
     entityForm,
+    navigationProfileForm,
     semanticExtractionForm,
     semanticReviewForm,
     routeForm,
@@ -1991,6 +1995,19 @@ function bindInterface(): void {
       pendingLabel: "Adding entity…",
       errorTarget: byId("entityError"),
     }, () => createSpatialEntity(form));
+  });
+  const navigationProfileSubmit =
+    navigationProfileForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  navigationProfileForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(navigationProfileForm);
+    void runAction({
+      key: "update-navigation-profile",
+      trigger: navigationProfileSubmit,
+      form: navigationProfileForm,
+      pendingLabel: "Saving profile…",
+      errorTarget: byId("navigationProfileError"),
+    }, () => updateNavigationProfile(form));
   });
   const semanticExtractionSubmit =
     semanticExtractionForm.querySelector<HTMLButtonElement>("[type='submit']")!;
@@ -6052,6 +6069,8 @@ function renderSpatial(): void {
     for (const entity of grouped.get(kind) ?? []) {
       const row = element("div", "semantic-row");
       row.append(element("span", "", entity.label));
+      const edit = element("button", "quiet-button", "Edit");
+      edit.addEventListener("click", () => openSpatialEntityDialog(entity));
       const remove = element("button", "danger-button", "Archive");
       remove.addEventListener("click", () => {
         if (!confirm(`Archive ${entity.label}? Routes using it may need revision.`)) return;
@@ -6061,7 +6080,7 @@ function renderSpatial(): void {
           pendingLabel: "Archiving…",
         }, () => archiveSpatialEntity(entity.id));
       });
-      row.append(remove);
+      row.append(edit, remove);
       group.append(row);
     }
     hierarchy.append(group);
@@ -6089,11 +6108,7 @@ function renderSpatial(): void {
   }
   hierarchy.append(obstacleGroup);
   const add = element("button", "primary-button wide", "Add structure or navigation obstacle");
-  add.addEventListener("click", () => {
-    byId<HTMLFormElement>("entityForm").reset();
-    byId("entityError").textContent = "";
-    entityDialog.showModal();
-  });
+  add.addEventListener("click", () => openSpatialEntityDialog(null));
   hierarchy.append(add);
 
   const semanticExtraction = element("article", "workspace-card-large semantic-extraction-card");
@@ -6103,7 +6118,7 @@ function renderSpatial(): void {
     element(
       "p",
       "muted-copy",
-      "A leased processor can propose bounded walkable polygons from a verified, registered Y-up metric PLY. Nothing enters the scene hierarchy until an operator accepts specific candidates.",
+      "A leased processor normalizes a verified PLY through reviewed source-to-world evidence, then proposes bounded walkable polygons. Nothing enters the scene hierarchy until an operator accepts specific candidates.",
     ),
   );
   const eligibleSemanticAssets = semanticExtractionAssets();
@@ -6238,7 +6253,9 @@ function renderSpatial(): void {
   const addRoute = element("button", "quiet-button wide", "Create guided route");
   addRoute.disabled = spatial.entities.length === 0;
   addRoute.addEventListener("click", openRouteDialog);
-  routes.append(addRoute);
+  const tuneNavigation = element("button", "quiet-button wide", "Tune navigation agent");
+  tuneNavigation.addEventListener("click", openNavigationProfileDialog);
+  routes.append(addRoute, tuneNavigation);
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7492,13 +7509,87 @@ function processingJobError(value: string | null): string {
   return "The processor reported a failure. Retry the retained job or inspect its evidence log.";
 }
 
+function openSpatialEntityDialog(entity: SpatialEntity | null): void {
+  const form = byId<HTMLFormElement>("entityForm");
+  form.reset();
+  editingSpatialEntity = entity;
+  const kind = form.elements.namedItem("kind");
+  if (kind instanceof HTMLSelectElement) {
+    kind.disabled = Boolean(entity);
+    if (entity) kind.value = entity.kind;
+  }
+  const submit = form.querySelector<HTMLButtonElement>("[type='submit']")!;
+  submit.textContent = entity ? "Save spatial entity" : "Add spatial entity";
+  if (entity) {
+    setFormValue(form, "label", entity.label);
+    setFormValue(form, "description", entity.description ?? "");
+    if (entity.position_json) {
+      try {
+        const position = JSON.parse(entity.position_json);
+        if (validNumberTuple(position)) setFormValue(form, "position", position.join(", "));
+      } catch {
+        // The server remains the source of truth for malformed legacy values.
+      }
+    }
+    if (entity.geometry_json) {
+      try {
+        const geometry = JSON.parse(entity.geometry_json) as {
+          type?: string;
+          points?: unknown[];
+        };
+        if (geometry.type === "box" && geometry.points?.length === 2) {
+          setFormValue(
+            form,
+            "bounds",
+            `${String(geometry.points[0])} → ${String(geometry.points[1])}`,
+          );
+        } else if (geometry.type === "polygon" && Array.isArray(geometry.points)) {
+          setFormValue(
+            form,
+            "polygon",
+            geometry.points.map((point) => String(point)).join("\n"),
+          );
+        }
+      } catch {
+        // Keep the editor empty instead of exposing malformed legacy JSON.
+      }
+    }
+  }
+  byId("entityError").textContent = "";
+  entityDialog.showModal();
+}
+
 async function createSpatialEntity(form: FormData): Promise<void> {
   const project = state.selected?.project;
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
   const position = parsePosition(String(form.get("position") ?? ""));
-  const geometry = parseWalkableBounds(String(form.get("bounds") ?? ""));
+  const bounds = parseWalkableBounds(String(form.get("bounds") ?? ""));
+  const polygon = parseWalkablePolygon(String(form.get("polygon") ?? ""));
+  if (bounds && polygon) {
+    throw new Error("Use either walkable bounds or a polygon, not both.");
+  }
+  const geometry = polygon ?? bounds;
   const kind = String(form.get("kind") ?? "room");
+  if (editingSpatialEntity) {
+    await api(
+      `/api/projects/${project.id}/spatial/entities/${editingSpatialEntity.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          label: String(form.get("label") ?? ""),
+          description: optionalString(form.get("description")) ?? null,
+          position,
+          geometry,
+        }),
+      },
+    );
+    editingSpatialEntity = null;
+    entityDialog.close();
+    showToast("Spatial entity updated");
+    await loadSpatialWorkspace(project.id);
+    return;
+  }
   if (kind === "navigation_obstacle") {
     if (!geometry || geometry.type !== "box") {
       throw new Error("Navigation obstacles require two opposing bounds corners.");
@@ -7546,6 +7637,37 @@ async function archiveNavigationObstacle(obstacleId: string): Promise<void> {
     { method: "DELETE" },
   );
   showToast("Navigation obstacle archived");
+  await loadSpatialWorkspace(project.id);
+}
+
+function openNavigationProfileDialog(): void {
+  const profile = state.spatial?.navigationProfile;
+  if (!profile) return;
+  const form = byId<HTMLFormElement>("navigationProfileForm");
+  setFormValue(form, "agentRadius", String(profile.agentRadius));
+  setFormValue(form, "agentHeight", String(profile.agentHeight));
+  setFormValue(form, "eyeHeight", String(profile.eyeHeight));
+  setFormValue(form, "maxStepMetres", String(profile.maxStepMetres));
+  byId("navigationProfileError").textContent = "";
+  navigationProfileDialog.showModal();
+}
+
+async function updateNavigationProfile(form: FormData): Promise<void> {
+  const project = state.selected?.project;
+  const version = state.spatial?.version;
+  if (!project || !version) throw new Error("Open an immutable scene version first.");
+  await api(`/api/projects/${project.id}/spatial/navigation-profile`, {
+    method: "PUT",
+    body: JSON.stringify({
+      versionId: version.id,
+      agentRadius: Number(form.get("agentRadius")),
+      agentHeight: Number(form.get("agentHeight")),
+      eyeHeight: Number(form.get("eyeHeight")),
+      maxStepMetres: Number(form.get("maxStepMetres")),
+    }),
+  });
+  navigationProfileDialog.close();
+  showToast("Navigation profile updated");
   await loadSpatialWorkspace(project.id);
 }
 
@@ -8675,6 +8797,27 @@ function parseWalkableBounds(value: string): { type: "box"; points: [[number, nu
       [Math.min(first[0], second[0]), Math.min(first[1], second[1]), Math.min(first[2], second[2])],
       [Math.max(first[0], second[0]), Math.max(first[1], second[1]), Math.max(first[2], second[2])],
     ],
+  };
+}
+
+function parseWalkablePolygon(value: string): {
+  type: "polygon";
+  points: Array<[number, number, number]>;
+} | null {
+  if (!value.trim()) return null;
+  const points = value
+    .split(/\r?\n|;/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(parsePosition);
+  if (points.length < 3 || points.some((point) => !point)) {
+    throw new Error(
+      "A walkable polygon requires at least three lines of x, y, z coordinates.",
+    );
+  }
+  return {
+    type: "polygon",
+    points: points as Array<[number, number, number]>,
   };
 }
 
@@ -10266,7 +10409,24 @@ function openReleaseDialog(): void {
   const title = form.elements.namedItem("title");
   if (slug instanceof HTMLInputElement) slug.value = state.selected.project.activeReleaseSlug ?? state.selected.project.slug;
   if (title instanceof HTMLInputElement) title.value = state.selected.project.name;
-  const latestTransform = latestSemanticSourceToWorld();
+  const reviewedTransforms = reviewedSemanticSourceToWorld();
+  const latestTransform = reviewedTransforms[0] ?? null;
+  const evidenceSelect = form.elements.namedItem("sourceToWorldEvidenceId");
+  if (evidenceSelect instanceof HTMLSelectElement) {
+    evidenceSelect.replaceChildren(new Option(
+      reviewedTransforms.length
+        ? "Select reviewed transform evidence"
+        : "No accepted metric extraction available",
+      "",
+    ));
+    for (const evidence of reviewedTransforms) {
+      evidenceSelect.append(new Option(
+        `Accepted extraction · ${evidence.sourceUpAxis}-up · ${evidence.metresPerSourceUnit} m/unit`,
+        evidence.extractionId,
+      ));
+    }
+    if (latestTransform) evidenceSelect.value = latestTransform.extractionId;
+  }
   const applyTransform = form.elements.namedItem("applySourceToWorld");
   if (applyTransform instanceof HTMLInputElement) applyTransform.checked = Boolean(latestTransform);
   if (latestTransform) {
@@ -10289,6 +10449,14 @@ async function publishRelease(form: FormData): Promise<void> {
   try {
     const initialCamera = parseReleaseInitialCamera(form);
     const sourceToWorld = parseReleaseSourceToWorld(form);
+    const sourceToWorldEvidenceId = sourceToWorld
+      ? String(form.get("sourceToWorldEvidenceId") ?? "")
+      : null;
+    if (sourceToWorld && !sourceToWorldEvidenceId) {
+      throw new Error(
+        "Choose an accepted semantic extraction that proves the release transform.",
+      );
+    }
     const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
       `/api/projects/${state.selected.project.id}/releases`,
       {
@@ -10298,6 +10466,7 @@ async function publishRelease(form: FormData): Promise<void> {
           slug: String(form.get("slug") ?? ""),
           accessPolicy: String(form.get("accessPolicy") ?? "public"),
           expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
+          ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
           viewerConfig: {
             title: String(form.get("title") ?? state.selected.project.name),
             subtitle: optionalString(form.get("subtitle")),
@@ -10322,13 +10491,25 @@ async function publishRelease(form: FormData): Promise<void> {
   }
 }
 
-function latestSemanticSourceToWorld(): {
+function reviewedSemanticSourceToWorld(): Array<{
+  extractionId: string;
   sourceUpAxis: "Y" | "Z";
   metresPerSourceUnit: number;
   yawDegrees: number;
   translationMetres: [number, number, number];
-} | null {
+}> {
+  const reviewed: Array<{
+    extractionId: string;
+    sourceUpAxis: "Y" | "Z";
+    metresPerSourceUnit: number;
+    yawDegrees: number;
+    translationMetres: [number, number, number];
+  }> = [];
   for (const extraction of state.spatial?.semanticExtractions ?? []) {
+    if (
+      extraction.status !== "REVIEWED" ||
+      extraction.review_decision !== "accept_selected"
+    ) continue;
     try {
       const parameters = JSON.parse(extraction.parameters_json) as Record<string, unknown>;
       const transform = parameters.sourceToWorld;
@@ -10343,13 +10524,19 @@ function latestSemanticSourceToWorld(): {
         Number.isFinite(yawDegrees) &&
         validNumberTuple(translationMetres)
       ) {
-        return { sourceUpAxis, metresPerSourceUnit, yawDegrees, translationMetres };
+        reviewed.push({
+          extractionId: extraction.id,
+          sourceUpAxis,
+          metresPerSourceUnit,
+          yawDegrees,
+          translationMetres,
+        });
       }
     } catch {
       // Ignore legacy or malformed extraction evidence.
     }
   }
-  return null;
+  return reviewed;
 }
 
 function parseReleaseSourceToWorld(form: FormData): {

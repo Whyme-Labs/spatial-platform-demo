@@ -45,7 +45,9 @@ import {
   reviewerInvitationSchema,
   retentionPolicySchema,
   sceneEntitySchema,
+  sceneEntityUpdateSchema,
   navigationObstacleSchema,
+  navigationProfileSchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
@@ -6361,10 +6363,16 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE project_id = ? AND version_id = ? AND organisation_id = ? AND status = 'active'
       ORDER BY label, created_at
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      FROM scene_navigation_profiles
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
-  const runtime = buildSpatialRuntime(entities, navigationObstacles);
+  const navigationProfile = requiredBatchResult(results, 16).results[0];
+  const runtime = buildSpatialRuntime(entities, navigationObstacles, navigationProfile);
   return context.json({
     version,
     entities,
@@ -6443,6 +6451,70 @@ app.post("/api/projects/:projectId/spatial/entities", async (context) => {
   ).run();
   await audit(context, auth, "spatial.entity.create", "scene_entity", id, { kind: parsed.data.kind, versionId: version.id });
   return context.json({ entity: { id, ...parsed.data } }, 201);
+});
+
+app.patch("/api/projects/:projectId/spatial/entities/:entityId", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = sceneEntityUpdateSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const existing = await context.env.DB.prepare(`
+    SELECT id, label, description, position_json, geometry_json, metadata_json, sort_order
+    FROM scene_entities
+    WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
+  `).bind(
+    context.req.param("entityId"),
+    context.req.param("projectId"),
+    auth.organisationId,
+  ).first<{
+    id: string;
+    label: string;
+    description: string | null;
+    position_json: string | null;
+    geometry_json: string | null;
+    metadata_json: string;
+    sort_order: number;
+  }>();
+  if (!existing) return notFound(context, "Spatial entity not found");
+  const next = {
+    label: parsed.data.label ?? existing.label,
+    description: parsed.data.description === undefined
+      ? existing.description
+      : parsed.data.description,
+    positionJson: parsed.data.position === undefined
+      ? existing.position_json
+      : parsed.data.position === null
+      ? null
+      : JSON.stringify(parsed.data.position),
+    geometryJson: parsed.data.geometry === undefined
+      ? existing.geometry_json
+      : parsed.data.geometry === null
+      ? null
+      : JSON.stringify(parsed.data.geometry),
+    metadataJson: parsed.data.metadata === undefined
+      ? existing.metadata_json
+      : JSON.stringify(parsed.data.metadata),
+    sortOrder: parsed.data.sortOrder ?? existing.sort_order,
+  };
+  await context.env.DB.prepare(`
+    UPDATE scene_entities
+    SET label = ?, description = ?, position_json = ?, geometry_json = ?,
+      metadata_json = ?, sort_order = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(
+    next.label,
+    next.description,
+    next.positionJson,
+    next.geometryJson,
+    next.metadataJson,
+    next.sortOrder,
+    existing.id,
+  ).run();
+  await audit(context, auth, "spatial.entity.update", "scene_entity", existing.id, {
+    fields: Object.keys(parsed.data).sort(),
+  });
+  return context.json({ entity: { id: existing.id, ...next } });
 });
 
 app.delete("/api/projects/:projectId/spatial/entities/:entityId", async (context) => {
@@ -6529,6 +6601,62 @@ app.delete("/api/projects/:projectId/spatial/navigation-obstacles/:obstacleId", 
     context.req.param("obstacleId"),
   );
   return context.body(null, 204);
+});
+
+app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationProfileSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+  );
+  if (!project) return notFound(context, "Project not found");
+  const version = await context.env.DB.prepare(
+    "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
+  ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Scene version not found");
+  await context.env.DB.prepare(`
+    INSERT INTO scene_navigation_profiles (
+      version_id, organisation_id, project_id, agent_radius, agent_height,
+      eye_height, max_step_metres, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(version_id) DO UPDATE SET
+      agent_radius = excluded.agent_radius,
+      agent_height = excluded.agent_height,
+      eye_height = excluded.eye_height,
+      max_step_metres = excluded.max_step_metres,
+      updated_by = excluded.updated_by,
+      updated_at = datetime('now')
+    WHERE scene_navigation_profiles.organisation_id = excluded.organisation_id
+      AND scene_navigation_profiles.project_id = excluded.project_id
+  `).bind(
+    version.id,
+    auth.organisationId,
+    project.id,
+    parsed.data.agentRadius,
+    parsed.data.agentHeight,
+    parsed.data.eyeHeight,
+    parsed.data.maxStepMetres,
+    auth.userId,
+  ).run();
+  await audit(context, auth, "spatial.navigation_profile.update", "scene_version", version.id, {
+    agentRadius: parsed.data.agentRadius,
+    agentHeight: parsed.data.agentHeight,
+    eyeHeight: parsed.data.eyeHeight,
+    maxStepMetres: parsed.data.maxStepMetres,
+  });
+  return context.json({
+    navigationProfile: {
+      agentRadius: parsed.data.agentRadius,
+      agentHeight: parsed.data.agentHeight,
+      eyeHeight: parsed.data.eyeHeight,
+      maxStepMetres: parsed.data.maxStepMetres,
+    },
+  });
 });
 
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
@@ -11087,6 +11215,47 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   const webAssetId = readStringProperty(approval, "webAssetId");
   const posterAssetId = readNullableStringProperty(approval, "posterAssetId");
   if (!webAssetId) return validationError(context, { project: ["Approved version has no web asset"] });
+  if (parsed.data.viewerConfig.sourceToWorld) {
+    const evidence = await context.env.DB.prepare(`
+      SELECT id, status, review_decision, parameters_json
+      FROM semantic_extraction_runs
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(
+      parsed.data.sourceToWorldEvidenceId!,
+      auth.organisationId,
+      project.id,
+      approved.id,
+    ).first<{
+      id: string;
+      status: string;
+      review_decision: string | null;
+      parameters_json: string;
+    }>();
+    if (
+      !evidence ||
+      evidence.status !== "REVIEWED" ||
+      evidence.review_decision !== "accept_selected"
+    ) {
+      return conflict(
+        context,
+        "The source-to-world transform must come from an accepted semantic extraction on this exact scene version",
+      );
+    }
+    const evidenceTransform = Reflect.get(
+      parseStoredObject(evidence.parameters_json) as object,
+      "sourceToWorld",
+    );
+    if (
+      JSON.stringify(evidenceTransform ?? null) !==
+        JSON.stringify(parsed.data.viewerConfig.sourceToWorld)
+    ) {
+      return unprocessable(context, {
+        sourceToWorldEvidenceId: [
+          "The release transform differs from its reviewed semantic extraction evidence",
+        ],
+      });
+    }
+  }
   const releaseId = crypto.randomUUID();
   const channelId = crypto.randomUUID();
   const existingChannel = await context.env.DB.prepare(
@@ -11146,7 +11315,11 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     context.env.DB.prepare("UPDATE scene_versions SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ?").bind(approved.id),
     context.env.DB.prepare("UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, auth.organisationId),
   ]);
-  await audit(context, auth, "release.publish", "release", releaseId, { slug: parsed.data.slug, accessPolicy: parsed.data.accessPolicy });
+  await audit(context, auth, "release.publish", "release", releaseId, {
+    slug: parsed.data.slug,
+    accessPolicy: parsed.data.accessPolicy,
+    sourceToWorldEvidenceId: parsed.data.sourceToWorldEvidenceId ?? null,
+  });
   return context.json({
     release: {
       id: releaseId,
@@ -11272,10 +11445,20 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       WHERE project_id = ? AND version_id = ? AND organisation_id = ? AND status = 'active'
       ORDER BY label, created_at
     `).bind(release.project_id, release.version_id, release.organisation_id),
+    context.env.DB.prepare(`
+      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      FROM scene_navigation_profiles
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+    `).bind(release.project_id, release.version_id, release.organisation_id),
   ]);
   const spatialEntities = requiredBatchResult(spatial, 0).results;
   const navigationObstacles = requiredBatchResult(spatial, 4).results;
-  const spatialRuntime = buildSpatialRuntime(spatialEntities, navigationObstacles);
+  const navigationProfile = requiredBatchResult(spatial, 5).results[0];
+  const spatialRuntime = buildSpatialRuntime(
+    spatialEntities,
+    navigationObstacles,
+    navigationProfile,
+  );
   const liveSpatial = {
     schemaVersion: "spatial-runtime-v5",
     entities: spatialEntities,
@@ -16014,10 +16197,16 @@ async function captureSpatialSnapshot(
       WHERE organisation_id = ? AND project_id = ? AND version_id = ? AND status = 'active'
       ORDER BY label, created_at
     `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      FROM scene_navigation_profiles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(organisationId, projectId, versionId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const obstacles = requiredBatchResult(results, 3).results;
-  const runtime = buildSpatialRuntime(entities, obstacles);
+  const profile = requiredBatchResult(results, 4).results[0];
+  const runtime = buildSpatialRuntime(entities, obstacles, profile);
   return {
     schemaVersion: "spatial-runtime-v5",
     entities,
@@ -16049,7 +16238,11 @@ function parseSpatialSnapshot(value: string): Record<string, unknown> | null {
   return parsed as Record<string, unknown>;
 }
 
-function buildSpatialRuntime(rows: unknown[], obstacleRows: unknown[] = []): {
+function buildSpatialRuntime(
+  rows: unknown[],
+  obstacleRows: unknown[] = [],
+  profileRow: unknown = null,
+): {
   collisionProxy: { version: "box-union-v1"; boxes: RuntimeBox[] };
   navigationMesh: {
     version: "room-box-triangles-v1" | "authored-polygon-triangles-v2";
@@ -16061,7 +16254,12 @@ function buildSpatialRuntime(rows: unknown[], obstacleRows: unknown[] = []): {
     version: "authored-obstacle-boxes-v1";
     boxes: RuntimeObstacleBox[];
   };
-  navigationProfile: typeof defaultNavigationProfile;
+  navigationProfile: {
+    agentRadius: number;
+    agentHeight: number;
+    eyeHeight: number;
+    maxStepMetres: number;
+  };
 } {
   const regions: Array<{
     entityId: string;
@@ -16193,6 +16391,7 @@ function buildSpatialRuntime(rows: unknown[], obstacleRows: unknown[] = []): {
       ],
     }];
   });
+  const navigationProfile = navigationProfileFromRow(profileRow);
   return {
     collisionProxy: { version: "box-union-v1", boxes },
     navigationMesh: {
@@ -16207,8 +16406,30 @@ function buildSpatialRuntime(rows: unknown[], obstacleRows: unknown[] = []): {
       version: "authored-obstacle-boxes-v1",
       boxes: obstacleBoxes,
     },
-    navigationProfile: defaultNavigationProfile,
+    navigationProfile,
   };
+}
+
+function navigationProfileFromRow(
+  row: unknown,
+): typeof defaultNavigationProfile | {
+  agentRadius: number;
+  agentHeight: number;
+  eyeHeight: number;
+  maxStepMetres: number;
+} {
+  if (!row || typeof row !== "object") return defaultNavigationProfile;
+  const agentRadius = Number(Reflect.get(row, "agent_radius"));
+  const agentHeight = Number(Reflect.get(row, "agent_height"));
+  const eyeHeight = Number(Reflect.get(row, "eye_height"));
+  const maxStepMetres = Number(Reflect.get(row, "max_step_metres"));
+  if (
+    !Number.isFinite(agentRadius) ||
+    !Number.isFinite(agentHeight) ||
+    !Number.isFinite(eyeHeight) ||
+    !Number.isFinite(maxStepMetres)
+  ) return defaultNavigationProfile;
+  return { agentRadius, agentHeight, eyeHeight, maxStepMetres };
 }
 
 function triangulateWalkablePolygon(points: Array<[number, number, number]>): number[] {

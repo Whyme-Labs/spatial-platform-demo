@@ -228,6 +228,16 @@ describe("v5 coordinate contracts", () => {
         measurementDisclaimer: "Indicative visual navigation only.",
         sourceToWorld,
       },
+    }).success).toBe(false);
+    expect(releaseInputSchema.safeParse({
+      slug: "v5-room",
+      accessPolicy: "unlisted",
+      sourceToWorldEvidenceId: crypto.randomUUID(),
+      viewerConfig: {
+        title: "V5 room",
+        measurementDisclaimer: "Indicative visual navigation only.",
+        sourceToWorld,
+      },
     }).success).toBe(true);
   });
 });

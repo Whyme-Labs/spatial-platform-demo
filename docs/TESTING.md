@@ -8,9 +8,9 @@ only when the public behavior at its relevant seam is covered and the complete
 
 | Layer | Public seam | Command | Current scope |
 | --- | --- | --- | --- |
-| Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, OIDC helpers, processor validation, privacy detection, Turnstile verification |
+| Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, navigation triangles/obstacles/transitions, coordinate transforms, OIDC helpers, processor validation, privacy detection, Turnstile verification |
 | Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
-| End to end | Production browser bundle | `npm run test:e2e` | Landing, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls and dropdowns, Spark renderer chrome |
+| End to end | Production browser bundle | `npm run test:e2e` | Landing, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls and dropdowns, Spark renderer chrome, and the host-to-renderer navigation snapshot handoff |
 | Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`

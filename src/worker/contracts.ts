@@ -599,6 +599,25 @@ const sourceToWorldTransformSchema = z.object({
   yawDegrees: z.number().finite().min(-360).max(360).default(0),
   translationMetres: point3Schema.default([0, 0, 0]),
 });
+const sceneGeometrySchema = z.object({
+  type: z.enum(["point", "polygon", "box"]),
+  points: z.array(point3Schema).min(1).max(2000),
+}).superRefine((geometry, context) => {
+  if (geometry.type === "box" && geometry.points.length !== 2) {
+    context.addIssue({
+      code: "custom",
+      message: "A box requires exactly two opposing corners",
+      path: ["points"],
+    });
+  }
+  if (geometry.type === "polygon" && geometry.points.length < 3) {
+    context.addIssue({
+      code: "custom",
+      message: "A polygon requires at least three points",
+      path: ["points"],
+    });
+  }
+});
 
 export const sceneEntitySchema = z.object({
   clientOperationId: z.string().uuid().optional(),
@@ -608,19 +627,20 @@ export const sceneEntitySchema = z.object({
   label: z.string().trim().min(1).max(120),
   description: z.string().trim().max(1000).nullable().optional(),
   position: point3Schema.nullable().optional(),
-  geometry: z.object({
-    type: z.enum(["point", "polygon", "box"]),
-    points: z.array(point3Schema).min(1).max(2000),
-  }).superRefine((geometry, context) => {
-    if (geometry.type === "box" && geometry.points.length !== 2) {
-      context.addIssue({ code: "custom", message: "A box requires exactly two opposing corners", path: ["points"] });
-    }
-    if (geometry.type === "polygon" && geometry.points.length < 3) {
-      context.addIssue({ code: "custom", message: "A polygon requires at least three points", path: ["points"] });
-    }
-  }).nullable().optional(),
+  geometry: sceneGeometrySchema.nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).default({}),
   sortOrder: z.number().int().min(0).max(100000).default(0),
+});
+
+export const sceneEntityUpdateSchema = z.object({
+  label: z.string().trim().min(1).max(120).optional(),
+  description: z.string().trim().max(1000).nullable().optional(),
+  position: point3Schema.nullable().optional(),
+  geometry: sceneGeometrySchema.nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  sortOrder: z.number().int().min(0).max(100000).optional(),
+}).refine((value) => Object.keys(value).length > 0, {
+  message: "At least one entity field must be updated",
 });
 
 export const navigationObstacleSchema = z.object({
@@ -645,6 +665,22 @@ export const navigationObstacleSchema = z.object({
     }
   }),
   metadata: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const navigationProfileSchema = z.object({
+  versionId: z.string().uuid(),
+  agentRadius: z.number().min(0.05).max(2),
+  agentHeight: z.number().min(0.5).max(4),
+  eyeHeight: z.number().min(0.3).max(3),
+  maxStepMetres: z.number().min(0.01).max(0.5),
+}).superRefine((value, context) => {
+  if (value.eyeHeight >= value.agentHeight) {
+    context.addIssue({
+      code: "custom",
+      path: ["eyeHeight"],
+      message: "Eye height must be lower than total agent height",
+    });
+  }
 });
 
 export const semanticExtractionSchema = z.object({
@@ -1238,6 +1274,7 @@ export const releaseInputSchema = z.object({
   slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).min(3).max(80),
   accessPolicy: z.enum(["public", "unlisted", "token", "customer-authenticated"]),
   expiresAt: z.string().datetime().nullable().optional(),
+  sourceToWorldEvidenceId: z.string().uuid().optional(),
   viewerConfig: z.object({
     title: z.string().trim().min(1).max(120),
     subtitle: z.string().trim().max(240).optional(),
@@ -1248,6 +1285,21 @@ export const releaseInputSchema = z.object({
     sourceToWorld: sourceToWorldTransformSchema.optional(),
     initialCamera: cameraPoseSchema.optional(),
   }),
+}).superRefine((value, context) => {
+  if (value.viewerConfig.sourceToWorld && !value.sourceToWorldEvidenceId) {
+    context.addIssue({
+      code: "custom",
+      path: ["sourceToWorldEvidenceId"],
+      message: "A reviewed semantic extraction is required for a metric source-to-world release",
+    });
+  }
+  if (!value.viewerConfig.sourceToWorld && value.sourceToWorldEvidenceId) {
+    context.addIssue({
+      code: "custom",
+      path: ["sourceToWorldEvidenceId"],
+      message: "Source-to-world evidence cannot be attached without a release transform",
+    });
+  }
 });
 
 export const telemetrySchema = z.object({

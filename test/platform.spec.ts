@@ -1754,6 +1754,139 @@ describe("Spatial Studio Worker", () => {
       expect(invalidCameraResponse.status).toBe(400);
     }
 
+    const metricTransform = {
+      sourceUpAxis: "Z",
+      metresPerSourceUnit: 0.42,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    };
+    const unprovenMetricRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "unproven-metric-release",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Unproven metric release",
+            measurementDisclaimer: "Indicative visual navigation only.",
+            sourceToWorld: metricTransform,
+          },
+        }),
+      },
+    );
+    expect(unprovenMetricRelease.status).toBe(400);
+    const unknownMetricEvidence = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "unknown-metric-evidence",
+          accessPolicy: "unlisted",
+          sourceToWorldEvidenceId: crypto.randomUUID(),
+          viewerConfig: {
+            title: "Unknown metric evidence",
+            measurementDisclaimer: "Indicative visual navigation only.",
+            sourceToWorld: metricTransform,
+          },
+        }),
+      },
+    );
+    expect(unknownMetricEvidence.status).toBe(409);
+
+    const metricEvidenceId = crypto.randomUUID();
+    const metricEvidenceJobId = crypto.randomUUID();
+    const metricEvidenceOwner = await env.DB.prepare(`
+      SELECT organisation_id, created_by FROM projects WHERE id = ?
+    `).bind(project.id).first<{ organisation_id: string; created_by: string }>();
+    expect(metricEvidenceOwner).toBeTruthy();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO processing_jobs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_type,
+          processor_version, idempotency_key, state, progress, progress_message
+        ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1', 'test/1.0',
+          ?, 'SUCCEEDED', 100, 'Reviewed metric evidence')
+      `).bind(
+        metricEvidenceJobId,
+        metricEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        completed.asset.id,
+        `metric-evidence:${metricEvidenceId}`,
+      ),
+      env.DB.prepare(`
+        INSERT INTO semantic_extraction_runs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_id,
+          status, parameters_json, candidate_count, client_operation_id,
+          request_hash, created_by, reviewed_by, review_decision, review_note,
+          reviewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'REVIEWED', ?, 1, ?, ?, ?, ?,
+          'accept_selected', 'Reviewed fixture proving the exact transform.',
+          datetime('now'))
+      `).bind(
+        metricEvidenceId,
+        metricEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        completed.asset.id,
+        metricEvidenceJobId,
+        JSON.stringify({
+          coordinateAssurance: "authored_source_to_world_v1",
+          sourceToWorld: metricTransform,
+          registrationEvidence: "Measured control points establish the metric transform.",
+        }),
+        crypto.randomUUID(),
+        "f".repeat(64),
+        metricEvidenceOwner!.created_by,
+        metricEvidenceOwner!.created_by,
+      ),
+    ]);
+    const mismatchedMetricEvidence = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "mismatched-metric-evidence",
+          accessPolicy: "unlisted",
+          sourceToWorldEvidenceId: metricEvidenceId,
+          viewerConfig: {
+            title: "Mismatched metric evidence",
+            measurementDisclaimer: "Indicative visual navigation only.",
+            sourceToWorld: { ...metricTransform, metresPerSourceUnit: 0.43 },
+          },
+        }),
+      },
+    );
+    expect(mismatchedMetricEvidence.status).toBe(422);
+    const provenMetricRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "proven-metric-release",
+          accessPolicy: "unlisted",
+          sourceToWorldEvidenceId: metricEvidenceId,
+          viewerConfig: {
+            title: "Proven metric release",
+            measurementDisclaimer: "Indicative visual navigation only.",
+            sourceToWorld: metricTransform,
+          },
+        }),
+      },
+    );
+    expect(provenMetricRelease.status).toBe(201);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM release_channels WHERE slug = ?")
+        .bind("proven-metric-release"),
+      env.DB.prepare("DELETE FROM releases WHERE project_id = ? AND viewer_config_json LIKE ?")
+        .bind(project.id, '%"Proven metric release"%'),
+    ]);
+
     const snapshotEntityResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities`,
       {
@@ -2518,6 +2651,22 @@ describe("Spatial Studio Worker", () => {
     expect(obstacleResponse.status).toBe(201);
     const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
 
+    const navigationProfileResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          agentRadius: 0.3,
+          agentHeight: 1.75,
+          eyeHeight: 1.58,
+          maxStepMetres: 0.08,
+        }),
+      },
+    );
+    expect(navigationProfileResponse.status).toBe(200);
+
     const routeResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/routes`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -2605,11 +2754,51 @@ describe("Spatial Studio Worker", () => {
         }],
       },
       navigationProfile: {
-        agentRadius: 0.22,
-        agentHeight: 1.8,
-        eyeHeight: 1.6,
-        maxStepMetres: 0.1,
+        agentRadius: 0.3,
+        agentHeight: 1.75,
+        eyeHeight: 1.58,
+        maxStepMetres: 0.08,
       },
+    });
+
+    const updateRoom = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/entities/${entity.entity.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          label: "Gallery one revised",
+          geometry: {
+            type: "polygon",
+            points: [
+              [-2, 0, -3],
+              [2, 0, -3],
+              [2, 0, -1],
+              [0, 0, -1],
+              [0, 0, 3],
+              [-2, 0, 3],
+            ],
+          },
+        }),
+      },
+    );
+    expect(updateRoom.status).toBe(200);
+    const revisedWorkspace = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial`,
+      { headers: { cookie } },
+    );
+    expect(revisedWorkspace.status).toBe(200);
+    const revised = await revisedWorkspace.json<{
+      entities: Array<{ id: string; label: string }>;
+      navigationMesh: { version: string; sourceEntityIds: string[] };
+    }>();
+    expect(revised.entities.some((candidate) =>
+      candidate.id === entity.entity.id &&
+      candidate.label === "Gallery one revised"
+    )).toBe(true);
+    expect(revised.navigationMesh).toMatchObject({
+        version: "authored-polygon-triangles-v2",
+        sourceEntityIds: [entity.entity.id, doorway.entity.id],
     });
   });
 

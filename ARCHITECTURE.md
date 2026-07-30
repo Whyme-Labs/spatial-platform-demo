@@ -239,32 +239,46 @@ scene_version
   \-- measurement evidence --> brief / check points / residual QA / sign-off
 ```
 
-Semantic entities are vendor-neutral D1 records. Authored room/floor box
-geometry is compiled into a release-time box-union collision proxy and floor
-navigation triangles. Room boxes and polygons also project into a
-scale-preserving SVG floor plan in the published viewer. Spark receives the
-derived collision runtime by same-origin message after the scene is ready and
-returns bounded camera updates for the live plan marker. A room move uses a
-request/acknowledgement message: the renderer rejects authored cameras outside
-the collision boundary, while the host restores the control with an inline
-retryable error. The Gaussian asset remains a visual layer; the platform does
-not infer measurement accuracy from it.
+Semantic entities are vendor-neutral D1 records. Authored room/floor boxes or
+concave polygons and doorway connectors compile into a triangulated walkable
+surface. Furniture and other non-walkable volumes are authored separately as
+obstacle boxes, then inflated by the selected agent radius at runtime. The
+version-specific navigation profile records agent radius, height, eye height,
+and maximum step. Room boxes and polygons also project into a scale-preserving
+SVG floor plan in the published viewer.
+
+Every new release freezes the exact semantic entities, routes, stops, navigation
+mesh, obstacles, and navigation profile into an immutable spatial snapshot.
+Legacy releases without a snapshot retain their historical live-query fallback.
+After Spark reports scene readiness, the host sends the frozen runtime to the
+renderer by same-origin message. The renderer constrains the camera to the
+triangle mesh, keeps concave voids and inflated obstacles blocked, samples
+movement transitions to prevent tunnelling, and maintains the authored eye
+height above the selected floor. Room moves use a request/acknowledgement
+message so rejected cameras leave the host control recoverable. The Gaussian
+asset remains a visual layer; the platform does not infer measurement accuracy
+from it.
 
 Point-cloud semantic extraction is a separate evidence-first processing lane.
-D1 binds one immutable version, one verified source/master/point-cloud PLY, a
-registered Y-up metric coordinate assertion, bounded grid/floor-band/sample
-parameters, job state, candidate rows, and the terminal human decision. The
-leased processor downloads and verifies the exact bytes, detects credible
-horizontal support layers, selects the lower layer unless an operator supplies
-an elevation hint, traces connected occupancy into polygons, and writes the
-full report to private R2. Machine candidates never create scene entities.
-`accept_selected` creates an editable floor grouping and room polygons;
-`reject_all` preserves the evidence without authored geometry. Accepted
-concave polygons are ear-clipped into navigation triangles. Collision remains
-a conservative AABB proxy. Furniture, ceilings, sparse floors, stairs, glass,
-and overlapping levels remain explicit limitations; this is not wall
-extraction, legal-room classification, area certification, accessibility
-certification, or survey evidence.
+D1 binds one immutable version, one verified source/master/point-cloud PLY, an
+explicit source-to-world transform, bounded grid/floor-band/sample parameters,
+job state, candidate rows, and the terminal human decision. The transform
+declares the source up axis, metres per source unit, yaw, translation, and
+registration evidence; scale is never inferred. The leased processor downloads
+and verifies the exact bytes, normalizes them into canonical Y-up metres,
+detects credible horizontal support layers, selects the lower layer unless an
+operator supplies an elevation hint, traces connected occupancy into polygons,
+and writes the full report to private R2. Machine candidates never create scene
+entities. `accept_selected` creates an editable floor grouping and room
+polygons; `reject_all` preserves the evidence without authored geometry.
+
+A release may apply a source-to-world transform only when it cites a reviewed,
+accepted semantic extraction whose transform is an exact match. Operators can
+then edit concave walkable polygons, author doorway connectors, obstacle boxes,
+and the agent profile before publication. Furniture, ceilings, sparse floors,
+stairs, glass, and overlapping levels remain explicit limitations; this is not
+automatic wall or object extraction, legal-room classification, area
+certification, accessibility certification, or survey evidence.
 
 Authored geometry change evidence is a separate, deliberately bounded lane.
 The operator selects two immutable versions, declares how they share a Y-up
@@ -362,9 +376,11 @@ The shipped agent pins the official Spark 2.1.0 `build-lod` implementation and
 uses its quality LoD method for production RAD derivatives. It also renders a
 real Spark poster and emits a machine-readable QA report. SplatTransform remains
 the compatible interchange path, while PDAL/Open3D remain candidates for future
-metric derivatives. Current navigation runtime is deliberately simple:
-operator-authored walkable boxes compile to floor triangles and collision
-bounds. Rich point-cloud-derived geometry remains behind the adapter boundary.
+metric derivatives. The v5 navigation runtime deliberately separates visual
+reconstruction from authored game-space geometry: reviewed room/floor
+polygons, doorway connectors, obstacle proxies, and an agent profile compile to
+an immutable release snapshot. Rich automatic wall/object geometry extraction
+remains behind the adapter boundary.
 
 ## Renderer and formats
 

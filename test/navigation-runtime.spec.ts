@@ -111,6 +111,14 @@ describe("v5 navigation enforcement", () => {
     expect(Math.hypot(anchored![0] - 3, anchored![2] - 3)).toBeLessThan(3);
   });
 
+  it("anchors camera height to the authored floor instead of permitting flight over obstacles", () => {
+    expect(isNavigationPointAllowed([3, 9, 0.5], runtime)).toBe(false);
+
+    const anchored = nearestNavigationPoint([3, 9, 0.5], runtime);
+    expect(anchored?.[1]).toBeCloseTo(1.6, 6);
+    expect(isNavigationPointAllowed(anchored!, runtime)).toBe(true);
+  });
+
   it("accepts the published host-to-renderer runtime contract", () => {
     const parsed = parseNavigationRuntimeMessage({
       source: "spatial-host",

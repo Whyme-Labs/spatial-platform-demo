@@ -31,13 +31,6 @@ export type NavigationRuntime = {
   profile: NavigationProfile;
 };
 
-export const DEFAULT_SOURCE_TO_WORLD: SourceToWorldTransform = {
-  sourceUpAxis: "Y",
-  metresPerSourceUnit: 1,
-  yawDegrees: 0,
-  translationMetres: [0, 0, 0],
-};
-
 export const DEFAULT_NAVIGATION_PROFILE: NavigationProfile = {
   agentRadius: 0.22,
   agentHeight: 1.8,
@@ -198,6 +191,16 @@ export function isNavigationPointAllowed(
     )
   );
   if (!onNavigationMesh) return false;
+  const floorElevations = navigationFloorElevationsAt(
+    cameraPosition[0],
+    cameraPosition[2],
+    runtime.navigationMesh,
+  );
+  const feetY = cameraPosition[1] - runtime.profile.eyeHeight;
+  const verticalTolerance = Math.max(0.35, runtime.profile.maxStepMetres * 2);
+  if (!floorElevations.some((floorY) => Math.abs(feetY - floorY) <= verticalTolerance)) {
+    return false;
+  }
 
   return !runtime.obstacleBoxes.some((obstacle) =>
     intersectsObstacle(cameraPosition, obstacle, runtime.profile)
@@ -251,15 +254,18 @@ export function nearestNavigationPoint(
       (first[0] + second[0] + third[0]) / 3,
       (first[2] + second[2] + third[2]) / 3,
     ];
+    const cameraY = (first[1] + second[1] + third[1]) / 3 +
+      runtime.profile.eyeHeight;
     for (const inset of [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1]) {
       const candidate: Vector3Tuple = [
         closest[0] + (centroid[0] - closest[0]) * inset,
-        cameraPosition[1],
+        cameraY,
         closest[1] + (centroid[1] - closest[1]) * inset,
       ];
       if (!isNavigationPointAllowed(candidate, runtime)) continue;
       const distanceSquared =
         (candidate[0] - cameraPosition[0]) ** 2 +
+        (candidate[1] - cameraPosition[1]) ** 2 +
         (candidate[2] - cameraPosition[2]) ** 2;
       if (distanceSquared < nearestDistanceSquared) {
         nearest = candidate;
@@ -268,6 +274,23 @@ export function nearestNavigationPoint(
     }
   }
   return nearest;
+}
+
+function navigationFloorElevationsAt(
+  x: number,
+  z: number,
+  mesh: NavigationMesh,
+): number[] {
+  const elevations: number[] = [];
+  for (let index = 0; index + 2 < mesh.indices.length; index += 3) {
+    const first = mesh.vertices[mesh.indices[index]!];
+    const second = mesh.vertices[mesh.indices[index + 1]!];
+    const third = mesh.vertices[mesh.indices[index + 2]!];
+    if (!first || !second || !third) continue;
+    if (!pointInTriangle2d(x, z, first, second, third)) continue;
+    elevations.push((first[1] + second[1] + third[1]) / 3);
+  }
+  return elevations;
 }
 
 function normalizeUpAxis(

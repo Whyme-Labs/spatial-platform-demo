@@ -721,7 +721,8 @@ function setMovementAvailability(
 }
 
 function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
-  const bounds = mesh.getBoundingBox();
+  mesh.updateMatrixWorld(true);
+  const bounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
   const center = sphere.center;
   const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 1;
