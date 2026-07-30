@@ -74,17 +74,21 @@ bounds.
 ## Operator sequence
 
 1. Upload or select the verified PLY and RAD assets for the immutable version.
-2. Queue semantic extraction with source up axis `Z`, world unit
+2. Set the version navigation profile to `scene_units`; this establishes the
+   unit inherited by all later manual doorways and obstacles.
+3. Queue semantic extraction with source up axis `Z`, world unit
    `scene_units`, a temporary scale factor, and any required yaw/translation.
-3. Review the detected floor candidates and accept only the correct support
-   layer.
-4. Edit the resulting walkable polygons so both connected spaces are covered.
-5. Add a doorway connector across the threshold between the spaces.
-6. Add obstacle boxes for the L-shaped table, furniture, and any other volumes
+4. Review the detected floor candidates and accept only the correct support
+   layer. Acceptance also initializes the profile to the extraction unit if the
+   version has no profile yet; it fails closed if an incompatible profile or
+   authored artifact already exists.
+5. Edit the resulting walkable polygons so both connected spaces are covered.
+6. Add a doorway connector across the threshold between the spaces.
+7. Add obstacle boxes for the L-shaped table, furniture, and any other volumes
    the camera must not enter.
-7. Set the navigation profile to `scene_units` and tune the intended
-   player/camera dimensions by visual inspection.
-8. Inspect the Studio floor plan and viewer movement, then publish using the
+8. Tune the intended player/camera dimensions by visual inspection without
+   changing the version unit.
+9. Inspect the Studio floor plan and viewer movement, then publish using the
    accepted extraction as transform evidence.
 
 Concave room polygons preserve blocked voids. Doorways provide explicit

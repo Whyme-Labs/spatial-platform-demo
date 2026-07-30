@@ -284,7 +284,8 @@ re-authoring. Provisional releases remain explorable, but expose `SU` in Studio
 and the published viewer and use a platform-authored, non-editable warning that
 makes no metre, area, clearance, survey, construction, or accessibility claim.
 Metric-only authored-geometry change and pose-path coverage evidence is blocked
-for provisional versions. Operators can edit concave walkable polygons, author
+for provisional versions, as are measurement briefs, millimetre QA, and metric
+deliverable generation. Operators can edit concave walkable polygons, author
 doorway connectors, obstacle boxes, and the agent profile before publication.
 Furniture, ceilings, sparse floors, stairs, glass, and overlapping levels
 remain explicit limitations; this is not automatic wall or object extraction,

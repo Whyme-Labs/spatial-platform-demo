@@ -47,8 +47,9 @@ platform-authored non-measurement warning. All candidates remain machine
 evidence until an operator explicitly accepts selected polygons as editable
 room seeds; they are never survey, legal-room, area, clearance, construction,
 or accessibility claims. Metric-only geometry-change and pose-path coverage
-evidence stays unavailable until a new measured scene version is authored. RAD
-is the preferred large-scene format because
+evidence stays unavailable until a new measured scene version is authored.
+Measurement briefs, millimetre QA, and metric deliverables are blocked on the
+same boundary. RAD is the preferred large-scene format because
 Spark can page its prebuilt LoD tree directly through the range-capable private
 R2 release endpoint.
 

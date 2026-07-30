@@ -6421,12 +6421,6 @@ app.post("/api/projects/:projectId/spatial/entities", async (context) => {
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
   if (!version) return notFound(context, "Scene version not found");
-  const worldUnit = await spatialVersionWorldUnit(
-    context.env.DB,
-    auth.organisationId,
-    project.id,
-    version.id,
-  );
   if (parsed.data.parentId) {
     const parent = await context.env.DB.prepare(
       "SELECT id FROM scene_entities WHERE id = ? AND version_id = ? AND project_id = ?",
@@ -6440,12 +6434,17 @@ app.post("/api/projects/:projectId/spatial/entities", async (context) => {
     if (existing) return context.json({ entity: existing, idempotent: true });
   }
   const id = crypto.randomUUID();
-  await context.env.DB.prepare(`
+  const created = await context.env.DB.prepare(`
     INSERT INTO scene_entities
       (id, organisation_id, project_id, version_id, parent_id, kind, label,
         description, position_json, geometry_json, metadata_json, sort_order,
         client_operation_id, created_by, world_unit)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      COALESCE((
+        SELECT world_unit FROM scene_navigation_profiles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      ), 'metres')
+    RETURNING world_unit
   `).bind(
     id,
     auth.organisationId,
@@ -6461,8 +6460,12 @@ app.post("/api/projects/:projectId/spatial/entities", async (context) => {
     parsed.data.sortOrder,
     parsed.data.clientOperationId ?? null,
     auth.userId,
-    worldUnit,
-  ).run();
+    auth.organisationId,
+    project.id,
+    version.id,
+  ).first<{ world_unit: string }>();
+  if (!created) throw new Error("Spatial entity was not persisted");
+  const worldUnit = parseWorldUnit(created.world_unit);
   await audit(context, auth, "spatial.entity.create", "scene_entity", id, { kind: parsed.data.kind, versionId: version.id });
   return context.json({ entity: { id, ...parsed.data, world_unit: worldUnit } }, 201);
 });
@@ -6561,12 +6564,6 @@ app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
   if (!version) return notFound(context, "Scene version not found");
-  const worldUnit = await spatialVersionWorldUnit(
-    context.env.DB,
-    auth.organisationId,
-    project.id,
-    version.id,
-  );
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
       SELECT * FROM scene_navigation_obstacles
@@ -6575,11 +6572,16 @@ app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context
     if (existing) return context.json({ obstacle: existing, idempotent: true });
   }
   const id = crypto.randomUUID();
-  await context.env.DB.prepare(`
+  const created = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_obstacles
       (id, organisation_id, project_id, version_id, label, bounds_json,
         metadata_json, client_operation_id, created_by, world_unit)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      COALESCE((
+        SELECT world_unit FROM scene_navigation_profiles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      ), 'metres')
+    RETURNING world_unit
   `).bind(
     id,
     auth.organisationId,
@@ -6590,8 +6592,12 @@ app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context
     JSON.stringify(parsed.data.metadata),
     parsed.data.clientOperationId ?? null,
     auth.userId,
-    worldUnit,
-  ).run();
+    auth.organisationId,
+    project.id,
+    version.id,
+  ).first<{ world_unit: string }>();
+  if (!created) throw new Error("Navigation obstacle was not persisted");
+  const worldUnit = parseWorldUnit(created.world_unit);
   await audit(context, auth, "spatial.navigation_obstacle.create", "scene_navigation_obstacle", id, {
     versionId: version.id,
     label: parsed.data.label,
@@ -6640,37 +6646,25 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
   if (!version) return notFound(context, "Scene version not found");
-  const incompatibleArtifacts = await context.env.DB.prepare(`
-    SELECT count(*) AS count FROM (
-      SELECT id FROM scene_entities
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND status = 'active' AND world_unit <> ?
-      UNION ALL
-      SELECT id FROM scene_navigation_obstacles
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND status = 'active' AND world_unit <> ?
-    )
-  `).bind(
-    auth.organisationId,
-    project.id,
-    version.id,
-    parsed.data.worldUnit,
-    auth.organisationId,
-    project.id,
-    version.id,
-    parsed.data.worldUnit,
-  ).first<{ count: number }>();
-  if ((incompatibleArtifacts?.count ?? 0) > 0) {
-    return conflict(
-      context,
-      "This scene version already contains authored geometry in another unit. Create a new version and re-extract or re-author it instead of relabelling the existing coordinates.",
-    );
-  }
-  await context.env.DB.prepare(`
+  const updated = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_profiles (
       version_id, organisation_id, project_id, world_unit, agent_radius,
       agent_height, eye_height, max_step_metres, updated_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    )
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM scene_entities
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active' AND world_unit <> ?
+      UNION ALL
+      SELECT 1 FROM scene_navigation_obstacles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active' AND world_unit <> ?
+      UNION ALL
+      SELECT 1 FROM measurement_briefs
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND ? <> 'metres'
+    )
     ON CONFLICT(version_id) DO UPDATE SET
       world_unit = excluded.world_unit,
       agent_radius = excluded.agent_radius,
@@ -6681,6 +6675,20 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
       updated_at = datetime('now')
     WHERE scene_navigation_profiles.organisation_id = excluded.organisation_id
       AND scene_navigation_profiles.project_id = excluded.project_id
+      AND NOT EXISTS (
+        SELECT 1 FROM scene_entities
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> ?
+        UNION ALL
+        SELECT 1 FROM scene_navigation_obstacles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> ?
+        UNION ALL
+        SELECT 1 FROM measurement_briefs
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND ? <> 'metres'
+      )
+    RETURNING world_unit
   `).bind(
     version.id,
     auth.organisationId,
@@ -6691,7 +6699,37 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     parsed.data.eyeHeight,
     parsed.data.maxStepMetres,
     auth.userId,
-  ).run();
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.worldUnit,
+  ).first<{ world_unit: string }>();
+  if (!updated) {
+    return conflict(
+      context,
+      "This scene version already contains authored geometry or measurement evidence that fixes another unit. Create a new version instead of relabelling the existing coordinates.",
+    );
+  }
   await audit(context, auth, "spatial.navigation_profile.update", "scene_version", version.id, {
     worldUnit: parsed.data.worldUnit,
     agentRadius: parsed.data.agentRadius,
@@ -7557,12 +7595,59 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
     : null;
   const statements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
+      INSERT INTO scene_navigation_profiles (
+        version_id, organisation_id, project_id, world_unit, agent_radius,
+        agent_height, eye_height, max_step_metres, updated_by
+      )
+      SELECT ?, ?, ?, ?, 0.22, 1.8, 1.6, 0.1, ?
+      WHERE ? = 'accept_selected' AND NOT EXISTS (
+        SELECT 1 FROM scene_entities
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> ?
+        UNION ALL
+        SELECT 1 FROM scene_navigation_obstacles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> ?
+        UNION ALL
+        SELECT 1 FROM measurement_briefs
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND ? <> 'metres'
+      )
+      ON CONFLICT(version_id) DO NOTHING
+    `).bind(
+      extraction.version_id,
+      auth.organisationId,
+      project.id,
+      extractionWorldUnit,
+      auth.userId,
+      parsed.data.decision,
+      auth.organisationId,
+      project.id,
+      extraction.version_id,
+      extractionWorldUnit,
+      auth.organisationId,
+      project.id,
+      extraction.version_id,
+      extractionWorldUnit,
+      auth.organisationId,
+      project.id,
+      extraction.version_id,
+      extractionWorldUnit,
+    ),
+    context.env.DB.prepare(`
       UPDATE semantic_extraction_runs
       SET status = 'REVIEWED', reviewed_by = ?, review_decision = ?,
         review_note = ?, review_client_operation_id = ?, review_request_hash = ?,
         review_response_json = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
       WHERE id = ? AND project_id = ? AND organisation_id = ?
         AND status = 'READY_FOR_REVIEW' AND review_client_operation_id IS NULL
+        AND (
+          ? = 'reject_all' OR EXISTS (
+            SELECT 1 FROM scene_navigation_profiles
+            WHERE version_id = ? AND organisation_id = ? AND project_id = ?
+              AND world_unit = ?
+          )
+        )
     `).bind(
       auth.userId,
       parsed.data.decision,
@@ -7573,6 +7658,11 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
       extraction.id,
       project.id,
       auth.organisationId,
+      parsed.data.decision,
+      extraction.version_id,
+      auth.organisationId,
+      project.id,
+      extractionWorldUnit,
     ),
     parsed.data.decision === "accept_selected"
       ? context.env.DB.prepare(`
@@ -8761,6 +8851,17 @@ app.post("/api/projects/:projectId/measurement/briefs", async (context) => {
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first();
   if (!version) return notFound(context, "Scene version not found");
+  if (!(await isMetricSpatialVersion(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+    parsed.data.versionId,
+  ))) {
+    return conflict(
+      context,
+      "Measurement briefs require reviewed metric metres. Provisional scene-unit versions support relative navigation only.",
+    );
+  }
   if (parsed.data.relianceClass === "professional_certified") {
     return validationError(context, {
       relianceClass: ["Create the brief as project_verified; professional certification is applied only after a recorded partner sign-off"],
@@ -8830,18 +8931,42 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/qa-report", async
   `).bind(context.req.param("briefId"), context.req.param("projectId"), auth.organisationId)
     .first<{ id: string; version_id: string; tolerance_mm: number }>();
   if (!brief) return notFound(context, "Measurement brief not found");
+  if (!(await isMetricSpatialVersion(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+    brief.version_id,
+  ))) {
+    return conflict(
+      context,
+      "Measurement QA requires reviewed metric metres and cannot use provisional scene-unit geometry.",
+    );
+  }
   const [points, entities] = await Promise.all([
     context.env.DB.prepare(
       "SELECT residual_mm FROM measurement_check_points WHERE brief_id = ? ORDER BY residual_mm",
     ).bind(brief.id).all<{ residual_mm: number }>(),
     context.env.DB.prepare(`
-      SELECT id, label, geometry_json FROM scene_entities
+      SELECT id, label, geometry_json, world_unit FROM scene_entities
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
         AND kind = 'room' AND status = 'active' AND geometry_json IS NOT NULL
       ORDER BY sort_order, label, id
     `).bind(context.req.param("projectId"), brief.version_id, auth.organisationId)
-      .all<{ id: string; label: string; geometry_json: string }>(),
+      .all<{
+        id: string;
+        label: string;
+        geometry_json: string;
+        world_unit: string;
+      }>(),
   ]);
+  if (entities.results.some((entity) =>
+    parseWorldUnit(entity.world_unit) !== "metres"
+  )) {
+    return conflict(
+      context,
+      "Measurement QA cannot interpret provisional scene-unit room coordinates as metres.",
+    );
+  }
   const residuals = points.results.map((point) => Number(point.residual_mm));
   const footprints = entities.results
     .map(measurementFootprint)
@@ -8928,6 +9053,17 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/deliverables", as
       qa_source_geometry_hash: string | null;
     }>();
   if (!brief) return notFound(context, "Measurement brief not found");
+  if (!(await isMetricSpatialVersion(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+    brief.version_id,
+  ))) {
+    return conflict(
+      context,
+      "Measurement deliverables require reviewed metric metres and cannot use provisional scene-unit geometry.",
+    );
+  }
   if (brief.latest_qa_result !== "pass" || brief.status !== "accepted") {
     return context.json({
       error: "A passing measurement QA report is required before generating a deliverable",
@@ -8935,13 +9071,26 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/deliverables", as
     }, 409);
   }
   const entities = await context.env.DB.prepare(`
-    SELECT id, label, geometry_json
+    SELECT id, label, geometry_json, world_unit
     FROM scene_entities
     WHERE project_id = ? AND version_id = ? AND organisation_id = ?
       AND kind = 'room' AND status = 'active' AND geometry_json IS NOT NULL
     ORDER BY sort_order, label, id
   `).bind(context.req.param("projectId"), brief.version_id, auth.organisationId)
-    .all<{ id: string; label: string; geometry_json: string }>();
+    .all<{
+      id: string;
+      label: string;
+      geometry_json: string;
+      world_unit: string;
+    }>();
+  if (entities.results.some((entity) =>
+    parseWorldUnit(entity.world_unit) !== "metres"
+  )) {
+    return conflict(
+      context,
+      "Measurement deliverables cannot interpret provisional scene-unit room coordinates as metres.",
+    );
+  }
   const footprints = entities.results
     .map(measurementFootprint)
     .filter((footprint): footprint is MeasurementFootprint => Boolean(footprint));
@@ -9118,11 +9267,22 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/signoffs", async 
   const parsed = professionalSignoffSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const brief = await context.env.DB.prepare(`
-    SELECT id, status FROM measurement_briefs
+    SELECT id, version_id, status FROM measurement_briefs
     WHERE id = ? AND project_id = ? AND organisation_id = ?
   `).bind(context.req.param("briefId"), context.req.param("projectId"), auth.organisationId)
-    .first<{ id: string; status: string }>();
+    .first<{ id: string; version_id: string; status: string }>();
   if (!brief) return notFound(context, "Measurement brief not found");
+  if (!(await isMetricSpatialVersion(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+    brief.version_id,
+  ))) {
+    return conflict(
+      context,
+      "Professional sign-off requires reviewed metric metres and cannot certify a provisional scene-unit version.",
+    );
+  }
   if (brief.status !== "accepted") return context.json({ error: "A passing project QA report is required before professional sign-off" }, 409);
   if (parsed.data.evidenceAssetId) {
     const asset = await context.env.DB.prepare(
@@ -10810,7 +10970,7 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED')
     `).bind(
       reportAssetId,
-      JSON.stringify(parsed.data.report),
+      JSON.stringify(parsed.data.report.summary),
       parsed.data.report.candidates.length,
       job.extraction_id,
       job.id,
@@ -16398,6 +16558,48 @@ async function spatialVersionWorldUnit(
     WHERE organisation_id = ? AND project_id = ? AND version_id = ?
   `).bind(organisationId, projectId, versionId).first<{ world_unit: string }>();
   return parseWorldUnit(profile?.world_unit);
+}
+
+async function isMetricSpatialVersion(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<boolean> {
+  const results = await database.batch([
+    database.prepare(`
+      SELECT world_unit
+      FROM scene_navigation_profiles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT count(*) AS count FROM (
+        SELECT id FROM scene_entities
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> 'metres'
+        UNION ALL
+        SELECT id FROM scene_navigation_obstacles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> 'metres'
+      )
+    `).bind(
+      organisationId,
+      projectId,
+      versionId,
+      organisationId,
+      projectId,
+      versionId,
+    ),
+  ]);
+  const profile = requiredBatchResult(results, 0).results[0];
+  const incompatible = requiredBatchResult(results, 1).results[0] as
+    | { count?: number }
+    | undefined;
+  return parseWorldUnit(
+    profile && typeof profile === "object"
+      ? Reflect.get(profile, "world_unit")
+      : undefined,
+  ) === "metres" && Number(incompatible?.count ?? 0) === 0;
 }
 
 async function captureSpatialSnapshot(

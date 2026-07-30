@@ -3613,6 +3613,7 @@ describe("Spatial Studio Worker", () => {
     `).first<{ organisationId: string; userId: string }>();
     const projectId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
+    const provisionalVersionId = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO projects
@@ -3623,7 +3624,56 @@ describe("Spatial Studio Worker", () => {
         INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
         VALUES (?, ?, 1, 'QA_REQUIRED', ?)
       `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 2, 'QA_REQUIRED', ?)
+      `).bind(provisionalVersionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_navigation_profiles (
+          version_id, organisation_id, project_id, world_unit, agent_radius,
+          agent_height, eye_height, max_step_metres, updated_by
+        ) VALUES (?, ?, ?, 'scene_units', 0.22, 1.8, 1.6, 0.1, ?)
+      `).bind(
+        provisionalVersionId,
+        member!.organisationId,
+        projectId,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities (
+          id, organisation_id, project_id, version_id, kind, label,
+          geometry_json, metadata_json, created_by, world_unit
+        ) VALUES (?, ?, ?, ?, 'room', 'Provisional measured room', ?, '{}', ?,
+          'scene_units')
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        provisionalVersionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 4]] }),
+        member!.userId,
+      ),
     ]);
+
+    const provisionalBrief = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: provisionalVersionId,
+          productType: "measured_floor_plan",
+          intendedUse: "Construction layout",
+          units: "metres",
+          toleranceMm: 30,
+          relianceClass: "project_verified",
+        }),
+      },
+    );
+    expect(provisionalBrief.status).toBe(409);
+    await expect(provisionalBrief.json()).resolves.toMatchObject({
+      error: expect.stringContaining("require reviewed metric metres"),
+    });
 
     const invalidCertified = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement/briefs`, {
       method: "POST",
@@ -3654,6 +3704,23 @@ describe("Spatial Studio Worker", () => {
     });
     expect(briefResponse.status).toBe(201);
     const brief = await briefResponse.json<{ brief: { id: string } }>();
+
+    const relabelMeasuredVersion = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        }),
+      },
+    );
+    expect(relabelMeasuredVersion.status).toBe(409);
 
     const roomResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
       method: "POST",

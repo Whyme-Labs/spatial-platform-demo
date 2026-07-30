@@ -295,7 +295,11 @@ describe("reviewed point-cloud semantic extraction", () => {
     );
     expect(workspace.status).toBe(200);
     const spatial = await workspace.json<{
-      semanticExtractions: Array<{ id: string; status: string }>;
+      semanticExtractions: Array<{
+        id: string;
+        status: string;
+        summary_json: string;
+      }>;
       semanticCandidates: Array<{
         id: string;
         status: string;
@@ -308,6 +312,12 @@ describe("reviewed point-cloud semantic extraction", () => {
     expect(spatial.semanticExtractions).toEqual([
       expect.objectContaining({ id: created.extraction.id, status: "READY_FOR_REVIEW" }),
     ]);
+    expect(JSON.parse(spatial.semanticExtractions[0]!.summary_json)).toEqual({
+      inferredFloorElevation: 0,
+      credibleHorizontalLayerCount: 2,
+      candidateCount: 1,
+      totalCandidateArea: 12,
+    });
     expect(spatial.semanticCandidates).toEqual([
       expect.objectContaining({
         status: "pending",
@@ -367,6 +377,11 @@ describe("reviewed point-cloud semantic extraction", () => {
       WHERE project_id = ? AND version_id = ? AND status = 'active'
     `).bind(project.id, versionId).first<{ count: number }>();
     expect(entityCount?.count).toBe(2);
+    const autoSeededProfile = await env.DB.prepare(`
+      SELECT world_unit FROM scene_navigation_profiles
+      WHERE project_id = ? AND version_id = ?
+    `).bind(project.id, versionId).first<{ world_unit: string }>();
+    expect(autoSeededProfile?.world_unit).toBe("scene_units");
     const unitProfile = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
       {
