@@ -476,6 +476,11 @@ button {
 }
 
 @media (max-width: 640px) {
+  .spark-runtime {
+    top: max(14px, env(safe-area-inset-top));
+    bottom: auto;
+  }
+
   .spark-help {
     right: 14px;
     bottom: calc(max(14px, env(safe-area-inset-bottom)) + 56px);

@@ -185,3 +185,40 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
   await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
   await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 });
+
+test("keeps renderer status and controls separated in a compact fine-pointer viewport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/renderer/index.html");
+
+  const layout = await page.evaluate(() => {
+    const runtime = document.querySelector<HTMLElement>(".spark-runtime");
+    const controls = document.querySelector<HTMLElement>(".spark-controls");
+    if (!runtime || !controls) return null;
+    const runtimeBounds = runtime.getBoundingClientRect();
+    const controlBounds = controls.getBoundingClientRect();
+    return {
+      runtime: {
+        top: runtimeBounds.top,
+        right: runtimeBounds.right,
+        bottom: runtimeBounds.bottom,
+        left: runtimeBounds.left,
+      },
+      controls: {
+        top: controlBounds.top,
+        right: controlBounds.right,
+        bottom: controlBounds.bottom,
+        left: controlBounds.left,
+      },
+    };
+  });
+
+  expect(layout).not.toBeNull();
+  const overlaps =
+    layout!.runtime.left < layout!.controls.right
+    && layout!.runtime.right > layout!.controls.left
+    && layout!.runtime.top < layout!.controls.bottom
+    && layout!.runtime.bottom > layout!.controls.top;
+  expect(overlaps).toBe(false);
+});
