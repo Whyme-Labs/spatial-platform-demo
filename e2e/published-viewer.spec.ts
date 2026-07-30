@@ -85,13 +85,32 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
 
   const parentLoader = page.locator("#loadingOverlay");
   const releaseInfo = page.locator("#releaseInfo");
+  const rendererFrame = page.locator("#rendererFrame");
   await expect(parentLoader).toBeVisible();
   await expect(releaseInfo).toBeHidden();
+  await expect(rendererFrame).toHaveClass(/is-loading/);
+  await expect(rendererFrame).toHaveCSS("opacity", "0");
+  await expect(parentLoader).toHaveCSS("background-color", "rgb(9, 11, 10)");
   await expect(page.frameLocator("#rendererFrame").getByRole("status")).toBeVisible();
-  await expect(parentLoader).toBeHidden();
+  await expect(parentLoader).toBeVisible();
+  await expect(page.locator("#loadingDetail")).toHaveText("Streaming scene detail");
+  await expect(page.locator("#progressBar")).toHaveJSProperty("style.width", "42%");
   await expect(releaseInfo).toBeHidden();
 
-  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Renderer ready" }).click();
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "ready",
+      runtime: "spark",
+      version: "2.1.0",
+      timeToFirstFrameMs: 1200,
+      format: "rad",
+      splatBudget: 2_000_000,
+    }, location.origin);
+  });
+  await expect(rendererFrame).not.toHaveClass(/is-loading/);
+  await expect(rendererFrame).toHaveCSS("opacity", "1");
+  await expect(parentLoader).toBeHidden();
   await expect(releaseInfo).toBeVisible();
 
   const viewport = page.locator("#viewport");

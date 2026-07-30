@@ -253,6 +253,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   errorPanel.hidden = true;
   releaseInfo.hidden = true;
   byId("reviewPanel").hidden = true;
+  frame.classList.add("is-loading");
   frame.hidden = true;
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
 
@@ -344,7 +345,7 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type === "progress") {
-    setLoading(false);
+    setLoading(true, message.detail, message.progress);
     byId("rendererStatus").textContent = message.detail;
     return;
   }
@@ -357,6 +358,7 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
+  frame.classList.remove("is-loading");
   setLoading(false);
   rendererReady = true;
   releaseInfo.hidden = false;
@@ -849,10 +851,13 @@ function releaseSlug(): string | null {
   return match?.[1] ?? null;
 }
 
-function setLoading(visible: boolean, detail = ""): void {
+function setLoading(visible: boolean, detail = "", progress?: number): void {
   loading.classList.toggle("hidden", !visible);
   if (detail) byId("loadingDetail").textContent = detail;
-  byId<HTMLElement>("progressBar").style.width = visible ? "55%" : "100%";
+  const boundedProgress = Number.isFinite(progress)
+    ? Math.min(100, Math.max(0, Number(progress)))
+    : 14;
+  byId<HTMLElement>("progressBar").style.width = visible ? `${boundedProgress}%` : "100%";
 }
 
 function showError(title: string, message: string): void {
@@ -862,6 +867,7 @@ function showError(title: string, message: string): void {
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
   setLoading(false);
+  frame.classList.add("is-loading");
   frame.hidden = true;
   errorPanel.hidden = false;
   byId("errorTitle").textContent = title;

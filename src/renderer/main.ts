@@ -404,10 +404,9 @@ async function start(): Promise<void> {
       mobileControls.setReady(true);
       const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
-      window.setTimeout(() => {
-        loading.classList.add("is-complete");
-        loading.setAttribute("aria-hidden", "true");
-      }, 140);
+      loading.classList.add("is-complete");
+      loading.setAttribute("aria-hidden", "true");
+      loading.hidden = true;
       post({
         source: "spatial-spark",
         type: "ready",
