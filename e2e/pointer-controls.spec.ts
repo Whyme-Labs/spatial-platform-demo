@@ -76,6 +76,61 @@ test.describe("spatial navigation direction", () => {
     expect(dot(strafeDelta, initial.up)).toBeCloseTo(0, 5);
     expect(dot(strafeDelta, planarRight)).toBeLessThan(-0.1);
   });
+
+  test("a trackpad secondary click cannot translate or rotate the camera", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html");
+    const initial = await readCameraState(page);
+
+    await page.mouse.move(500, 320);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.move(508, 326, { steps: 3 });
+    await page.mouse.up({ button: "right" });
+    await page.waitForTimeout(80);
+    const afterClick = await readCameraState(page);
+
+    expect(vectorLength(subtract(afterClick.position, initial.position))).toBeLessThan(0.001);
+    expect(vectorLength(subtract(afterClick.direction, initial.direction))).toBeLessThan(0.001);
+  });
+
+  test("two-finger trackpad scrolling travels a bounded distance on the walk plane", async ({
+    page,
+  }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html");
+    const authored = await readCameraState(page);
+    await drag(page, { x: 500, y: 360 }, { x: 500, y: 260 });
+    const beforeScroll = await readCameraState(page);
+    const planarForward = normalise(
+      projectOnPlane(beforeScroll.direction, authored.up),
+    );
+
+    await page.mouse.wheel(0, -12);
+    await page.waitForTimeout(80);
+    const afterScroll = await readCameraState(page);
+    const travel = subtract(afterScroll.position, beforeScroll.position);
+
+    expect(dot(travel, authored.up)).toBeCloseTo(0, 5);
+    expect(dot(travel, planarForward)).toBeGreaterThan(0.005);
+    expect(vectorLength(travel)).toBeLessThan(0.2);
+  });
+
+  test("cancels pending trackpad travel when the viewer loses focus", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html");
+    const initial = await readCameraState(page);
+
+    await page.locator("#controlCanvas").evaluate((canvas) => {
+      canvas.dispatchEvent(new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        deltaY: -24,
+        deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      }));
+      window.dispatchEvent(new Event("blur"));
+    });
+    await page.waitForTimeout(80);
+    const afterBlur = await readCameraState(page);
+
+    expect(vectorLength(subtract(afterBlur.position, initial.position))).toBeLessThan(0.001);
+  });
 });
 
 async function drag(
@@ -135,4 +190,8 @@ function normalise(vector: number[]): number[] {
 function projectOnPlane(vector: number[], normal: number[]): number[] {
   const alongNormal = dot(vector, normal);
   return vector.map((value, index) => value - alongNormal * (normal[index] ?? 0));
+}
+
+function vectorLength(vector: number[]): number {
+  return Math.hypot(...vector);
 }

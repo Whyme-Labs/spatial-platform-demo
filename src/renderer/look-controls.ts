@@ -1,4 +1,3 @@
-import { SparkControls } from "@sparkjsdev/spark";
 import * as THREE from "three";
 
 type PlanarMovement = {
@@ -11,17 +10,17 @@ const MAX_PITCH_RADIANS = THREE.MathUtils.degToRad(85);
 const LOOK_RADIANS_PER_PIXEL = 0.002;
 const WALK_SPEED_METRES_PER_SECOND = 1.4;
 const FAST_WALK_MULTIPLIER = 3;
+const TRACKPAD_METRES_PER_PIXEL = 0.0025;
+const MAX_TRACKPAD_DELTA_PIXELS = 80;
 const MOVEMENT_EPSILON = 1e-6;
 
 /**
- * Spark's stock primary-drag path converts camera poses through world-Y Euler
- * angles. Imported splat cameras frequently use a different authored up axis,
- * which makes drag axes swap and introduces roll after turning. This wrapper
- * keeps Spark's scroll, pinch, and secondary-drag gestures, while owning the
- * primary look gesture and floor-parallel keyboard movement.
+ * A single, scene-aware input owner for the Spark renderer. Primary drag looks
+ * in screen space; keyboard, joystick, mouse wheel, and two-finger trackpad
+ * scrolling move on the authored navigation plane. Secondary clicks are inert
+ * so trackpad click jitter cannot move the camera.
  */
 export class SpatialNavigationControls {
-  private readonly spark: SparkControls;
   private readonly canvas: HTMLCanvasElement;
   private readonly navigationUp = new THREE.Vector3(0, 1, 0);
   private readonly activeKeys = new Set<string>();
@@ -31,17 +30,13 @@ export class SpatialNavigationControls {
   private lastPointerY = 0;
   private lookDeltaX = 0;
   private lookDeltaY = 0;
+  private wheelDeltaX = 0;
+  private wheelDeltaY = 0;
   private multiTouchGesture = false;
   private disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.spark = new SparkControls({ canvas });
-    this.spark.fpsMovement.enable = false;
-    this.spark.pointerControls.rotateSpeed = 0;
-    this.spark.pointerControls.scrollSpeed = 0.8;
-    this.spark.pointerControls.moveInertia = 0.82;
-    this.spark.pointerControls.rotateInertia = 0.78;
     this.bind();
   }
 
@@ -54,7 +49,8 @@ export class SpatialNavigationControls {
     this.navigationUp.copy(camera.up).normalize();
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
-    this.spark.pointerControls.rotateVelocity.set(0, 0, 0);
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
   }
 
   update(
@@ -62,14 +58,14 @@ export class SpatialNavigationControls {
     deltaSeconds: number,
     externalMovement: PlanarMovement = { x: 0, z: 0 },
   ): boolean {
-    const sparkUpdated = this.spark.update(camera, camera);
     const lookUpdated = this.applyLook(camera);
+    const wheelUpdated = this.applyWheel(camera);
     const movementUpdated = this.applyMovement(
       camera,
       this.combinedMovement(externalMovement),
       deltaSeconds,
     );
-    return sparkUpdated || lookUpdated || movementUpdated;
+    return lookUpdated || wheelUpdated || movementUpdated;
   }
 
   dispose(): void {
@@ -80,6 +76,8 @@ export class SpatialNavigationControls {
     document.removeEventListener("pointerup", this.handlePointerEnd);
     document.removeEventListener("pointercancel", this.handlePointerEnd);
     this.canvas.removeEventListener("lostpointercapture", this.handlePointerEnd);
+    this.canvas.removeEventListener("contextmenu", this.handleContextMenu);
+    this.canvas.removeEventListener("wheel", this.handleWheel);
     window.removeEventListener("keydown", this.handleKeyDown);
     window.removeEventListener("keyup", this.handleKeyUp);
     window.removeEventListener("blur", this.handleSuspend);
@@ -93,6 +91,8 @@ export class SpatialNavigationControls {
     document.addEventListener("pointerup", this.handlePointerEnd);
     document.addEventListener("pointercancel", this.handlePointerEnd);
     this.canvas.addEventListener("lostpointercapture", this.handlePointerEnd);
+    this.canvas.addEventListener("contextmenu", this.handleContextMenu);
+    this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
     window.addEventListener("blur", this.handleSuspend);
@@ -134,6 +134,31 @@ export class SpatialNavigationControls {
       if (this.activeTouches.size === 0) this.multiTouchGesture = false;
     }
     if (event.pointerId === this.lookPointerId) this.lookPointerId = null;
+    try {
+      if (this.canvas.hasPointerCapture(event.pointerId)) {
+        this.canvas.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // The browser may retire a touch pointer before lostpointercapture runs.
+    }
+  };
+
+  private readonly handleContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+  };
+
+  private readonly handleWheel = (event: WheelEvent): void => {
+    event.preventDefault();
+    // Browser trackpad pinch is commonly exposed as Ctrl+wheel. Movement and
+    // zoom are explicit product controls, so ignore this ambiguous gesture.
+    if (event.ctrlKey) return;
+    const unitScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+      ? 16
+      : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? Math.max(1, this.canvas.clientHeight)
+      : 1;
+    this.wheelDeltaX += event.deltaX * unitScale;
+    this.wheelDeltaY += event.deltaY * unitScale;
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -158,17 +183,27 @@ export class SpatialNavigationControls {
 
   private beginLook(event: PointerEvent): void {
     this.canvas.focus({ preventScroll: true });
+    try {
+      this.canvas.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is an enhancement; document-level move/up listeners
+      // still preserve a complete gesture when a browser declines it.
+    }
     this.lookPointerId = event.pointerId;
     this.lastPointerX = event.clientX;
     this.lastPointerY = event.clientY;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
   }
 
   private suspend(): void {
     this.lookPointerId = null;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
     this.activeTouches.clear();
     this.activeKeys.clear();
     this.multiTouchGesture = false;
@@ -216,6 +251,24 @@ export class SpatialNavigationControls {
     return true;
   }
 
+  private applyWheel(camera: THREE.PerspectiveCamera): boolean {
+    const deltaX = this.wheelDeltaX;
+    const deltaY = this.wheelDeltaY;
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
+    const magnitude = Math.hypot(deltaX, deltaY);
+    if (magnitude < MOVEMENT_EPSILON) return false;
+
+    const basis = this.navigationBasis(camera);
+    if (!basis) return false;
+    const boundedScale = TRACKPAD_METRES_PER_PIXEL *
+      Math.min(1, MAX_TRACKPAD_DELTA_PIXELS / magnitude);
+    camera.position
+      .addScaledVector(basis.right, deltaX * boundedScale)
+      .addScaledVector(basis.forward, -deltaY * boundedScale);
+    return true;
+  }
+
   private combinedMovement(externalMovement: PlanarMovement): PlanarMovement {
     const keyboardX = Number(
       this.activeKeys.has("KeyD") || this.activeKeys.has("ArrowRight"),
@@ -242,11 +295,8 @@ export class SpatialNavigationControls {
     if (inputMagnitude < MOVEMENT_EPSILON || deltaSeconds <= 0) return false;
 
     const normalisation = inputMagnitude > 1 ? 1 / inputMagnitude : 1;
-    const forward = camera.getWorldDirection(new THREE.Vector3())
-      .projectOnPlane(this.navigationUp);
-    if (forward.lengthSq() < MOVEMENT_EPSILON) return false;
-    forward.normalize();
-    const right = forward.clone().cross(this.navigationUp).normalize();
+    const basis = this.navigationBasis(camera);
+    if (!basis) return false;
     const speedMultiplier = this.activeKeys.has("ShiftLeft") ||
         this.activeKeys.has("ShiftRight")
       ? FAST_WALK_MULTIPLIER
@@ -255,9 +305,22 @@ export class SpatialNavigationControls {
       speedMultiplier *
       Math.min(0.05, deltaSeconds);
     camera.position
-      .addScaledVector(right, movement.x * normalisation * distance)
-      .addScaledVector(forward, -movement.z * normalisation * distance);
+      .addScaledVector(basis.right, movement.x * normalisation * distance)
+      .addScaledVector(basis.forward, -movement.z * normalisation * distance);
     return true;
+  }
+
+  private navigationBasis(
+    camera: THREE.PerspectiveCamera,
+  ): { forward: THREE.Vector3; right: THREE.Vector3 } | null {
+    const forward = camera.getWorldDirection(new THREE.Vector3())
+      .projectOnPlane(this.navigationUp);
+    if (forward.lengthSq() < MOVEMENT_EPSILON) return null;
+    forward.normalize();
+    return {
+      forward,
+      right: forward.clone().cross(this.navigationUp).normalize(),
+    };
   }
 }
 
