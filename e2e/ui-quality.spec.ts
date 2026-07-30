@@ -195,6 +195,26 @@ test.describe("authenticated studio UI", () => {
     }
   });
 
+  test("provisional navigation authoring is labelled in scene units instead of metres", async ({
+    page,
+  }) => {
+    await expect(page.locator(
+      "#semanticExtractionForm select[name='worldUnit']",
+    )).toHaveValue("scene_units");
+    await expect(page.locator(
+      "#navigationProfileForm select[name='worldUnit']",
+    )).toHaveValue("scene_units");
+    await expect(page.locator(
+      "#releaseForm select[name='releaseWorldUnit']",
+    )).toHaveValue("scene_units");
+    await expect(page.locator("#semanticExtractionDialog")).toContainText(
+      "SU supports aligned navigation but not metre or area claims",
+    );
+    await expect(page.locator("#releaseDialog")).toContainText(
+      "Provisional SU releases support navigation",
+    );
+  });
+
   test("every dialog keeps action groups separated from content and adjacent controls", async ({
     page,
   }) => {

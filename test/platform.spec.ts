@@ -1754,68 +1754,69 @@ describe("Spatial Studio Worker", () => {
       expect(invalidCameraResponse.status).toBe(400);
     }
 
-    const metricTransform = {
+    const provisionalTransform = {
       sourceUpAxis: "Z",
-      metresPerSourceUnit: 0.42,
+      worldUnit: "scene_units",
+      metresPerSourceUnit: 1,
       yawDegrees: 0,
       translationMetres: [0, 0, 0],
     };
-    const unprovenMetricRelease = await exports.default.fetch(
+    const unprovenProvisionalRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "unproven-metric-release",
+          slug: "unproven-provisional-release",
           accessPolicy: "unlisted",
           viewerConfig: {
-            title: "Unproven metric release",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Unproven provisional release",
+            measurementDisclaimer: "Provisional scene units only.",
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(unprovenMetricRelease.status).toBe(400);
-    const unknownMetricEvidence = await exports.default.fetch(
+    expect(unprovenProvisionalRelease.status).toBe(400);
+    const unknownProvisionalEvidence = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "unknown-metric-evidence",
+          slug: "unknown-provisional-evidence",
           accessPolicy: "unlisted",
           sourceToWorldEvidenceId: crypto.randomUUID(),
           viewerConfig: {
-            title: "Unknown metric evidence",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Unknown provisional evidence",
+            measurementDisclaimer: "Provisional scene units only.",
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(unknownMetricEvidence.status).toBe(409);
+    expect(unknownProvisionalEvidence.status).toBe(409);
 
-    const metricEvidenceId = crypto.randomUUID();
-    const metricEvidenceJobId = crypto.randomUUID();
-    const metricEvidenceOwner = await env.DB.prepare(`
+    const provisionalEvidenceId = crypto.randomUUID();
+    const provisionalEvidenceJobId = crypto.randomUUID();
+    const provisionalEvidenceOwner = await env.DB.prepare(`
       SELECT organisation_id, created_by FROM projects WHERE id = ?
     `).bind(project.id).first<{ organisation_id: string; created_by: string }>();
-    expect(metricEvidenceOwner).toBeTruthy();
+    expect(provisionalEvidenceOwner).toBeTruthy();
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
           processor_version, idempotency_key, state, progress, progress_message
         ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1', 'test/1.0',
-          ?, 'SUCCEEDED', 100, 'Reviewed metric evidence')
+          ?, 'SUCCEEDED', 100, 'Reviewed provisional-unit evidence')
       `).bind(
-        metricEvidenceJobId,
-        metricEvidenceOwner!.organisation_id,
+        provisionalEvidenceJobId,
+        provisionalEvidenceOwner!.organisation_id,
         project.id,
         completed.asset.versionId,
         completed.asset.id,
-        `metric-evidence:${metricEvidenceId}`,
+        `provisional-evidence:${provisionalEvidenceId}`,
       ),
       env.DB.prepare(`
         INSERT INTO semantic_extraction_runs (
@@ -1827,65 +1828,132 @@ describe("Spatial Studio Worker", () => {
           'accept_selected', 'Reviewed fixture proving the exact transform.',
           datetime('now'))
       `).bind(
-        metricEvidenceId,
-        metricEvidenceOwner!.organisation_id,
+        provisionalEvidenceId,
+        provisionalEvidenceOwner!.organisation_id,
         project.id,
         completed.asset.versionId,
         completed.asset.id,
-        metricEvidenceJobId,
+        provisionalEvidenceJobId,
         JSON.stringify({
           coordinateAssurance: "authored_source_to_world_v1",
-          sourceToWorld: metricTransform,
-          registrationEvidence: "Measured control points establish the metric transform.",
+          sourceToWorld: provisionalTransform,
+          registrationEvidence:
+            "Temporary scene units preserve alignment without claiming real-world scale.",
         }),
         crypto.randomUUID(),
         "f".repeat(64),
-        metricEvidenceOwner!.created_by,
-        metricEvidenceOwner!.created_by,
+        provisionalEvidenceOwner!.created_by,
+        provisionalEvidenceOwner!.created_by,
       ),
     ]);
-    const mismatchedMetricEvidence = await exports.default.fetch(
+    const mismatchedProvisionalEvidence = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "mismatched-metric-evidence",
+          slug: "mismatched-provisional-evidence",
           accessPolicy: "unlisted",
-          sourceToWorldEvidenceId: metricEvidenceId,
+          sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
-            title: "Mismatched metric evidence",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: { ...metricTransform, metresPerSourceUnit: 0.43 },
+            title: "Mismatched provisional evidence",
+            measurementDisclaimer: "Provisional scene units only.",
+            sourceToWorld: { ...provisionalTransform, metresPerSourceUnit: 1.1 },
           },
         }),
       },
     );
-    expect(mismatchedMetricEvidence.status).toBe(422);
-    const provenMetricRelease = await exports.default.fetch(
+    expect(mismatchedProvisionalEvidence.status).toBe(422);
+    const mismatchedNavigationUnit = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "proven-metric-release",
+          slug: "proven-provisional-release",
           accessPolicy: "unlisted",
-          sourceToWorldEvidenceId: metricEvidenceId,
+          sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
-            title: "Proven metric release",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Proven provisional release",
+            measurementDisclaimer: "Provisional scene units only.",
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(provenMetricRelease.status).toBe(201);
+    expect(mismatchedNavigationUnit.status).toBe(409);
+    const provisionalProfile = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: completed.asset.versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.12,
+          agentHeight: 0.8,
+          eyeHeight: 0.65,
+          maxStepMetres: 0.05,
+        }),
+      },
+    );
+    expect(provisionalProfile.status).toBe(200);
+    const provenProvisionalRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "proven-provisional-release",
+          accessPolicy: "unlisted",
+          sourceToWorldEvidenceId: provisionalEvidenceId,
+          viewerConfig: {
+            title: "Proven provisional release",
+            measurementDisclaimer: "Provisional scene units only.",
+            sourceToWorld: provisionalTransform,
+          },
+        }),
+      },
+    );
+    expect(provenProvisionalRelease.status).toBe(201);
+    const provisionalManifest = await exports.default.fetch(
+      `${origin}/api/releases/proven-provisional-release/manifest`,
+    );
+    expect(provisionalManifest.status).toBe(200);
+    await expect(provisionalManifest.json()).resolves.toMatchObject({
+      viewer: {
+        sourceToWorld: {
+          worldUnit: "scene_units",
+        },
+      },
+      spatial: {
+        navigationProfile: {
+          worldUnit: "scene_units",
+        },
+      },
+    });
     await env.DB.batch([
       env.DB.prepare("DELETE FROM release_channels WHERE slug = ?")
-        .bind("proven-metric-release"),
+        .bind("proven-provisional-release"),
       env.DB.prepare("DELETE FROM releases WHERE project_id = ? AND viewer_config_json LIKE ?")
-        .bind(project.id, '%"Proven metric release"%'),
+        .bind(project.id, '%"Proven provisional release"%'),
     ]);
+    const restoreMetricProfile = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: completed.asset.versionId,
+          worldUnit: "metres",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        }),
+      },
+    );
+    expect(restoreMetricProfile.status).toBe(200);
 
     const snapshotEntityResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities`,
@@ -2658,6 +2726,7 @@ describe("Spatial Studio Worker", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
           versionId,
+          worldUnit: "scene_units",
           agentRadius: 0.3,
           agentHeight: 1.75,
           eyeHeight: 1.58,
@@ -2754,6 +2823,7 @@ describe("Spatial Studio Worker", () => {
         }],
       },
       navigationProfile: {
+        worldUnit: "scene_units",
         agentRadius: 0.3,
         agentHeight: 1.75,
         eyeHeight: 1.58,

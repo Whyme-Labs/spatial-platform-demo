@@ -598,6 +598,9 @@ function readSourceToWorld(value: string | null): SourceToWorldTransform | null 
   }
   if (!parsed || typeof parsed !== "object") return null;
   const sourceUpAxis = Reflect.get(parsed, "sourceUpAxis");
+  const worldUnit = Reflect.get(parsed, "worldUnit") === "scene_units"
+    ? "scene_units" as const
+    : "metres" as const;
   const metresPerSourceUnit = Number(Reflect.get(parsed, "metresPerSourceUnit"));
   const yawDegrees = Number(Reflect.get(parsed, "yawDegrees"));
   const translationMetres = finiteTuple(Reflect.get(parsed, "translationMetres"));
@@ -611,6 +614,7 @@ function readSourceToWorld(value: string | null): SourceToWorldTransform | null 
   ) return null;
   return {
     sourceUpAxis,
+    worldUnit,
     metresPerSourceUnit,
     yawDegrees,
     translationMetres,

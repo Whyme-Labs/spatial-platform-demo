@@ -6364,7 +6364,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       ORDER BY label, created_at
     `).bind(access.project.id, version.id, access.auth.organisationId),
     context.env.DB.prepare(`
-      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
       FROM scene_navigation_profiles
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
     `).bind(access.project.id, version.id, access.auth.organisationId),
@@ -6621,10 +6621,11 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
   if (!version) return notFound(context, "Scene version not found");
   await context.env.DB.prepare(`
     INSERT INTO scene_navigation_profiles (
-      version_id, organisation_id, project_id, agent_radius, agent_height,
-      eye_height, max_step_metres, updated_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      version_id, organisation_id, project_id, world_unit, agent_radius,
+      agent_height, eye_height, max_step_metres, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(version_id) DO UPDATE SET
+      world_unit = excluded.world_unit,
       agent_radius = excluded.agent_radius,
       agent_height = excluded.agent_height,
       eye_height = excluded.eye_height,
@@ -6637,6 +6638,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     version.id,
     auth.organisationId,
     project.id,
+    parsed.data.worldUnit,
     parsed.data.agentRadius,
     parsed.data.agentHeight,
     parsed.data.eyeHeight,
@@ -6644,6 +6646,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     auth.userId,
   ).run();
   await audit(context, auth, "spatial.navigation_profile.update", "scene_version", version.id, {
+    worldUnit: parsed.data.worldUnit,
     agentRadius: parsed.data.agentRadius,
     agentHeight: parsed.data.agentHeight,
     eyeHeight: parsed.data.eyeHeight,
@@ -6651,6 +6654,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
   });
   return context.json({
     navigationProfile: {
+      worldUnit: parsed.data.worldUnit,
       agentRadius: parsed.data.agentRadius,
       agentHeight: parsed.data.agentHeight,
       eyeHeight: parsed.data.eyeHeight,
@@ -11241,13 +11245,15 @@ app.post("/api/projects/:projectId/releases", async (context) => {
         "The source-to-world transform must come from an accepted semantic extraction on this exact scene version",
       );
     }
-    const evidenceTransform = Reflect.get(
+    const evidenceTransform = canonicalSourceToWorldTransform(Reflect.get(
       parseStoredObject(evidence.parameters_json) as object,
       "sourceToWorld",
+    ));
+    const releaseTransform = canonicalSourceToWorldTransform(
+      parsed.data.viewerConfig.sourceToWorld,
     );
     if (
-      JSON.stringify(evidenceTransform ?? null) !==
-        JSON.stringify(parsed.data.viewerConfig.sourceToWorld)
+      JSON.stringify(evidenceTransform) !== JSON.stringify(releaseTransform)
     ) {
       return unprocessable(context, {
         sourceToWorldEvidenceId: [
@@ -11255,6 +11261,26 @@ app.post("/api/projects/:projectId/releases", async (context) => {
         ],
       });
     }
+  }
+  const profileUnitRow = await context.env.DB.prepare(`
+    SELECT world_unit
+    FROM scene_navigation_profiles
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+  `).bind(
+    auth.organisationId,
+    project.id,
+    approved.id,
+  ).first<{ world_unit: string }>();
+  const navigationWorldUnit = profileUnitRow?.world_unit === "scene_units"
+    ? "scene_units"
+    : "metres";
+  const releaseWorldUnit =
+    parsed.data.viewerConfig.sourceToWorld?.worldUnit ?? "metres";
+  if (navigationWorldUnit !== releaseWorldUnit) {
+    return conflict(
+      context,
+      "The navigation profile world unit must match the reviewed source-to-world transform",
+    );
   }
   const releaseId = crypto.randomUUID();
   const channelId = crypto.randomUUID();
@@ -11446,7 +11472,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       ORDER BY label, created_at
     `).bind(release.project_id, release.version_id, release.organisation_id),
     context.env.DB.prepare(`
-      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
       FROM scene_navigation_profiles
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
     `).bind(release.project_id, release.version_id, release.organisation_id),
@@ -16142,6 +16168,36 @@ function dxfNumber(value: number): string {
   return Object.is(rounded, -0) ? "0" : String(rounded);
 }
 
+function canonicalSourceToWorldTransform(value: unknown): {
+  sourceUpAxis: "Y" | "Z";
+  worldUnit: "metres" | "scene_units";
+  metresPerSourceUnit: number;
+  yawDegrees: number;
+  translationMetres: [number, number, number];
+} | null {
+  if (!value || typeof value !== "object") return null;
+  const sourceUpAxis = Reflect.get(value, "sourceUpAxis");
+  const metresPerSourceUnit = Number(Reflect.get(value, "metresPerSourceUnit"));
+  const yawDegrees = Number(Reflect.get(value, "yawDegrees"));
+  const translationMetres = finitePoint3(Reflect.get(value, "translationMetres"));
+  if (
+    (sourceUpAxis !== "Y" && sourceUpAxis !== "Z") ||
+    !Number.isFinite(metresPerSourceUnit) ||
+    metresPerSourceUnit <= 0 ||
+    !Number.isFinite(yawDegrees) ||
+    !translationMetres
+  ) return null;
+  return {
+    sourceUpAxis,
+    worldUnit: Reflect.get(value, "worldUnit") === "scene_units"
+      ? "scene_units"
+      : "metres",
+    metresPerSourceUnit,
+    yawDegrees,
+    translationMetres,
+  };
+}
+
 type RuntimeBox = {
   entityId: string;
   label: string;
@@ -16157,6 +16213,7 @@ type RuntimeObstacleBox = {
 };
 
 const defaultNavigationProfile = {
+  worldUnit: "metres",
   agentRadius: 0.22,
   agentHeight: 1.8,
   eyeHeight: 1.6,
@@ -16198,7 +16255,7 @@ async function captureSpatialSnapshot(
       ORDER BY label, created_at
     `).bind(organisationId, projectId, versionId),
     database.prepare(`
-      SELECT agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
       FROM scene_navigation_profiles
       WHERE organisation_id = ? AND project_id = ? AND version_id = ?
     `).bind(organisationId, projectId, versionId),
@@ -16255,6 +16312,7 @@ function buildSpatialRuntime(
     boxes: RuntimeObstacleBox[];
   };
   navigationProfile: {
+    worldUnit: "metres" | "scene_units";
     agentRadius: number;
     agentHeight: number;
     eyeHeight: number;
@@ -16413,12 +16471,16 @@ function buildSpatialRuntime(
 function navigationProfileFromRow(
   row: unknown,
 ): typeof defaultNavigationProfile | {
+  worldUnit: "metres" | "scene_units";
   agentRadius: number;
   agentHeight: number;
   eyeHeight: number;
   maxStepMetres: number;
 } {
   if (!row || typeof row !== "object") return defaultNavigationProfile;
+  const worldUnit = Reflect.get(row, "world_unit") === "scene_units"
+    ? "scene_units" as const
+    : "metres" as const;
   const agentRadius = Number(Reflect.get(row, "agent_radius"));
   const agentHeight = Number(Reflect.get(row, "agent_height"));
   const eyeHeight = Number(Reflect.get(row, "eye_height"));
@@ -16429,7 +16491,7 @@ function navigationProfileFromRow(
     !Number.isFinite(eyeHeight) ||
     !Number.isFinite(maxStepMetres)
   ) return defaultNavigationProfile;
-  return { agentRadius, agentHeight, eyeHeight, maxStepMetres };
+  return { worldUnit, agentRadius, agentHeight, eyeHeight, maxStepMetres };
 }
 
 function triangulateWalkablePolygon(points: Array<[number, number, number]>): number[] {

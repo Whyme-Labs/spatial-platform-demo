@@ -5,6 +5,7 @@ import {
   ProcessingAgentError,
 } from "../scripts/processing-agent-core.mjs";
 import {
+  navigationProfileSchema,
   releaseInputSchema,
   semanticExtractionSchema,
 } from "../src/worker/contracts";
@@ -239,5 +240,77 @@ describe("v5 coordinate contracts", () => {
         sourceToWorld,
       },
     }).success).toBe(true);
+  });
+
+  it("preserves provisional scene units without representing them as metres", () => {
+    const sourceToWorld = {
+      sourceUpAxis: "Z",
+      worldUnit: "scene_units",
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    } as const;
+    const extraction = semanticExtractionSchema.safeParse({
+      clientOperationId: crypto.randomUUID(),
+      versionId: crypto.randomUUID(),
+      inputAssetId: crypto.randomUUID(),
+      coordinateAssurance: "authored_source_to_world_v1",
+      sourceToWorld,
+      registrationEvidence:
+        "Temporary scene units preserve reconstruction alignment; no metric scale is claimed.",
+    });
+    expect(extraction.success).toBe(true);
+    if (extraction.success) {
+      expect(extraction.data.sourceToWorld?.worldUnit).toBe("scene_units");
+    }
+
+    const release = releaseInputSchema.safeParse({
+      slug: "provisional-v5-room",
+      accessPolicy: "unlisted",
+      sourceToWorldEvidenceId: crypto.randomUUID(),
+      viewerConfig: {
+        title: "Provisional V5 room",
+        measurementDisclaimer:
+          "Provisional scene units only. Distances and areas are not real-world measurements.",
+        sourceToWorld,
+      },
+    });
+    expect(release.success).toBe(true);
+    if (release.success) {
+      expect(release.data.viewerConfig.sourceToWorld?.worldUnit).toBe("scene_units");
+    }
+
+    const navigationProfile = navigationProfileSchema.safeParse({
+      versionId: crypto.randomUUID(),
+      worldUnit: "scene_units",
+      agentRadius: 0.12,
+      agentHeight: 0.8,
+      eyeHeight: 0.65,
+      maxStepMetres: 0.05,
+    });
+    expect(navigationProfile.success).toBe(true);
+    if (navigationProfile.success) {
+      expect(navigationProfile.data.worldUnit).toBe("scene_units");
+    }
+  });
+
+  it("defaults legacy transforms and navigation profiles to metres", () => {
+    const extraction = semanticExtractionSchema.safeParse({
+      clientOperationId: crypto.randomUUID(),
+      versionId: crypto.randomUUID(),
+      inputAssetId: crypto.randomUUID(),
+      coordinateAssurance: "authored_source_to_world_v1",
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
+      registrationEvidence: "Legacy metric transform with reviewed scale evidence.",
+    });
+    expect(extraction.success).toBe(true);
+    if (extraction.success) {
+      expect(extraction.data.sourceToWorld?.worldUnit).toBe("metres");
+    }
   });
 });

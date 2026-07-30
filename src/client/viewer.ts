@@ -110,6 +110,7 @@ type ReleaseManifest = {
       }>;
     };
     navigationProfile: {
+      worldUnit?: "metres" | "scene_units";
       agentRadius: number;
       agentHeight: number;
       eyeHeight: number;
@@ -418,6 +419,12 @@ function applyManifest(manifest: ReleaseManifest): void {
   byId("releaseSubtitle").textContent = manifest.viewer.subtitle ?? manifest.project.name;
   byId("captureDate").textContent = manifest.viewer.captureDate ?? "Not provided";
   byId("sceneFormat").textContent = manifest.scene.format.toUpperCase();
+  const worldUnit = manifest.viewer.sourceToWorld?.worldUnit ??
+    manifest.spatial?.navigationProfile.worldUnit ??
+    "metres";
+  byId("scaleStatus").textContent = worldUnit === "scene_units"
+    ? "Provisional scene units (SU)"
+    : "Metric metres";
   byId("publishedAt").textContent = new Date(manifest.release.publishedAt).toLocaleDateString();
   byId("measurementDisclaimer").textContent = manifest.viewer.measurementDisclaimer;
   if (manifest.theme) {

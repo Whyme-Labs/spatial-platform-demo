@@ -263,9 +263,11 @@ Point-cloud semantic extraction is a separate evidence-first processing lane.
 D1 binds one immutable version, one verified source/master/point-cloud PLY, an
 explicit source-to-world transform, bounded grid/floor-band/sample parameters,
 job state, candidate rows, and the terminal human decision. The transform
-declares the source up axis, metres per source unit, yaw, translation, and
-registration evidence; scale is never inferred. The leased processor downloads
-and verifies the exact bytes, normalizes them into canonical Y-up metres,
+declares the source up axis, world unit, world units per source unit, yaw,
+translation, and alignment evidence. The world unit is either reviewed metric
+metres or explicitly provisional scene units (`SU`); metric scale is never
+inferred. The leased processor downloads and verifies the exact bytes,
+normalizes them into canonical Y-up world coordinates,
 detects credible horizontal support layers, selects the lower layer unless an
 operator supplies an elevation hint, traces connected occupancy into polygons,
 and writes the full report to private R2. Machine candidates never create scene
@@ -273,12 +275,15 @@ entities. `accept_selected` creates an editable floor grouping and room
 polygons; `reject_all` preserves the evidence without authored geometry.
 
 A release may apply a source-to-world transform only when it cites a reviewed,
-accepted semantic extraction whose transform is an exact match. Operators can
-then edit concave walkable polygons, author doorway connectors, obstacle boxes,
-and the agent profile before publication. Furniture, ceilings, sparse floors,
-stairs, glass, and overlapping levels remain explicit limitations; this is not
-automatic wall or object extraction, legal-room classification, area
-certification, accessibility certification, or survey evidence.
+accepted semantic extraction whose transform is an exact match. The navigation
+profile must use the same world unit. Provisional releases remain explorable
+but expose `SU` in Studio and the published viewer and make no metre, area, or
+clearance claim. Operators can then edit concave walkable polygons, author
+doorway connectors, obstacle boxes, and the agent profile before publication.
+Furniture, ceilings, sparse floors, stairs, glass, and overlapping levels
+remain explicit limitations; this is not automatic wall or object extraction,
+legal-room classification, area certification, accessibility certification, or
+survey evidence.
 
 Authored geometry change evidence is a separate, deliberately bounded lane.
 The operator selects two immutable versions, declares how they share a Y-up

@@ -26,8 +26,15 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
     },
     viewer: {
       title: "Loading handoff fixture",
-      measurementDisclaimer: "Test scene only.",
+      measurementDisclaimer: "Provisional scene units only.",
       splatBudgetMillions: 2,
+      sourceToWorld: {
+        sourceUpAxis: "Z",
+        worldUnit: "scene_units",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
     },
     spatial: {
       entities: [],
@@ -48,6 +55,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         boxes: [{ entityId: "table", label: "Table", min: [1, 0, 1], max: [2, 1, 2] }],
       },
       navigationProfile: {
+        worldUnit: "scene_units",
         agentRadius: 0.22,
         agentHeight: 1.8,
         eyeHeight: 1.6,
@@ -143,6 +151,9 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(parentLoader).toBeHidden();
   await expect(releaseInfo).toBeVisible();
+  await expect(page.locator("#scaleStatus")).toHaveText(
+    "Provisional scene units (SU)",
+  );
   await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
     () => Reflect.get(window, "runtimeMessage"),
   )).toMatchObject({
@@ -157,6 +168,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       max: [2, 1, 2],
     }],
     navigationProfile: {
+      worldUnit: "scene_units",
       agentRadius: 0.22,
       agentHeight: 1.8,
       eyeHeight: 1.6,

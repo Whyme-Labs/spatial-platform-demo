@@ -586,20 +586,21 @@
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
         <label><span>Splat budget (millions)</span><input name="splatBudgetMillions" type="number" min="0.25" max="8" step="0.25" value="2" required /></label>
         <label class="checkbox-row"><input name="applySourceToWorld" type="checkbox" /> Apply authored source-to-world transform</label>
-        <label class="full"><span>Reviewed transform evidence</span><select name="sourceToWorldEvidenceId"><option value="">No accepted metric extraction available</option></select></label>
+        <label class="full"><span>Reviewed transform evidence</span><select name="sourceToWorldEvidenceId"><option value="">No accepted extraction available</option></select></label>
+        <label><span>World unit</span><select name="releaseWorldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
         <label><span>Source up axis</span><select name="releaseSourceUpAxis"><option value="Y">Y-up</option><option value="Z">Z-up</option></select></label>
-        <label><span>Metres per source unit</span><input name="releaseMetresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" /></label>
+        <label><span>World units per source unit</span><input name="releaseMetresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" /></label>
         <label><span>World yaw</span><input name="releaseYawDegrees" type="number" min="-360" max="360" step="0.1" value="0" /></label>
-        <label><span>Translation X (m)</span><input name="releaseTranslationX" type="number" step="0.01" value="0" /></label>
-        <label><span>Translation Y (m)</span><input name="releaseTranslationY" type="number" step="0.01" value="0" /></label>
-        <label><span>Translation Z (m)</span><input name="releaseTranslationZ" type="number" step="0.01" value="0" /></label>
+        <label><span>World translation X</span><input name="releaseTranslationX" type="number" step="0.01" value="0" /></label>
+        <label><span>World translation Y</span><input name="releaseTranslationY" type="number" step="0.01" value="0" /></label>
+        <label><span>World translation Z</span><input name="releaseTranslationZ" type="number" step="0.01" value="0" /></label>
         <label class="full"><span>Starting camera position (x, y, z)</span><input name="initialCameraPosition" placeholder="Optional; for example -0.3, 0.71, -0.94" /></label>
         <label class="full"><span>Starting camera target (x, y, z)</span><input name="initialCameraTarget" placeholder="Required when a starting position is set" /></label>
         <label><span>Camera up (x, y, z)</span><input name="initialCameraUp" value="0, 1, 0" /></label>
         <label><span>Field of view</span><input name="initialCameraFov" type="number" min="20" max="100" step="1" value="58" /></label>
         <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer" required>This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
       </div>
-      <p class="field-note">The release freezes this transform and the exact authored navigation runtime. Only enable the transform when scale and gravity are backed by registration evidence.</p>
+      <p class="field-note">The release freezes this transform and the exact authored navigation runtime. Provisional SU releases support navigation but make no metre, area, clearance, survey, or construction claim.</p>
       <button class="primary-button wide" type="submit">Publish release</button>
       <p id="releaseError" class="form-error" role="alert"></p>
     </form>
@@ -678,7 +679,7 @@
         <label><span>Type</span><select name="kind"><option value="floor">Floor</option><option value="room">Room</option><option value="doorway">Doorway</option><option value="poi">Point of interest</option><option value="navigation_obstacle">Navigation obstacle</option></select></label>
         <label><span>Label</span><input name="label" required maxlength="120" /></label>
         <label class="full"><span>Description</span><textarea name="description" maxlength="1000"></textarea></label>
-        <label class="full"><span>Position (x, y, z metres)</span><input name="position" placeholder="0, 0, 0" pattern="\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*" title="Enter exactly three numbers separated by commas, for example 0, 1.6, 2" /></label>
+        <label class="full"><span>Position (x, y, z world units)</span><input name="position" placeholder="0, 0, 0" pattern="\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*" title="Enter exactly three numbers separated by commas, for example 0, 1.6, 2" /></label>
         <label class="full"><span>Walkable bounds (min x, floor y, min z → max x, ceiling y, max z)</span><input name="bounds" placeholder="-2, 0, -3 → 2, 2.6, 3" /></label>
         <label class="full"><span>Walkable polygon (x, y, z; one vertex per line)</span><textarea name="polygon" placeholder="-2, 0, -3&#10;2, 0, -3&#10;2, 0, 1&#10;0, 0, 1&#10;0, 0, 3&#10;-2, 0, 3"></textarea></label>
       </div>
@@ -694,10 +695,11 @@
       <span class="eyebrow">NAVIGATION AGENT</span>
       <h2>Tune walking clearance for this scene version.</h2>
       <div class="mock-form-grid">
-        <label><span>Agent radius (m)</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" required /></label>
-        <label><span>Agent height (m)</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" required /></label>
-        <label><span>Eye height (m)</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" required /></label>
-        <label><span>Maximum sampled step (m)</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" required /></label>
+        <label class="full"><span>World unit</span><select name="worldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
+        <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" required /></label>
+        <label><span>Agent height</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" required /></label>
+        <label><span>Eye height</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" required /></label>
+        <label><span>Maximum sampled step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" required /></label>
       </div>
       <p class="field-note">Radius controls clearance around furniture and polygon edges. Eye height must remain below total agent height. Smaller sampled steps improve anti-tunnelling checks at higher runtime cost.</p>
       <button class="primary-button wide" type="submit">Save navigation profile</button>
@@ -713,21 +715,22 @@
       <p>The processor normalizes a verified PLY through an authored source-to-world transform, then proposes horizontal occupancy for review. It creates candidates only, never authored rooms or measurement claims.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Registered PLY asset</span><select id="semanticInputAsset" name="inputAssetId" required></select></label>
+        <label><span>World unit</span><select name="worldUnit" required><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
         <label><span>Source up axis</span><select name="sourceUpAxis" required><option value="Y">Y-up</option><option value="Z">Z-up</option></select></label>
-        <label><span>Metres per source unit</span><input name="metresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" required /></label>
+        <label><span>World units per source unit</span><input name="metresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" required /></label>
         <label><span>World yaw</span><input name="yawDegrees" type="number" min="-360" max="360" step="0.1" value="0" required /></label>
-        <label><span>Translation X (m)</span><input name="translationX" type="number" step="0.01" value="0" required /></label>
-        <label><span>Translation Y (m)</span><input name="translationY" type="number" step="0.01" value="0" required /></label>
-        <label><span>Translation Z (m)</span><input name="translationZ" type="number" step="0.01" value="0" required /></label>
-        <label><span>Horizontal grid</span><input name="gridSizeM" type="number" min="0.05" max="2" step="0.05" value="0.25" required /></label>
-        <label><span>Floor band</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" required /></label>
-        <label><span>Minimum region area</span><input name="minimumAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" required /></label>
+        <label><span>World translation X</span><input name="translationX" type="number" step="0.01" value="0" required /></label>
+        <label><span>World translation Y</span><input name="translationY" type="number" step="0.01" value="0" required /></label>
+        <label><span>World translation Z</span><input name="translationZ" type="number" step="0.01" value="0" required /></label>
+        <label><span>Horizontal grid (world units)</span><input name="gridSizeM" type="number" min="0.05" max="2" step="0.05" value="0.25" required /></label>
+        <label><span>Floor band (world units)</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" required /></label>
+        <label><span>Minimum region area (world units²)</span><input name="minimumAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" required /></label>
         <label><span>Maximum candidates</span><input name="maximumCandidates" type="number" min="1" max="100" step="1" value="24" required /></label>
         <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" required /></label>
-        <label><span>Floor elevation hint (optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic lower support layer" /></label>
-        <label class="full"><span>Registration evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Which known measurement establishes scale, and how were gravity, yaw, and origin verified?"></textarea></label>
+        <label><span>Floor elevation hint (world units, optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic lower support layer" /></label>
+        <label class="full"><span>Alignment / scale evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="For SU, explain the temporary normalization and confirm no metric scale is claimed. For metres, identify the measured control distance."></textarea></label>
       </div>
-      <p class="field-note">Scale is not inferred from a Gaussian PLY. Use a real measured distance. Furniture, ceilings, stairs, glass, sparse floors, and overlapping levels can mislead extraction; inspect every polygon before acceptance.</p>
+      <p class="field-note">Choose provisional SU when real scale is unknown. SU supports aligned navigation but not metre or area claims. Furniture, ceilings, stairs, glass, sparse floors, and overlapping levels can mislead extraction; inspect every polygon before acceptance.</p>
       <button class="primary-button wide" type="submit">Queue semantic extraction</button>
       <p id="semanticExtractionError" class="form-error" role="alert"></p>
     </form>

@@ -595,6 +595,7 @@ const point3Schema = z.tuple([z.number().finite(), z.number().finite(), z.number
 const polygon3Schema = z.array(point3Schema).min(3).max(2000);
 const sourceToWorldTransformSchema = z.object({
   sourceUpAxis: z.enum(["Y", "Z"]),
+  worldUnit: z.enum(["metres", "scene_units"]).default("metres"),
   metresPerSourceUnit: z.number().positive().max(10_000),
   yawDegrees: z.number().finite().min(-360).max(360).default(0),
   translationMetres: point3Schema.default([0, 0, 0]),
@@ -669,6 +670,7 @@ export const navigationObstacleSchema = z.object({
 
 export const navigationProfileSchema = z.object({
   versionId: z.string().uuid(),
+  worldUnit: z.enum(["metres", "scene_units"]).default("metres"),
   agentRadius: z.number().min(0.05).max(2),
   agentHeight: z.number().min(0.5).max(4),
   eyeHeight: z.number().min(0.3).max(3),
@@ -1290,7 +1292,7 @@ export const releaseInputSchema = z.object({
     context.addIssue({
       code: "custom",
       path: ["sourceToWorldEvidenceId"],
-      message: "A reviewed semantic extraction is required for a metric source-to-world release",
+      message: "A reviewed semantic extraction is required for a source-to-world release",
     });
   }
   if (!value.viewerConfig.sourceToWorld && value.sourceToWorldEvidenceId) {
