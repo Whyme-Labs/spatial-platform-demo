@@ -647,7 +647,9 @@ export function extractWalkableSemanticCandidates(signature, {
       selectedLayer.elevationM,
       semanticRound(z * gridSizeM),
     ]);
-    const areaM2 = semanticRound(component.length * gridSizeM * gridSizeM);
+    const areaM2 = semanticRound(
+      Math.abs(semanticPolygonArea(outline)) * gridSizeM * gridSizeM,
+    );
     const xs = component.map(([x]) => x);
     const zs = component.map(([, z]) => z);
     const boundingCellCount =
