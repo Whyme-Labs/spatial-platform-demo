@@ -131,6 +131,27 @@ test.describe("spatial navigation direction", () => {
 
     expect(vectorLength(subtract(afterBlur.position, initial.position))).toBeLessThan(0.001);
   });
+
+  test("repeated travel cannot leave the active navigation boundary", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?boundary=1");
+
+    for (let index = 0; index < 24; index += 1) {
+      await page.mouse.wheel(0, -80);
+    }
+    await page.waitForTimeout(120);
+
+    const state = await readCameraState(page);
+    const bounds = await page.locator("body").evaluate((body) =>
+      JSON.parse(body.dataset.navigationBounds ?? "{}") as {
+        min: number[];
+        max: number[];
+      }
+    );
+    for (const [index, coordinate] of state.position.entries()) {
+      expect(coordinate).toBeGreaterThanOrEqual(bounds.min[index]! - 1e-6);
+      expect(coordinate).toBeLessThanOrEqual(bounds.max[index]! + 1e-6);
+    }
+  });
 });
 
 async function drag(

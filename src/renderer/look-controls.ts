@@ -5,6 +5,11 @@ type PlanarMovement = {
   z: number;
 };
 
+type NavigationBounds = {
+  min: THREE.Vector3;
+  max: THREE.Vector3;
+};
+
 const LOCAL_RIGHT = new THREE.Vector3(1, 0, 0);
 const MAX_PITCH_RADIANS = THREE.MathUtils.degToRad(85);
 const LOOK_RADIANS_PER_PIXEL = 0.002;
@@ -25,6 +30,7 @@ export class SpatialNavigationControls {
   private readonly navigationUp = new THREE.Vector3(0, 1, 0);
   private readonly activeKeys = new Set<string>();
   private readonly activeTouches = new Set<number>();
+  private navigationBounds: NavigationBounds[] = [];
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -53,11 +59,33 @@ export class SpatialNavigationControls {
     this.wheelDeltaY = 0;
   }
 
+  setNavigationBounds(bounds: NavigationBounds[]): void {
+    this.navigationBounds = bounds.flatMap(({ min, max }) => {
+      const coordinates = [...min.toArray(), ...max.toArray()];
+      if (coordinates.some((coordinate) => !Number.isFinite(coordinate))) return [];
+      return [{
+        min: new THREE.Vector3(
+          Math.min(min.x, max.x),
+          Math.min(min.y, max.y),
+          Math.min(min.z, max.z),
+        ),
+        max: new THREE.Vector3(
+          Math.max(min.x, max.x),
+          Math.max(min.y, max.y),
+          Math.max(min.z, max.z),
+        ),
+      }];
+    });
+  }
+
   update(
     camera: THREE.PerspectiveCamera,
     deltaSeconds: number,
     externalMovement: PlanarMovement = { x: 0, z: 0 },
   ): boolean {
+    const positionBeforeMovement = this.navigationBounds.length
+      ? camera.position.clone()
+      : null;
     const lookUpdated = this.applyLook(camera);
     const wheelUpdated = this.applyWheel(camera);
     const movementUpdated = this.applyMovement(
@@ -65,7 +93,16 @@ export class SpatialNavigationControls {
       this.combinedMovement(externalMovement),
       deltaSeconds,
     );
-    return lookUpdated || wheelUpdated || movementUpdated;
+    const translated = wheelUpdated || movementUpdated;
+    if (
+      translated &&
+      positionBeforeMovement &&
+      !this.isInsideNavigationBounds(camera.position)
+    ) {
+      camera.position.copy(positionBeforeMovement);
+      return lookUpdated;
+    }
+    return lookUpdated || translated;
   }
 
   dispose(): void {
@@ -321,6 +358,18 @@ export class SpatialNavigationControls {
       forward,
       right: forward.clone().cross(this.navigationUp).normalize(),
     };
+  }
+
+  private isInsideNavigationBounds(position: THREE.Vector3): boolean {
+    if (!this.navigationBounds.length) return true;
+    return this.navigationBounds.some(({ min, max }) =>
+      position.x >= min.x &&
+      position.x <= max.x &&
+      position.y >= min.y &&
+      position.y <= max.y &&
+      position.z >= min.z &&
+      position.z <= max.z
+    );
   }
 }
 

@@ -34,6 +34,19 @@ const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(initialQuaternion);
 const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(initialQuaternion);
 const controls = createSpatialLookControls(canvas);
 controls.align(camera);
+const requestedBoundary = new URL(location.href).searchParams.get("boundary") === "1";
+if (requestedBoundary) {
+  const padding = new THREE.Vector3(0.2, 0.2, 0.2);
+  const boundary = {
+    min: camera.position.clone().sub(padding),
+    max: camera.position.clone().add(padding),
+  };
+  controls.setNavigationBounds([boundary]);
+  document.body.dataset.navigationBounds = JSON.stringify({
+    min: boundary.min.toArray(),
+    max: boundary.max.toArray(),
+  });
+}
 
 function cameraState(): {
   position: number[];

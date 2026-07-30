@@ -7,6 +7,7 @@ import {
 import * as THREE from "three";
 import { runAction } from "../client/action-state";
 import {
+  createFallbackWalkableBounds,
   MobileControlSurface,
   nearestWalkablePoint,
 } from "./mobile-controls";
@@ -22,6 +23,7 @@ const startedAt = performance.now();
 
 type SparkSceneFormat = "rad" | "spz" | "sog";
 type Vector3Tuple = [number, number, number];
+type WalkableBoundarySource = "authored" | "scene" | "none";
 
 type RendererMessage =
   | {
@@ -152,6 +154,7 @@ let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
 let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
+let walkableBoundarySource: WalkableBoundarySource = "none";
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
@@ -218,7 +221,7 @@ async function start(): Promise<void> {
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
     if (Reflect.get(event.data, "type") === "set-spatial-runtime") {
       const boxes = Reflect.get(event.data, "collisionBoxes");
-      walkableBoxes = Array.isArray(boxes)
+      const authoredBoxes = Array.isArray(boxes)
         ? boxes.flatMap((box) => {
             if (!box || typeof box !== "object") return [];
             const min = finiteVector3(Reflect.get(box, "min"));
@@ -226,10 +229,19 @@ async function start(): Promise<void> {
             return min && max ? [{ min, max }] : [];
           })
         : [];
-      const cameraAdjusted = anchorCameraToWalkable(camera);
-      controlStatus.textContent = walkableBoxes.length
-        ? `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active${cameraAdjusted ? " · view aligned" : ""}`
-        : "";
+      if (authoredBoxes.length) {
+        walkableBoxes = authoredBoxes;
+        walkableBoundarySource = "authored";
+        controls.setNavigationBounds(walkableBoxes);
+        const cameraAdjusted = anchorCameraToWalkable(camera);
+        controlStatus.textContent =
+          `${walkableBoxes.length} authored walkable region${walkableBoxes.length === 1 ? "" : "s"} active${cameraAdjusted ? " · view aligned" : ""}`;
+      } else if (walkableBoundarySource !== "scene") {
+        walkableBoxes = [];
+        walkableBoundarySource = "none";
+        controls.setNavigationBounds([]);
+        controlStatus.textContent = "";
+      }
       return;
     }
     if (Reflect.get(event.data, "type") === "sync-camera") {
@@ -286,7 +298,7 @@ async function start(): Promise<void> {
             type: "camera-set",
             requestId,
             accepted: false,
-            message: "The authored room camera is outside the walkable collision boundary.",
+            message: "The requested room camera is outside the scene navigation boundary.",
             cameraPose: cameraPose(camera),
           });
         }
@@ -371,6 +383,7 @@ async function start(): Promise<void> {
   } else {
     frameScene(mesh, camera);
   }
+  ensureSceneNavigationBoundary(mesh, camera, controls);
   anchorCameraToWalkable(camera);
   controls.align(camera);
   initialView = {
@@ -555,6 +568,39 @@ function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
   camera.position.copy(target);
   lastWalkablePosition = camera.position.clone();
   return adjusted;
+}
+
+function ensureSceneNavigationBoundary(
+  mesh: SplatMesh,
+  camera: THREE.PerspectiveCamera,
+  controls: ReturnType<typeof createSpatialLookControls>,
+): void {
+  if (walkableBoundarySource === "authored" || walkableBoxes.length) {
+    controls.setNavigationBounds(walkableBoxes);
+    return;
+  }
+
+  mesh.updateMatrixWorld(true);
+  const worldBounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
+  const fallback = createFallbackWalkableBounds(
+    {
+      min: worldBounds.min.toArray() as Vector3Tuple,
+      max: worldBounds.max.toArray() as Vector3Tuple,
+    },
+    camera.position.toArray() as Vector3Tuple,
+  );
+  if (!fallback) {
+    controls.setNavigationBounds([]);
+    return;
+  }
+
+  walkableBoxes = [{
+    min: new THREE.Vector3().fromArray(fallback.min),
+    max: new THREE.Vector3().fromArray(fallback.max),
+  }];
+  walkableBoundarySource = "scene";
+  controls.setNavigationBounds(walkableBoxes);
+  controlStatus.textContent = "Scene safety boundary active";
 }
 
 function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
