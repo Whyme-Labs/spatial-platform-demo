@@ -3674,6 +3674,50 @@ describe("Spatial Studio Worker", () => {
     await expect(provisionalBrief.json()).resolves.toMatchObject({
       error: expect.stringContaining("require reviewed metric metres"),
     });
+    const rejectedBriefCount = await env.DB.prepare(`
+      SELECT count(*) AS count FROM measurement_briefs
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(
+      member!.organisationId,
+      projectId,
+      provisionalVersionId,
+    ).first<{ count: number }>();
+    expect(Number(rejectedBriefCount?.count ?? 0)).toBe(0);
+
+    const inconsistentBriefId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO measurement_briefs
+        (id, organisation_id, project_id, version_id, product_type, intended_use,
+          units, tolerance_mm, reliance_class, status, created_by)
+      VALUES (?, ?, ?, ?, 'measured_floor_plan', 'Legacy inconsistent fixture',
+        'metres', 30, 'project_verified', 'evidence_required', ?)
+    `).bind(
+      inconsistentBriefId,
+      member!.organisationId,
+      projectId,
+      provisionalVersionId,
+      member!.userId,
+    ).run();
+    const provisionalCheckPoint = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${inconsistentBriefId}/check-points`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          label: "Rejected provisional checkpoint",
+          reference: [0, 0, 0],
+          observed: [0.01, 0, 0],
+        }),
+      },
+    );
+    expect(provisionalCheckPoint.status).toBe(409);
+    const rejectedCheckPointCount = await env.DB.prepare(`
+      SELECT count(*) AS count FROM measurement_check_points WHERE brief_id = ?
+    `).bind(inconsistentBriefId).first<{ count: number }>();
+    expect(Number(rejectedCheckPointCount?.count ?? 0)).toBe(0);
+    await env.DB.prepare("DELETE FROM measurement_briefs WHERE id = ?")
+      .bind(inconsistentBriefId)
+      .run();
 
     const invalidCertified = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement/briefs`, {
       method: "POST",

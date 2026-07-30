@@ -8851,35 +8851,47 @@ app.post("/api/projects/:projectId/measurement/briefs", async (context) => {
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first();
   if (!version) return notFound(context, "Scene version not found");
-  if (!(await isMetricSpatialVersion(
-    context.env.DB,
-    auth.organisationId,
-    project.id,
-    parsed.data.versionId,
-  ))) {
-    return conflict(
-      context,
-      "Measurement briefs require reviewed metric metres. Provisional scene-unit versions support relative navigation only.",
-    );
-  }
   if (parsed.data.relianceClass === "professional_certified") {
     return validationError(context, {
       relianceClass: ["Create the brief as project_verified; professional certification is applied only after a recorded partner sign-off"],
     });
   }
   const id = crypto.randomUUID();
-  await context.env.DB.prepare(`
+  const created = await context.env.DB.prepare(`
     INSERT INTO measurement_briefs
       (id, organisation_id, project_id, version_id, product_type, intended_use,
         units, tolerance_mm, reliance_class, coordinate_reference, exclusions,
         acceptance_notes, status, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'evidence_required', ?)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'evidence_required', ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM scene_navigation_profiles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND world_unit <> 'metres'
+      UNION ALL
+      SELECT 1 FROM scene_entities
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active' AND world_unit <> 'metres'
+      UNION ALL
+      SELECT 1 FROM scene_navigation_obstacles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active' AND world_unit <> 'metres'
+    )
+    RETURNING id
   `).bind(
     id, auth.organisationId, project.id, parsed.data.versionId, parsed.data.productType,
     parsed.data.intendedUse, parsed.data.units, parsed.data.toleranceMm,
     parsed.data.relianceClass, parsed.data.coordinateReference ?? null,
     parsed.data.exclusions ?? null, parsed.data.acceptanceNotes ?? null, auth.userId,
-  ).run();
+    auth.organisationId, project.id, parsed.data.versionId,
+    auth.organisationId, project.id, parsed.data.versionId,
+    auth.organisationId, project.id, parsed.data.versionId,
+  ).first<{ id: string }>();
+  if (!created) {
+    return conflict(
+      context,
+      "Measurement briefs require reviewed metric metres. Provisional scene-unit versions support relative navigation only.",
+    );
+  }
   await audit(context, auth, "measurement.brief.create", "measurement_brief", id, {
     productType: parsed.data.productType,
     toleranceMm: parsed.data.toleranceMm,
@@ -8895,25 +8907,51 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/check-points", as
   const parsed = measurementCheckPointSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const brief = await context.env.DB.prepare(`
-    SELECT id, units FROM measurement_briefs
+    SELECT id, units, version_id FROM measurement_briefs
     WHERE id = ? AND project_id = ? AND organisation_id = ?
   `).bind(context.req.param("briefId"), context.req.param("projectId"), auth.organisationId)
-    .first<{ id: string; units: "metres" | "millimetres" }>();
+    .first<{ id: string; units: "metres" | "millimetres"; version_id: string }>();
   if (!brief) return notFound(context, "Measurement brief not found");
   const [rx, ry, rz] = parsed.data.reference;
   const [ox, oy, oz] = parsed.data.observed;
   const rawResidual = Math.hypot(ox - rx, oy - ry, oz - rz);
   const residualMm = brief.units === "metres" ? rawResidual * 1000 : rawResidual;
   const id = crypto.randomUUID();
-  await context.env.DB.prepare(`
+  const created = await context.env.DB.prepare(`
     INSERT INTO measurement_check_points
       (id, brief_id, label, reference_x, reference_y, reference_z,
         observed_x, observed_y, observed_z, residual_mm, evidence_note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    SELECT ?, b.id, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    FROM measurement_briefs b
+    WHERE b.id = ? AND b.project_id = ? AND b.organisation_id = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM scene_navigation_profiles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND world_unit <> 'metres'
+        UNION ALL
+        SELECT 1 FROM scene_entities
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> 'metres'
+        UNION ALL
+        SELECT 1 FROM scene_navigation_obstacles
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'active' AND world_unit <> 'metres'
+      )
+    RETURNING id
   `).bind(
-    id, brief.id, parsed.data.label, rx, ry, rz, ox, oy, oz,
+    id, parsed.data.label, rx, ry, rz, ox, oy, oz,
     residualMm, parsed.data.evidenceNote ?? null,
-  ).run();
+    brief.id, context.req.param("projectId"), auth.organisationId,
+    auth.organisationId, context.req.param("projectId"), brief.version_id,
+    auth.organisationId, context.req.param("projectId"), brief.version_id,
+    auth.organisationId, context.req.param("projectId"), brief.version_id,
+  ).first<{ id: string }>();
+  if (!created) {
+    return conflict(
+      context,
+      "Measurement checkpoints require reviewed metric metres. Provisional scene-unit versions support relative navigation only.",
+    );
+  }
   await context.env.DB.prepare(
     "UPDATE measurement_briefs SET status = 'qa_required', updated_at = datetime('now') WHERE id = ?",
   ).bind(brief.id).run();
