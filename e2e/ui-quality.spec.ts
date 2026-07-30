@@ -194,6 +194,90 @@ test.describe("authenticated studio UI", () => {
       }
     }
   });
+
+  test("every dialog keeps action groups separated from content and adjacent controls", async ({
+    page,
+  }) => {
+    const dialogIds = await page.locator("dialog.dialog-card").evaluateAll((dialogs) =>
+      dialogs.map((dialog) => dialog.id)
+    );
+
+    expect(dialogIds.length).toBeGreaterThan(20);
+
+    for (const viewport of [viewports[0], viewports[3], viewports[4]]) {
+      await page.setViewportSize(viewport);
+
+      for (const dialogId of dialogIds) {
+        const dialog = page.locator(`#${dialogId}`);
+        await dialog.evaluate((element) => {
+          const current = element as HTMLDialogElement;
+          document.querySelectorAll<HTMLDialogElement>("dialog[open]").forEach((openDialog) => {
+            if (openDialog !== current) openDialog.close();
+          });
+          current.show();
+        });
+
+        const layout = await dialog.evaluate((element) => {
+          const current = element as HTMLDialogElement;
+          const forms = [...current.querySelectorAll<HTMLFormElement>("form")];
+          const groupedActions = [...current.querySelectorAll<HTMLElement>(".form-actions")]
+            .filter((group) => group.getClientRects().length > 0)
+            .map((group) => {
+              const style = getComputedStyle(group);
+              return {
+                columnGap: Number.parseFloat(style.columnGap || "0"),
+                rowGap: Number.parseFloat(style.rowGap || "0"),
+                marginTop: Number.parseFloat(style.marginTop || "0"),
+              };
+            });
+          const directActions = forms.flatMap((form) =>
+            [...form.children]
+              .filter((child): child is HTMLButtonElement => (
+                child instanceof HTMLButtonElement &&
+                !child.classList.contains("dialog-close") &&
+                child.matches(".primary-button.wide, .quiet-button.wide, .text-button.wide") &&
+                child.getClientRects().length > 0
+              ))
+              .map((button) => Number.parseFloat(getComputedStyle(button).marginTop || "0"))
+          );
+          const bottomSurface = current.querySelector<HTMLElement>(
+            ":scope > .portfolio-tools-grid",
+          ) ?? current.querySelector<HTMLElement>(
+            ":scope > .comparison-shell",
+          ) ?? current.querySelector<HTMLFormElement>(
+            ":scope > form",
+          );
+          return {
+            groupedActions,
+            directActions,
+            bottomPadding: bottomSurface
+              ? Number.parseFloat(getComputedStyle(bottomSurface).paddingBottom || "0")
+              : null,
+            left: current.getBoundingClientRect().left,
+            right: current.getBoundingClientRect().right,
+            viewportWidth: window.innerWidth,
+          };
+        });
+
+        for (const group of layout.groupedActions) {
+          expect(group.columnGap, `${dialogId} horizontal action gap`).toBeGreaterThanOrEqual(10);
+          expect(group.rowGap, `${dialogId} vertical action gap`).toBeGreaterThanOrEqual(10);
+          expect(group.marginTop, `${dialogId} action-group separation`).toBeGreaterThanOrEqual(16);
+        }
+        for (const marginTop of layout.directActions) {
+          expect(marginTop, `${dialogId} direct-action separation`).toBeGreaterThanOrEqual(10);
+        }
+        expect(layout.bottomPadding, `${dialogId} has a bottom surface`).not.toBeNull();
+        expect(layout.bottomPadding!, `${dialogId} safe bottom padding`).toBeGreaterThanOrEqual(20);
+        expect(layout.left, `${dialogId} left viewport edge`).toBeGreaterThanOrEqual(-1);
+        expect(layout.right, `${dialogId} right viewport edge`).toBeLessThanOrEqual(
+          layout.viewportWidth + 1,
+        );
+
+        await dialog.evaluate((element) => (element as HTMLDialogElement).close());
+      }
+    }
+  });
 });
 
 test.describe("studio authentication lifecycle", () => {

@@ -2361,6 +2361,8 @@ body.studio-page :is(.empty-state, .notice-card, .field-note, .form-error) {
 }
 
 body.studio-page .dialog-card {
+  --dialog-action-gap: 12px;
+  --dialog-action-offset: 18px;
   width: min(580px, calc(100vw - 32px));
   max-height: calc(100dvh - 24px);
   border-radius: 22px;
@@ -2378,7 +2380,38 @@ body.studio-page .comparison-shell {
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(22px, 3vw, 32px);
+  padding-block-end: max(
+    clamp(22px, 3vw, 32px),
+    calc(env(safe-area-inset-bottom, 0px) + 20px)
+  );
   scrollbar-gutter: stable;
+}
+
+body.studio-page .dialog-card .form-actions {
+  justify-content: flex-end;
+  column-gap: var(--dialog-action-gap);
+  row-gap: var(--dialog-action-gap);
+  margin-block-start: var(--dialog-action-offset);
+}
+
+body.studio-page .dialog-card form > :is(
+  button.primary-button.wide,
+  button.quiet-button.wide,
+  button.text-button.wide
+) {
+  margin-block-start: var(--dialog-action-gap);
+}
+
+body.studio-page .dialog-card form > :not(
+  button.primary-button.wide,
+  button.quiet-button.wide,
+  button.text-button.wide
+) + :is(
+  button.primary-button.wide,
+  button.quiet-button.wide,
+  button.text-button.wide
+) {
+  margin-block-start: var(--dialog-action-offset);
 }
 
 body.studio-page .dialog-card h2 {
@@ -2698,6 +2731,10 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
   body.studio-page .comparison-shell {
     max-height: calc(100dvh - 16px);
     padding: 22px 20px;
+    padding-block-end: max(
+      22px,
+      calc(env(safe-area-inset-bottom, 0px) + 16px)
+    );
   }
 
   body.studio-page .dialog-card h2 {
