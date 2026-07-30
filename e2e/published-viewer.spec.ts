@@ -1,4 +1,5 @@
 import { expect, test, type Route } from "@playwright/test";
+import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 test("published viewer hands startup progress to the embedded Spark loader", async ({ page }) => {
   await page.route("**/api/releases/loading-handoff/manifest", (route) => json(route, {
@@ -26,8 +27,15 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
     },
     viewer: {
       title: "Loading handoff fixture",
-      measurementDisclaimer: "Test scene only.",
+      measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
       splatBudgetMillions: 2,
+      sourceToWorld: {
+        sourceUpAxis: "Z",
+        worldUnit: "scene_units",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
     },
     spatial: {
       entities: [],
@@ -48,6 +56,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         boxes: [{ entityId: "table", label: "Table", min: [1, 0, 1], max: [2, 1, 2] }],
       },
       navigationProfile: {
+        worldUnit: "scene_units",
         agentRadius: 0.22,
         agentHeight: 1.8,
         eyeHeight: 1.6,
@@ -143,6 +152,9 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(parentLoader).toBeHidden();
   await expect(releaseInfo).toBeVisible();
+  await expect(page.locator("#scaleStatus")).toHaveText(
+    "Provisional scene units (SU)",
+  );
   await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
     () => Reflect.get(window, "runtimeMessage"),
   )).toMatchObject({
@@ -157,6 +169,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       max: [2, 1, 2],
     }],
     navigationProfile: {
+      worldUnit: "scene_units",
       agentRadius: 0.22,
       agentHeight: 1.8,
       eyeHeight: 1.6,
@@ -173,6 +186,62 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(viewport).toHaveClass(/mobile-controls-onboarding/);
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Close onboarding" }).click();
   await expect(viewport).not.toHaveClass(/mobile-controls-onboarding/);
+});
+
+test("visual-only releases do not imply a metric scale", async ({ page }) => {
+  await page.route("**/api/releases/visual-only-room/manifest", (route) => json(route, {
+    schemaVersion: "1",
+    release: {
+      id: "44444444-4444-4444-8444-444444444444",
+      slug: "visual-only-room",
+      publishedAt: "2026-07-30T00:00:00.000Z",
+      expiresAt: null,
+      accessPolicy: "public",
+    },
+    project: {
+      id: "55555555-5555-4555-8555-555555555555",
+      versionId: "66666666-6666-4666-8666-666666666666",
+      name: "Visual-only room",
+      captureAdapter: "test",
+      provenance: {},
+    },
+    scene: {
+      format: "rad",
+      contentUrl: "/visual-only.rad",
+      posterUrl: null,
+      sizeBytes: 1,
+      etag: null,
+    },
+    viewer: {
+      title: "Visual-only room",
+      measurementDisclaimer: "Visual experience only.",
+      splatBudgetMillions: 2,
+    },
+    spatial: {
+      entities: [],
+      routes: [],
+      routeStops: [],
+      collisionProxy: { version: "box-union-v1", boxes: [] },
+      navigationMesh: {
+        version: "room-box-triangles-v1",
+        vertices: [],
+        indices: [],
+        sourceEntityIds: [],
+      },
+      obstacleProxy: { version: "authored-obstacle-boxes-v1", boxes: [] },
+      navigationProfile: {
+        worldUnit: "metres",
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
+      },
+    },
+  }));
+  await page.route("**/api/releases/visual-only-room/telemetry", (route) => json(route, {}));
+
+  await page.goto("/s/visual-only-room", { waitUntil: "commit" });
+  await expect(page.locator("#scaleStatus")).toHaveText("Visual only — scale not declared");
 });
 
 function json(route: Route, body: unknown): Promise<void> {

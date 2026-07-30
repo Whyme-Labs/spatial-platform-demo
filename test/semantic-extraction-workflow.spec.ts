@@ -85,7 +85,7 @@ describe("reviewed point-cloud semantic extraction", () => {
       env.DB.prepare(`
         INSERT INTO scene_versions
           (id, project_id, version_number, status, source_provenance_json, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', '{"registered":true,"units":"metres","upAxis":"y"}', ?)
+        VALUES (?, ?, 1, 'QA_REQUIRED', '{"registered":true,"units":"scene_units","upAxis":"y"}', ?)
       `).bind(versionId, project.id, storedProject!.created_by),
       env.DB.prepare(`
         INSERT INTO assets (
@@ -109,9 +109,16 @@ describe("reviewed point-cloud semantic extraction", () => {
       clientOperationId,
       versionId,
       inputAssetId: assetId,
-      coordinateAssurance: "registered_y_up_metric_frame",
+      coordinateAssurance: "authored_source_to_world_v1",
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "scene_units",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
       registrationEvidence:
-        "The immutable PLY uses metres and the reviewed project-local Y-up frame.",
+        "The immutable PLY uses provisional scene units in a reviewed project-local Y-up frame; no metric scale is claimed.",
       gridSizeM: 0.5,
       floorBandM: 0.15,
       minimumAreaM2: 2,
@@ -178,40 +185,42 @@ describe("reviewed point-cloud semantic extraction", () => {
         gridSizeM: 0.5,
         floorBandM: 0.15,
         minimumAreaM2: 2,
-        coordinateAssurance: "registered_y_up_metric_frame",
+        coordinateAssurance: "authored_source_to_world_v1",
       },
       input: { id: assetId },
     });
 
     const report = {
       schemaVersion: "1.0.0",
-      method: "registered-ply-walkable-candidates-v1",
+      worldUnit: "scene_units",
+      method: "registered-ply-walkable-candidates-v2",
       result: "candidates_ready",
       source: {
         vertexCount: 384,
         sampledPointCount: 384,
         voxelCount: 384,
-        coordinateAssurance: "registered_y_up_metric_frame",
+        coordinateAssurance: "authored_source_to_world_v1",
+        sourceToWorld: request.sourceToWorld,
       },
       parameters: {
-        gridSizeM: 0.5,
-        floorBandM: 0.15,
-        minimumAreaM2: 2,
+        gridSize: 0.5,
+        floorBand: 0.15,
+        minimumArea: 2,
         maximumCandidates: 8,
-        elevationHintM: null,
+        elevationHint: null,
       },
       summary: {
-        inferredFloorElevationM: 0,
+        inferredFloorElevation: 0,
         credibleHorizontalLayerCount: 2,
         candidateCount: 1,
-        totalCandidateAreaM2: 12,
+        totalCandidateArea: 12,
       },
       candidates: [{
         candidateKey: "walkable-001",
         kind: "walkable_region",
         label: "Candidate room 1",
-        elevationM: 0,
-        areaM2: 12,
+        elevation: 0,
+        area: 12,
         confidence: 0.95,
         geometry: {
           type: "polygon",
@@ -221,8 +230,8 @@ describe("reviewed point-cloud semantic extraction", () => {
           occupiedCellCount: 48,
           boundingCellCount: 48,
           supportRatio: 1,
-          gridSizeM: 0.5,
-          floorBandM: 0.15,
+          gridSize: 0.5,
+          floorBand: 0.15,
         },
       }],
       humanReviewRequired: true,
@@ -286,14 +295,37 @@ describe("reviewed point-cloud semantic extraction", () => {
     );
     expect(workspace.status).toBe(200);
     const spatial = await workspace.json<{
-      semanticExtractions: Array<{ id: string; status: string }>;
-      semanticCandidates: Array<{ id: string; status: string; geometry_json: string }>;
+      semanticExtractions: Array<{
+        id: string;
+        status: string;
+        summary_json: string;
+      }>;
+      semanticCandidates: Array<{
+        id: string;
+        status: string;
+        geometry_json: string;
+        elevation: number;
+        area: number;
+        worldUnit: string;
+      }>;
     }>();
     expect(spatial.semanticExtractions).toEqual([
       expect.objectContaining({ id: created.extraction.id, status: "READY_FOR_REVIEW" }),
     ]);
+    expect(JSON.parse(spatial.semanticExtractions[0]!.summary_json)).toEqual({
+      inferredFloorElevation: 0,
+      credibleHorizontalLayerCount: 2,
+      candidateCount: 1,
+      totalCandidateArea: 12,
+    });
     expect(spatial.semanticCandidates).toEqual([
-      expect.objectContaining({ status: "pending", geometry_json: expect.stringContaining("polygon") }),
+      expect.objectContaining({
+        status: "pending",
+        geometry_json: expect.stringContaining("polygon"),
+        elevation: 0,
+        area: 12,
+        worldUnit: "scene_units",
+      }),
     ]);
 
     const candidateId = spatial.semanticCandidates[0]!.id;
@@ -345,16 +377,47 @@ describe("reviewed point-cloud semantic extraction", () => {
       WHERE project_id = ? AND version_id = ? AND status = 'active'
     `).bind(project.id, versionId).first<{ count: number }>();
     expect(entityCount?.count).toBe(2);
+    const autoSeededProfile = await env.DB.prepare(`
+      SELECT world_unit FROM scene_navigation_profiles
+      WHERE project_id = ? AND version_id = ?
+    `).bind(project.id, versionId).first<{ world_unit: string }>();
+    expect(autoSeededProfile?.world_unit).toBe("scene_units");
+    const unitProfile = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.2,
+          agentHeight: 1.2,
+          eyeHeight: 1,
+          maxStepMetres: 0.05,
+        }),
+      },
+    );
+    expect(unitProfile.status).toBe(200);
 
     const finalSpatial = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial?versionId=${versionId}`,
       { headers: { cookie } },
     );
     const final = await finalSpatial.json<{
-      entities: Array<{ kind: string; geometry_json: string | null }>;
+      entities: Array<{
+        kind: string;
+        label: string;
+        geometry_json: string | null;
+        metadata_json: string;
+        world_unit: string;
+      }>;
       navigationMesh: { version: string; vertices: number[][]; indices: number[] };
     }>();
     expect(final.entities.map((entity) => entity.kind).sort()).toEqual(["floor", "room"]);
+    expect(final.entities.every((entity) => entity.world_unit === "scene_units")).toBe(true);
+    expect(final.entities.find((entity) => entity.kind === "floor")?.label).toContain("SU");
+    expect(final.entities.find((entity) => entity.kind === "room")?.metadata_json)
+      .not.toContain("areaM2");
     expect(final.navigationMesh).toMatchObject({
       version: "authored-polygon-triangles-v2",
       vertices: [[0, 0.02, 0], [4, 0.02, 0], [4, 0.02, 3], [0, 0.02, 3]],

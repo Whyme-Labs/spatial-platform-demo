@@ -14,6 +14,7 @@ describe("v5 source-to-world normalization", () => {
   it("normalizes a Z-up source into the canonical Y-up world before scale and translation", () => {
     const transform: SourceToWorldTransform = {
       sourceUpAxis: "Z",
+      worldUnit: "scene_units",
       metresPerSourceUnit: 2,
       yawDegrees: 0,
       translationMetres: [10, 20, 30],
@@ -59,6 +60,7 @@ describe("v5 navigation enforcement", () => {
     },
     obstacleBoxes: [],
     profile: {
+      worldUnit: "scene_units",
       agentRadius: 0.2,
       agentHeight: 1.8,
       eyeHeight: 1.6,

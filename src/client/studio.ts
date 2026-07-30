@@ -17,6 +17,12 @@ import {
   type CaptureAssetFormat,
   type CaptureAssetPurpose,
 } from "../shared/capture-adapters";
+import {
+  parseWorldUnit,
+  PROVISIONAL_MEASUREMENT_DISCLAIMER,
+  worldUnitSymbol,
+  type WorldUnit,
+} from "../shared/world-units";
 import "../../styles.css";
 
 type TurnstileWidgetOptions = {
@@ -423,6 +429,7 @@ type VersionComparison = {
       sceneRotationDegrees?: [number, number, number];
       sourceToWorld?: {
         sourceUpAxis: "Y" | "Z";
+        worldUnit?: WorldUnit;
         metresPerSourceUnit: number;
         yawDegrees: number;
         translationMetres: [number, number, number];
@@ -554,6 +561,7 @@ type SpatialEntity = {
   description: string | null;
   position_json: string | null;
   geometry_json: string | null;
+  world_unit: WorldUnit;
   status: string;
 };
 type GeometryChangeSummary = {
@@ -884,8 +892,9 @@ type SpatialWorkspace = {
     kind: "walkable_region";
     label: string;
     geometry_json: string;
-    elevation_m: number;
-    area_m2: number;
+    elevation: number;
+    area: number;
+    worldUnit: WorldUnit;
     confidence: number;
     evidence_json: string;
     status: "pending" | "accepted" | "rejected";
@@ -953,12 +962,14 @@ type SpatialWorkspace = {
     label: string;
     bounds_json: string;
     metadata_json: string;
+    world_unit: WorldUnit;
   }>;
   obstacleProxy: {
     version: string;
     boxes: Array<{ entityId: string; label: string; min: number[]; max: number[] }>;
   };
   navigationProfile: {
+    worldUnit?: WorldUnit;
     agentRadius: number;
     agentHeight: number;
     eyeHeight: number;
@@ -1938,6 +1949,26 @@ function bindInterface(): void {
       errorTarget: byId("releaseError"),
     }, () => publishRelease(form));
   });
+  const releaseEvidence = releaseForm.elements.namedItem("sourceToWorldEvidenceId");
+  if (releaseEvidence instanceof HTMLSelectElement) {
+    releaseEvidence.addEventListener("change", () => {
+      if (releaseEvidence.value) {
+        applyReviewedTransformToReleaseForm(releaseEvidence.value);
+      } else {
+        setProvisionalReleaseDisclaimer(releaseForm, false);
+      }
+    });
+  }
+  const applyReleaseTransform = releaseForm.elements.namedItem("applySourceToWorld");
+  if (applyReleaseTransform instanceof HTMLInputElement) {
+    applyReleaseTransform.addEventListener("change", () => {
+      if (!applyReleaseTransform.checked) {
+        setProvisionalReleaseDisclaimer(releaseForm, false);
+      } else if (releaseEvidence instanceof HTMLSelectElement && releaseEvidence.value) {
+        applyReviewedTransformToReleaseForm(releaseEvidence.value);
+      }
+    });
+  }
   const reviewerSubmit = reviewerForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   reviewerForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -6140,8 +6171,10 @@ function renderSpatial(): void {
       ),
     );
     const summary = parseSemanticExtractionSummary(extraction.summary_json);
+    const extractionUnit = semanticExtractionWorldUnit(extraction);
+    const linearUnit = worldUnitSymbol(extractionUnit);
     const summaryText = summary
-      ? `${summary.candidateCount} candidate${summary.candidateCount === 1 ? "" : "s"} · ${summary.totalCandidateAreaM2.toFixed(2)} m² proxy area · inferred elevation ${summary.inferredFloorElevationM.toFixed(2)} m`
+      ? `${summary.candidateCount} candidate${summary.candidateCount === 1 ? "" : "s"} · ${summary.totalCandidateArea.toFixed(2)} ${linearUnit}² proxy area · inferred elevation ${summary.inferredFloorElevation.toFixed(2)} ${linearUnit}`
       : `${extraction.candidate_count} candidate${extraction.candidate_count === 1 ? "" : "s"} · ${humanStatus(extraction.job_state)}`;
     card.append(
       heading,
@@ -6243,7 +6276,18 @@ function renderSpatial(): void {
     projectFact("Collision regions", String(spatial.collisionProxy.boxes.length)),
     projectFact("Navigation triangles", String(Math.floor(spatial.navigationMesh.indices.length / 3))),
     projectFact("Navigation obstacles", String(spatial.obstacleProxy.boxes.length)),
-    projectFact("Agent clearance", `${spatial.navigationProfile.agentRadius.toFixed(2)} m radius`),
+    projectFact(
+      "Navigation radius",
+      `${spatial.navigationProfile.agentRadius.toFixed(2)} ${
+        worldUnitSymbol(spatial.navigationProfile.worldUnit)
+      } radius`,
+    ),
+    projectFact(
+      "World scale",
+      spatial.navigationProfile.worldUnit === "scene_units"
+        ? "Provisional scene units"
+        : "Metric metres",
+    ),
   );
   if (!spatial.routes.length) routes.append(element("p", "muted-copy", "No guided route yet."));
   for (const route of spatial.routes) {
@@ -6275,11 +6319,15 @@ function renderSpatial(): void {
     captureEvidence.append(renderCaptureCompletenessReport(report));
   }
   const authoredRooms = spatial.entities.filter((entity) => entity.kind === "room" && entity.geometry_json);
+  const captureUsesProvisionalUnits =
+    spatial.navigationProfile.worldUnit === "scene_units";
   const analyzeCapture = element("button", "primary-button wide", captureReports.length
     ? "Analyze another trajectory"
     : "Analyze capture trajectory");
-  analyzeCapture.disabled = authoredRooms.length === 0;
-  analyzeCapture.title = authoredRooms.length
+  analyzeCapture.disabled = authoredRooms.length === 0 || captureUsesProvisionalUnits;
+  analyzeCapture.title = captureUsesProvisionalUnits
+    ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation only."
+    : authoredRooms.length
     ? ""
     : "Author at least one room footprint before evaluating path coverage.";
   analyzeCapture.addEventListener("click", openCaptureCompletenessDialog);
@@ -6288,7 +6336,9 @@ function renderSpatial(): void {
     element(
       "small",
       "field-note",
-      authoredRooms.length
+      captureUsesProvisionalUnits
+        ? "Unavailable for this version: pose-path coverage radii and gaps are metric evidence. Establish measured scale in a new version before running this analysis."
+        : authoredRooms.length
         ? `${authoredRooms.length} authored room footprint${authoredRooms.length === 1 ? "" : "s"} will define the coverage target.`
         : "No authored room footprint is available for a defensible coverage target.",
     ),
@@ -6794,6 +6844,7 @@ async function queueSemanticExtraction(form: FormData): Promise<void> {
     coordinateAssurance: "authored_source_to_world_v1",
     sourceToWorld: {
       sourceUpAxis: String(form.get("sourceUpAxis") ?? "Y"),
+      worldUnit: String(form.get("worldUnit") ?? "scene_units"),
       metresPerSourceUnit: Number(form.get("metresPerSourceUnit") ?? 1),
       yawDegrees: Number(form.get("yawDegrees") ?? 0),
       translationMetres: [
@@ -6856,9 +6907,14 @@ function openSemanticReviewDialog(extractionId: string): void {
   if (extractionInput instanceof HTMLInputElement) extractionInput.value = extraction.id;
   byId("semanticReviewContext").textContent =
     `${extraction.input_file_name} produced ${candidates.length} reviewable polygon` +
-    `${candidates.length === 1 ? "" : "s"}. Select only regions inspected against the registered point cloud.`;
+    `${candidates.length === 1 ? "" : "s"} in ${
+      semanticExtractionWorldUnit(extraction) === "scene_units"
+        ? "provisional scene units"
+        : "metric metres"
+    }. Select only regions inspected against the registered point cloud.`;
   const choices = byId("semanticCandidateChoices");
   choices.replaceChildren();
+  const unit = worldUnitSymbol(semanticExtractionWorldUnit(extraction));
   for (const candidate of candidates) {
     const label = element("label", "semantic-candidate-choice");
     const checkbox = document.createElement("input");
@@ -6872,7 +6928,7 @@ function openSemanticReviewDialog(extractionId: string): void {
       element(
         "small",
         "muted-copy",
-        `${candidate.area_m2.toFixed(2)} m² proxy area · elevation ${candidate.elevation_m.toFixed(2)} m · ${Math.round(candidate.confidence * 100)}% extraction confidence`,
+        `${candidate.area.toFixed(2)} ${unit}² proxy area · elevation ${candidate.elevation.toFixed(2)} ${unit} · ${Math.round(candidate.confidence * 100)}% extraction confidence`,
       ),
     );
     label.append(checkbox, copy);
@@ -6981,24 +7037,43 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
 
 function parseSemanticExtractionSummary(value: string | null): {
   candidateCount: number;
-  totalCandidateAreaM2: number;
-  inferredFloorElevationM: number;
+  totalCandidateArea: number;
+  inferredFloorElevation: number;
 } | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
     const candidateCount = Number(parsed.candidateCount);
-    const totalCandidateAreaM2 = Number(parsed.totalCandidateAreaM2);
-    const inferredFloorElevationM = Number(parsed.inferredFloorElevationM);
+    const totalCandidateArea = Number(
+      parsed.totalCandidateArea ?? parsed.totalCandidateAreaM2,
+    );
+    const inferredFloorElevation = Number(
+      parsed.inferredFloorElevation ?? parsed.inferredFloorElevationM,
+    );
     if (
       !Number.isFinite(candidateCount) ||
-      !Number.isFinite(totalCandidateAreaM2) ||
-      !Number.isFinite(inferredFloorElevationM)
+      !Number.isFinite(totalCandidateArea) ||
+      !Number.isFinite(inferredFloorElevation)
     ) return null;
-    return { candidateCount, totalCandidateAreaM2, inferredFloorElevationM };
+    return { candidateCount, totalCandidateArea, inferredFloorElevation };
   } catch {
     return null;
   }
+}
+
+function semanticExtractionWorldUnit(
+  extraction: { parameters_json: string },
+): WorldUnit {
+  try {
+    const parameters = JSON.parse(extraction.parameters_json) as Record<string, unknown>;
+    const transform = parameters.sourceToWorld;
+    if (transform && typeof transform === "object") {
+      return parseWorldUnit(Reflect.get(transform, "worldUnit"));
+    }
+  } catch {
+    // Legacy or malformed extraction evidence remains metric-only.
+  }
+  return "metres";
 }
 
 type EditableFloorplan = {
@@ -7644,6 +7719,7 @@ function openNavigationProfileDialog(): void {
   const profile = state.spatial?.navigationProfile;
   if (!profile) return;
   const form = byId<HTMLFormElement>("navigationProfileForm");
+  setFormValue(form, "worldUnit", profile.worldUnit ?? "metres");
   setFormValue(form, "agentRadius", String(profile.agentRadius));
   setFormValue(form, "agentHeight", String(profile.agentHeight));
   setFormValue(form, "eyeHeight", String(profile.eyeHeight));
@@ -7660,6 +7736,7 @@ async function updateNavigationProfile(form: FormData): Promise<void> {
     method: "PUT",
     body: JSON.stringify({
       versionId: version.id,
+      worldUnit: String(form.get("worldUnit") ?? "metres"),
       agentRadius: Number(form.get("agentRadius")),
       agentHeight: Number(form.get("agentHeight")),
       eyeHeight: Number(form.get("eyeHeight")),
@@ -10416,12 +10493,14 @@ function openReleaseDialog(): void {
     evidenceSelect.replaceChildren(new Option(
       reviewedTransforms.length
         ? "Select reviewed transform evidence"
-        : "No accepted metric extraction available",
+        : "No accepted extraction available",
       "",
     ));
     for (const evidence of reviewedTransforms) {
       evidenceSelect.append(new Option(
-        `Accepted extraction · ${evidence.sourceUpAxis}-up · ${evidence.metresPerSourceUnit} m/unit`,
+        `Accepted extraction · ${evidence.sourceUpAxis}-up · ${evidence.metresPerSourceUnit} ${
+          worldUnitSymbol(evidence.worldUnit)
+        }/source unit`,
         evidence.extractionId,
       ));
     }
@@ -10430,12 +10509,9 @@ function openReleaseDialog(): void {
   const applyTransform = form.elements.namedItem("applySourceToWorld");
   if (applyTransform instanceof HTMLInputElement) applyTransform.checked = Boolean(latestTransform);
   if (latestTransform) {
-    setFormValue(form, "releaseSourceUpAxis", latestTransform.sourceUpAxis);
-    setFormValue(form, "releaseMetresPerSourceUnit", String(latestTransform.metresPerSourceUnit));
-    setFormValue(form, "releaseYawDegrees", String(latestTransform.yawDegrees));
-    setFormValue(form, "releaseTranslationX", String(latestTransform.translationMetres[0]));
-    setFormValue(form, "releaseTranslationY", String(latestTransform.translationMetres[1]));
-    setFormValue(form, "releaseTranslationZ", String(latestTransform.translationMetres[2]));
+    applyReviewedTransformToReleaseForm(latestTransform.extractionId);
+  } else {
+    setProvisionalReleaseDisclaimer(form, false);
   }
   releaseOperationId = crypto.randomUUID();
   byId("releaseError").textContent = "";
@@ -10455,6 +10531,16 @@ async function publishRelease(form: FormData): Promise<void> {
     if (sourceToWorld && !sourceToWorldEvidenceId) {
       throw new Error(
         "Choose an accepted semantic extraction that proves the release transform.",
+      );
+    }
+    const navigationWorldUnit = state.spatial?.navigationProfile.worldUnit ?? "metres";
+    if (sourceToWorld && sourceToWorld.worldUnit !== navigationWorldUnit) {
+      throw new Error(
+        `Tune the navigation agent to ${
+          sourceToWorld.worldUnit === "scene_units"
+            ? "Provisional scene units (SU)"
+            : "Metric metres"
+        } before publishing this transform.`,
       );
     }
     const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
@@ -10494,6 +10580,7 @@ async function publishRelease(form: FormData): Promise<void> {
 function reviewedSemanticSourceToWorld(): Array<{
   extractionId: string;
   sourceUpAxis: "Y" | "Z";
+  worldUnit: WorldUnit;
   metresPerSourceUnit: number;
   yawDegrees: number;
   translationMetres: [number, number, number];
@@ -10501,6 +10588,7 @@ function reviewedSemanticSourceToWorld(): Array<{
   const reviewed: Array<{
     extractionId: string;
     sourceUpAxis: "Y" | "Z";
+    worldUnit: WorldUnit;
     metresPerSourceUnit: number;
     yawDegrees: number;
     translationMetres: [number, number, number];
@@ -10515,6 +10603,7 @@ function reviewedSemanticSourceToWorld(): Array<{
       const transform = parameters.sourceToWorld;
       if (!transform || typeof transform !== "object") continue;
       const sourceUpAxis = Reflect.get(transform, "sourceUpAxis");
+      const worldUnit = parseWorldUnit(Reflect.get(transform, "worldUnit"));
       const metresPerSourceUnit = Number(Reflect.get(transform, "metresPerSourceUnit"));
       const yawDegrees = Number(Reflect.get(transform, "yawDegrees"));
       const translationMetres = Reflect.get(transform, "translationMetres");
@@ -10527,6 +10616,7 @@ function reviewedSemanticSourceToWorld(): Array<{
         reviewed.push({
           extractionId: extraction.id,
           sourceUpAxis,
+          worldUnit,
           metresPerSourceUnit,
           yawDegrees,
           translationMetres,
@@ -10539,14 +10629,49 @@ function reviewedSemanticSourceToWorld(): Array<{
   return reviewed;
 }
 
+function applyReviewedTransformToReleaseForm(extractionId: string): void {
+  if (!extractionId) return;
+  const transform = reviewedSemanticSourceToWorld().find(
+    (candidate) => candidate.extractionId === extractionId,
+  );
+  if (!transform) return;
+  const form = byId<HTMLFormElement>("releaseForm");
+  setFormValue(form, "releaseWorldUnit", transform.worldUnit);
+  setFormValue(form, "releaseSourceUpAxis", transform.sourceUpAxis);
+  setFormValue(form, "releaseMetresPerSourceUnit", String(transform.metresPerSourceUnit));
+  setFormValue(form, "releaseYawDegrees", String(transform.yawDegrees));
+  setFormValue(form, "releaseTranslationX", String(transform.translationMetres[0]));
+  setFormValue(form, "releaseTranslationY", String(transform.translationMetres[1]));
+  setFormValue(form, "releaseTranslationZ", String(transform.translationMetres[2]));
+  setProvisionalReleaseDisclaimer(
+    form,
+    transform.worldUnit === "scene_units",
+  );
+}
+
+function setProvisionalReleaseDisclaimer(
+  form: HTMLFormElement,
+  provisional: boolean,
+): void {
+  const disclaimer = form.elements.namedItem("measurementDisclaimer");
+  if (!(disclaimer instanceof HTMLTextAreaElement)) return;
+  disclaimer.readOnly = provisional;
+  disclaimer.title = provisional
+    ? "The platform warning is mandatory and cannot be edited for provisional scene-unit releases."
+    : "";
+  if (provisional) disclaimer.value = PROVISIONAL_MEASUREMENT_DISCLAIMER;
+}
+
 function parseReleaseSourceToWorld(form: FormData): {
   sourceUpAxis: "Y" | "Z";
+  worldUnit: WorldUnit;
   metresPerSourceUnit: number;
   yawDegrees: number;
   translationMetres: [number, number, number];
 } | null {
   if (form.get("applySourceToWorld") !== "on") return null;
   const sourceUpAxis = String(form.get("releaseSourceUpAxis") ?? "Y");
+  const worldUnit = String(form.get("releaseWorldUnit") ?? "scene_units");
   const metresPerSourceUnit = Number(form.get("releaseMetresPerSourceUnit") ?? 1);
   const yawDegrees = Number(form.get("releaseYawDegrees") ?? 0);
   const translationMetres: [number, number, number] = [
@@ -10556,6 +10681,7 @@ function parseReleaseSourceToWorld(form: FormData): {
   ];
   if (
     (sourceUpAxis !== "Y" && sourceUpAxis !== "Z") ||
+    (worldUnit !== "metres" && worldUnit !== "scene_units") ||
     !Number.isFinite(metresPerSourceUnit) ||
     metresPerSourceUnit <= 0 ||
     !Number.isFinite(yawDegrees) ||
@@ -10565,6 +10691,7 @@ function parseReleaseSourceToWorld(form: FormData): {
   }
   return {
     sourceUpAxis,
+    worldUnit,
     metresPerSourceUnit,
     yawDegrees,
     translationMetres,

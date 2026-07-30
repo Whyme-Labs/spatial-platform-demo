@@ -39,11 +39,17 @@ derivative, renders a poster, writes a QA report, and uploads the immutable
 outputs through the Worker. The same lease lane can compare two explicitly
 registered, verified PLY assets and retain bounded voxel-occupancy, centroid,
 mean-colour, source-byte, method, and human-review evidence. It can also inspect
-a verified, registered Y-up metric PLY for bounded horizontal occupancy and
-propose polygonal walkable regions. Those candidates remain machine evidence
-until an operator explicitly accepts selected polygons as editable room seeds;
-they are never survey, legal-room, area, or accessibility claims. RAD is the
-preferred large-scene format because
+a verified PLY in either reviewed metric metres or explicitly provisional scene
+units for bounded horizontal occupancy and propose polygonal walkable regions.
+Provisional releases expose unit-neutral candidate values in `SU`, attach unit
+provenance to accepted entities and obstacles, and use a mandatory
+platform-authored non-measurement warning. All candidates remain machine
+evidence until an operator explicitly accepts selected polygons as editable
+room seeds; they are never survey, legal-room, area, clearance, construction,
+or accessibility claims. Metric-only geometry-change and pose-path coverage
+evidence stays unavailable until a new measured scene version is authored.
+Measurement briefs, millimetre QA, and metric deliverables are blocked on the
+same boundary. RAD is the preferred large-scene format because
 Spark can page its prebuilt LoD tree directly through the range-capable private
 R2 release endpoint.
 

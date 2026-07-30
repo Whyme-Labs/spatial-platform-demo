@@ -11,7 +11,7 @@ The pipeline keeps four inputs separate:
 
 1. the PLY/RAD Gaussian asset is the visual layer;
 2. a reviewed source-to-world transform puts source coordinates into canonical
-   Y-up metres;
+   Y-up world coordinates, either metric metres or provisional scene units;
 3. authored floor/room polygons and doorway connectors define the walkable
    triangle mesh;
 4. obstacle boxes and a version-specific agent profile define clearance and
@@ -20,10 +20,16 @@ The pipeline keeps four inputs separate:
 The source-to-world transform contains:
 
 - source up axis (`Y` or `Z`);
-- metres per source unit;
+- world unit (`metres` or provisional `scene_units`);
+- world units per source unit;
 - yaw in degrees;
-- translation in metres;
+- translation in the selected world unit;
 - registration and scale evidence.
+
+For stored-release compatibility, the transport fields remain named
+`metresPerSourceUnit`, `translationMetres`, and `maxStepMetres`. Their numeric
+values follow `worldUnit`; when it is `scene_units`, those values are SU rather
+than metres. Studio and the published viewer never present them as metric.
 
 An applied release transform must exactly match a reviewed, accepted semantic
 extraction record. The renderer applies the same transform to the visual mesh
@@ -41,9 +47,21 @@ The improved DJI reconstruction is available locally as:
 - `artifacts/gaussian-examples/user-room/improved-exhaustive-colmap-15000/user-room-exhaustive-colmap.splatfacto.ply`
 - `artifacts/gaussian-examples/user-room/improved-exhaustive-colmap-15000/user-room-exhaustive-colmap.splatfacto-lod.rad`
 
-It is Z-up and its units are arbitrary. Before publishing a metric v5 scene,
-measure one distance between two unambiguous points that are visible in the
-capture. Compute:
+It is Z-up and its units are arbitrary. V5 can publish a provisional navigation
+release now with `worldUnit: scene_units`; Studio and the viewer display those
+values as `SU` and suppress any metre or area interpretation. Use an internally
+consistent scale factor, author the navigation profile in SU, and retain the
+reviewed transform as provisional evidence.
+
+Semantic candidates, accepted scene entities, and navigation obstacles retain
+their world-unit provenance. A version containing authored SU geometry cannot
+be relabelled as metres. Authored geometry change and capture-completeness
+evidence also remain disabled because their thresholds are metric.
+
+When a real measurement becomes available, create a new scene version, run a
+new metric extraction, re-author any manual doorways or obstacles in that
+metric frame, and then create a new release. Measure one distance between two
+unambiguous points visible in the capture and compute:
 
 ```text
 metresPerSourceUnit = measuredDistanceMetres / reconstructedDistanceSourceUnits
@@ -56,16 +74,21 @@ bounds.
 ## Operator sequence
 
 1. Upload or select the verified PLY and RAD assets for the immutable version.
-2. Queue semantic extraction with source up axis `Z`, the measured
-   `metresPerSourceUnit`, and any required yaw/translation.
-3. Review the detected floor candidates and accept only the correct support
-   layer.
-4. Edit the resulting walkable polygons so both connected spaces are covered.
-5. Add a doorway connector across the threshold between the spaces.
-6. Add obstacle boxes for the L-shaped table, furniture, and any other volumes
+2. Set the version navigation profile to `scene_units`; this establishes the
+   unit inherited by all later manual doorways and obstacles.
+3. Queue semantic extraction with source up axis `Z`, world unit
+   `scene_units`, a temporary scale factor, and any required yaw/translation.
+4. Review the detected floor candidates and accept only the correct support
+   layer. Acceptance also initializes the profile to the extraction unit if the
+   version has no profile yet; it fails closed if an incompatible profile or
+   authored artifact already exists.
+5. Edit the resulting walkable polygons so both connected spaces are covered.
+6. Add a doorway connector across the threshold between the spaces.
+7. Add obstacle boxes for the L-shaped table, furniture, and any other volumes
    the camera must not enter.
-7. Tune the navigation profile for the intended player/camera dimensions.
-8. Inspect the Studio floor plan and viewer movement, then publish using the
+8. Tune the intended player/camera dimensions by visual inspection without
+   changing the version unit.
+9. Inspect the Studio floor plan and viewer movement, then publish using the
    accepted extraction as transform evidence.
 
 Concave room polygons preserve blocked voids. Doorways provide explicit
@@ -74,8 +97,9 @@ are sampled so a large movement cannot tunnel through an obstacle.
 
 ## Deployment order
 
-1. Apply D1 migrations `0033_v5_navigation.sql` and
-   `0034_navigation_profiles.sql` in order.
+1. Apply D1 migrations `0033_v5_navigation.sql`,
+   `0034_navigation_profiles.sql`, `0035_navigation_world_units.sql`, and
+   `0036_spatial_world_unit_provenance.sql` in order.
 2. Deploy the application Worker and static bundle from the same tested
    revision.
 3. Run the deployed staging acceptance suite.
@@ -83,9 +107,9 @@ are sampled so a large movement cannot tunnel through an obstacle.
 5. Create and inspect a new v5 release.
 
 The implementation can be tested locally without mutating the existing DJI
-release. Production deployment and v5 publication must remain pending until the
-real scale measurement is supplied and the migration/deployment acceptance
-evidence is captured.
+release. A provisional v5 publication does not require a real measurement, but
+production deployment still requires migration and deployed-acceptance
+evidence. A later metric publication requires a measured control distance.
 
 ## Explicit exclusions
 

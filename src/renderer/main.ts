@@ -22,6 +22,7 @@ import {
   type SourceToWorldTransform,
   type Vector3Tuple,
 } from "../shared/navigation-runtime";
+import { parseWorldUnit } from "../shared/world-units";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -598,6 +599,7 @@ function readSourceToWorld(value: string | null): SourceToWorldTransform | null 
   }
   if (!parsed || typeof parsed !== "object") return null;
   const sourceUpAxis = Reflect.get(parsed, "sourceUpAxis");
+  const worldUnit = parseWorldUnit(Reflect.get(parsed, "worldUnit"));
   const metresPerSourceUnit = Number(Reflect.get(parsed, "metresPerSourceUnit"));
   const yawDegrees = Number(Reflect.get(parsed, "yawDegrees"));
   const translationMetres = finiteTuple(Reflect.get(parsed, "translationMetres"));
@@ -611,6 +613,7 @@ function readSourceToWorld(value: string | null): SourceToWorldTransform | null 
   ) return null;
   return {
     sourceUpAxis,
+    worldUnit,
     metresPerSourceUnit,
     yawDegrees,
     translationMetres,

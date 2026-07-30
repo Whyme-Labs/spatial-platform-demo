@@ -1,7 +1,11 @@
+import { parseWorldUnit, type WorldUnit } from "./world-units";
+
 export type Vector3Tuple = [number, number, number];
+export type { WorldUnit } from "./world-units";
 
 export type SourceToWorldTransform = {
   sourceUpAxis: "Y" | "Z";
+  worldUnit?: WorldUnit;
   metresPerSourceUnit: number;
   yawDegrees: number;
   translationMetres: Vector3Tuple;
@@ -19,6 +23,7 @@ export type NavigationObstacleBox = {
 };
 
 export type NavigationProfile = {
+  worldUnit?: WorldUnit;
   agentRadius: number;
   agentHeight: number;
   eyeHeight: number;
@@ -32,6 +37,7 @@ export type NavigationRuntime = {
 };
 
 export const DEFAULT_NAVIGATION_PROFILE: NavigationProfile = {
+  worldUnit: "metres",
   agentRadius: 0.22,
   agentHeight: 1.8,
   eyeHeight: 1.6,
@@ -98,6 +104,7 @@ export function parseNavigationRuntimeMessage(
   const rawProfile = Reflect.get(message, "navigationProfile");
   const profile = rawProfile && typeof rawProfile === "object"
     ? {
+        worldUnit: parseWorldUnit(Reflect.get(rawProfile, "worldUnit")),
         agentRadius: boundedRuntimeNumber(
           Reflect.get(rawProfile, "agentRadius"),
           DEFAULT_NAVIGATION_PROFILE.agentRadius,

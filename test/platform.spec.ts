@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { sha256Hex } from "../src/worker/security";
+import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 const origin = "https://spatial.test";
 let testClientSequence = 0;
@@ -1754,68 +1755,69 @@ describe("Spatial Studio Worker", () => {
       expect(invalidCameraResponse.status).toBe(400);
     }
 
-    const metricTransform = {
+    const provisionalTransform = {
       sourceUpAxis: "Z",
-      metresPerSourceUnit: 0.42,
+      worldUnit: "scene_units",
+      metresPerSourceUnit: 1,
       yawDegrees: 0,
       translationMetres: [0, 0, 0],
     };
-    const unprovenMetricRelease = await exports.default.fetch(
+    const unprovenProvisionalRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "unproven-metric-release",
+          slug: "unproven-provisional-release",
           accessPolicy: "unlisted",
           viewerConfig: {
-            title: "Unproven metric release",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Unproven provisional release",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(unprovenMetricRelease.status).toBe(400);
-    const unknownMetricEvidence = await exports.default.fetch(
+    expect(unprovenProvisionalRelease.status).toBe(400);
+    const unknownProvisionalEvidence = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "unknown-metric-evidence",
+          slug: "unknown-provisional-evidence",
           accessPolicy: "unlisted",
           sourceToWorldEvidenceId: crypto.randomUUID(),
           viewerConfig: {
-            title: "Unknown metric evidence",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Unknown provisional evidence",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(unknownMetricEvidence.status).toBe(409);
+    expect(unknownProvisionalEvidence.status).toBe(409);
 
-    const metricEvidenceId = crypto.randomUUID();
-    const metricEvidenceJobId = crypto.randomUUID();
-    const metricEvidenceOwner = await env.DB.prepare(`
+    const provisionalEvidenceId = crypto.randomUUID();
+    const provisionalEvidenceJobId = crypto.randomUUID();
+    const provisionalEvidenceOwner = await env.DB.prepare(`
       SELECT organisation_id, created_by FROM projects WHERE id = ?
     `).bind(project.id).first<{ organisation_id: string; created_by: string }>();
-    expect(metricEvidenceOwner).toBeTruthy();
+    expect(provisionalEvidenceOwner).toBeTruthy();
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
           processor_version, idempotency_key, state, progress, progress_message
         ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1', 'test/1.0',
-          ?, 'SUCCEEDED', 100, 'Reviewed metric evidence')
+          ?, 'SUCCEEDED', 100, 'Reviewed provisional-unit evidence')
       `).bind(
-        metricEvidenceJobId,
-        metricEvidenceOwner!.organisation_id,
+        provisionalEvidenceJobId,
+        provisionalEvidenceOwner!.organisation_id,
         project.id,
         completed.asset.versionId,
         completed.asset.id,
-        `metric-evidence:${metricEvidenceId}`,
+        `provisional-evidence:${provisionalEvidenceId}`,
       ),
       env.DB.prepare(`
         INSERT INTO semantic_extraction_runs (
@@ -1827,65 +1829,132 @@ describe("Spatial Studio Worker", () => {
           'accept_selected', 'Reviewed fixture proving the exact transform.',
           datetime('now'))
       `).bind(
-        metricEvidenceId,
-        metricEvidenceOwner!.organisation_id,
+        provisionalEvidenceId,
+        provisionalEvidenceOwner!.organisation_id,
         project.id,
         completed.asset.versionId,
         completed.asset.id,
-        metricEvidenceJobId,
+        provisionalEvidenceJobId,
         JSON.stringify({
           coordinateAssurance: "authored_source_to_world_v1",
-          sourceToWorld: metricTransform,
-          registrationEvidence: "Measured control points establish the metric transform.",
+          sourceToWorld: provisionalTransform,
+          registrationEvidence:
+            "Temporary scene units preserve alignment without claiming real-world scale.",
         }),
         crypto.randomUUID(),
         "f".repeat(64),
-        metricEvidenceOwner!.created_by,
-        metricEvidenceOwner!.created_by,
+        provisionalEvidenceOwner!.created_by,
+        provisionalEvidenceOwner!.created_by,
       ),
     ]);
-    const mismatchedMetricEvidence = await exports.default.fetch(
+    const mismatchedProvisionalEvidence = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "mismatched-metric-evidence",
+          slug: "mismatched-provisional-evidence",
           accessPolicy: "unlisted",
-          sourceToWorldEvidenceId: metricEvidenceId,
+          sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
-            title: "Mismatched metric evidence",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: { ...metricTransform, metresPerSourceUnit: 0.43 },
+            title: "Mismatched provisional evidence",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
+            sourceToWorld: { ...provisionalTransform, metresPerSourceUnit: 1.1 },
           },
         }),
       },
     );
-    expect(mismatchedMetricEvidence.status).toBe(422);
-    const provenMetricRelease = await exports.default.fetch(
+    expect(mismatchedProvisionalEvidence.status).toBe(422);
+    const mismatchedNavigationUnit = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          slug: "proven-metric-release",
+          slug: "proven-provisional-release",
           accessPolicy: "unlisted",
-          sourceToWorldEvidenceId: metricEvidenceId,
+          sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
-            title: "Proven metric release",
-            measurementDisclaimer: "Indicative visual navigation only.",
-            sourceToWorld: metricTransform,
+            title: "Proven provisional release",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
+            sourceToWorld: provisionalTransform,
           },
         }),
       },
     );
-    expect(provenMetricRelease.status).toBe(201);
+    expect(mismatchedNavigationUnit.status).toBe(409);
+    const provisionalProfile = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: completed.asset.versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.12,
+          agentHeight: 0.8,
+          eyeHeight: 0.65,
+          maxStepMetres: 0.05,
+        }),
+      },
+    );
+    expect(provisionalProfile.status).toBe(200);
+    const provenProvisionalRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "proven-provisional-release",
+          accessPolicy: "unlisted",
+          sourceToWorldEvidenceId: provisionalEvidenceId,
+          viewerConfig: {
+            title: "Proven provisional release",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
+            sourceToWorld: provisionalTransform,
+          },
+        }),
+      },
+    );
+    expect(provenProvisionalRelease.status).toBe(201);
+    const provisionalManifest = await exports.default.fetch(
+      `${origin}/api/releases/proven-provisional-release/manifest`,
+    );
+    expect(provisionalManifest.status).toBe(200);
+    await expect(provisionalManifest.json()).resolves.toMatchObject({
+      viewer: {
+        sourceToWorld: {
+          worldUnit: "scene_units",
+        },
+      },
+      spatial: {
+        navigationProfile: {
+          worldUnit: "scene_units",
+        },
+      },
+    });
     await env.DB.batch([
       env.DB.prepare("DELETE FROM release_channels WHERE slug = ?")
-        .bind("proven-metric-release"),
+        .bind("proven-provisional-release"),
       env.DB.prepare("DELETE FROM releases WHERE project_id = ? AND viewer_config_json LIKE ?")
-        .bind(project.id, '%"Proven metric release"%'),
+        .bind(project.id, '%"Proven provisional release"%'),
     ]);
+    const restoreMetricProfile = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: completed.asset.versionId,
+          worldUnit: "metres",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        }),
+      },
+    );
+    expect(restoreMetricProfile.status).toBe(200);
 
     const snapshotEntityResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities`,
@@ -2584,6 +2653,23 @@ describe("Spatial Studio Worker", () => {
       `).bind(versionId, projectId, member!.userId),
     ]);
 
+    const navigationProfileResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.3,
+          agentHeight: 1.75,
+          eyeHeight: 1.58,
+          maxStepMetres: 0.08,
+        }),
+      },
+    );
+    expect(navigationProfileResponse.status).toBe(200);
+
     const entityResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -2651,13 +2737,14 @@ describe("Spatial Studio Worker", () => {
     expect(obstacleResponse.status).toBe(201);
     const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
 
-    const navigationProfileResponse = await exports.default.fetch(
+    const unsafeUnitRelabel = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
       {
         method: "PUT",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
           versionId,
+          worldUnit: "metres",
           agentRadius: 0.3,
           agentHeight: 1.75,
           eyeHeight: 1.58,
@@ -2665,7 +2752,10 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(navigationProfileResponse.status).toBe(200);
+    expect(unsafeUnitRelabel.status).toBe(409);
+    await expect(unsafeUnitRelabel.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Create a new version"),
+    });
 
     const routeResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/routes`, {
       method: "POST",
@@ -2754,6 +2844,7 @@ describe("Spatial Studio Worker", () => {
         }],
       },
       navigationProfile: {
+        worldUnit: "scene_units",
         agentRadius: 0.3,
         agentHeight: 1.75,
         eyeHeight: 1.58,
@@ -3067,6 +3158,69 @@ describe("Spatial Studio Worker", () => {
         { position: [0.5, 1.5, 0.5], timestampMs: 8000 },
       ],
     };
+    const provisionalProjectId = crypto.randomUUID();
+    const provisionalVersionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter,
+            delivery_template, created_by)
+        VALUES (?, ?, 'Provisional capture coverage', ?, 'QA_REQUIRED',
+          'open-import', 'venue-navigator', ?)
+      `).bind(
+        provisionalProjectId,
+        member!.organisationId,
+        `provisional-coverage-${provisionalProjectId.slice(0, 8)}`,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(provisionalVersionId, provisionalProjectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_navigation_profiles (
+          version_id, organisation_id, project_id, world_unit, agent_radius,
+          agent_height, eye_height, max_step_metres, updated_by
+        ) VALUES (?, ?, ?, 'scene_units', 0.2, 1.2, 1, 0.05, ?)
+      `).bind(
+        provisionalVersionId,
+        member!.organisationId,
+        provisionalProjectId,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities (
+          id, organisation_id, project_id, version_id, kind, label,
+          geometry_json, metadata_json, created_by, world_unit
+        ) VALUES (?, ?, ?, ?, 'room', 'Provisional room', ?, '{}', ?,
+          'scene_units')
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        provisionalProjectId,
+        provisionalVersionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 4]] }),
+        member!.userId,
+      ),
+    ]);
+    const provisionalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${provisionalProjectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          clientOperationId: crypto.randomUUID(),
+          versionId: provisionalVersionId,
+        }),
+      },
+    );
+    expect(provisionalResponse.status).toBe(409);
+    await expect(provisionalResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("requires reviewed metric metres"),
+    });
+
     const createdResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
       {
@@ -3459,6 +3613,7 @@ describe("Spatial Studio Worker", () => {
     `).first<{ organisationId: string; userId: string }>();
     const projectId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
+    const provisionalVersionId = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO projects
@@ -3469,7 +3624,100 @@ describe("Spatial Studio Worker", () => {
         INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
         VALUES (?, ?, 1, 'QA_REQUIRED', ?)
       `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 2, 'QA_REQUIRED', ?)
+      `).bind(provisionalVersionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_navigation_profiles (
+          version_id, organisation_id, project_id, world_unit, agent_radius,
+          agent_height, eye_height, max_step_metres, updated_by
+        ) VALUES (?, ?, ?, 'scene_units', 0.22, 1.8, 1.6, 0.1, ?)
+      `).bind(
+        provisionalVersionId,
+        member!.organisationId,
+        projectId,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities (
+          id, organisation_id, project_id, version_id, kind, label,
+          geometry_json, metadata_json, created_by, world_unit
+        ) VALUES (?, ?, ?, ?, 'room', 'Provisional measured room', ?, '{}', ?,
+          'scene_units')
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        projectId,
+        provisionalVersionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 4]] }),
+        member!.userId,
+      ),
     ]);
+
+    const provisionalBrief = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId: provisionalVersionId,
+          productType: "measured_floor_plan",
+          intendedUse: "Construction layout",
+          units: "metres",
+          toleranceMm: 30,
+          relianceClass: "project_verified",
+        }),
+      },
+    );
+    expect(provisionalBrief.status).toBe(409);
+    await expect(provisionalBrief.json()).resolves.toMatchObject({
+      error: expect.stringContaining("require reviewed metric metres"),
+    });
+    const rejectedBriefCount = await env.DB.prepare(`
+      SELECT count(*) AS count FROM measurement_briefs
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(
+      member!.organisationId,
+      projectId,
+      provisionalVersionId,
+    ).first<{ count: number }>();
+    expect(Number(rejectedBriefCount?.count ?? 0)).toBe(0);
+
+    const inconsistentBriefId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO measurement_briefs
+        (id, organisation_id, project_id, version_id, product_type, intended_use,
+          units, tolerance_mm, reliance_class, status, created_by)
+      VALUES (?, ?, ?, ?, 'measured_floor_plan', 'Legacy inconsistent fixture',
+        'metres', 30, 'project_verified', 'evidence_required', ?)
+    `).bind(
+      inconsistentBriefId,
+      member!.organisationId,
+      projectId,
+      provisionalVersionId,
+      member!.userId,
+    ).run();
+    const provisionalCheckPoint = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/measurement/briefs/${inconsistentBriefId}/check-points`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          label: "Rejected provisional checkpoint",
+          reference: [0, 0, 0],
+          observed: [0.01, 0, 0],
+        }),
+      },
+    );
+    expect(provisionalCheckPoint.status).toBe(409);
+    const rejectedCheckPointCount = await env.DB.prepare(`
+      SELECT count(*) AS count FROM measurement_check_points WHERE brief_id = ?
+    `).bind(inconsistentBriefId).first<{ count: number }>();
+    expect(Number(rejectedCheckPointCount?.count ?? 0)).toBe(0);
+    await env.DB.prepare("DELETE FROM measurement_briefs WHERE id = ?")
+      .bind(inconsistentBriefId)
+      .run();
 
     const invalidCertified = await exports.default.fetch(`${origin}/api/projects/${projectId}/measurement/briefs`, {
       method: "POST",
@@ -3500,6 +3748,23 @@ describe("Spatial Studio Worker", () => {
     });
     expect(briefResponse.status).toBe(201);
     const brief = await briefResponse.json<{ brief: { id: string } }>();
+
+    const relabelMeasuredVersion = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        }),
+      },
+    );
+    expect(relabelMeasuredVersion.status).toBe(409);
 
     const roomResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
       method: "POST",
