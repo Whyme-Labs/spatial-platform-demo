@@ -1,5 +1,7 @@
+import { parseWorldUnit, type WorldUnit } from "./world-units";
+
 export type Vector3Tuple = [number, number, number];
-export type WorldUnit = "metres" | "scene_units";
+export type { WorldUnit } from "./world-units";
 
 export type SourceToWorldTransform = {
   sourceUpAxis: "Y" | "Z";
@@ -102,9 +104,7 @@ export function parseNavigationRuntimeMessage(
   const rawProfile = Reflect.get(message, "navigationProfile");
   const profile = rawProfile && typeof rawProfile === "object"
     ? {
-        worldUnit: Reflect.get(rawProfile, "worldUnit") === "scene_units"
-          ? "scene_units" as const
-          : "metres" as const,
+        worldUnit: parseWorldUnit(Reflect.get(rawProfile, "worldUnit")),
         agentRadius: boundedRuntimeNumber(
           Reflect.get(rawProfile, "agentRadius"),
           DEFAULT_NAVIGATION_PROFILE.agentRadius,

@@ -4,6 +4,7 @@ import {
   captureAssetFormats,
   captureAssetPurposes,
 } from "../shared/capture-adapters";
+import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../shared/world-units";
 import { captureBundleRoles } from "./capture-bundle";
 
 const captureAdapterSchema = z.enum(captureAdapterIds);
@@ -742,19 +743,62 @@ export const semanticExtractionReviewSchema = z.object({
   }
 });
 
-const semanticExtractionCandidateSchema = z.object({
+const semanticExtractionCandidateSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return {
+    ...record,
+    elevation: record.elevation ?? record.elevationM,
+    area: record.area ?? record.areaM2,
+  };
+}, z.object({
   candidateKey: z.string().regex(/^walkable-[0-9]{3}$/),
   kind: z.literal("walkable_region"),
   label: z.string().trim().min(1).max(120),
-  elevationM: z.number().finite(),
-  areaM2: z.number().positive().max(10_000_000),
+  elevation: z.number().finite(),
+  area: z.number().positive().max(10_000_000),
   confidence: z.number().min(0).max(1),
   geometry: z.object({
     type: z.literal("polygon"),
     points: polygon3Schema,
   }),
   evidence: z.record(z.string(), z.unknown()),
-});
+}));
+
+const semanticExtractionSummarySchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return {
+    ...record,
+    inferredFloorElevation:
+      record.inferredFloorElevation ?? record.inferredFloorElevationM,
+    totalCandidateArea:
+      record.totalCandidateArea ?? record.totalCandidateAreaM2,
+  };
+}, z.object({
+  inferredFloorElevation: z.number().finite(),
+  credibleHorizontalLayerCount: z.number().int().positive(),
+  candidateCount: z.number().int().min(1).max(100),
+  totalCandidateArea: z.number().positive(),
+}));
+
+const semanticExtractionReportParametersSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return {
+    gridSize: record.gridSize ?? record.gridSizeM,
+    floorBand: record.floorBand ?? record.floorBandM,
+    minimumArea: record.minimumArea ?? record.minimumAreaM2,
+    maximumCandidates: record.maximumCandidates,
+    elevationHint: record.elevationHint ?? record.elevationHintM ?? null,
+  };
+}, z.object({
+  gridSize: z.number().min(0.05).max(2),
+  floorBand: z.number().min(0.05).max(0.5),
+  minimumArea: z.number().min(0.25).max(10_000),
+  maximumCandidates: z.number().int().min(1).max(100),
+  elevationHint: z.number().finite().nullable(),
+}));
 
 export const workerSemanticExtractionCompletionSchema = z.object({
   leaseToken: z.string().min(20).max(512),
@@ -765,19 +809,15 @@ export const workerSemanticExtractionCompletionSchema = z.object({
   }),
   report: z.object({
     schemaVersion: z.literal("1.0.0"),
+    worldUnit: z.enum(["metres", "scene_units"]).default("metres"),
     method: z.enum([
       "registered-ply-walkable-candidates-v1",
       "registered-ply-walkable-candidates-v2",
     ]),
     result: z.literal("candidates_ready"),
     source: z.record(z.string(), z.unknown()),
-    parameters: z.record(z.string(), z.unknown()),
-    summary: z.object({
-      inferredFloorElevationM: z.number().finite(),
-      credibleHorizontalLayerCount: z.number().int().positive(),
-      candidateCount: z.number().int().min(1).max(100),
-      totalCandidateAreaM2: z.number().positive(),
-    }),
+    parameters: semanticExtractionReportParametersSchema,
+    summary: semanticExtractionSummarySchema,
     candidates: z.array(semanticExtractionCandidateSchema).min(1).max(100),
     humanReviewRequired: z.literal(true),
     limitations: z.array(z.string().trim().min(10).max(1000)).min(1).max(20),
@@ -1300,6 +1340,17 @@ export const releaseInputSchema = z.object({
       code: "custom",
       path: ["sourceToWorldEvidenceId"],
       message: "Source-to-world evidence cannot be attached without a release transform",
+    });
+  }
+  if (
+    value.viewerConfig.sourceToWorld?.worldUnit === "scene_units" &&
+    value.viewerConfig.measurementDisclaimer !== PROVISIONAL_MEASUREMENT_DISCLAIMER
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["viewerConfig"],
+      message:
+        "Provisional releases must use the platform-authored non-measurement warning",
     });
   }
 });

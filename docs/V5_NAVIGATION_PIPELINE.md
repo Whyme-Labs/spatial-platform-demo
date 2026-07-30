@@ -53,9 +53,15 @@ values as `SU` and suppress any metre or area interpretation. Use an internally
 consistent scale factor, author the navigation profile in SU, and retain the
 reviewed transform as provisional evidence.
 
-When a real measurement becomes available, create a new metric extraction and
-release. Measure one distance between two unambiguous points visible in the
-capture and compute:
+Semantic candidates, accepted scene entities, and navigation obstacles retain
+their world-unit provenance. A version containing authored SU geometry cannot
+be relabelled as metres. Authored geometry change and capture-completeness
+evidence also remain disabled because their thresholds are metric.
+
+When a real measurement becomes available, create a new scene version, run a
+new metric extraction, re-author any manual doorways or obstacles in that
+metric frame, and then create a new release. Measure one distance between two
+unambiguous points visible in the capture and compute:
 
 ```text
 metresPerSourceUnit = measuredDistanceMetres / reconstructedDistanceSourceUnits
@@ -88,8 +94,8 @@ are sampled so a large movement cannot tunnel through an obstacle.
 ## Deployment order
 
 1. Apply D1 migrations `0033_v5_navigation.sql`,
-   `0034_navigation_profiles.sql`, and `0035_navigation_world_units.sql` in
-   order.
+   `0034_navigation_profiles.sql`, `0035_navigation_world_units.sql`, and
+   `0036_spatial_world_unit_provenance.sql` in order.
 2. Deploy the application Worker and static bundle from the same tested
    revision.
 3. Run the deployed staging acceptance suite.

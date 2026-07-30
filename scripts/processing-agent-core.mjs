@@ -534,6 +534,11 @@ export function extractWalkableSemanticCandidates(signature, {
   elevationHintM = null,
   sourceToWorld = null,
 } = {}) {
+  const worldUnit = sourceToWorld?.worldUnit === "scene_units"
+    ? "scene_units"
+    : "metres";
+  const linearUnitName = worldUnit === "scene_units" ? "scene units" : "metres";
+  const areaUnitName = worldUnit === "scene_units" ? "square scene units" : "square metres";
   if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_SOURCE",
@@ -547,21 +552,21 @@ export function extractWalkableSemanticCandidates(signature, {
   if (!Number.isFinite(gridSizeM) || gridSizeM < 0.05 || gridSizeM > 2) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_PARAMETERS",
-      "Grid size must be between 0.05 and 2 metres",
+      `Grid size must be between 0.05 and 2 ${linearUnitName}`,
       { failureClass: "input_validation", retryable: false },
     );
   }
   if (!Number.isFinite(floorBandM) || floorBandM < 0.05 || floorBandM > 0.5) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_PARAMETERS",
-      "Floor band must be between 0.05 and 0.5 metres",
+      `Floor band must be between 0.05 and 0.5 ${linearUnitName}`,
       { failureClass: "input_validation", retryable: false },
     );
   }
   if (!Number.isFinite(minimumAreaM2) || minimumAreaM2 < 0.25 || minimumAreaM2 > 10_000) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_PARAMETERS",
-      "Minimum candidate area must be between 0.25 and 10,000 square metres",
+      `Minimum candidate area must be between 0.25 and 10,000 ${areaUnitName}`,
       { failureClass: "input_validation", retryable: false },
     );
   }
@@ -575,7 +580,7 @@ export function extractWalkableSemanticCandidates(signature, {
   if (elevationHintM !== null && !Number.isFinite(elevationHintM)) {
     throw new ProcessingAgentError(
       "INVALID_SEMANTIC_PARAMETERS",
-      "Elevation hint must be a finite number of metres",
+      `Elevation hint must be a finite number of ${linearUnitName}`,
       { failureClass: "input_validation", retryable: false },
     );
   }
@@ -653,8 +658,8 @@ export function extractWalkableSemanticCandidates(signature, {
       candidateKey: `walkable-${String(index + 1).padStart(3, "0")}`,
       kind: "walkable_region",
       label: `Candidate room ${index + 1}`,
-      elevationM: selectedLayer.elevationM,
-      areaM2,
+      elevation: selectedLayer.elevationM,
+      area: areaM2,
       confidence: semanticRound(Math.min(0.99, 0.55 + supportRatio * 0.4)),
       geometry: {
         type: "polygon",
@@ -664,13 +669,14 @@ export function extractWalkableSemanticCandidates(signature, {
         occupiedCellCount: component.length,
         boundingCellCount,
         supportRatio: semanticRound(supportRatio),
-        gridSizeM,
-        floorBandM,
+        gridSize: gridSizeM,
+        floorBand: floorBandM,
       },
     };
   });
   return {
     schemaVersion: "1.0.0",
+    worldUnit,
     method: sourceToWorld
       ? "registered-ply-walkable-candidates-v2"
       : "registered-ply-walkable-candidates-v1",
@@ -687,24 +693,26 @@ export function extractWalkableSemanticCandidates(signature, {
       ...(sourceToWorld ? { sourceToWorld } : {}),
     },
     parameters: {
-      gridSizeM,
-      floorBandM,
-      minimumAreaM2,
+      gridSize: gridSizeM,
+      floorBand: floorBandM,
+      minimumArea: minimumAreaM2,
       maximumCandidates,
-      elevationHintM,
+      elevationHint: elevationHintM,
     },
     summary: {
-      inferredFloorElevationM: selectedLayer.elevationM,
+      inferredFloorElevation: selectedLayer.elevationM,
       credibleHorizontalLayerCount: credibleLayers.length,
       candidateCount: candidates.length,
-      totalCandidateAreaM2: semanticRound(candidates.reduce((sum, candidate) => sum + candidate.areaM2, 0)),
+      totalCandidateArea: semanticRound(candidates.reduce((sum, candidate) => sum + candidate.area, 0)),
     },
     candidates,
     humanReviewRequired: true,
     limitations: [
       "Candidates are occupancy-derived walkable proxies, not walls, legal rooms, accessibility certification, or survey evidence.",
       sourceToWorld
-        ? "The declared source-to-world transform is operator-authored evidence; this method applies but does not independently verify its scale, gravity axis, yaw, or translation."
+        ? worldUnit === "scene_units"
+          ? "The declared source-to-world transform preserves relative scene alignment only; it does not establish real-world scale, clearance, area, survey, construction, or accessibility evidence."
+          : "The declared source-to-world transform is operator-authored evidence; this method applies but does not independently verify its scale, gravity axis, yaw, or translation."
         : "The source must already use metres in a registered Y-up coordinate frame; this method does not register or calibrate it.",
       "Ceilings, furniture, sparse floors, stairs, glass, and multi-level overlap may require a supplied elevation hint or manual authoring.",
       "No candidate becomes an authored entity until an operator reviews and explicitly accepts it.",

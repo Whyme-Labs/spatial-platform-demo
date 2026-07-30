@@ -420,11 +420,12 @@ function applyManifest(manifest: ReleaseManifest): void {
   byId("captureDate").textContent = manifest.viewer.captureDate ?? "Not provided";
   byId("sceneFormat").textContent = manifest.scene.format.toUpperCase();
   const worldUnit = manifest.viewer.sourceToWorld?.worldUnit ??
-    manifest.spatial?.navigationProfile.worldUnit ??
-    "metres";
+    manifest.spatial?.navigationProfile.worldUnit;
   byId("scaleStatus").textContent = worldUnit === "scene_units"
     ? "Provisional scene units (SU)"
-    : "Metric metres";
+    : manifest.viewer.sourceToWorld
+    ? "Reviewed metric metres"
+    : "Visual only — scale not declared";
   byId("publishedAt").textContent = new Date(manifest.release.publishedAt).toLocaleDateString();
   byId("measurementDisclaimer").textContent = manifest.viewer.measurementDisclaimer;
   if (manifest.theme) {

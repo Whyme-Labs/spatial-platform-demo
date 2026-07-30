@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { sha256Hex } from "../src/worker/security";
+import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 const origin = "https://spatial.test";
 let testClientSequence = 0;
@@ -1771,7 +1772,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Unproven provisional release",
-            measurementDisclaimer: "Provisional scene units only.",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
             sourceToWorld: provisionalTransform,
           },
         }),
@@ -1789,7 +1790,7 @@ describe("Spatial Studio Worker", () => {
           sourceToWorldEvidenceId: crypto.randomUUID(),
           viewerConfig: {
             title: "Unknown provisional evidence",
-            measurementDisclaimer: "Provisional scene units only.",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
             sourceToWorld: provisionalTransform,
           },
         }),
@@ -1857,7 +1858,7 @@ describe("Spatial Studio Worker", () => {
           sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
             title: "Mismatched provisional evidence",
-            measurementDisclaimer: "Provisional scene units only.",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
             sourceToWorld: { ...provisionalTransform, metresPerSourceUnit: 1.1 },
           },
         }),
@@ -1875,7 +1876,7 @@ describe("Spatial Studio Worker", () => {
           sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
             title: "Proven provisional release",
-            measurementDisclaimer: "Provisional scene units only.",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
             sourceToWorld: provisionalTransform,
           },
         }),
@@ -1909,7 +1910,7 @@ describe("Spatial Studio Worker", () => {
           sourceToWorldEvidenceId: provisionalEvidenceId,
           viewerConfig: {
             title: "Proven provisional release",
-            measurementDisclaimer: "Provisional scene units only.",
+            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
             sourceToWorld: provisionalTransform,
           },
         }),
@@ -2652,6 +2653,23 @@ describe("Spatial Studio Worker", () => {
       `).bind(versionId, projectId, member!.userId),
     ]);
 
+    const navigationProfileResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "scene_units",
+          agentRadius: 0.3,
+          agentHeight: 1.75,
+          eyeHeight: 1.58,
+          maxStepMetres: 0.08,
+        }),
+      },
+    );
+    expect(navigationProfileResponse.status).toBe(200);
+
     const entityResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/entities`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -2719,14 +2737,14 @@ describe("Spatial Studio Worker", () => {
     expect(obstacleResponse.status).toBe(201);
     const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
 
-    const navigationProfileResponse = await exports.default.fetch(
+    const unsafeUnitRelabel = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
       {
         method: "PUT",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
           versionId,
-          worldUnit: "scene_units",
+          worldUnit: "metres",
           agentRadius: 0.3,
           agentHeight: 1.75,
           eyeHeight: 1.58,
@@ -2734,7 +2752,10 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(navigationProfileResponse.status).toBe(200);
+    expect(unsafeUnitRelabel.status).toBe(409);
+    await expect(unsafeUnitRelabel.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Create a new version"),
+    });
 
     const routeResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/routes`, {
       method: "POST",
@@ -3137,6 +3158,69 @@ describe("Spatial Studio Worker", () => {
         { position: [0.5, 1.5, 0.5], timestampMs: 8000 },
       ],
     };
+    const provisionalProjectId = crypto.randomUUID();
+    const provisionalVersionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter,
+            delivery_template, created_by)
+        VALUES (?, ?, 'Provisional capture coverage', ?, 'QA_REQUIRED',
+          'open-import', 'venue-navigator', ?)
+      `).bind(
+        provisionalProjectId,
+        member!.organisationId,
+        `provisional-coverage-${provisionalProjectId.slice(0, 8)}`,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(provisionalVersionId, provisionalProjectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO scene_navigation_profiles (
+          version_id, organisation_id, project_id, world_unit, agent_radius,
+          agent_height, eye_height, max_step_metres, updated_by
+        ) VALUES (?, ?, ?, 'scene_units', 0.2, 1.2, 1, 0.05, ?)
+      `).bind(
+        provisionalVersionId,
+        member!.organisationId,
+        provisionalProjectId,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_entities (
+          id, organisation_id, project_id, version_id, kind, label,
+          geometry_json, metadata_json, created_by, world_unit
+        ) VALUES (?, ?, ?, ?, 'room', 'Provisional room', ?, '{}', ?,
+          'scene_units')
+      `).bind(
+        crypto.randomUUID(),
+        member!.organisationId,
+        provisionalProjectId,
+        provisionalVersionId,
+        JSON.stringify({ type: "box", points: [[0, 0, 0], [4, 3, 4]] }),
+        member!.userId,
+      ),
+    ]);
+    const provisionalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${provisionalProjectId}/spatial/capture-completeness`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...body,
+          clientOperationId: crypto.randomUUID(),
+          versionId: provisionalVersionId,
+        }),
+      },
+    );
+    expect(provisionalResponse.status).toBe(409);
+    await expect(provisionalResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("requires reviewed metric metres"),
+    });
+
     const createdResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/capture-completeness`,
       {

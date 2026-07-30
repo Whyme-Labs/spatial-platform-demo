@@ -65,17 +65,17 @@ describe("registered point-cloud semantic candidates", () => {
       coordinateAssurance: "registered_y_up_metric_frame",
     });
     expect(report.summary).toMatchObject({
-      inferredFloorElevationM: 0,
+      inferredFloorElevation: 0,
       candidateCount: 1,
-      totalCandidateAreaM2: 12,
+      totalCandidateArea: 12,
     });
     expect(report.candidates).toEqual([
       expect.objectContaining({
         candidateKey: "walkable-001",
         kind: "walkable_region",
         label: "Candidate room 1",
-        elevationM: 0,
-        areaM2: 12,
+        elevation: 0,
+        area: 12,
         geometry: {
           type: "polygon",
           points: [
@@ -109,7 +109,7 @@ describe("registered point-cloud semantic candidates", () => {
     });
 
     expect(report.candidates).toHaveLength(1);
-    expect(report.candidates[0].areaM2).toBe(7);
+    expect(report.candidates[0].area).toBe(7);
     expect(report.candidates[0].geometry.points).toHaveLength(6);
     expect(report.candidates[0].geometry.points).toEqual([
       [0, 0, 0],
@@ -151,9 +151,9 @@ describe("registered point-cloud semantic candidates", () => {
       sourceToWorld,
     });
     expect(report.summary).toMatchObject({
-      inferredFloorElevationM: 0,
+      inferredFloorElevation: 0,
       candidateCount: 1,
-      totalCandidateAreaM2: 12,
+      totalCandidateArea: 12,
     });
     expect(report.candidates[0].geometry.points).toEqual([
       [0, 0, 0],
@@ -271,7 +271,7 @@ describe("v5 coordinate contracts", () => {
       viewerConfig: {
         title: "Provisional V5 room",
         measurementDisclaimer:
-          "Provisional scene units only. Distances and areas are not real-world measurements.",
+          "Provisional scene units (SU) only. Distances, areas, navigation radii, and heights are relative values, not real-world measurements, and must not be relied upon for construction, survey, boundary, clearance, or accessibility decisions.",
         sourceToWorld,
       },
     });
@@ -292,6 +292,62 @@ describe("v5 coordinate contracts", () => {
     if (navigationProfile.success) {
       expect(navigationProfile.data.worldUnit).toBe("scene_units");
     }
+  });
+
+  it("rejects an operator-authored metric claim on a provisional release", () => {
+    const result = releaseInputSchema.safeParse({
+      slug: "unsafe-provisional-v5-room",
+      accessPolicy: "unlisted",
+      sourceToWorldEvidenceId: crypto.randomUUID(),
+      viewerConfig: {
+        title: "Unsafe provisional room",
+        measurementDisclaimer:
+          "Surveyed metric room suitable for construction and accessibility decisions.",
+        sourceToWorld: {
+          sourceUpAxis: "Z",
+          worldUnit: "scene_units",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.flatten().fieldErrors.viewerConfig).toBeDefined();
+    }
+  });
+
+  it("emits unit-neutral provisional semantic measurements", () => {
+    const floor = rectangularSurface(0, 4, 0, 3, 0);
+    const signature = parsePlySceneSignature(asciiPly(floor), {
+      voxelSizeM: 0.1,
+      maximumSamplePoints: 100_000,
+    });
+    const report = extractWalkableSemanticCandidates(signature, {
+      gridSizeM: 0.5,
+      floorBandM: 0.15,
+      minimumAreaM2: 2,
+      maximumCandidates: 8,
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "scene_units",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
+    });
+
+    expect(report.worldUnit).toBe("scene_units");
+    expect(report.summary).toMatchObject({
+      inferredFloorElevation: 0,
+      totalCandidateArea: 12,
+    });
+    expect(report.candidates[0]).toMatchObject({ elevation: 0, area: 12 });
+    expect(report.candidates[0]).not.toHaveProperty("elevationM");
+    expect(report.candidates[0]).not.toHaveProperty("areaM2");
+    expect(JSON.stringify(report)).not.toMatch(/square metres|\\bmetres\\b/);
   });
 
   it("defaults legacy transforms and navigation profiles to metres", () => {

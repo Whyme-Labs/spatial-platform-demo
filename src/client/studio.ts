@@ -17,9 +17,13 @@ import {
   type CaptureAssetFormat,
   type CaptureAssetPurpose,
 } from "../shared/capture-adapters";
+import {
+  parseWorldUnit,
+  PROVISIONAL_MEASUREMENT_DISCLAIMER,
+  worldUnitSymbol,
+  type WorldUnit,
+} from "../shared/world-units";
 import "../../styles.css";
-
-type WorldUnit = "metres" | "scene_units";
 
 type TurnstileWidgetOptions = {
   sitekey: string;
@@ -557,6 +561,7 @@ type SpatialEntity = {
   description: string | null;
   position_json: string | null;
   geometry_json: string | null;
+  world_unit: WorldUnit;
   status: string;
 };
 type GeometryChangeSummary = {
@@ -887,8 +892,9 @@ type SpatialWorkspace = {
     kind: "walkable_region";
     label: string;
     geometry_json: string;
-    elevation_m: number;
-    area_m2: number;
+    elevation: number;
+    area: number;
+    worldUnit: WorldUnit;
     confidence: number;
     evidence_json: string;
     status: "pending" | "accepted" | "rejected";
@@ -956,6 +962,7 @@ type SpatialWorkspace = {
     label: string;
     bounds_json: string;
     metadata_json: string;
+    world_unit: WorldUnit;
   }>;
   obstacleProxy: {
     version: string;
@@ -1945,7 +1952,21 @@ function bindInterface(): void {
   const releaseEvidence = releaseForm.elements.namedItem("sourceToWorldEvidenceId");
   if (releaseEvidence instanceof HTMLSelectElement) {
     releaseEvidence.addEventListener("change", () => {
-      applyReviewedTransformToReleaseForm(releaseEvidence.value);
+      if (releaseEvidence.value) {
+        applyReviewedTransformToReleaseForm(releaseEvidence.value);
+      } else {
+        setProvisionalReleaseDisclaimer(releaseForm, false);
+      }
+    });
+  }
+  const applyReleaseTransform = releaseForm.elements.namedItem("applySourceToWorld");
+  if (applyReleaseTransform instanceof HTMLInputElement) {
+    applyReleaseTransform.addEventListener("change", () => {
+      if (!applyReleaseTransform.checked) {
+        setProvisionalReleaseDisclaimer(releaseForm, false);
+      } else if (releaseEvidence instanceof HTMLSelectElement && releaseEvidence.value) {
+        applyReviewedTransformToReleaseForm(releaseEvidence.value);
+      }
     });
   }
   const reviewerSubmit = reviewerForm.querySelector<HTMLButtonElement>("[type='submit']")!;
@@ -6153,7 +6174,7 @@ function renderSpatial(): void {
     const extractionUnit = semanticExtractionWorldUnit(extraction);
     const linearUnit = worldUnitSymbol(extractionUnit);
     const summaryText = summary
-      ? `${summary.candidateCount} candidate${summary.candidateCount === 1 ? "" : "s"} · ${summary.totalCandidateAreaM2.toFixed(2)} ${linearUnit}² proxy area · inferred elevation ${summary.inferredFloorElevationM.toFixed(2)} ${linearUnit}`
+      ? `${summary.candidateCount} candidate${summary.candidateCount === 1 ? "" : "s"} · ${summary.totalCandidateArea.toFixed(2)} ${linearUnit}² proxy area · inferred elevation ${summary.inferredFloorElevation.toFixed(2)} ${linearUnit}`
       : `${extraction.candidate_count} candidate${extraction.candidate_count === 1 ? "" : "s"} · ${humanStatus(extraction.job_state)}`;
     card.append(
       heading,
@@ -6256,7 +6277,7 @@ function renderSpatial(): void {
     projectFact("Navigation triangles", String(Math.floor(spatial.navigationMesh.indices.length / 3))),
     projectFact("Navigation obstacles", String(spatial.obstacleProxy.boxes.length)),
     projectFact(
-      "Agent clearance",
+      "Navigation radius",
       `${spatial.navigationProfile.agentRadius.toFixed(2)} ${
         worldUnitSymbol(spatial.navigationProfile.worldUnit)
       } radius`,
@@ -6298,11 +6319,15 @@ function renderSpatial(): void {
     captureEvidence.append(renderCaptureCompletenessReport(report));
   }
   const authoredRooms = spatial.entities.filter((entity) => entity.kind === "room" && entity.geometry_json);
+  const captureUsesProvisionalUnits =
+    spatial.navigationProfile.worldUnit === "scene_units";
   const analyzeCapture = element("button", "primary-button wide", captureReports.length
     ? "Analyze another trajectory"
     : "Analyze capture trajectory");
-  analyzeCapture.disabled = authoredRooms.length === 0;
-  analyzeCapture.title = authoredRooms.length
+  analyzeCapture.disabled = authoredRooms.length === 0 || captureUsesProvisionalUnits;
+  analyzeCapture.title = captureUsesProvisionalUnits
+    ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation only."
+    : authoredRooms.length
     ? ""
     : "Author at least one room footprint before evaluating path coverage.";
   analyzeCapture.addEventListener("click", openCaptureCompletenessDialog);
@@ -6311,7 +6336,9 @@ function renderSpatial(): void {
     element(
       "small",
       "field-note",
-      authoredRooms.length
+      captureUsesProvisionalUnits
+        ? "Unavailable for this version: pose-path coverage radii and gaps are metric evidence. Establish measured scale in a new version before running this analysis."
+        : authoredRooms.length
         ? `${authoredRooms.length} authored room footprint${authoredRooms.length === 1 ? "" : "s"} will define the coverage target.`
         : "No authored room footprint is available for a defensible coverage target.",
     ),
@@ -6901,7 +6928,7 @@ function openSemanticReviewDialog(extractionId: string): void {
       element(
         "small",
         "muted-copy",
-        `${candidate.area_m2.toFixed(2)} ${unit}² proxy area · elevation ${candidate.elevation_m.toFixed(2)} ${unit} · ${Math.round(candidate.confidence * 100)}% extraction confidence`,
+        `${candidate.area.toFixed(2)} ${unit}² proxy area · elevation ${candidate.elevation.toFixed(2)} ${unit} · ${Math.round(candidate.confidence * 100)}% extraction confidence`,
       ),
     );
     label.append(checkbox, copy);
@@ -7010,21 +7037,25 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
 
 function parseSemanticExtractionSummary(value: string | null): {
   candidateCount: number;
-  totalCandidateAreaM2: number;
-  inferredFloorElevationM: number;
+  totalCandidateArea: number;
+  inferredFloorElevation: number;
 } | null {
   if (!value) return null;
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
     const candidateCount = Number(parsed.candidateCount);
-    const totalCandidateAreaM2 = Number(parsed.totalCandidateAreaM2);
-    const inferredFloorElevationM = Number(parsed.inferredFloorElevationM);
+    const totalCandidateArea = Number(
+      parsed.totalCandidateArea ?? parsed.totalCandidateAreaM2,
+    );
+    const inferredFloorElevation = Number(
+      parsed.inferredFloorElevation ?? parsed.inferredFloorElevationM,
+    );
     if (
       !Number.isFinite(candidateCount) ||
-      !Number.isFinite(totalCandidateAreaM2) ||
-      !Number.isFinite(inferredFloorElevationM)
+      !Number.isFinite(totalCandidateArea) ||
+      !Number.isFinite(inferredFloorElevation)
     ) return null;
-    return { candidateCount, totalCandidateAreaM2, inferredFloorElevationM };
+    return { candidateCount, totalCandidateArea, inferredFloorElevation };
   } catch {
     return null;
   }
@@ -7036,19 +7067,13 @@ function semanticExtractionWorldUnit(
   try {
     const parameters = JSON.parse(extraction.parameters_json) as Record<string, unknown>;
     const transform = parameters.sourceToWorld;
-    if (
-      transform &&
-      typeof transform === "object" &&
-      Reflect.get(transform, "worldUnit") === "scene_units"
-    ) return "scene_units";
+    if (transform && typeof transform === "object") {
+      return parseWorldUnit(Reflect.get(transform, "worldUnit"));
+    }
   } catch {
     // Legacy or malformed extraction evidence remains metric-only.
   }
   return "metres";
-}
-
-function worldUnitSymbol(worldUnit: WorldUnit | undefined): "m" | "SU" {
-  return worldUnit === "scene_units" ? "SU" : "m";
 }
 
 type EditableFloorplan = {
@@ -10485,6 +10510,8 @@ function openReleaseDialog(): void {
   if (applyTransform instanceof HTMLInputElement) applyTransform.checked = Boolean(latestTransform);
   if (latestTransform) {
     applyReviewedTransformToReleaseForm(latestTransform.extractionId);
+  } else {
+    setProvisionalReleaseDisclaimer(form, false);
   }
   releaseOperationId = crypto.randomUUID();
   byId("releaseError").textContent = "";
@@ -10576,9 +10603,7 @@ function reviewedSemanticSourceToWorld(): Array<{
       const transform = parameters.sourceToWorld;
       if (!transform || typeof transform !== "object") continue;
       const sourceUpAxis = Reflect.get(transform, "sourceUpAxis");
-      const worldUnit = Reflect.get(transform, "worldUnit") === "scene_units"
-        ? "scene_units"
-        : "metres";
+      const worldUnit = parseWorldUnit(Reflect.get(transform, "worldUnit"));
       const metresPerSourceUnit = Number(Reflect.get(transform, "metresPerSourceUnit"));
       const yawDegrees = Number(Reflect.get(transform, "yawDegrees"));
       const translationMetres = Reflect.get(transform, "translationMetres");
@@ -10618,13 +10643,23 @@ function applyReviewedTransformToReleaseForm(extractionId: string): void {
   setFormValue(form, "releaseTranslationX", String(transform.translationMetres[0]));
   setFormValue(form, "releaseTranslationY", String(transform.translationMetres[1]));
   setFormValue(form, "releaseTranslationZ", String(transform.translationMetres[2]));
-  if (transform.worldUnit === "scene_units") {
-    setFormValue(
-      form,
-      "measurementDisclaimer",
-      "Provisional scene units only. Distances, areas, and clearances are not real-world measurements and must not be relied upon for construction, survey, boundary, or accessibility decisions.",
-    );
-  }
+  setProvisionalReleaseDisclaimer(
+    form,
+    transform.worldUnit === "scene_units",
+  );
+}
+
+function setProvisionalReleaseDisclaimer(
+  form: HTMLFormElement,
+  provisional: boolean,
+): void {
+  const disclaimer = form.elements.namedItem("measurementDisclaimer");
+  if (!(disclaimer instanceof HTMLTextAreaElement)) return;
+  disclaimer.readOnly = provisional;
+  disclaimer.title = provisional
+    ? "The platform warning is mandatory and cannot be edited for provisional scene-unit releases."
+    : "";
+  if (provisional) disclaimer.value = PROVISIONAL_MEASUREMENT_DISCLAIMER;
 }
 
 function parseReleaseSourceToWorld(form: FormData): {

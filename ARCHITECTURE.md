@@ -276,9 +276,15 @@ polygons; `reject_all` preserves the evidence without authored geometry.
 
 A release may apply a source-to-world transform only when it cites a reviewed,
 accepted semantic extraction whose transform is an exact match. The navigation
-profile must use the same world unit. Provisional releases remain explorable
-but expose `SU` in Studio and the published viewer and make no metre, area, or
-clearance claim. Operators can then edit concave walkable polygons, author
+profile, semantic candidates, accepted entities, and navigation obstacles all
+carry immutable unit provenance and must use the same world unit. Once geometry
+exists, changing the navigation profile cannot relabel its coordinates; a
+metric conversion requires a new scene version and new extraction or
+re-authoring. Provisional releases remain explorable, but expose `SU` in Studio
+and the published viewer and use a platform-authored, non-editable warning that
+makes no metre, area, clearance, survey, construction, or accessibility claim.
+Metric-only authored-geometry change and pose-path coverage evidence is blocked
+for provisional versions. Operators can edit concave walkable polygons, author
 doorway connectors, obstacle boxes, and the agent profile before publication.
 Furniture, ceilings, sparse floors, stairs, glass, and overlapping levels
 remain explicit limitations; this is not automatic wall or object extraction,
