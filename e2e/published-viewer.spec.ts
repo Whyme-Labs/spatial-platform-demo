@@ -38,7 +38,11 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       },
     },
     spatial: {
-      entities: [],
+      entities: [{
+        id: "77777777-7777-4777-8777-777777777777",
+        kind: "room",
+        label: "Room",
+      }],
       routes: [],
       routeStops: [],
       collisionProxy: {
@@ -70,8 +74,31 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
     contentType: "text/html",
     body: `<!doctype html>
       <html>
+        <head>
+          <style>
+            body { margin: 0; }
+            #quality-status {
+              position: fixed;
+              left: 12px;
+              bottom: 12px;
+              padding: 10px 16px;
+              border: 1px solid #39403e;
+              border-radius: 999px;
+              background: #101514;
+              color: white;
+              font: 14px sans-serif;
+            }
+            @media (max-width: 640px) {
+              #quality-status {
+                top: 14px;
+                bottom: auto;
+              }
+            }
+          </style>
+        </head>
         <body>
           <div role="status">Loading spatial scene</div>
+          <div id="quality-status">Spark 2.1 · 2M splat budget</div>
           <button id="free-roam" onclick="parent.postMessage({
             source: 'spatial-spark',
             type: 'control-mode',
@@ -155,6 +182,17 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#scaleStatus")).toHaveText(
     "Provisional scene units (SU)",
   );
+  const exploreRooms = page.getByRole("button", { name: "Explore rooms" });
+  const qualityStatus = page.frameLocator("#rendererFrame").locator("#quality-status");
+  await expect(exploreRooms).toBeVisible();
+  await expect(qualityStatus).toBeVisible();
+  const [exploreBox, qualityBox] = await Promise.all([
+    exploreRooms.boundingBox(),
+    qualityStatus.boundingBox(),
+  ]);
+  expect(exploreBox).not.toBeNull();
+  expect(qualityBox).not.toBeNull();
+  expect(rectanglesOverlap(exploreBox!, qualityBox!)).toBe(false);
   await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
     () => Reflect.get(window, "runtimeMessage"),
   )).toMatchObject({
@@ -186,6 +224,22 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(viewport).toHaveClass(/mobile-controls-onboarding/);
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Close onboarding" }).click();
   await expect(viewport).not.toHaveClass(/mobile-controls-onboarding/);
+
+  for (const viewportSize of [
+    { width: 700, height: 760 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewportSize);
+    await expect.poll(async () => {
+      const [responsiveExploreBox, responsiveQualityBox] = await Promise.all([
+        exploreRooms.boundingBox(),
+        qualityStatus.boundingBox(),
+      ]);
+      return responsiveExploreBox !== null
+        && responsiveQualityBox !== null
+        && !rectanglesOverlap(responsiveExploreBox, responsiveQualityBox);
+    }).toBe(true);
+  }
 });
 
 test("visual-only releases do not imply a metric scale", async ({ page }) => {
@@ -250,4 +304,14 @@ function json(route: Route, body: unknown): Promise<void> {
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+}
+
+function rectanglesOverlap(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number },
+): boolean {
+  return first.x < second.x + second.width
+    && first.x + first.width > second.x
+    && first.y < second.y + second.height
+    && first.y + first.height > second.y;
 }
