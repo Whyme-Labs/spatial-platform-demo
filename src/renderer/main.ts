@@ -152,6 +152,13 @@ const mobileControls = new MobileControlSurface({
     });
   },
 });
+
+type ControlStatusTone = "ready" | "info" | "error";
+
+function setControlStatus(message: string, tone: ControlStatusTone = "info"): void {
+  controlStatus.textContent = message;
+  controlStatus.dataset.tone = tone;
+}
 const enableMobileControlsForTest = (): void => mobileControls.setReady(true);
 if (__SPATIAL_E2E__) {
   window.addEventListener("spatial:e2e-mobile-controls-ready", enableMobileControlsForTest);
@@ -259,15 +266,20 @@ async function start(): Promise<void> {
         }
         walkableBoundarySource = "authored";
         setMovementAvailability(controls, true);
-        const cameraAdjusted = anchorCameraToWalkable(camera);
-        controlStatus.textContent =
-          `${Math.floor(authoredRuntime.navigationMesh.indices.length / 3)} navigation triangles · ${authoredRuntime.obstacleBoxes.length} obstacle${authoredRuntime.obstacleBoxes.length === 1 ? "" : "s"}${cameraAdjusted ? " · view aligned" : ""}`;
+        anchorCameraToWalkable(camera);
+        const obstacleCount = authoredRuntime.obstacleBoxes.length;
+        setControlStatus(
+          `Walking enabled · ${obstacleCount
+            ? `${obstacleCount} obstacle${obstacleCount === 1 ? "" : "s"} mapped`
+            : "clear route map"}`,
+          "ready",
+        );
       } else {
         navigationRuntime = null;
         walkableBoxes = [];
         walkableBoundarySource = "none";
         setMovementAvailability(controls, false);
-        controlStatus.textContent = "Look-only preview · drag to look around";
+        setControlStatus("Look around only · no walking map");
       }
       return;
     }
@@ -429,7 +441,7 @@ async function start(): Promise<void> {
   }
   setMovementAvailability(controls, walkableBoundarySource === "authored");
   if (walkableBoundarySource === "none") {
-    controlStatus.textContent = "Look-only preview · drag to look around";
+    setControlStatus("Look around only · no walking map");
   }
   anchorCameraToWalkable(camera);
   controls.align(camera);
@@ -780,7 +792,7 @@ function post(message: RendererMessage): void {
 }
 
 function updateFullscreenControl(): void {
-  fullscreenButton.textContent = document.fullscreenElement ? "Exit fullscreen" : "Fullscreen";
+  fullscreenButton.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen";
   fullscreenButton.setAttribute("aria-pressed", String(Boolean(document.fullscreenElement)));
 }
 
@@ -802,7 +814,7 @@ function resetView(): void {
   if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
     lastWalkablePosition = camera.position.clone();
   }
-  controlStatus.textContent = "View reset";
+  setControlStatus("Opening view restored");
 }
 
 function toggleHelp(): void {
@@ -815,15 +827,18 @@ function requestFullscreen(): void {
     key: "renderer-fullscreen",
     trigger: fullscreenButton,
     pendingLabel: document.fullscreenElement ? "Exiting…" : "Entering…",
-    idleLabel: () => document.fullscreenElement ? "Exit fullscreen" : "Fullscreen",
+    idleLabel: () => document.fullscreenElement ? "Exit full screen" : "Full screen",
   }, async () => {
-    controlStatus.textContent = "";
+    setControlStatus("");
     try {
       await toggleFullscreen();
     } catch (error) {
-      controlStatus.textContent = error instanceof Error
-        ? `Fullscreen is unavailable: ${error.message}`
-        : "Fullscreen is unavailable in this browser.";
+      setControlStatus(
+        error instanceof Error
+          ? `Full screen is unavailable: ${error.message}`
+          : "Full screen is unavailable in this browser.",
+        "error",
+      );
     }
   });
 }

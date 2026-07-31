@@ -15,6 +15,7 @@ test.describe("touch-first Spark controls", () => {
     await expect(freeRoam).toBeDisabled();
     await expect(freeRoam).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
+    await expect(page.locator(".spark-runtime")).toBeHidden();
     await expect(page.getByText("The spatial scene could not be rendered.", {
       exact: true,
     })).toBeVisible();
@@ -169,7 +170,7 @@ test.describe("touch-first Spark controls", () => {
       "Walking is unavailable until this scene has a navigation map",
     );
 
-    await page.getByRole("button", { name: "Help" }).click();
+    await page.getByRole("button", { name: "Controls" }).click();
     await expect(page.locator("#mobileMovementHelp")).toHaveText(
       "Drag to look · walking is unavailable for this scene",
     );
@@ -184,6 +185,58 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
 
   await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
   await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
+});
+
+test("summarizes authored walking readiness without exposing mesh jargon", async ({ page }) => {
+  await page.route("**/asset/test-scene.spz", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/octet-stream",
+      body: "invalid-spz-fixture",
+    })
+  );
+  await page.goto("/renderer/index.html?content=/asset/test-scene.spz&format=spz");
+  await expect(page.getByText(
+    "The spatial scene could not be rendered.",
+    { exact: true },
+  )).toBeVisible();
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new MessageEvent("message", {
+      data: {
+        source: "spatial-host",
+        type: "set-spatial-runtime",
+        collisionBoxes: [{ min: [0, 0, 0], max: [4, 3, 4] }],
+        navigationMesh: {
+          vertices: [[0, 0, 0], [4, 0, 0], [4, 0, 4], [0, 0, 4]],
+          indices: [0, 1, 2, 0, 2, 3],
+          sourceEntityIds: ["room"],
+        },
+        obstacleBoxes: [{
+          entityId: "table",
+          min: [1, 0, 1],
+          max: [2, 1, 2],
+        }],
+        navigationProfile: {
+          worldUnit: "scene_units",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        },
+      },
+      origin: location.origin,
+      source: window,
+    }));
+  });
+
+  const status = page.locator("#controlStatus");
+  await expect(status).toHaveText("Walking enabled · 1 obstacle mapped");
+  await expect(status).toHaveAttribute("data-tone", "ready");
+  await expect(status).not.toContainText("triangles");
+  await expect(page.getByRole("button", { name: "Reset view" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Controls" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();
 });
 
 test("keeps renderer status and controls separated in a compact fine-pointer viewport", async ({

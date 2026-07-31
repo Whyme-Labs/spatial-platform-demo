@@ -161,35 +161,80 @@ button {
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
   display: flex;
-  gap: 7px;
-  padding: 6px;
-  border: 1px solid rgb(255 255 255 / 10%);
-  border-radius: 999px;
-  background: rgb(13 17 19 / 76%);
-  backdrop-filter: blur(16px);
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 16px;
+  background: rgb(10 14 14 / 86%);
+  box-shadow:
+    0 14px 40px rgb(0 0 0 / 28%),
+    inset 0 1px 0 rgb(255 255 255 / 4%);
+  backdrop-filter: blur(20px) saturate(115%);
 }
 
 .spark-controls button {
-  min-height: 40px;
-  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 12px;
   background: transparent;
   color: #dce2dc;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   cursor: pointer;
+}
+
+.spark-controls button::before {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  color: #aeb8b0;
+  font: 600 1rem/1 "IBM Plex Mono", ui-monospace, monospace;
+  content: "";
+}
+
+.spark-controls #resetView::before {
+  content: "↺";
+}
+
+.spark-controls #freeRoamToggle::before {
+  content: "⌖";
+}
+
+.spark-controls #toggleHelp::before {
+  width: 17px;
+  height: 17px;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 50%;
+  font-size: 0.68rem;
+  content: "?";
+}
+
+.spark-controls #enterFullscreen::before {
+  content: "⛶";
 }
 
 .spark-controls button:hover,
 .spark-controls button:focus-visible {
-  background: rgb(255 255 255 / 10%);
+  background: rgb(255 255 255 / 8%);
   color: #fff;
   outline: none;
+}
+
+.spark-controls button:hover::before,
+.spark-controls button:focus-visible::before {
+  color: #d4ff58;
 }
 
 .spark-help {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 58px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px);
   display: grid;
   max-width: 360px;
   gap: 6px;
@@ -256,12 +301,57 @@ button {
 .spark-control-status {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 52px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 58px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
   max-width: min(420px, calc(100vw - 28px));
   margin: 0;
-  color: #f1ad98;
-  font-size: 0.75rem;
-  text-align: right;
+  padding: 0 11px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 999px;
+  background: rgb(10 14 14 / 78%);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 20%);
+  color: #c2cbc3;
+  font-size: 0.68rem;
+  font-weight: 620;
+  text-align: left;
+  backdrop-filter: blur(18px) saturate(115%);
+}
+
+.spark-control-status:empty {
+  display: none;
+}
+
+.spark-control-status::before {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #9fa8a1;
+  box-shadow: 0 0 10px rgb(159 168 161 / 38%);
+  content: "";
+}
+
+.spark-control-status[data-tone="ready"] {
+  border-color: rgb(212 255 88 / 18%);
+  color: #e0ebb9;
+}
+
+.spark-control-status[data-tone="ready"]::before {
+  background: #d4ff58;
+  box-shadow: 0 0 12px rgb(212 255 88 / 62%);
+}
+
+.spark-control-status[data-tone="error"] {
+  border-color: rgb(255 126 101 / 24%);
+  color: #ffc0b2;
+}
+
+.spark-control-status[data-tone="error"]::before {
+  background: #ff8e77;
+  box-shadow: 0 0 12px rgb(255 126 101 / 48%);
 }
 
 .spark-movement-pad {
@@ -544,10 +634,7 @@ button {
   }
 
   .spark-runtime {
-    top: max(12px, env(safe-area-inset-top));
-    bottom: auto;
-    min-height: 40px;
-    padding: 0 11px;
+    display: none;
   }
 
   .spark-runtime #sparkQuality {
@@ -555,7 +642,7 @@ button {
   }
 
   .spark-help {
-    top: calc(max(10px, env(safe-area-inset-top)) + 58px);
+    top: calc(max(10px, env(safe-area-inset-top)) + 100px);
     right: 10px;
     bottom: auto;
     left: 10px;
