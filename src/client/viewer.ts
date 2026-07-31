@@ -455,6 +455,9 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
+  loadTimeout = null;
+  errorPanel.hidden = true;
+  frame.hidden = false;
   frame.classList.remove("is-loading");
   setLoading(false);
   rendererReady = true;

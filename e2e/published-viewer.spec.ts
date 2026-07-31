@@ -214,6 +214,17 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
     parent.postMessage({
       source: "spatial-spark",
+      type: "error",
+      code: "TEST_LATE_READY",
+      message: "The first-frame watchdog fired before the renderer completed.",
+    }, location.origin);
+  });
+  await expect(page.locator("#errorPanel")).toBeVisible();
+  await expect(rendererFrame).toBeHidden();
+
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-spark",
       type: "ready",
       runtime: "spark",
       version: "2.1.0",
@@ -222,6 +233,8 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       splatBudget: 2_000_000,
     }, location.origin);
   });
+  await expect(page.locator("#errorPanel")).toBeHidden();
+  await expect(rendererFrame).toBeVisible();
   await expect(rendererFrame).not.toHaveClass(/is-loading/);
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(parentLoader).toBeHidden();

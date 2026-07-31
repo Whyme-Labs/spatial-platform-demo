@@ -7,11 +7,11 @@ describe("published renderer readiness", () => {
   });
 
   it("allows a first-time 52 MiB native SOG load to finish", () => {
-    expect(rendererLoadTimeoutMs("sog", 54_803_033)).toBe(180_000);
+    expect(rendererLoadTimeoutMs("sog", 54_803_033)).toBe(240_000);
   });
 
-  it("bounds native SOG waits between three and five minutes", () => {
-    expect(rendererLoadTimeoutMs("sog", 1)).toBe(180_000);
+  it("bounds native SOG waits between four and five minutes", () => {
+    expect(rendererLoadTimeoutMs("sog", 1)).toBe(240_000);
     expect(rendererLoadTimeoutMs("sog", Number.MAX_SAFE_INTEGER)).toBe(300_000);
   });
 });
