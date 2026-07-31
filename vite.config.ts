@@ -179,6 +179,9 @@ function playCanvasBridgeScript(): string {
       ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
       ShiftLeft: "Shift", ShiftRight: "Shift"
     };
+    const movementStartedAt = new Map();
+    const movementReleaseTimers = new Map();
+    const minimumMovementHoldMs = 120;
     const post = (message) => parent.postMessage({ source: "spatial-playcanvas", ...message }, location.origin);
     const viewer = () => window.spatialViewer;
     const cameraPose = () => {
@@ -216,13 +219,37 @@ function playCanvasBridgeScript(): string {
       active.cameraManager.snap();
       return true;
     };
-    const dispatchMovement = (code, pressed) => {
+    const dispatchMovement = (code, pressed, immediate = false) => {
       if (!movementCodes.includes(code)) return;
-      window.dispatchEvent(new KeyboardEvent(pressed ? "keydown" : "keyup", {
-        code,
-        key: keyValues[code] || code,
-        bubbles: true
-      }));
+      const pendingRelease = movementReleaseTimers.get(code);
+      if (pendingRelease) {
+        clearTimeout(pendingRelease);
+        movementReleaseTimers.delete(code);
+      }
+      if (pressed) {
+        if (movementStartedAt.has(code)) return;
+        movementStartedAt.set(code, performance.now());
+        window.dispatchEvent(new KeyboardEvent("keydown", {
+          code,
+          key: keyValues[code] || code,
+          bubbles: true
+        }));
+        return;
+      }
+      const startedAt = movementStartedAt.get(code);
+      const elapsed = Number.isFinite(startedAt) ? performance.now() - startedAt : minimumMovementHoldMs;
+      const release = () => {
+        movementReleaseTimers.delete(code);
+        movementStartedAt.delete(code);
+        window.dispatchEvent(new KeyboardEvent("keyup", {
+          code,
+          key: keyValues[code] || code,
+          bubbles: true
+        }));
+      };
+      const delay = immediate ? 0 : Math.max(0, minimumMovementHoldMs - elapsed);
+      if (delay === 0) release();
+      else movementReleaseTimers.set(code, setTimeout(release, delay));
     };
     const visibleSceneReady = async () => {
       for (let attempt = 0; attempt < 90; attempt += 1) {
@@ -299,7 +326,7 @@ function playCanvasBridgeScript(): string {
       } else if (message.type === "movement-key") {
         dispatchMovement(message.code, Boolean(message.pressed));
       } else if (message.type === "movement-keys-clear") {
-        movementCodes.forEach((code) => dispatchMovement(code, false));
+        movementCodes.forEach((code) => dispatchMovement(code, false, true));
       }
     });
     window.addEventListener("DOMContentLoaded", () => {

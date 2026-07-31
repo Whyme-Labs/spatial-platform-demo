@@ -564,6 +564,41 @@ test("anchors native control help away from the release HUD edge", async ({ page
   }).toBeLessThan(80);
 });
 
+test("gives a quick native arrow press enough time to reach a rendered frame", async ({ page }) => {
+  await page.goto("/playcanvas-renderer/index.html", { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    const events: Array<{ type: string; time: number }> = [];
+    Reflect.set(window, "nativeArrowEvents", events);
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "ArrowUp") events.push({ type: "down", time: performance.now() });
+    });
+    window.addEventListener("keyup", (event) => {
+      if (event.code === "ArrowUp") events.push({ type: "up", time: performance.now() });
+    });
+    window.postMessage({
+      source: "spatial-host",
+      type: "movement-key",
+      code: "ArrowUp",
+      pressed: true,
+    }, location.origin);
+    window.postMessage({
+      source: "spatial-host",
+      type: "movement-key",
+      code: "ArrowUp",
+      pressed: false,
+    }, location.origin);
+  });
+
+  await expect.poll(() => page.evaluate(() =>
+    (Reflect.get(window, "nativeArrowEvents") as Array<unknown>).length
+  )).toBe(2);
+  const heldForMs = await page.evaluate(() => {
+    const events = Reflect.get(window, "nativeArrowEvents") as Array<{ time: number }>;
+    return events[1]!.time - events[0]!.time;
+  });
+  expect(heldForMs).toBeGreaterThanOrEqual(100);
+});
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,
