@@ -286,6 +286,17 @@
                 <span class="release-info-chevron" aria-hidden="true">⌄</span>
               </span>
             </button>
+            <button
+              id="openNavigator"
+              class="navigator-trigger"
+              type="button"
+              aria-expanded="false"
+              aria-controls="spatialNavigator"
+              hidden
+            >
+              <span id="navigatorTriggerLabel">Explore rooms</span>
+              <span class="navigator-trigger-chevron" aria-hidden="true">⌄</span>
+            </button>
             <div id="releaseInfoDetails" class="release-info-details" hidden>
               <p id="releaseSubtitle"></p>
               <dl class="detail-list">
@@ -296,38 +307,37 @@
               </dl>
               <p id="measurementDisclaimer" class="disclaimer"></p>
             </div>
-          </aside>
 
-          <aside id="spatialNavigator" class="spatial-navigator glass-panel" hidden>
-            <div class="spatial-navigator-heading">
-              <div><span class="eyebrow">EXPLORE</span><h2>Rooms and guided routes</h2></div>
-              <button id="closeNavigator" class="text-button" type="button">Close</button>
-            </div>
-            <section id="floorPlanSection" class="floor-plan-section" aria-labelledby="floorPlanTitle" hidden>
-              <div class="floor-plan-toolbar">
-                <div>
-                  <span id="floorPlanTitle" class="eyebrow">FLOOR PLAN</span>
-                  <strong id="floorPlanPosition">Locating your view…</strong>
-                </div>
-                <label id="floorPlanFloorControl">
-                  <span>Floor</span>
-                  <select id="floorPlanSelect" aria-label="Select floor"></select>
-                </label>
+            <div id="spatialNavigator" class="spatial-navigator" hidden>
+              <div class="spatial-navigator-heading">
+                <div><span class="eyebrow">EXPLORE</span><h2>Rooms and guided routes</h2></div>
+                <button id="closeNavigator" class="text-button" type="button">Close</button>
               </div>
-              <svg id="floorPlanMap" class="floor-plan-map" viewBox="0 0 400 240" role="img" aria-label="Interactive room floor plan">
-                <g id="floorPlanRooms"></g>
-                <g id="floorPlanMarker" class="floor-plan-marker" aria-hidden="true" hidden>
-                  <circle r="7"></circle>
-                  <path d="M0 -13 L5 -4 L-5 -4 Z"></path>
-                </g>
-              </svg>
-              <p>Choose a room to move there. The marker follows your live camera position.</p>
-            </section>
-            <div id="guidedRoutes" class="guided-routes"></div>
-            <div id="roomDirectory" class="room-directory"></div>
-            <p id="navigatorError" class="form-error" role="alert"></p>
+              <section id="floorPlanSection" class="floor-plan-section" aria-labelledby="floorPlanTitle" hidden>
+                <div class="floor-plan-toolbar">
+                  <div>
+                    <span id="floorPlanTitle" class="eyebrow">FLOOR PLAN</span>
+                    <strong id="floorPlanPosition">Locating your view…</strong>
+                  </div>
+                  <label id="floorPlanFloorControl">
+                    <span>Floor</span>
+                    <select id="floorPlanSelect" aria-label="Select floor"></select>
+                  </label>
+                </div>
+                <svg id="floorPlanMap" class="floor-plan-map" viewBox="0 0 400 240" role="img" aria-label="Interactive room floor plan">
+                  <g id="floorPlanRooms"></g>
+                  <g id="floorPlanMarker" class="floor-plan-marker" aria-hidden="true" hidden>
+                    <circle r="7"></circle>
+                    <path d="M0 -13 L5 -4 L-5 -4 Z"></path>
+                  </g>
+                </svg>
+                <p>Choose a room to move there. The marker follows your live camera position.</p>
+              </section>
+              <div id="guidedRoutes" class="guided-routes"></div>
+              <div id="roomDirectory" class="room-directory"></div>
+              <p id="navigatorError" class="form-error" role="alert"></p>
+            </div>
           </aside>
-          <button id="openNavigator" class="navigator-trigger primary-button" type="button" hidden>Explore rooms</button>
         </div>
       </section>
     </main>

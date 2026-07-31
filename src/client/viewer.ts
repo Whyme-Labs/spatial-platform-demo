@@ -269,10 +269,9 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
   errorPanel.hidden = true;
-  setReleaseInfoExpanded(false);
+  setViewerHudMode("collapsed");
   byId<HTMLElement>("viewerHud").hidden = true;
   releaseInfo.hidden = true;
-  byId<HTMLElement>("spatialNavigator").hidden = true;
   byId<HTMLButtonElement>("openNavigator").hidden = true;
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
@@ -445,31 +444,31 @@ function applyManifest(manifest: ReleaseManifest): void {
 function bindViewerHud(): void {
   const toggle = byId<HTMLButtonElement>("toggleReleaseInfo");
   toggle.addEventListener("click", () => {
-    setReleaseInfoExpanded(toggle.getAttribute("aria-expanded") !== "true");
+    setViewerHudMode(toggle.getAttribute("aria-expanded") === "true" ? "collapsed" : "release");
   });
 }
 
-function setReleaseInfoExpanded(expanded: boolean): void {
+function setViewerHudMode(mode: "collapsed" | "release" | "navigator"): void {
   const toggle = byId<HTMLButtonElement>("toggleReleaseInfo");
-  toggle.setAttribute("aria-expanded", String(expanded));
-  byId<HTMLElement>("releaseInfoDetails").hidden = !expanded;
-  releaseInfo.classList.toggle("is-expanded", expanded);
-  if (!expanded) return;
-
-  byId<HTMLElement>("spatialNavigator").hidden = true;
-  byId<HTMLButtonElement>("openNavigator").hidden = !hasSpatialNavigation(activeManifest);
+  const navigatorToggle = byId<HTMLButtonElement>("openNavigator");
+  const releaseExpanded = mode === "release";
+  const navigatorExpanded = mode === "navigator";
+  toggle.setAttribute("aria-expanded", String(releaseExpanded));
+  navigatorToggle.setAttribute("aria-expanded", String(navigatorExpanded));
+  byId<HTMLElement>("releaseInfoDetails").hidden = !releaseExpanded;
+  byId<HTMLElement>("spatialNavigator").hidden = !navigatorExpanded;
+  releaseInfo.classList.toggle("is-expanded", mode !== "collapsed");
+  releaseInfo.classList.toggle("is-navigating", navigatorExpanded);
 }
 
 function bindSpatialNavigator(): void {
-  const panel = byId("spatialNavigator");
-  byId("openNavigator").addEventListener("click", () => {
-    setReleaseInfoExpanded(false);
-    panel.hidden = false;
-    byId<HTMLButtonElement>("openNavigator").hidden = true;
+  const trigger = byId<HTMLButtonElement>("openNavigator");
+  trigger.addEventListener("click", () => {
+    setViewerHudMode(trigger.getAttribute("aria-expanded") === "true" ? "collapsed" : "navigator");
   });
   byId("closeNavigator").addEventListener("click", () => {
-    panel.hidden = true;
-    byId<HTMLButtonElement>("openNavigator").hidden = false;
+    setViewerHudMode("collapsed");
+    trigger.focus();
   });
   byId<HTMLSelectElement>("floorPlanSelect").addEventListener("change", (event) => {
     const selected = (event.currentTarget as HTMLSelectElement).value;
@@ -504,11 +503,11 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   const trigger = byId<HTMLButtonElement>("openNavigator");
   if (!hasSpatialNavigation(manifest)) {
     trigger.hidden = true;
-    byId("spatialNavigator").hidden = true;
+    setViewerHudMode("collapsed");
     return;
   }
   trigger.hidden = false;
-  trigger.textContent = routes.length ? "Start guided visit" : "Explore rooms";
+  byId("navigatorTriggerLabel").textContent = routes.length ? "Start guided visit" : "Explore rooms";
   const roomDirectory = byId("roomDirectory");
   roomDirectory.replaceChildren();
   for (const room of rooms) {
@@ -532,8 +531,7 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
         await setRendererCamera(pose);
         showToast(`Moved to ${room.label}`);
         if (innerWidth < 760) {
-          byId<HTMLElement>("spatialNavigator").hidden = true;
-          byId<HTMLButtonElement>("openNavigator").hidden = false;
+          setViewerHudMode("collapsed");
         }
       });
     });
@@ -691,8 +689,7 @@ function navigateToPlanRoom(room: PlanRoom): void {
       await setRendererCamera(pose);
       showToast(`Moved to ${room.label}`);
       if (innerWidth < 760) {
-        byId<HTMLElement>("spatialNavigator").hidden = true;
-        byId<HTMLButtonElement>("openNavigator").hidden = false;
+        setViewerHudMode("collapsed");
       }
     } catch (error) {
       byId("navigatorError").textContent = error instanceof Error

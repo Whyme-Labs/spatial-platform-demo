@@ -195,24 +195,29 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(qualityStatus).toBeVisible();
   await expect(page.locator("#viewerHud")).toContainText("Loading handoff fixture");
   await expect.poll(() => page.locator("#viewerHud").evaluate((hud) =>
-    ["releaseInfo", "spatialNavigator", "openNavigator"].every((id) =>
-      document.getElementById(id)?.parentElement === hud
+    document.getElementById("releaseInfo")?.parentElement === hud &&
+    ["spatialNavigator", "openNavigator"].every((id) =>
+      document.getElementById(id)?.parentElement?.id === "releaseInfo"
     )
   )).toBe(true);
+  await expect(page.locator("#viewerHud .glass-panel")).toHaveCount(1);
 
   await page.locator("#toggleReleaseInfo").click();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#releaseInfoDetails")).toBeVisible();
   await expect(page.locator("#spatialNavigator")).toBeHidden();
+  await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
 
   await exploreRooms.click();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#releaseInfoDetails")).toBeHidden();
   await expect(page.locator("#spatialNavigator")).toBeVisible();
-  await expect(exploreRooms).toBeHidden();
+  await expect(exploreRooms).toBeVisible();
+  await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
   await page.locator("#closeNavigator").click();
   await expect(page.locator("#spatialNavigator")).toBeHidden();
   await expect(exploreRooms).toBeVisible();
+  await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
 
   const [exploreBox, qualityBox] = await Promise.all([
     exploreRooms.boundingBox(),
