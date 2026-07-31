@@ -133,7 +133,11 @@ describe("Spatial Studio Worker", () => {
   });
 
   it("serves direct static entry points through the Worker security middleware", async () => {
-    for (const path of ["/studio.html", "/images/spatial-hero.webp"]) {
+    for (const path of [
+      "/studio.html",
+      "/images/spatial-hero.webp",
+      "/playcanvas-renderer/index.html",
+    ]) {
       const response = await exports.default.fetch(`${origin}${path}`);
       expect(response.status).toBe(200);
       expect(response.headers.get("x-request-id")).toBeTruthy();

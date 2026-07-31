@@ -1892,10 +1892,12 @@ function bindInterface(): void {
   const uploadSubmit = uploadForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   const pauseUploadButton = byId<HTMLButtonElement>("pauseUploadButton");
   const uploadPurpose = byId<HTMLSelectElement>("uploadPurpose");
+  const uploadFormat = byId<HTMLSelectElement>("uploadFormat");
   const uploadAssetInput = byId<HTMLInputElement>("uploadAssetInput");
   uploadPurpose.addEventListener("change", () => {
     syncUploadPurpose(uploadPurpose.value as CaptureAssetPurpose);
   });
+  uploadFormat.addEventListener("change", syncUploadPosterCameraRequirement);
   uploadAssetInput.addEventListener("change", () => {
     const file = uploadAssetInput.files?.[0];
     if (!file) return;
@@ -1903,6 +1905,7 @@ function bindInterface(): void {
     const format = byId<HTMLSelectElement>("uploadFormat");
     if (extension && Array.from(format.options).some((option) => option.value === extension)) {
       format.value = extension;
+      syncUploadPosterCameraRequirement();
     }
   });
   pauseUploadButton.addEventListener("click", () => {
@@ -10044,6 +10047,7 @@ function openUploadDialog(): void {
         : "gaussian_splat";
   byId<HTMLSelectElement>("uploadPurpose").value = defaultPurpose;
   syncUploadPurpose(defaultPurpose);
+  byId<HTMLTextAreaElement>("uploadPosterCamera").value = "";
   byId<HTMLInputElement>("uploadProjectName").value = state.selected.project.name;
   byId<HTMLElement>("uploadProgress").style.width = "0%";
   byId("uploadStatus").textContent = "Checking for interrupted uploads…";
@@ -10114,6 +10118,16 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   const fileInput = byId<HTMLInputElement>("uploadAssetInput");
   fileInput.accept = formats.map((format) => `.${format}`).join(",");
   byId("uploadPurposeHelp").textContent = capturePurposeHelp[purpose];
+  syncUploadPosterCameraRequirement();
+}
+
+function syncUploadPosterCameraRequirement(): void {
+  const purpose = byId<HTMLSelectElement>("uploadPurpose").value;
+  const format = byId<HTMLSelectElement>("uploadFormat").value;
+  const field = byId<HTMLElement>("uploadPosterCameraField");
+  const input = byId<HTMLTextAreaElement>("uploadPosterCamera");
+  field.hidden = purpose !== "web_scene";
+  input.required = purpose === "web_scene" && format === "sog";
 }
 
 async function loadRecoverableUploads(projectId: string): Promise<void> {
@@ -10250,6 +10264,15 @@ async function uploadAsset(form: FormData): Promise<void> {
   if (!(file instanceof File)) return;
   const format = String(form.get("format") ?? "");
   const purpose = String(form.get("purpose") ?? "") as CaptureAssetPurpose;
+  const posterCameraText = String(form.get("posterCamera") ?? "").trim();
+  let posterCamera: unknown;
+  if (posterCameraText) {
+    try {
+      posterCamera = JSON.parse(posterCameraText);
+    } catch {
+      throw new Error("The authored opening camera must be valid JSON.");
+    }
+  }
   const status = byId("uploadStatus");
   const progress = byId<HTMLElement>("uploadProgress");
   const pauseButton = byId<HTMLButtonElement>("pauseUploadButton");
@@ -10297,6 +10320,7 @@ async function uploadAsset(form: FormData): Promise<void> {
             format,
             purpose,
             mimeType: file.type || "application/octet-stream",
+            ...(posterCamera ? { posterCamera } : {}),
           }),
           signal: uploadAbortController.signal,
         },

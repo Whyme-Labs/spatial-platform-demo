@@ -316,6 +316,38 @@ export const captureAgentCredentialRotateSchema = z.object({
   expiresInDays: z.number().int().min(1).max(365),
 });
 
+const uploadCameraCoordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);
+const uploadCameraVectorSchema = z.tuple([
+  uploadCameraCoordinateSchema,
+  uploadCameraCoordinateSchema,
+  uploadCameraCoordinateSchema,
+]);
+const uploadPosterCameraSchema = z.object({
+  position: uploadCameraVectorSchema,
+  target: uploadCameraVectorSchema,
+  up: uploadCameraVectorSchema,
+  fovDegrees: z.number().finite().min(20).max(100),
+}).superRefine((camera, context) => {
+  const direction: [number, number, number] = [
+    camera.target[0] - camera.position[0],
+    camera.target[1] - camera.position[1],
+    camera.target[2] - camera.position[2],
+  ];
+  const directionLength = Math.hypot(...direction);
+  const upLength = Math.hypot(...camera.up);
+  const crossLength = Math.hypot(
+    direction[1] * camera.up[2] - direction[2] * camera.up[1],
+    direction[2] * camera.up[0] - direction[0] * camera.up[2],
+    direction[0] * camera.up[1] - direction[1] * camera.up[0],
+  );
+  if (directionLength <= 1e-6) {
+    context.addIssue({ code: "custom", message: "Poster camera position and target must differ" });
+  }
+  if (upLength <= 1e-6 || crossLength <= 1e-6) {
+    context.addIssue({ code: "custom", message: "Poster camera up must be non-zero and not parallel to its view" });
+  }
+});
+
 export const uploadInputSchema = z.object({
   clientOperationId: z.string().uuid().optional(),
   fileName: z.string().trim().min(1).max(255),
@@ -324,6 +356,7 @@ export const uploadInputSchema = z.object({
   purpose: z.enum(captureAssetPurposes).optional(),
   mimeType: z.string().trim().min(1).max(120),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  posterCamera: uploadPosterCameraSchema.optional(),
 });
 
 export const uploadCompleteSchema = z.object({

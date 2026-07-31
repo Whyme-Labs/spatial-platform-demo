@@ -180,6 +180,7 @@ export async function runStagingHttpAcceptance({
     ["landing-entry", "/", "Spatial"],
     ["studio-entry", "/studio.html", "Spatial Studio"],
     ["renderer-entry", "/renderer/index.html", "Spark"],
+    ["native-sog-renderer-entry", "/playcanvas-renderer/index.html", "SuperSplat Viewer"],
   ]) {
     await timedStep(steps, name, async () => {
       const response = await fetchBounded(fetcher, `${app}${path}`, {

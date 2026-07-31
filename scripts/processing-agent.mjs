@@ -172,6 +172,9 @@ async function processNextJob() {
   if (leaseResponse.status === 204) return { claimed: false };
   const lease = await leaseResponse.json();
   const job = lease.job;
+  const posterCamera = job.posterCamera
+    ? parsePosterCameraJson(JSON.stringify(job.posterCamera))
+    : configuration.posterCamera;
   const jobStartedAt = performance.now();
   const workDirectory = await mkdtemp(join(tmpdir(), `spatial-${job.id}-`));
   let heartbeatTimer;
@@ -444,7 +447,7 @@ async function processNextJob() {
         job.input.purpose,
       );
       const posterRenderer = job.input.purpose === "web_scene"
-        ? webScenePosterRenderer(job.input.format, Boolean(configuration.posterCamera))
+        ? webScenePosterRenderer(job.input.format, Boolean(posterCamera))
         : null;
       let posterPath;
       let posterMetadata;
@@ -463,14 +466,14 @@ async function processNextJob() {
             sourcePath,
             posterPath,
             configuration.chromePath,
-            configuration.posterCamera,
+            posterCamera,
           );
         } else {
           await generateSparkPoster(
             sourcePath,
             posterPath,
             configuration.chromePath,
-            configuration.posterCamera,
+            posterCamera,
           );
         }
         posterMetadata = await fileMetadata(posterPath);
@@ -502,8 +505,8 @@ async function processNextJob() {
             },
             rendering: {
               renderer: posterRenderer,
-              posterCamera: configuration.posterCamera
-                ? { mode: "authored", ...configuration.posterCamera }
+              posterCamera: posterCamera
+                ? { mode: "authored", ...posterCamera }
                 : { mode: "auto" },
               sourceContainerPreserved: true,
             },
@@ -563,7 +566,7 @@ async function processNextJob() {
                   ...(posterRenderer === "spark"
                     ? { spark: sparkVersion }
                     : { playcanvasViewer: "1.28.0" }),
-                  posterCamera: configuration.posterCamera ? "authored" : "auto",
+                  posterCamera: posterCamera ? "authored" : "auto",
                 }
                 : {}),
             },
@@ -609,7 +612,7 @@ async function processNextJob() {
       radPath,
       posterPath,
       configuration.chromePath,
-      configuration.posterCamera,
+      posterCamera,
     );
     const posterMetadata = await fileMetadata(posterPath);
 
@@ -639,8 +642,8 @@ async function processNextJob() {
         poster: { fileName: basename(posterPath), sizeBytes: posterMetadata.sizeBytes, sha256: posterMetadata.sha256 },
       },
       rendering: {
-        posterCamera: configuration.posterCamera
-          ? { mode: "authored", ...configuration.posterCamera }
+        posterCamera: posterCamera
+          ? { mode: "authored", ...posterCamera }
           : { mode: "auto" },
       },
       checks: {
@@ -685,7 +688,7 @@ async function processNextJob() {
             splatTransform: "3.1.7",
             node: process.version,
             processor: "0.7.0",
-            posterCamera: configuration.posterCamera ? "authored" : "auto",
+            posterCamera: posterCamera ? "authored" : "auto",
           },
         },
       }),

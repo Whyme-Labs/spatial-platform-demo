@@ -494,6 +494,7 @@ type JobLeaseRow = {
   input_size_bytes: number;
   input_sha256: string | null;
   input_object_key: string;
+  version_provenance_json: string;
   change_report_id: string | null;
   change_config_json: string | null;
   secondary_input_asset_id: string | null;
@@ -882,6 +883,7 @@ for (const path of [
   "/assets/*",
   "/images/*",
   "/renderer/*",
+  "/playcanvas-renderer/*",
 ]) {
   app.get(path, (context) => serveStaticEntry(context, context.req.path));
 }
@@ -9506,9 +9508,11 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   if (!importPlan.accepted) return context.json({ error: importPlan.reason }, 422);
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
-      SELECT id, project_id, version_id, asset_id, file_name, format, purpose,
-        expected_size_bytes, part_size_bytes, expires_at, status
-      FROM upload_sessions
+      SELECT u.id, u.project_id, u.version_id, u.asset_id, u.file_name, u.format, u.purpose,
+        u.expected_size_bytes, u.part_size_bytes, u.expires_at, u.status,
+        sv.source_provenance_json
+      FROM upload_sessions u
+      JOIN scene_versions sv ON sv.id = u.version_id
       WHERE organisation_id = ? AND client_operation_id = ?
     `).bind(organisationId, parsed.data.clientOperationId).first<{
       id: string;
@@ -9522,6 +9526,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       part_size_bytes: number;
       expires_at: string;
       status: string;
+      source_provenance_json: string;
     }>();
     if (existing) {
       if (
@@ -9529,7 +9534,9 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         existing.file_name !== safeFileName(parsed.data.fileName) ||
         existing.format !== parsed.data.format ||
         existing.purpose !== purpose ||
-        existing.expected_size_bytes !== parsed.data.sizeBytes
+        existing.expected_size_bytes !== parsed.data.sizeBytes ||
+        JSON.stringify(storedPosterCamera(existing.source_provenance_json) ?? null) !==
+          JSON.stringify(parsed.data.posterCamera ?? null)
       ) {
         return context.json({ error: "Operation ID was already used for a different upload request" }, 409);
       }
@@ -9593,6 +9600,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
           adapter: project.capture_adapter,
           importedAt: new Date().toISOString(),
           ...(credentialId ? { captureAgentCredentialId: credentialId } : {}),
+          ...(parsed.data.posterCamera ? { posterCamera: parsed.data.posterCamera } : {}),
         }),
         uploadPrincipalUserId(principal),
         credentialId,
@@ -10091,6 +10099,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
       a.file_name AS input_file_name, a.format AS input_format,
       a.mime_type AS input_mime_type, a.size_bytes AS input_size_bytes,
       a.sha256 AS input_sha256, a.object_key AS input_object_key,
+      sv.source_provenance_json AS version_provenance_json,
       us.purpose AS input_purpose,
       r.id AS change_report_id,
       CASE WHEN r.id IS NULL THEN NULL ELSE json_object(
@@ -10119,6 +10128,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
       fe.parameters_json AS floorplan_config_json
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
+    JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
     LEFT JOIN upload_sessions us ON us.asset_id = a.id
     LEFT JOIN registered_scene_change_reports r ON r.job_id = j.id
     LEFT JOIN assets ca ON ca.id = r.candidate_asset_id
@@ -10185,6 +10195,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
       WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
     `).bind(job.floorplan_extraction_id).run();
   }
+  const posterCamera = storedPosterCamera(job.version_provenance_json);
   return context.json({
     job: {
       id: job.id,
@@ -10206,6 +10217,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
           ? `/api/worker/jobs/${job.id}/inputs/baseline`
           : `/api/worker/jobs/${job.id}/input`,
       },
+      ...(posterCamera ? { posterCamera } : {}),
       ...(job.change_report_id && job.secondary_input_asset_id
         ? {
           changeReportId: job.change_report_id,
@@ -15845,6 +15857,13 @@ function parseStoredObject(value: string): unknown {
   } catch {
     return {};
   }
+}
+
+function storedPosterCamera(value: string): unknown {
+  const provenance = parseStoredObject(value);
+  return provenance && typeof provenance === "object"
+    ? Reflect.get(provenance, "posterCamera")
+    : undefined;
 }
 
 function isFloorplanRevisionSequenceConflict(error: unknown): boolean {

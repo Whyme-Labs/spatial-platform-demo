@@ -106,6 +106,12 @@ stored 4,944,177-Gaussian archive without conversion. This keeps the licensed
 source bytes immutable and makes the QA evidence representative of the
 published viewport.
 
+The authored opening camera is attached to the immutable scene version during
+web-scene upload. It is returned only with that version's processor lease and
+drives both the native review poster and the eventual release manifest. It is
+not a global processor setting, so later SOG imports cannot accidentally
+inherit the Bellevue camera.
+
 An SPZ/RAD conversion was tested only as a diagnostic and must not be
 published: although the conversion completed, independent rendered previews
 did not reproduce the source scene faithfully.

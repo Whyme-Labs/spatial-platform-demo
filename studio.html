@@ -455,13 +455,14 @@
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">IMMUTABLE SOURCE INGEST</span>
       <h2>Preserve a capture asset or delivery master.</h2>
-      <p>The browser sends resumable 25 MiB parts. R2 keeps the immutable bytes; D1 records their purpose, integrity state, and processing lifecycle. Only compatible Gaussian masters enter Spark.</p>
+      <p>The browser sends resumable 25 MiB parts. R2 keeps the immutable bytes; D1 records their purpose, integrity state, and processing lifecycle. Compatible Gaussian assets stay on their verified renderer lane.</p>
       <section id="uploadAdapterGuidance" class="notice-card"></section>
       <section id="uploadRecovery" class="notice-card" aria-live="polite" hidden></section>
       <div class="mock-form-grid">
-        <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready Spark web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
+        <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
         <label><span>Declared format</span><select id="uploadFormat" name="format"><option value="ply">PLY</option></select></label>
         <label class="full"><span>Immutable local file</span><input id="uploadAssetInput" name="asset" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.zip" required /><small id="uploadPurposeHelp">Spark will validate and derive a browser-ready RAD scene from this portable Gaussian master.</small></label>
+        <label id="uploadPosterCameraField" class="full" hidden><span>Authored opening camera (JSON)</span><textarea id="uploadPosterCamera" name="posterCamera" rows="5" spellcheck="false" placeholder='{"position":[0,1,0],"target":[0,1,-1],"up":[0,1,0],"fovDegrees":65}'></textarea><small>SOG web scenes require an authored source camera so the processor poster and published opening agree.</small></label>
         <label><span>Target project</span><input id="uploadProjectName" disabled /></label>
       </div>
       <div class="upload-progress"><i id="uploadProgress"></i></div>
