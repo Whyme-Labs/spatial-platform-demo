@@ -11638,9 +11638,9 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       ? Reflect.get(snapshotProfile, "worldUnit")
       : undefined,
   );
-  const releaseWorldUnit = parseWorldUnit(
-    parsed.data.viewerConfig.sourceToWorld?.worldUnit,
-  );
+  const releaseWorldUnit = parsed.data.viewerConfig.sourceToWorld
+    ? parseWorldUnit(parsed.data.viewerConfig.sourceToWorld.worldUnit)
+    : navigationWorldUnit;
   if (navigationWorldUnit !== releaseWorldUnit) {
     return conflict(
       context,
