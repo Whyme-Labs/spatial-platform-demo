@@ -242,6 +242,10 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(releaseInfo).toBeVisible();
   await expect(page.locator(".performance-chip")).toHaveCount(0);
   await expect(page.locator("#rendererStatus")).toHaveText("Scene ready");
+  await rendererFrame.evaluate((element) => {
+    element.dispatchEvent(new Event("load"));
+  });
+  await expect(page.locator("#rendererStatus")).toHaveText("Scene ready");
   await expect(page.locator("#releaseInfoDetails")).toBeHidden();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#scaleStatus")).toHaveText(

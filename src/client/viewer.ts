@@ -336,6 +336,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
 
 frame.addEventListener("load", () => {
   if (!activeManifest) return;
+  if (rendererReady) return;
   byId("rendererStatus").textContent = "Preparing scene";
   sendSpatialRuntime();
 });
