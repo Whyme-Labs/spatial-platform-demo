@@ -294,6 +294,17 @@ async function start(): Promise<void> {
       }
       return;
     }
+    if (Reflect.get(event.data, "type") === "movement-key") {
+      controls.setKeyboardKeyState(
+        String(Reflect.get(event.data, "code") ?? ""),
+        Reflect.get(event.data, "pressed") === true,
+      );
+      return;
+    }
+    if (Reflect.get(event.data, "type") === "movement-keys-clear") {
+      controls.clearKeyboardState();
+      return;
+    }
     if (Reflect.get(event.data, "type") === "sync-camera") {
       mobileControls.suspend();
       const pose = Reflect.get(event.data, "cameraPose");

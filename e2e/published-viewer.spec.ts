@@ -172,6 +172,12 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
               if (event.data?.type === "set-spatial-runtime") {
                 window.runtimeMessage = event.data;
               }
+              if (event.data?.type === "movement-key") {
+                window.movementMessages = [
+                  ...(window.movementMessages ?? []),
+                  event.data
+                ];
+              }
             });
             setTimeout(() => {
               parent.postMessage({
@@ -333,6 +339,25 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       maxStepMetres: 0.1,
     },
   });
+
+  await page.locator("#toggleReleaseInfo").focus();
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => Reflect.get(window, "movementMessages"),
+  )).toEqual([
+    {
+      source: "spatial-host",
+      type: "movement-key",
+      code: "ArrowUp",
+      pressed: true,
+    },
+    {
+      source: "spatial-host",
+      type: "movement-key",
+      code: "ArrowUp",
+      pressed: false,
+    },
+  ]);
 
   const viewport = page.locator("#viewport");
   await page.frameLocator("#rendererFrame").getByRole("button", { name: "Free roam" }).click();

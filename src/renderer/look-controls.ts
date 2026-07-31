@@ -29,6 +29,7 @@ export class SpatialNavigationControls {
   private readonly canvas: HTMLCanvasElement;
   private readonly navigationUp = new THREE.Vector3(0, 1, 0);
   private readonly activeKeys = new Set<string>();
+  private readonly pendingKeys = new Set<string>();
   private readonly activeTouches = new Set<number>();
   private navigationBounds: NavigationBounds[] = [];
   private translationEnabled = true;
@@ -84,7 +85,22 @@ export class SpatialNavigationControls {
     if (enabled) return;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
+    this.clearKeyboardState();
+  }
+
+  setKeyboardKeyState(code: string, pressed: boolean): void {
+    if (!MOVEMENT_KEYS.has(code)) return;
+    if (pressed) {
+      this.activeKeys.add(code);
+      this.pendingKeys.add(code);
+      return;
+    }
+    this.activeKeys.delete(code);
+  }
+
+  clearKeyboardState(): void {
     this.activeKeys.clear();
+    this.pendingKeys.clear();
   }
 
   update(
@@ -99,7 +115,7 @@ export class SpatialNavigationControls {
     if (!this.translationEnabled) {
       this.wheelDeltaX = 0;
       this.wheelDeltaY = 0;
-      this.activeKeys.clear();
+      this.clearKeyboardState();
       return lookUpdated;
     }
     const wheelUpdated = this.applyWheel(camera);
@@ -108,6 +124,7 @@ export class SpatialNavigationControls {
       this.combinedMovement(externalMovement),
       deltaSeconds,
     );
+    this.pendingKeys.clear();
     const translated = wheelUpdated || movementUpdated;
     if (
       translated &&
@@ -215,13 +232,13 @@ export class SpatialNavigationControls {
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (!MOVEMENT_KEYS.has(event.code) || isEditableTarget(event.target)) return;
-    this.activeKeys.add(event.code);
+    this.setKeyboardKeyState(event.code, true);
     event.preventDefault();
   };
 
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
     if (!MOVEMENT_KEYS.has(event.code)) return;
-    this.activeKeys.delete(event.code);
+    this.setKeyboardKeyState(event.code, false);
     event.preventDefault();
   };
 
@@ -257,7 +274,7 @@ export class SpatialNavigationControls {
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     this.activeTouches.clear();
-    this.activeKeys.clear();
+    this.clearKeyboardState();
     this.multiTouchGesture = false;
   }
 
@@ -323,14 +340,14 @@ export class SpatialNavigationControls {
 
   private combinedMovement(externalMovement: PlanarMovement): PlanarMovement {
     const keyboardX = Number(
-      this.activeKeys.has("KeyD") || this.activeKeys.has("ArrowRight"),
+      this.hasKeyboardKey("KeyD") || this.hasKeyboardKey("ArrowRight"),
     ) - Number(
-      this.activeKeys.has("KeyA") || this.activeKeys.has("ArrowLeft"),
+      this.hasKeyboardKey("KeyA") || this.hasKeyboardKey("ArrowLeft"),
     );
     const keyboardZ = Number(
-      this.activeKeys.has("KeyS") || this.activeKeys.has("ArrowDown"),
+      this.hasKeyboardKey("KeyS") || this.hasKeyboardKey("ArrowDown"),
     ) - Number(
-      this.activeKeys.has("KeyW") || this.activeKeys.has("ArrowUp"),
+      this.hasKeyboardKey("KeyW") || this.hasKeyboardKey("ArrowUp"),
     );
     return {
       x: clampInput(externalMovement.x) + keyboardX,
@@ -349,8 +366,8 @@ export class SpatialNavigationControls {
     const normalisation = inputMagnitude > 1 ? 1 / inputMagnitude : 1;
     const basis = this.navigationBasis(camera);
     if (!basis) return false;
-    const speedMultiplier = this.activeKeys.has("ShiftLeft") ||
-        this.activeKeys.has("ShiftRight")
+    const speedMultiplier = this.hasKeyboardKey("ShiftLeft") ||
+        this.hasKeyboardKey("ShiftRight")
       ? FAST_WALK_MULTIPLIER
       : 1;
     const distance = WALK_SPEED_METRES_PER_SECOND *
@@ -360,6 +377,10 @@ export class SpatialNavigationControls {
       .addScaledVector(basis.right, movement.x * normalisation * distance)
       .addScaledVector(basis.forward, -movement.z * normalisation * distance);
     return true;
+  }
+
+  private hasKeyboardKey(code: string): boolean {
+    return this.activeKeys.has(code) || this.pendingKeys.has(code);
   }
 
   private navigationBasis(

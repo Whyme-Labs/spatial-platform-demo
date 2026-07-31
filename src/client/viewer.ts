@@ -15,6 +15,19 @@ import {
 import type { SourceToWorldTransform } from "../shared/navigation-runtime";
 import "../../styles.css";
 
+const VIEWER_MOVEMENT_KEYS = new Set([
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "ShiftLeft",
+  "ShiftRight",
+]);
+
 type ReleaseManifest = {
   schemaVersion: string;
   release: {
@@ -251,6 +264,7 @@ if (activeReleaseSlug) {
     }, loadPublishedRelease);
   });
   window.addEventListener("message", handleRendererMessage);
+  bindViewerKeyboardBridge();
   if (reviewMode) bindReviewInterface();
   bindViewerHud();
   bindSpatialNavigator();
@@ -468,6 +482,46 @@ function bindViewerHud(): void {
   toggle.addEventListener("click", () => {
     setViewerHudMode(toggle.getAttribute("aria-expanded") === "true" ? "collapsed" : "release");
   });
+}
+
+function bindViewerKeyboardBridge(): void {
+  window.addEventListener("keydown", (event) => {
+    if (
+      !rendererReady ||
+      !VIEWER_MOVEMENT_KEYS.has(event.code) ||
+      isViewerEditableTarget(event.target)
+    ) return;
+    sendViewerMovementKey(event.code, true);
+    event.preventDefault();
+  });
+  window.addEventListener("keyup", (event) => {
+    if (!rendererReady || !VIEWER_MOVEMENT_KEYS.has(event.code)) return;
+    sendViewerMovementKey(event.code, false);
+    event.preventDefault();
+  });
+  window.addEventListener("blur", () => {
+    frame.contentWindow?.postMessage({
+      source: "spatial-host",
+      type: "movement-keys-clear",
+    }, location.origin);
+  });
+}
+
+function sendViewerMovementKey(code: string, pressed: boolean): void {
+  frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "movement-key",
+    code,
+    pressed,
+  }, location.origin);
+}
+
+function isViewerEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement;
 }
 
 function setViewerHudMode(mode: "collapsed" | "release" | "navigator"): void {

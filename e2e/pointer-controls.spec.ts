@@ -77,6 +77,20 @@ test.describe("spatial navigation direction", () => {
     expect(dot(strafeDelta, planarRight)).toBeLessThan(-0.1);
   });
 
+  test("a quick arrow-key press still advances one rendered frame", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html");
+    const initial = await readCameraState(page);
+    const planarForward = normalise(projectOnPlane(initial.direction, initial.up));
+
+    await page.keyboard.press("ArrowUp");
+    await page.waitForTimeout(80);
+
+    const afterPress = await readCameraState(page);
+    const travel = subtract(afterPress.position, initial.position);
+    expect(dot(travel, initial.up)).toBeCloseTo(0, 5);
+    expect(dot(travel, planarForward)).toBeGreaterThan(0.01);
+  });
+
   test("a trackpad secondary click cannot translate or rotate the camera", async ({ page }) => {
     await page.goto("/e2e/fixtures/pointer-controls.html");
     const initial = await readCameraState(page);
