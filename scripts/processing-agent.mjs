@@ -41,6 +41,7 @@ import {
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const processorVersion = "spatial-processor/0.7.0";
 const sparkVersion = "2.1.0";
+const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
 const posterOnlyIndex = process.argv.indexOf("--poster-only");
 const posterOnly = posterOnlyIndex >= 0;
@@ -1029,26 +1030,10 @@ async function downloadSource(job, leaseToken, destination) {
 
 async function validateSource(sourcePath, format) {
   if (format === "sog") {
-    const sourceStat = await stat(sourcePath);
-    const maximumSogValidationBytes = 256 * 1024 * 1024;
-    if (sourceStat.size > maximumSogValidationBytes) {
-      throw new ProcessingAgentError(
-        "SOG_VALIDATION_CAPACITY_EXCEEDED",
-        "SOG sources larger than 256 MiB require a streaming validation path",
-        {
-          failureClass: "capacity",
-          retryable: false,
-          details: {
-            sourceBytes: sourceStat.size,
-            maximumBytes: maximumSogValidationBytes,
-          },
-        },
-      );
-    }
     return {
       format,
       validatedBy: "SOG metadata and payload preflight",
-      ...validateSogArchive(await readFile(sourcePath)),
+      ...validateSogArchive(await readBufferedSogArchive(sourcePath)),
     };
   }
   if (format === "spz") {
@@ -1160,23 +1145,7 @@ async function readGaussianPlyValidation(sourcePath) {
 
 async function validateEvidenceSource(sourcePath, format, purpose) {
   if (format === "sog") {
-    const sourceStat = await stat(sourcePath);
-    const maximumSogValidationBytes = 256 * 1024 * 1024;
-    if (sourceStat.size > maximumSogValidationBytes) {
-      throw new ProcessingAgentError(
-        "SOG_VALIDATION_CAPACITY_EXCEEDED",
-        "SOG web scenes larger than 256 MiB require a streaming validation path",
-        {
-          failureClass: "capacity",
-          retryable: false,
-          details: {
-            sourceBytes: sourceStat.size,
-            maximumBytes: maximumSogValidationBytes,
-          },
-        },
-      );
-    }
-    return validateEvidenceAsset(await readFile(sourcePath), { format, purpose });
+    return validateEvidenceAsset(await readBufferedSogArchive(sourcePath), { format, purpose });
   }
   const handle = await open(sourcePath, "r");
   try {
@@ -1187,6 +1156,25 @@ async function validateEvidenceSource(sourcePath, format, purpose) {
   } finally {
     await handle.close();
   }
+}
+
+async function readBufferedSogArchive(sourcePath) {
+  const sourceStat = await stat(sourcePath);
+  if (sourceStat.size > maximumBufferedSogBytes) {
+    throw new ProcessingAgentError(
+      "SOG_VALIDATION_CAPACITY_EXCEEDED",
+      "SOG sources larger than 256 MiB require a streaming validation path",
+      {
+        failureClass: "capacity",
+        retryable: false,
+        details: {
+          sourceBytes: sourceStat.size,
+          maximumBytes: maximumBufferedSogBytes,
+        },
+      },
+    );
+  }
+  return readFile(sourcePath);
 }
 
 async function buildSparkRad(sourcePath, sourceFormat, maximumShDegree, sparkBinary, timeoutMs) {

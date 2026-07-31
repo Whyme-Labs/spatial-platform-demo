@@ -9,8 +9,9 @@ bug triggered by an incorrect argument from our processor**:
 
 1. The Bellevue `meta.json` has no optional `shN` section, so it correctly
    contains **0 higher-order spherical-harmonic bands**.
-2. Spatial Studio's `sparkMaximumSphericalHarmonicDegree("sog")` currently
-   defaults an undetected SOG degree to **3**.
+2. Spatial Studio's pre-fix
+   `sparkMaximumSphericalHarmonicDegree("sog")` defaulted an undetected SOG
+   degree to **3**.
 3. Spark 2.1.0's `--max-sh=3` implementation raises its internal degree from
    0 to 3 without allocating SH arrays. The first LoD merge then indexes empty
    `sh1` storage and panics.
@@ -166,38 +167,45 @@ workaround; it is not merely a similar crash.
 
 ## Spatial Studio contribution
 
-Our helper currently returns:
+Before this correction, the helper returned:
 
 ```json
 {"sog":3,"splat":0,"ply":3}
 ```
 
-because
+because the old implementation of
 [`sparkMaximumSphericalHarmonicDegree`](../../scripts/processing-agent-core.mjs)
 special-cases only `.splat`, accepts a detected PLY degree, and otherwise
-defaults to 3. The SOG archive validator verifies structure and `meta.json`
-references, but does not currently return `meta.shN?.bands`. Consequently the
+defaulted to 3. The old SOG archive validator verified structure and
+`meta.json` references but did not return `meta.shN?.bands`. Consequently the
 old SOG-to-RAD job invoked the affected Spark build with `--max-sh=3`.
 
-The current native-SOG publishing route bypasses `build-lod`, so the live
-Bellevue release does not hit this panic. The conversion path remains unsafe
-if it is re-enabled without one of the fixes below.
+The published Spark renderer can load SOG directly and therefore bypasses
+`build-lod`; that browser path does not hit this CLI panic. The failure was in
+the optional SOG-to-RAD conversion path.
 
-## Recommended correction
+## Correction status
 
-Apply both layers of protection:
+The application-side layer is implemented in this change:
 
-1. **Application clamp:** return the SOG's actual degree from archive
-   validation (`meta.shN?.bands ?? 0`) and pass that value to `--max-sh`.
-   Bellevue must use `--max-sh=0`.
-2. **Upstream fix:** replace the pinned `v2.1.0` builder with the official
+- `validateSogArchive` returns `meta.shN?.bands ?? 0` after checking that the
+  value is an integer from 0 through 3;
+- `validateSource` passes that detected value to the builder; and
+- undetected SOG inputs default safely to degree 0 rather than inventing
+  missing coefficients.
+
+The remaining upstream hardening is:
+
+1. **Upstream fix:** replace the pinned `v2.1.0` builder with the official
    fixed commit `63c6d6a13d7eb5794a3208233ef8352c588321f1` or a later tagged Spark
    release containing PR #359. As of this investigation, the official remote
    exposes `v2.0.0` and `v2.1.0`; no later `v2` tag was present.
-3. **Regression gate:** run a degree-0 SOG through the real `build-lod` binary
+2. **Binary regression gate:** when the builder is upgraded, run a degree-0
+   SOG through the real `build-lod` binary
    while requesting a cap of 3. A fixed upstream builder should clamp and
-   complete. Separately assert that the processor passes 0 for this asset.
-4. **Visual acceptance remains separate:** a non-crashing RAD conversion does
+   complete. The processor helper already has unit coverage for detected SH0
+   and SH3 SOG metadata.
+3. **Visual acceptance remains separate:** a non-crashing RAD conversion does
    not prove equivalent image quality. Compare the converted RAD and original
    SOG from the same authored camera before changing the published renderer.
 

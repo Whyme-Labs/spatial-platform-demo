@@ -204,9 +204,10 @@ Therefore:
 Before calling the release complete:
 
 1. Verify all six component hashes and package a loadable SOG.
-2. Import the immutable SOG as a ready web scene and load it through the same
-   native PlayCanvas SOG route used in production.
-3. Start at the authored camera above and confirm living, dining, and kitchen
+2. Validate the immutable SOG, derive its real SH degree from metadata, and
+   build a Spark RAD without inventing missing coefficients.
+3. Load both the source SOG and derived RAD through the Spark renderer from the
+   same authored camera, then confirm equivalent living, dining, and kitchen
    connectivity in desktop and mobile browsers.
 4. Record the CC BY attribution in release metadata and the visible release
    panel.
