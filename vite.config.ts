@@ -174,6 +174,7 @@ function playCanvasBridgeScript(): string {
   return `(() => {
     const startedAt = performance.now();
     const movementCodes = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"];
+    const locomotionCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
     const keyValues = {
       KeyW: "w", KeyA: "a", KeyS: "s", KeyD: "d",
       ArrowUp: "ArrowUp", ArrowDown: "ArrowDown", ArrowLeft: "ArrowLeft", ArrowRight: "ArrowRight",
@@ -227,6 +228,11 @@ function playCanvasBridgeScript(): string {
         movementReleaseTimers.delete(code);
       }
       if (pressed) {
+        const active = viewer();
+        if (locomotionCodes.has(code) && active?.global?.state) {
+          active.global.state.cameraMode = "fly";
+          active.global.state.inputMode = "desktop";
+        }
         if (movementStartedAt.has(code)) return;
         movementStartedAt.set(code, performance.now());
         window.dispatchEvent(new KeyboardEvent("keydown", {

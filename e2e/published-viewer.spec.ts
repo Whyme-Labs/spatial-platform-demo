@@ -569,6 +569,14 @@ test("gives a quick native arrow press enough time to reach a rendered frame", a
   await page.evaluate(() => {
     const events: Array<{ type: string; time: number }> = [];
     Reflect.set(window, "nativeArrowEvents", events);
+    Reflect.set(window, "spatialViewer", {
+      global: {
+        state: {
+          cameraMode: "orbit",
+          inputMode: "touch",
+        },
+      },
+    });
     window.addEventListener("keydown", (event) => {
       if (event.code === "ArrowUp") events.push({ type: "down", time: performance.now() });
     });
@@ -597,6 +605,15 @@ test("gives a quick native arrow press enough time to reach a rendered frame", a
     return events[1]!.time - events[0]!.time;
   });
   expect(heldForMs).toBeGreaterThanOrEqual(100);
+  await expect.poll(() => page.evaluate(() => {
+    const viewer = Reflect.get(window, "spatialViewer") as {
+      global?: { state?: { cameraMode?: string; inputMode?: string } };
+    };
+    return {
+      cameraMode: viewer.global?.state?.cameraMode,
+      inputMode: viewer.global?.state?.inputMode,
+    };
+  })).toEqual({ cameraMode: "fly", inputMode: "desktop" });
 });
 
 function json(route: Route, body: unknown): Promise<void> {
