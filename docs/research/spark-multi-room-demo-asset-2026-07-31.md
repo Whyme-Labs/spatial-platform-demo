@@ -4,13 +4,17 @@ Research date: 2026-07-31
 
 ## Decision
 
-**Home Scan** is the selected Spark-compatible multi-room visual demo. It now
-clears all four release gates:
+**Home Scan** is the selected Spark-compatible multi-room visual and
+provisional-walking demo. The current v3 release clears these gates:
 
 1. a real, connected multi-room indoor capture;
 2. rights that permit commercial use and redistribution with stated attribution;
 3. a portable Gaussian format that Spark can ingest directly (`PLY`, `SPZ`, `SOG`, `ZIP`, or `RAD`); and
-4. a verified Spark render that is visually faithful from an authored camera.
+4. a verified Spark render that is visually faithful from an authored camera;
+5. an immutable baked-upright PLY and reviewed identity Y-up transform that
+   bind the visual asset to authored geometry; and
+6. four inspected provisional walk zones that support bounded keyboard
+   movement without making metric or certified-collision claims.
 
 The earlier Home Scan failure was a coordinate-frame mismatch, not corrupted
 Gaussian data or a Spark decoder failure. SplatTransform's PLY presentation
@@ -19,11 +23,13 @@ PLY/RAD frame. Applying that rotation as explicit per-release viewer metadata
 raised normalized cross-correlation against the reference from `0.347871` to
 `0.984221` with the same authored camera.
 
-Publish it only as an attributed, visual-only Gaussian demonstration. The
+Publish it only as an attributed visual-navigation demonstration. The
 source is distributed as streamed SSOG, so `@playcanvas/splat-transform` remains
 an offline evaluation bridge and is not the FJD/XGRIDS ingestion architecture.
-The runtime remains Spark-only. Collision, navmesh, floorplan, metric scale,
-walkability, and room semantics are not authored for this release.
+The runtime remains Spark-only. The v3 release has authored provisional
+collision regions and a navigation mesh, but has no metric scale, certified
+collision, measured floor plan, accessibility evidence, or invented bridges
+across gaps between the separately reconstructed room components.
 
 ## Strongest direct-Spark candidate: Villa Badam
 
@@ -195,7 +201,7 @@ invent that transform. Applying the same orientation to Spark produces a
 reference-equivalent frame: normalized cross-correlation improved from
 `0.347871` before correction to `0.984221` after correction.
 
-The production release therefore authors both inputs instead of relying on
+The first production release authored both inputs instead of relying on
 guesswork:
 
 ```text
@@ -206,34 +212,51 @@ camera.up: [0, 1, 0]
 camera.fovDegrees: 55
 ```
 
-This clears the whole-home dollhouse visual gate. It does not clear interior
-walking, collision, navigation, metric, floor-plan, or close-range fidelity
-gates; those remain explicit non-claims in the project, QA record, and release
-disclaimer.
+That v1 release cleared the whole-home dollhouse visual gate only. The current
+v3 release bakes the same 180-degree correction into an immutable PLY, rebuilds
+RAD from that master, and adds reviewed provisional navigation evidence.
 
-### Production release verification
+### Current production walkable release verification
 
-The corrected Spark release was published and independently re-opened from the
-public channel on 2026-07-31:
+The walkable Spark v3 release was published and independently re-opened from
+the public channel on 2026-07-31:
 
 - public viewer: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
 - project: `8575b01f-af96-401f-a245-3013fda91706`;
-- immutable version: `388c4f7b-fcbd-4f1b-bffa-5f223fa13d10`;
-- active release: `9f62c462-5420-4f53-b02a-0c90022064a9`;
-- deployed application commit: `11663f01b51971447cbdc3349e0484b14ba04585`;
-- Cloudflare Worker version: `8bd4eab7-7470-42ab-a3a6-e770ad2e4097`.
+- immutable version: `fcdbecb7-3042-40d1-a96b-1bbc4fc3913c`;
+- active release: `665dc7ca-53c8-4d35-931d-51f749a3d394`;
+- immutable upright PLY: 150,480,651 bytes, SHA-256
+  `1d4c11e4e6f159e9997d953c22a6c5e8a9fecc45f1fa0ec4ad4ad207fc835148`;
+- production-generated RAD: 73,437,240 bytes, SHA-256
+  `ee0342109aff6661fe5c0a75e91f7a5401dcc23ee47c866105a23299d36462cf`;
+- reviewed transform evidence: `cc2f2648-4838-4df5-871f-9adf8301ff25`;
+- QA report: `eb1ac575-466f-406d-b3ee-be9f83c77ac2`;
+- deployed application commit: `0be9cdc`;
+- Cloudflare Worker version: `3861a40e-4363-4823-b3aa-4aec582da573`.
 
-The persisted production release row is public, active, and records a 4M splat
-budget, `[0, 0, 180]` scene rotation, and the authored camera above. The live
-viewer reached `Scene ready`; its Spark iframe carried `format=rad`, `budget=4`,
-`rotation=0,0,180`, the same position/target/up vectors, and `fov=55`. A fresh
-Chrome render showed the upright connected whole-home dollhouse and emitted no
-console errors. The viewer correctly labels the release `Look around only · no
-walking map` because no collision proxy or navigation runtime is authored.
+The active manifest records a 4M splat budget, reviewed identity Y-up/SU
+transform, opening camera `[3.433, 1.75, -2.433]` looking toward
+`[2.433, 1.75, -2.433]`, four authored floor entities, 82 runtime navigation
+triangles, a 0.30 SU agent radius, and no authored obstacles. The four polygons
+retain 30.53 SU² of relative Recast footprint across four disconnected
+components; the platform does not claim that SU is metres or that the gaps are
+real doors.
+
+A fresh production Chrome run reached `Scene ready`, displayed `Walking
+enabled · clear route map`, emitted no console errors, and visibly moved the
+camera forward after 18 real Arrow Up keypresses. A late-iframe-load regression
+that could overwrite the ready label with `Preparing scene` was reproduced in
+Playwright, fixed, and deployed with a dedicated regression assertion.
 
 Before production deployment, `npm run check` passed 163 unit/worker tests, 39
 Playwright tests, all type/build/static audits, and the Cloudflare production
-deployment dry-run.
+deployment dry-run. The temporary upload credential was revoked after the
+immutable PLY and derivatives were verified.
+
+The prior visual-only release remains in immutable history as version
+`388c4f7b-fcbd-4f1b-bffa-5f223fa13d10` / release
+`9f62c462-5420-4f53-b02a-0c90022064a9`, but it is no longer the active channel
+target.
 
 `@playcanvas/splat-transform` must remain an offline evaluation bridge only.
 The production FJD/XGRIDS path should accept a creator/vendor export in a
