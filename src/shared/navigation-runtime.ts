@@ -47,6 +47,10 @@ export const DEFAULT_NAVIGATION_PROFILE: NavigationProfile = {
   maxStepMetres: 0.1,
 };
 
+const DOORWAY_STEERING_ANGLES_DEGREES = [
+  -15, 15, -30, 30, -45, 45, -60, 60, -75, 75,
+] as const;
+
 export function parseNavigationRuntimeMessage(
   message: unknown,
   legacyBoxes: Array<{ min: Vector3Tuple; max: Vector3Tuple }> = [],
@@ -252,9 +256,7 @@ export function resolveNavigationMovement(
   const forwardX = deltaX / planarDistance;
   const forwardZ = deltaZ / planarDistance;
 
-  for (const angleDegrees of [
-    -15, 15, -30, 30, -45, 45, -60, 60, -75, 75,
-  ]) {
+  for (const angleDegrees of DOORWAY_STEERING_ANGLES_DEGREES) {
     const angle = angleDegrees * Math.PI / 180;
     const cosine = Math.cos(angle);
     const sine = Math.sin(angle);

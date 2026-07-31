@@ -95,6 +95,26 @@ Concave room polygons preserve blocked voids. Doorways provide explicit
 connectivity. Obstacle boxes are inflated by the agent radius, and transitions
 are sampled so a large movement cannot tunnel through an obstacle.
 
+## Publication connectivity gate
+
+Publication fails closed when authored navigation contains more than one
+reachable floor/room component. Floor/room polygons are the advertised
+destinations; doorway polygons are traversal connectors. A connector must
+overlap the regions it joins in the same frozen XZ topology used to compile the
+release navigation mesh. Visual-only releases and a single authored region are
+not blocked by this gate.
+
+Before activating a channel, run the deterministic manifest check as a second
+independent acceptance step:
+
+```bash
+npm run verify:navigation -- https://example.test/api/releases/scene-slug/manifest
+```
+
+A provisional connector is allowed when capture geometry is incomplete, but it
+must be labelled as provisional, use the version's scene unit, and be inspected
+in both travel directions. It is navigation authoring, not measurement evidence.
+
 ## Deployment order
 
 1. Apply D1 migrations `0033_v5_navigation.sql`,

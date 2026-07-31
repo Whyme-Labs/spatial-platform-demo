@@ -2009,6 +2009,52 @@ describe("Spatial Studio Worker", () => {
     );
     expect(snapshotEntityResponse.status).toBe(201);
     const snapshotEntity = await snapshotEntityResponse.json<{ entity: { id: string } }>();
+    const disconnectedEntityResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/entities`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId: completed.asset.versionId,
+          kind: "room",
+          label: "Disconnected room",
+          geometry: {
+            type: "polygon",
+            points: [[20, 0, 20], [24, 0, 20], [24, 0, 24], [20, 0, 24]],
+          },
+          metadata: {},
+        }),
+      },
+    );
+    expect(disconnectedEntityResponse.status).toBe(201);
+    const disconnectedEntity = await disconnectedEntityResponse.json<{
+      entity: { id: string };
+    }>();
+    const disconnectedReleaseResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "disconnected-apartment",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Disconnected apartment",
+            measurementDisclaimer: "Visual experience only.",
+          },
+        }),
+      },
+    );
+    expect(disconnectedReleaseResponse.status).toBe(409);
+    await expect(disconnectedReleaseResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("2 disconnected navigation components"),
+    });
+    const archiveDisconnectedEntity = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/entities/${disconnectedEntity.entity.id}`,
+      { method: "DELETE", headers: { cookie } },
+    );
+    expect(archiveDisconnectedEntity.status).toBe(204);
     const snapshotObstacleResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/navigation-obstacles`,
       {

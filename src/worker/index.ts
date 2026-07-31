@@ -136,6 +136,7 @@ import {
 } from "../shared/world-units";
 import { hasNonIdentitySceneRotation } from "../shared/scene-rotation";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
+import { inspectWalkableConnectivity } from "../shared/navigation-connectivity";
 import {
   CloudflareSaasError,
   createCloudflareCustomHostname,
@@ -11623,6 +11624,19 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     project.id,
     approved.id,
   );
+  const snapshotEntities = Reflect.get(spatialSnapshot, "entities");
+  const walkableConnectivity = inspectWalkableConnectivity(
+    Array.isArray(snapshotEntities) ? snapshotEntities : [],
+  );
+  if (walkableConnectivity.componentCount > 1) {
+    const componentLabels = walkableConnectivity.components
+      .map((component) => component.regionLabels.join(", "))
+      .join(" | ");
+    return conflict(
+      context,
+      `Walkable publication blocked: ${walkableConnectivity.componentCount} disconnected navigation components (${componentLabels}). Connect every advertised region with overlapping walkable or doorway geometry before publishing.`,
+    );
+  }
   if (
     hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees) &&
     hasAuthoredSpatialRuntime(spatialSnapshot)

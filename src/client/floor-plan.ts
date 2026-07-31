@@ -28,6 +28,7 @@ export type FloorPlan = {
   id: string;
   label: string;
   rooms: PlanRoom[];
+  connectors: PlanRoom[];
   bounds: {
     minX: number;
     minZ: number;
@@ -38,6 +39,11 @@ export type FloorPlan = {
 
 export type ProjectedFloorPlan = {
   viewBox: string;
+  connectors: Array<{
+    id: string;
+    label: string;
+    path: string;
+  }>;
   rooms: Array<{
     id: string;
     label: string;
@@ -67,6 +73,7 @@ export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
     .sort(entityOrder);
   const floorById = new Map(floors.map((floor) => [floor.id, floor]));
   const roomsByFloor = new Map<string, PlanRoom[]>();
+  const connectorsByFloor = new Map<string, PlanRoom[]>();
 
   for (const entity of entities.filter((candidate) => candidate.kind === "room").sort(entityOrder)) {
     const floorId = entity.parent_id && floorById.has(entity.parent_id)
@@ -78,16 +85,28 @@ export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
     floorRooms.push(room);
     roomsByFloor.set(floorId, floorRooms);
   }
+  for (const entity of entities.filter((candidate) => candidate.kind === "doorway").sort(entityOrder)) {
+    const floorId = entity.parent_id && floorById.has(entity.parent_id)
+      ? entity.parent_id
+      : STANDALONE_FLOOR_PLAN_ID;
+    const connector = parsePlanRoom(entity, floorId);
+    if (!connector) continue;
+    const floorConnectors = connectorsByFloor.get(floorId) ?? [];
+    floorConnectors.push(connector);
+    connectorsByFloor.set(floorId, floorConnectors);
+  }
 
   const plans: FloorPlan[] = [];
   for (const floor of floors) {
     const rooms = roomsByFloor.get(floor.id);
     if (!rooms?.length) continue;
+    const connectors = connectorsByFloor.get(floor.id) ?? [];
     plans.push({
       id: floor.id,
       label: floor.label,
       rooms,
-      bounds: boundsForRooms(rooms),
+      connectors,
+      bounds: boundsForRooms([...rooms, ...connectors]),
     });
   }
   const standaloneFloorZones = floors.flatMap((floor) => {
@@ -96,13 +115,15 @@ export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
     return zone ? [zone] : [];
   });
   if (standaloneFloorZones.length) {
+    const connectors = connectorsByFloor.get(STANDALONE_FLOOR_PLAN_ID) ?? [];
     plans.push({
       id: STANDALONE_FLOOR_PLAN_ID,
       label: standaloneFloorZones.length === 1
         ? standaloneFloorZones[0]!.label
         : "Walkable areas",
       rooms: standaloneFloorZones,
-      bounds: boundsForRooms(standaloneFloorZones),
+      connectors,
+      bounds: boundsForRooms([...standaloneFloorZones, ...connectors]),
     });
   }
   const unassigned = roomsByFloor.get("unassigned");
@@ -111,7 +132,15 @@ export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
       id: "unassigned",
       label: floors.length ? "Other rooms" : "Floor plan",
       rooms: unassigned,
-      bounds: boundsForRooms(unassigned),
+      connectors: standaloneFloorZones.length
+        ? []
+        : connectorsByFloor.get(STANDALONE_FLOOR_PLAN_ID) ?? [],
+      bounds: boundsForRooms([
+        ...unassigned,
+        ...(standaloneFloorZones.length
+          ? []
+          : connectorsByFloor.get(STANDALONE_FLOOR_PLAN_ID) ?? []),
+      ]),
     });
   }
   return plans;
@@ -128,21 +157,36 @@ export function projectFloorPlan(
   const safePadding = Math.max(0, Math.min(padding, Math.min(safeWidth, safeHeight) / 2 - 0.5));
   return {
     viewBox: `0 0 ${formatCoordinate(safeWidth)} ${formatCoordinate(safeHeight)}`,
+    connectors: plan.connectors.map((connector) => ({
+      id: connector.id,
+      label: connector.label,
+      path: projectedRegionPath(plan, connector, safeWidth, safeHeight, safePadding),
+    })),
     rooms: plan.rooms.map((room) => {
-      const projected = room.points.map((point) =>
-        projectPlanPoint(plan, point, safeWidth, safeHeight, safePadding)
-      );
       const labelPosition = projectPlanPoint(plan, room.center, safeWidth, safeHeight, safePadding);
       return {
         id: room.id,
         label: room.label,
-        path: `${projected.map(([x, y], index) =>
-          `${index === 0 ? "M" : "L"}${formatCoordinate(x)} ${formatCoordinate(y)}`
-        ).join(" ")} Z`,
+        path: projectedRegionPath(plan, room, safeWidth, safeHeight, safePadding),
         labelPosition,
       };
     }),
   };
+}
+
+function projectedRegionPath(
+  plan: FloorPlan,
+  region: PlanRoom,
+  width: number,
+  height: number,
+  padding: number,
+): string {
+  const projected = region.points.map((point) =>
+    projectPlanPoint(plan, point, width, height, padding)
+  );
+  return `${projected.map(([x, y], index) =>
+    `${index === 0 ? "M" : "L"}${formatCoordinate(x)} ${formatCoordinate(y)}`
+  ).join(" ")} Z`;
 }
 
 export function projectPlanPoint(

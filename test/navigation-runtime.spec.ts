@@ -150,6 +150,38 @@ describe("v5 navigation enforcement", () => {
     expect(isNavigationPointAllowed(position, doorwayRuntime)).toBe(true);
   });
 
+  it("traverses the provisional main-to-far corridor in both directions", () => {
+    const connectedRoomRuntime: NavigationRuntime = {
+      navigationMesh: {
+        vertices: [
+          [4.4, 0.15, -4.2], [6.4, 0.15, -4.2], [6.4, 0.15, -2.7], [4.4, 0.15, -2.7],
+          [0, 0.27, -13.2], [5.6, 0.27, -13.2], [5.6, 0.27, -10.6], [0, 0.27, -10.6],
+          [4.8, 0.17, -11.3], [6, 0.17, -11.3], [6, 0.17, -2.8], [4.8, 0.17, -2.8],
+        ],
+        indices: [
+          0, 1, 2, 0, 2, 3,
+          4, 5, 6, 4, 6, 7,
+          8, 9, 10, 8, 10, 11,
+        ],
+      },
+      obstacleBoxes: [],
+      doorwayBoxes: [{
+        entityId: "main-to-far",
+        min: [4.8, 0.15, -11.3],
+        max: [6, 0.17, -2.8],
+      }],
+      profile: {
+        ...runtime.profile,
+        agentRadius: 0.18,
+      },
+    };
+    const mainRoom: [number, number, number] = [5.2, 1.75, -3.4];
+    const farRoom: [number, number, number] = [5.2, 1.75, -11];
+
+    expect(isNavigationTransitionAllowed(mainRoom, farRoom, connectedRoomRuntime)).toBe(true);
+    expect(isNavigationTransitionAllowed(farRoom, mainRoom, connectedRoomRuntime)).toBe(true);
+  });
+
   it("does not steer through an authored obstacle blocking the doorway", () => {
     const blockedRuntime: NavigationRuntime = {
       navigationMesh: {

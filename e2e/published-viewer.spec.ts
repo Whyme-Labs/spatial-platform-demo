@@ -80,8 +80,14 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         }),
       }, {
         id: "88888888-8888-4888-8888-888888888888",
+        parent_id: null,
         kind: "doorway",
-        label: "Doorway",
+        label: "Main-to-far corridor",
+        position_json: null,
+        geometry_json: JSON.stringify({
+          type: "polygon",
+          points: [[0.8, 0, 3.5], [1.2, 0, 3.5], [1.2, 0, 10.5], [0.8, 0, 10.5]],
+        }),
       }],
       routes: [],
       routeStops: [],
@@ -345,6 +351,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#spatialNavigator")).toBeVisible();
   await expect(page.locator("#floorPlanSection")).toBeVisible();
   await expect(page.locator(".floor-plan-room-target")).toHaveCount(4);
+  await expect(page.locator(".floor-plan-connector")).toHaveCount(1);
   await expect(page.locator(".floor-plan-label")).toHaveText(["1", "2", "3", "4"]);
   await expect(page.locator("#roomDirectory").getByRole("button", {
     name: "1. Walk zone",

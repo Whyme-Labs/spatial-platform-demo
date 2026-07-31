@@ -91,6 +91,17 @@ describe("floor-plan projection", () => {
         points: [[-3, 0.2, 0], [-1, 0.2, 0], [-1, 0.2, 2], [-3, 0.2, 2]],
       }),
       sort_order: 20,
+    }, {
+      id: "zone-connector",
+      parent_id: null,
+      kind: "doorway" as const,
+      label: "Main to side connector",
+      position_json: null,
+      geometry_json: JSON.stringify({
+        type: "polygon",
+        points: [[-1.2, 0.15, 0.8], [0.2, 0.15, 0.8], [0.2, 0.15, 1.2], [-1.2, 0.15, 1.2]],
+      }),
+      sort_order: 30,
     }];
 
     expect(buildFloorPlans(floorZones)).toEqual([expect.objectContaining({
@@ -100,8 +111,14 @@ describe("floor-plan projection", () => {
         expect.objectContaining({ id: "zone-main", floorId: "standalone-floor-zones" }),
         expect.objectContaining({ id: "zone-side", floorId: "standalone-floor-zones" }),
       ],
+      connectors: [
+        expect.objectContaining({ id: "zone-connector", floorId: "standalone-floor-zones" }),
+      ],
       bounds: { minX: -3, minZ: 0, maxX: 4, maxZ: 3 },
     })]);
+    expect(projectFloorPlan(buildFloorPlans(floorZones)[0]!).connectors).toEqual([
+      expect.objectContaining({ id: "zone-connector", path: expect.stringContaining(" Z") }),
+    ]);
   });
 
   it("uses numbered map labels when full room names would collide", () => {

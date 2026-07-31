@@ -745,6 +745,15 @@ function renderActiveFloorPlan(): void {
   byId<HTMLSelectElement>("floorPlanSelect").value = plan.id;
   const projected = projectFloorPlan(plan);
   byId<SVGSVGElement>("floorPlanMap").setAttribute("viewBox", projected.viewBox);
+  for (const connector of projected.connectors) {
+    const title = svgElement("title");
+    title.textContent = connector.label;
+    const path = svgElement("path");
+    path.classList.add("floor-plan-connector");
+    path.setAttribute("d", connector.path);
+    path.append(title);
+    roomsRoot.append(path);
+  }
   for (const [index, projectedRoom] of projected.rooms.entries()) {
     const room = planRoomsById.get(projectedRoom.id);
     if (!room) continue;

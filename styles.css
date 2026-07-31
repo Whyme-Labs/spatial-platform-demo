@@ -329,6 +329,7 @@ form[aria-busy="true"] .dialog-close {
 .floor-plan-toolbar select { min-width:104px; max-width:150px; border:1px solid var(--line); border-radius:8px; background:#101310; color:var(--text); padding:6px 24px 6px 8px; font:500 9px/1.2 Manrope,sans-serif; }
 .floor-plan-map { display:block; width:100%; aspect-ratio:5 / 3; margin-top:10px; border-radius:10px; background:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px),#0b0d0b; background-size:20px 20px; overflow:visible; }
 .floor-plan-room { fill:rgba(142,203,183,.08); stroke:rgba(220,226,218,.42); stroke-width:1.5; vector-effect:non-scaling-stroke; }
+.floor-plan-connector { fill:rgba(214,255,75,.2); stroke:rgba(214,255,75,.72); stroke-width:1.5; vector-effect:non-scaling-stroke; pointer-events:none; }
 .floor-plan-room-target { cursor:pointer; outline:none; }
 .floor-plan-room-target:hover .floor-plan-room,.floor-plan-room-target:focus .floor-plan-room { fill:rgba(214,255,75,.16); stroke:var(--accent); stroke-width:2.5; }
 .floor-plan-room-target.active .floor-plan-room { fill:rgba(214,255,75,.22); stroke:var(--accent); }
