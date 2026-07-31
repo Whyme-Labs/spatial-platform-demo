@@ -49,6 +49,36 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
           points: [[0, 0, 0], [4, 0, 0], [4, 0, 4], [0, 0, 4]],
         }),
       }, {
+        id: "99999999-9999-4999-8999-999999999991",
+        parent_id: null,
+        kind: "floor",
+        label: "Walk zone 2 — far room",
+        position_json: null,
+        geometry_json: JSON.stringify({
+          type: "polygon",
+          points: [[0, 0, 10], [2, 0, 10], [2, 0, 12], [0, 0, 12]],
+        }),
+      }, {
+        id: "99999999-9999-4999-8999-999999999992",
+        parent_id: null,
+        kind: "floor",
+        label: "Walk zone 3 — side room",
+        position_json: null,
+        geometry_json: JSON.stringify({
+          type: "polygon",
+          points: [[-4, 0, 0], [-2, 0, 0], [-2, 0, 2], [-4, 0, 2]],
+        }),
+      }, {
+        id: "99999999-9999-4999-8999-999999999993",
+        parent_id: null,
+        kind: "floor",
+        label: "Walk zone 4 — side room",
+        position_json: null,
+        geometry_json: JSON.stringify({
+          type: "polygon",
+          points: [[-8, 0, 0], [-6, 0, 0], [-6, 0, 2], [-8, 0, 2]],
+        }),
+      }, {
         id: "88888888-8888-4888-8888-888888888888",
         kind: "doorway",
         label: "Doorway",
@@ -314,10 +344,21 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#releaseInfoDetails")).toBeHidden();
   await expect(page.locator("#spatialNavigator")).toBeVisible();
   await expect(page.locator("#floorPlanSection")).toBeVisible();
-  await expect(page.locator(".floor-plan-room-target")).toHaveCount(1);
-  await expect(page.locator("#floorPlanSection")).toContainText("Walk zone");
-  await expect(page.locator("#roomDirectory").getByRole("button", { name: "Walk zone" }))
+  await expect(page.locator(".floor-plan-room-target")).toHaveCount(4);
+  await expect(page.locator(".floor-plan-label")).toHaveText(["1", "2", "3", "4"]);
+  await expect(page.locator("#roomDirectory").getByRole("button", {
+    name: "1. Walk zone",
+  }))
     .toBeVisible();
+  await expect.poll(async () => {
+    const [hudBox, viewportBox] = await Promise.all([
+      viewerHud.boundingBox(),
+      page.locator("#viewport").boundingBox(),
+    ]);
+    return hudBox !== null && viewportBox !== null &&
+      hudBox.y >= viewportBox.y &&
+      hudBox.y + hudBox.height <= viewportBox.y + viewportBox.height;
+  }).toBe(true);
   await expect(exploreRooms).toBeVisible();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
   await controlsButton.click();
