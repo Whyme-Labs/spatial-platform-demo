@@ -211,6 +211,30 @@ walking, collision, navigation, metric, floor-plan, or close-range fidelity
 gates; those remain explicit non-claims in the project, QA record, and release
 disclaimer.
 
+### Production release verification
+
+The corrected Spark release was published and independently re-opened from the
+public channel on 2026-07-31:
+
+- public viewer: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
+- project: `8575b01f-af96-401f-a245-3013fda91706`;
+- immutable version: `388c4f7b-fcbd-4f1b-bffa-5f223fa13d10`;
+- active release: `9f62c462-5420-4f53-b02a-0c90022064a9`;
+- deployed application commit: `11663f01b51971447cbdc3349e0484b14ba04585`;
+- Cloudflare Worker version: `8bd4eab7-7470-42ab-a3a6-e770ad2e4097`.
+
+The persisted production release row is public, active, and records a 4M splat
+budget, `[0, 0, 180]` scene rotation, and the authored camera above. The live
+viewer reached `Scene ready`; its Spark iframe carried `format=rad`, `budget=4`,
+`rotation=0,0,180`, the same position/target/up vectors, and `fov=55`. A fresh
+Chrome render showed the upright connected whole-home dollhouse and emitted no
+console errors. The viewer correctly labels the release `Look around only · no
+walking map` because no collision proxy or navigation runtime is authored.
+
+Before production deployment, `npm run check` passed 163 unit/worker tests, 39
+Playwright tests, all type/build/static audits, and the Cloudflare production
+deployment dry-run.
+
 `@playcanvas/splat-transform` must remain an offline evaluation bridge only.
 The production FJD/XGRIDS path should accept a creator/vendor export in a
 portable Gaussian format and use Spark directly; it should not depend on
