@@ -69,14 +69,11 @@ describe("deployed staging acceptance contract", () => {
       if (
         url === `${appOrigin}/` ||
         url === `${appOrigin}/studio.html` ||
-        url === `${appOrigin}/renderer/index.html` ||
-        url === `${appOrigin}/playcanvas-renderer/index.html`
+        url === `${appOrigin}/renderer/index.html`
       ) {
         return new Response(
           url.endsWith("renderer/index.html")
-            ? url.includes("playcanvas-renderer")
-              ? "<html>SuperSplat Viewer</html>"
-              : "<html>Spark</html>"
+            ? "<html>Spark</html>"
             : "<html>Spatial Studio</html>",
           {
             headers: {
@@ -105,7 +102,7 @@ describe("deployed staging acceptance contract", () => {
       fetcher,
     });
 
-    expect(result.steps).toHaveLength(11);
+    expect(result.steps).toHaveLength(10);
     expect(result.steps.every((step: { status: string }) => step.status === "passed")).toBe(true);
     expect(result.application).toMatchObject({ environment: "staging", requestId });
     expect(result.processor).toMatchObject({

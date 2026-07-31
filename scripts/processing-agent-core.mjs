@@ -45,9 +45,8 @@ export function sparkPosterSceneDescriptor(format) {
   };
 }
 
-export function webScenePosterRenderer(format, hasAuthoredCamera) {
+export function webScenePosterRenderer(format) {
   if (format === "rad") return "spark";
-  if (format === "sog" && hasAuthoredCamera) return "playcanvas";
   return null;
 }
 
@@ -182,12 +181,13 @@ export function inspectSpzContainer(bytes) {
 }
 
 export function sparkMaximumSphericalHarmonicDegree(format, detectedDegree) {
-  if (String(format).toLowerCase() === "splat") return 0;
+  const normalizedFormat = String(format).toLowerCase();
   if (
     Number.isSafeInteger(detectedDegree)
     && detectedDegree >= 0
     && detectedDegree <= 3
   ) return detectedDegree;
+  if (normalizedFormat === "splat" || normalizedFormat === "sog") return 0;
   return 3;
 }
 
@@ -363,6 +363,23 @@ export function validateSogArchive(bytes) {
     );
   }
 
+  const sphericalHarmonicDegree = metadata?.shN?.bands ?? 0;
+  if (
+    !Number.isSafeInteger(sphericalHarmonicDegree)
+    || sphericalHarmonicDegree < 0
+    || sphericalHarmonicDegree > 3
+  ) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG metadata declares an invalid spherical harmonic degree",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: { sphericalHarmonicDegree },
+      },
+    );
+  }
+
   const referencedFiles = new Set();
   collectSogFileReferences(metadata, referencedFiles);
   if (!referencedFiles.size) {
@@ -389,6 +406,7 @@ export function validateSogArchive(bytes) {
     version,
     gaussianCount: count,
     entryCount: Object.keys(entries).length,
+    sphericalHarmonicDegree,
     referencedFiles: [...referencedFiles].sort(),
   };
 }

@@ -2,17 +2,25 @@
 
 Research date: 2026-07-31
 
-## Decision
+## Decision (superseded)
 
-Use **“Single family home, Bellevue WA (XGRIDS PortalCam)”** from SuperSplat
-for the first public Spatial Studio multi-room demo.
+Do **not** use **“Single family home, Bellevue WA (XGRIDS PortalCam)”** for the
+Spark-only public demo. The initial selection below predated two later findings:
+Spark 2.1's degree-zero SOG crash was caused by an upstream `--max-sh` bug that
+our pipeline exposed, and the corrected Spark RAD still failed the same-camera
+visual-fidelity check. The temporary PlayCanvas runtime has now been retired.
 
-It is the best candidate that clears all immediate gates:
+The current decision and replacement-candidate evidence are in
+[`spark-multi-room-demo-asset-2026-07-31.md`](./spark-multi-room-demo-asset-2026-07-31.md).
+The crash analysis is in
+[`spark-sog-crash-2026-07-31.md`](./spark-sog-crash-2026-07-31.md).
+
+Bellevue remains useful research evidence because it provides:
 
 - a real captured residence rather than a synthetic render;
 - visibly connected living, dining, and kitchen spaces in the published viewer;
 - asset-specific **CC BY 4.0** permission and an enabled download;
-- a 52.26 MB SOG, which the upstream PlayCanvas SOG runtime renders directly;
+- a 52.26 MB SOG with a verifiable source-authored view;
 - a public authored opening camera.
 
 Keep Habitat-GS “Sales gallery” as a technical reference only. It is a much
@@ -25,7 +33,7 @@ without written permission from the rights holder.
 
 | Rank | Candidate | Multi-room evidence | Format and size | Rights | Decision |
 |---|---|---|---|---|---|
-| 1 | [Single family home, Bellevue WA](https://superspl.at/scene/6f412fa2) by Paolo Tosolini (`tosolini`) | Real single-family-home capture. Manual viewer inspection on 2026-07-31 confirmed a continuous living/dining/kitchen reconstruction rather than isolated room cards. | SOG, 54,802,727 bytes on the asset record (52.26 MB in the UI) | Asset page exposes Download and links **CC BY 4.0** | **Use now** |
+| 1 | [Single family home, Bellevue WA](https://superspl.at/scene/6f412fa2) by Paolo Tosolini (`tosolini`) | Real single-family-home capture. Manual viewer inspection on 2026-07-31 confirmed a continuous living/dining/kitchen reconstruction rather than isolated room cards. | SOG, 54,802,727 bytes on the asset record (52.26 MB in the UI) | Asset page exposes Download and links **CC BY 4.0** | Reject for the current Spark-only demo: corrected RAD remains visually unfaithful |
 | 2 | [Home Scan](https://superspl.at/scene/3f89bbd3) by Isaiah Sweeney (`luxury_scans`) | The author explicitly says the entire NJ ranch home was captured room-by-room and merged into one seamless scene with clean transitions. | SSOG, 513,131,522 bytes (489.36 MB) | Asset page exposes Download and links **CC BY 4.0** | Strongest whole-home content, but too large and SSOG is outside the current ingest contract. Revisit after streaming-SSOG support. |
 | 3 | [Habitat-GS Sales gallery](https://zju3dv.github.io/habitat-gs/) | Excellent connected venue, walkable viewer, supplied Recast/Detour navmesh, roughly 20 m × 24 m navigation envelope | Raw `.splat`, 13,802,208 bytes; navmesh JSON, 28,417 bytes | The live binary maps to `interior_0184_840116`, which is derived from InteriorGS. InteriorGS terms prohibit commercial use and redistribution. | **Do not publish** |
 | 4 | [Matterport-derived home scan](https://superspl.at/scene/bc23fc76) | Likely real interior and compact | SOG, 17,761,430 bytes (16.94 MB) | SuperSplat says CC BY 4.0, but the author says it was derived from a Matterport virtual tour and does not document the source-tour rights | Hold pending source-capture permission |
@@ -86,25 +94,20 @@ polygons, or semantic labels.
 
 ### Spatial Studio compatibility
 
-Import the immutable SOG directly as a **Ready web scene**. Do not route this
-SOG v2 package through `spark-build-lod`: the current Spark 2.1.0 builder
-panics while decoding it. Direct Spark rendering and a diagnostic SPZ
-conversion also produced severely blurred, spatially incorrect frames.
+The temporary format-selected PlayCanvas runtime has been removed. Published
+releases now use the Spark renderer only.
 
-Spatial Studio therefore selects the renderer by immutable scene format:
+The original `spark-build-lod` panic was not evidence that Bellevue was
+malformed. Its SOG has SH degree zero, while the old processor forced
+`--max-sh=3`; Spark 2.1 then indexed an empty SH array. Reading `meta.shN?.bands`
+and invoking the pinned builder with `--max-sh=0` succeeds and produces a
+7,016,915-splat RAD. This is the known upstream Spark issue #352, fixed after
+the pinned 2.1.0 tag.
 
-- RAD remains on the existing Spark 2.1 runtime;
-- SOG uses the official MIT-licensed
-  [`@playcanvas/supersplat-viewer`](https://github.com/playcanvas/supersplat-viewer)
-  WebGL runtime;
-- the processor uses that same PlayCanvas SOG renderer and the authored camera
-  to generate the review poster.
-
-The native SOG and its PlayCanvas poster both reproduce the source living-room
-view sharply. The tested processor poster was 640 × 360 and completed from the
-stored 4,944,177-Gaussian archive without conversion. This keeps the licensed
-source bytes immutable and makes the QA evidence representative of the
-published viewport.
+That corrected conversion still does not pass release QA. A 640 x 360 Spark
+poster from the source-authored opening camera is severely blurred, while the
+source viewer is sharp. Bellevue therefore remains unpublished on the
+Spark-only path until the SOG/RAD scale and orientation mismatch is explained.
 
 The authored opening camera is attached to the immutable scene version during
 web-scene upload. It is returned only with that version's processor lease and
@@ -112,9 +115,9 @@ drives both the native review poster and the eventual release manifest. It is
 not a global processor setting, so later SOG imports cannot accidentally
 inherit the Bellevue camera.
 
-An SPZ/RAD conversion was tested only as a diagnostic and must not be
-published: although the conversion completed, independent rendered previews
-did not reproduce the source scene faithfully.
+The SOG, SPZ, and corrected RAD derivatives remain diagnostic artifacts only;
+none should be published as a replacement demo without same-camera visual
+equivalence.
 
 ## Reproducible SOG acquisition
 

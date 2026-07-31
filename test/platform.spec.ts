@@ -136,7 +136,7 @@ describe("Spatial Studio Worker", () => {
     for (const path of [
       "/studio.html",
       "/images/spatial-hero.webp",
-      "/playcanvas-renderer/index.html",
+      "/renderer/index.html",
     ]) {
       const response = await exports.default.fetch(`${origin}${path}`);
       expect(response.status).toBe(200);
@@ -149,6 +149,11 @@ describe("Spatial Studio Worker", () => {
         "frame-src 'self' https://challenges.cloudflare.com",
       );
     }
+  });
+
+  it("does not expose the retired PlayCanvas renderer entry point", async () => {
+    const response = await exports.default.fetch(`${origin}/playcanvas-renderer/index.html`);
+    expect(response.status).toBe(404);
   });
 
   it("rejects unauthenticated tenant APIs", async () => {

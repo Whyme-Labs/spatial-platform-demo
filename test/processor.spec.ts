@@ -73,11 +73,10 @@ describe("processing agent core", () => {
     }));
   });
 
-  it("selects the native PlayCanvas poster lane only when a SOG camera is authored", () => {
-    expect(webScenePosterRenderer("rad", false)).toBe("spark");
-    expect(webScenePosterRenderer("sog", true)).toBe("playcanvas");
-    expect(webScenePosterRenderer("sog", false)).toBeNull();
-    expect(webScenePosterRenderer("spz", true)).toBeNull();
+  it("keeps evidence posters on the Spark RAD lane", () => {
+    expect(webScenePosterRenderer("rad")).toBe("spark");
+    expect(webScenePosterRenderer("sog")).toBeNull();
+    expect(webScenePosterRenderer("spz")).toBeNull();
   });
 
   it("rejects unusable authored poster cameras as configuration failures", () => {
@@ -171,6 +170,8 @@ describe("processing agent core", () => {
     expect(sparkMaximumSphericalHarmonicDegree("ply", 2)).toBe(2);
     expect(sparkMaximumSphericalHarmonicDegree("spz")).toBe(3);
     expect(sparkMaximumSphericalHarmonicDegree("ksplat")).toBe(3);
+    expect(sparkMaximumSphericalHarmonicDegree("sog")).toBe(0);
+    expect(sparkMaximumSphericalHarmonicDegree("sog", 3)).toBe(3);
   });
 
   it("performs bounded signature validation for immutable capture evidence", () => {
@@ -220,7 +221,25 @@ describe("processing agent core", () => {
       version: 2,
       gaussianCount: 42,
       entryCount: 6,
+      sphericalHarmonicDegree: 0,
     });
+    const sogWithSh = zipSync({
+      "meta.json": new TextEncoder().encode(JSON.stringify({
+        version: 2,
+        count: 42,
+        means: { files: ["means.webp"] },
+        scales: { files: ["scales.webp"] },
+        quats: { files: ["quats.webp"] },
+        sh0: { files: ["sh0.webp"] },
+        shN: { bands: 3, files: ["shN.webp"] },
+      })),
+      "means.webp": new Uint8Array([1]),
+      "scales.webp": new Uint8Array([2]),
+      "quats.webp": new Uint8Array([3]),
+      "sh0.webp": new Uint8Array([4]),
+      "shN.webp": new Uint8Array([5]),
+    });
+    expect(validateSogArchive(sogWithSh).sphericalHarmonicDegree).toBe(3);
     expect(validateEvidenceAsset(
       Buffer.from([0x4e, 0x47, 0x53, 0x50, 0x04, 0x00, 0x00, 0x00]),
       { format: "spz", purpose: "web_scene" },

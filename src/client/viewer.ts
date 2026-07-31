@@ -208,50 +208,7 @@ type SparkRendererMessage =
       visible: boolean;
       height: number;
     };
-type PlayCanvasRendererMessage =
-  | {
-      source: "spatial-playcanvas";
-      type: "progress";
-      progress: number;
-      detail: string;
-    }
-  | {
-      source: "spatial-playcanvas";
-      type: "ready";
-      runtime: "playcanvas";
-      version: string;
-      timeToFirstFrameMs: number;
-      format: string;
-      splatBudget: number;
-    }
-  | {
-      source: "spatial-playcanvas";
-      type: "error";
-      code: string;
-      message: string;
-    }
-  | {
-      source: "spatial-playcanvas";
-      type: "camera";
-      requestId: string;
-      cameraPose: CameraPose;
-    }
-  | {
-      source: "spatial-playcanvas";
-      type: "camera-set";
-      requestId: string;
-      accepted: boolean;
-      message?: string;
-      cameraPose: CameraPose;
-    }
-  | {
-      source: "spatial-playcanvas";
-      type: "control-help";
-      visible: boolean;
-      height: number;
-    };
-type SpatialRendererMessage = SparkRendererMessage | PlayCanvasRendererMessage;
-type SpatialRendererRuntime = "spark" | "playcanvas";
+type SpatialRendererMessage = SparkRendererMessage;
 
 const byId = <T extends Element = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -269,7 +226,6 @@ const viewerSessionId = crypto.randomUUID();
 const activeReleaseSlug = releaseSlug();
 const viewerActions = new SingleFlight();
 let activeManifest: ReleaseManifest | null = null;
-let activeRendererRuntime: SpatialRendererRuntime = "spark";
 let loadTimeout: number | null = null;
 let activeReview: SceneReview | null = null;
 let activeFloorPlans: FloorPlan[] = [];
@@ -343,8 +299,6 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId<HTMLButtonElement>("openNavigator").hidden = true;
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
-  frame.classList.remove("native-streaming");
-  loading.classList.remove("native-streaming");
   frame.hidden = true;
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
 
@@ -362,21 +316,17 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     if (reviewMode) await loadSceneReview();
     void recordTelemetry("viewer_open");
     const rendererUrl = publishedRendererUrl(manifest);
-    const nativeStreaming = activeRendererRuntime === "playcanvas";
-    frame.classList.toggle("native-streaming", nativeStreaming);
-    loading.classList.toggle("native-streaming", nativeStreaming);
     frame.src = rendererUrl.toString();
     frame.hidden = false;
     const timeoutMs = rendererLoadTimeoutMs(manifest.scene.format, manifest.scene.sizeBytes);
     loadTimeout = window.setTimeout(() => {
-      const rendererName = activeRendererRuntime === "playcanvas" ? "The native SOG viewer" : "Spark";
       showError(
-        `${rendererName} did not become ready within ${timeoutMs / 1000} seconds.`,
+        `Spark did not become ready within ${timeoutMs / 1000} seconds.`,
         "Check the network connection or retry on a device with WebGL2 support.",
       );
       void recordTelemetry("renderer_error", timeoutMs, {
         reason: "load_timeout",
-        runtime: activeRendererRuntime,
+        runtime: "spark",
       });
     }, timeoutMs);
   } catch (error) {
@@ -444,9 +394,6 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     } else {
       viewport.style.removeProperty("--renderer-help-height");
     }
-    if (message.source === "spatial-playcanvas") {
-      byId<HTMLElement>("viewerHud").hidden = message.visible;
-    }
     return;
   }
   if (message.type === "progress") {
@@ -455,25 +402,18 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type === "error") {
-    const runtime = message.source === "spatial-playcanvas" ? "playcanvas" : "spark";
-    showError(
-      runtime === "playcanvas"
-        ? "The native SOG viewer could not render this release."
-        : "Spark could not render this release.",
-      message.message,
-    );
+    showError("Spark could not render this release.", message.message);
     void recordTelemetry("renderer_error", undefined, {
       reason: message.code,
-      runtime,
+      runtime: "spark",
     });
     return;
   }
+  if (message.type !== "ready") return;
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
   loadTimeout = null;
   errorPanel.hidden = true;
   frame.hidden = false;
-  frame.classList.remove("native-streaming");
-  loading.classList.remove("native-streaming");
   frame.classList.remove("is-loading");
   setLoading(false);
   rendererReady = true;
@@ -498,10 +438,6 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   if (!value || typeof value !== "object") return false;
   const source = Reflect.get(value, "source");
   const type = Reflect.get(value, "type");
-  if (source === "spatial-playcanvas") {
-    return type === "progress" || type === "ready" || type === "error" ||
-      type === "camera" || type === "camera-set" || type === "control-help";
-  }
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
@@ -510,22 +446,6 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
 
 function publishedRendererUrl(manifest: ReleaseManifest): URL {
   const budget = manifest.viewer.splatBudgetMillions ?? manifestBudget(manifest);
-  if (manifest.scene.format.toLowerCase() === "sog") {
-    activeRendererRuntime = "playcanvas";
-    const rendererUrl = new URL("/playcanvas-renderer/index.html", location.origin);
-    rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
-    rendererUrl.searchParams.set("format", "sog");
-    rendererUrl.searchParams.set("budget", String(budget));
-    rendererUrl.searchParams.set("settings", playCanvasSettingsUrl(manifest));
-    rendererUrl.searchParams.set("webgl", "");
-    rendererUrl.searchParams.set("noui", "");
-    rendererUrl.searchParams.set("noanim", "");
-    rendererUrl.searchParams.set("nofx", "");
-    if (manifest.scene.posterUrl) rendererUrl.searchParams.set("poster", manifest.scene.posterUrl);
-    return rendererUrl;
-  }
-
-  activeRendererRuntime = "spark";
   const rendererUrl = new URL("/renderer/index.html", location.origin);
   rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
   rendererUrl.searchParams.set("format", manifest.scene.format);
@@ -548,42 +468,6 @@ function publishedRendererUrl(manifest: ReleaseManifest): URL {
     rendererUrl.searchParams.set("fov", String(manifest.viewer.initialCamera.fovDegrees ?? 58));
   }
   return rendererUrl;
-}
-
-function playCanvasSettingsUrl(manifest: ReleaseManifest): string {
-  const camera = manifest.viewer.initialCamera;
-  const settings = {
-    version: 2,
-    tonemapping: "none",
-    highPrecisionRendering: false,
-    background: { color: [0.043, 0.067, 0.055] },
-    postEffectSettings: {
-      sharpness: { enabled: false, amount: 0 },
-      bloom: { enabled: false, intensity: 1, blurLevel: 2 },
-      grading: {
-        enabled: false,
-        brightness: 0,
-        contrast: 1,
-        saturation: 1,
-        tint: [1, 1, 1],
-      },
-      vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
-      fringing: { enabled: false, intensity: 0.5 },
-    },
-    animTracks: [],
-    cameras: camera
-      ? [{
-          initial: {
-            position: camera.position,
-            target: camera.target,
-            fov: camera.fovDegrees ?? 58,
-          },
-        }]
-      : [],
-    annotations: [],
-    startMode: "default",
-  };
-  return `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(settings))}`;
 }
 
 function applyManifest(manifest: ReleaseManifest): void {
@@ -1145,8 +1029,6 @@ function showError(title: string, message: string): void {
   setLoading(false);
   byId<HTMLElement>("viewerHud").hidden = true;
   frame.classList.add("is-loading");
-  frame.classList.remove("native-streaming");
-  loading.classList.remove("native-streaming");
   frame.hidden = true;
   errorPanel.hidden = false;
   byId("errorTitle").textContent = title;

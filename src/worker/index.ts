@@ -883,7 +883,6 @@ for (const path of [
   "/assets/*",
   "/images/*",
   "/renderer/*",
-  "/playcanvas-renderer/*",
 ]) {
   app.get(path, (context) => serveStaticEntry(context, context.req.path));
 }

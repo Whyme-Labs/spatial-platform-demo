@@ -455,12 +455,12 @@ test("visual-only releases do not imply a metric scale", async ({ page }) => {
   await expect(page.locator("#scaleStatus")).toHaveText("Visual only — scale not declared");
 });
 
-test("keeps a native SOG frame renderable behind its loading handoff", async ({ page }) => {
-  await page.route("**/api/releases/native-sog-loading/manifest", (route) => json(route, {
+test("routes SOG releases through the Spark renderer", async ({ page }) => {
+  await page.route("**/api/releases/spark-sog-loading/manifest", (route) => json(route, {
     schemaVersion: "1",
     release: {
       id: "74444444-4444-4444-8444-444444444444",
-      slug: "native-sog-loading",
+      slug: "spark-sog-loading",
       publishedAt: "2026-07-31T00:00:00.000Z",
       expiresAt: null,
       accessPolicy: "public",
@@ -505,37 +505,24 @@ test("keeps a native SOG frame renderable behind its loading handoff", async ({ 
       },
     },
   }));
-  await page.route("**/api/releases/native-sog-loading/telemetry", (route) => json(route, {}));
-  await page.route("**/playcanvas-renderer/index.html?*", (route) => route.fulfill({
+  await page.route("**/api/releases/spark-sog-loading/telemetry", (route) => json(route, {}));
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
     status: 200,
     contentType: "text/html",
-    body: `<html><body style="background:#5d7044">
-      <button id="controls" onclick="
-        window.helpVisible = !window.helpVisible;
-        parent.postMessage({
-          source: 'spatial-playcanvas',
-          type: 'control-help',
-          visible: window.helpVisible,
-          height: window.helpVisible ? 120 : 0
-        }, location.origin);
-      ">Controls</button>
-    </body></html>`,
+    body: "<html><body style='background:#5d7044'></body></html>",
   }));
 
-  await page.goto("/s/native-sog-loading", { waitUntil: "commit" });
+  await page.goto("/s/spark-sog-loading", { waitUntil: "commit" });
 
   const rendererFrame = page.locator("#rendererFrame");
-  const loader = page.locator("#loadingOverlay");
-  await expect(rendererFrame).toHaveClass(/native-streaming/);
-  await expect(rendererFrame).toHaveCSS("opacity", "1");
-  await expect(loader).toHaveClass(/native-streaming/);
-  await expect(loader).toHaveCSS("background-color", "rgba(9, 11, 10, 0.62)");
+  await expect(rendererFrame).not.toHaveClass(/native-streaming/);
+  await expect(rendererFrame).toHaveAttribute("src", /\/renderer\/index\.html\?.*format=sog/);
 
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
     parent.postMessage({
-      source: "spatial-playcanvas",
+      source: "spatial-spark",
       type: "ready",
-      runtime: "playcanvas",
+      runtime: "spark",
       version: "test",
       timeToFirstFrameMs: 1200,
       format: "sog",
@@ -543,77 +530,6 @@ test("keeps a native SOG frame renderable behind its loading handoff", async ({ 
     }, location.origin);
   });
   await expect(page.locator("#viewerHud")).toBeVisible();
-  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Controls" }).click();
-  await expect(page.locator("#viewerHud")).toBeHidden();
-  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Controls" }).click();
-  await expect(page.locator("#viewerHud")).toBeVisible();
-});
-
-test("anchors native control help away from the release HUD edge", async ({ page }) => {
-  await page.goto("/playcanvas-renderer/index.html", { waitUntil: "domcontentloaded" });
-  await page.locator("#spatialNativeToolbar").evaluate((toolbar) => {
-    toolbar.removeAttribute("hidden");
-  });
-  await page.getByRole("button", { name: "Controls" }).click();
-
-  const help = page.locator("#spatialNativeHelpPanel");
-  await expect(help).toBeVisible();
-  await expect.poll(async () => {
-    const box = await help.boundingBox();
-    return box?.x ?? Number.POSITIVE_INFINITY;
-  }).toBeLessThan(80);
-});
-
-test("gives a quick native arrow press enough time to reach a rendered frame", async ({ page }) => {
-  await page.goto("/playcanvas-renderer/index.html", { waitUntil: "domcontentloaded" });
-  await page.evaluate(() => {
-    const events: Array<{ type: string; time: number }> = [];
-    Reflect.set(window, "nativeArrowEvents", events);
-    Reflect.set(window, "spatialViewer", {
-      global: {
-        state: {
-          cameraMode: "orbit",
-          inputMode: "touch",
-        },
-      },
-    });
-    window.addEventListener("keydown", (event) => {
-      if (event.code === "ArrowUp") events.push({ type: "down", time: performance.now() });
-    });
-    window.addEventListener("keyup", (event) => {
-      if (event.code === "ArrowUp") events.push({ type: "up", time: performance.now() });
-    });
-    window.postMessage({
-      source: "spatial-host",
-      type: "movement-key",
-      code: "ArrowUp",
-      pressed: true,
-    }, location.origin);
-    window.postMessage({
-      source: "spatial-host",
-      type: "movement-key",
-      code: "ArrowUp",
-      pressed: false,
-    }, location.origin);
-  });
-
-  await expect.poll(() => page.evaluate(() =>
-    (Reflect.get(window, "nativeArrowEvents") as Array<unknown>).length
-  )).toBe(2);
-  const heldForMs = await page.evaluate(() => {
-    const events = Reflect.get(window, "nativeArrowEvents") as Array<{ time: number }>;
-    return events[1]!.time - events[0]!.time;
-  });
-  expect(heldForMs).toBeGreaterThanOrEqual(100);
-  await expect.poll(() => page.evaluate(() => {
-    const viewer = Reflect.get(window, "spatialViewer") as {
-      global?: { state?: { cameraMode?: string; inputMode?: string } };
-    };
-    return {
-      cameraMode: viewer.global?.state?.cameraMode,
-      inputMode: viewer.global?.state?.inputMode,
-    };
-  })).toEqual({ cameraMode: "fly", inputMode: "desktop" });
 });
 
 function json(route: Route, body: unknown): Promise<void> {
