@@ -67,6 +67,42 @@ describe("floor-plan projection", () => {
     ]);
   });
 
+  it("builds a combined navigation map from standalone floor zones", () => {
+    const floorZones = [{
+      id: "zone-main",
+      parent_id: null,
+      kind: "floor" as const,
+      label: "Main room",
+      position_json: null,
+      geometry_json: JSON.stringify({
+        type: "polygon",
+        points: [[0, 0.1, 0], [4, 0.1, 0], [4, 0.1, 3], [0, 0.1, 3]],
+      }),
+      sort_order: 10,
+    }, {
+      id: "zone-side",
+      parent_id: null,
+      kind: "floor" as const,
+      label: "Side room",
+      position_json: null,
+      geometry_json: JSON.stringify({
+        type: "polygon",
+        points: [[-3, 0.2, 0], [-1, 0.2, 0], [-1, 0.2, 2], [-3, 0.2, 2]],
+      }),
+      sort_order: 20,
+    }];
+
+    expect(buildFloorPlans(floorZones)).toEqual([expect.objectContaining({
+      id: "standalone-floor-zones",
+      label: "Walkable areas",
+      rooms: [
+        expect.objectContaining({ id: "zone-main", floorId: "standalone-floor-zones" }),
+        expect.objectContaining({ id: "zone-side", floorId: "standalone-floor-zones" }),
+      ],
+      bounds: { minX: -3, minZ: 0, maxX: 4, maxZ: 3 },
+    })]);
+  });
+
   it("preserves scene proportions in a bounded SVG projection", () => {
     const plan = buildFloorPlans(entities)[0]!;
     const projected = projectFloorPlan(plan, 400, 240, 20);
@@ -94,5 +130,29 @@ describe("floor-plan projection", () => {
       up: [0, 1, 0],
       fovDegrees: 58,
     });
+  });
+
+  it("keeps the destination camera inside a concave standalone walk zone", () => {
+    const plans = buildFloorPlans([{
+      id: "zone-concave",
+      parent_id: null,
+      kind: "floor" as const,
+      label: "Concave side room",
+      position_json: null,
+      geometry_json: JSON.stringify({
+        type: "polygon",
+        points: [
+          [-2.1, 0.15, -0.8], [-2.1, 0.15, -1], [-3.6, 0.2, -1.15],
+          [-4.1, 0.25, -1.2], [-4.1, 0.25, -0.7], [-4.4, 0.25, -0.5],
+          [-4.4, 0.2, 0], [-4.4, 0.15, 1], [-2.2, 0.15, 1.1],
+          [-2.2, 0.15, 0.5], [-2.6, 0.15, 0.3], [-2.6, 0.15, -0.5],
+        ],
+      }),
+    }]);
+    const plan = plans[0]!;
+    const room = plan.rooms[0]!;
+    const pose = cameraPoseForPlanRoom(room);
+
+    expect(locatePlanRoom(plan, pose.position)?.id).toBe(room.id);
   });
 });

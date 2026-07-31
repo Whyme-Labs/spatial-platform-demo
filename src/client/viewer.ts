@@ -574,9 +574,13 @@ function bindSpatialNavigator(): void {
   });
 }
 
-function hasSpatialNavigation(manifest: ReleaseManifest | null): boolean {
+function hasSpatialNavigation(
+  manifest: ReleaseManifest | null,
+  floorPlans: FloorPlan[],
+): boolean {
   const spatial = manifest?.spatial;
   return Boolean(
+    floorPlans.length ||
     spatial?.routes.length ||
     spatial?.entities.some((entity) => entity.kind === "room" || entity.kind === "poi"),
   );
@@ -597,7 +601,7 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   renderFloorPlanSelector();
   renderActiveFloorPlan();
   const trigger = byId<HTMLButtonElement>("openNavigator");
-  if (!hasSpatialNavigation(manifest)) {
+  if (!hasSpatialNavigation(manifest, activeFloorPlans)) {
     trigger.hidden = true;
     setViewerHudMode("collapsed");
     return;

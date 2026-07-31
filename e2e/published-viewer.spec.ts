@@ -40,8 +40,14 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
     spatial: {
       entities: [{
         id: "77777777-7777-4777-8777-777777777777",
-        kind: "room",
-        label: "Room",
+        parent_id: null,
+        kind: "floor",
+        label: "Walk zone",
+        position_json: null,
+        geometry_json: JSON.stringify({
+          type: "polygon",
+          points: [[0, 0, 0], [4, 0, 0], [4, 0, 4], [0, 0, 4]],
+        }),
       }, {
         id: "88888888-8888-4888-8888-888888888888",
         kind: "doorway",
@@ -307,6 +313,9 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#releaseInfoDetails")).toBeHidden();
   await expect(page.locator("#spatialNavigator")).toBeVisible();
+  await expect(page.locator("#floorPlanSection")).toBeVisible();
+  await expect(page.locator(".floor-plan-room-target")).toHaveCount(1);
+  await expect(page.locator("#floorPlanSection")).toContainText("Walk zone");
   await expect(exploreRooms).toBeVisible();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
   await controlsButton.click();

@@ -1,5 +1,7 @@
 export type Vector3Tuple = [number, number, number];
 
+const STANDALONE_FLOOR_PLAN_ID = "standalone-floor-zones";
+
 export type FloorPlanEntity = {
   id: string;
   parent_id: string | null;
@@ -78,6 +80,21 @@ export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
       label: floor.label,
       rooms,
       bounds: boundsForRooms(rooms),
+    });
+  }
+  const standaloneFloorZones = floors.flatMap((floor) => {
+    if (roomsByFloor.get(floor.id)?.length) return [];
+    const zone = parsePlanRoom(floor, STANDALONE_FLOOR_PLAN_ID);
+    return zone ? [zone] : [];
+  });
+  if (standaloneFloorZones.length) {
+    plans.push({
+      id: STANDALONE_FLOOR_PLAN_ID,
+      label: standaloneFloorZones.length === 1
+        ? standaloneFloorZones[0]!.label
+        : "Walkable areas",
+      rooms: standaloneFloorZones,
+      bounds: boundsForRooms(standaloneFloorZones),
     });
   }
   const unassigned = roomsByFloor.get("unassigned");
