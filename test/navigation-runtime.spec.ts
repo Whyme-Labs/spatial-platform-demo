@@ -4,6 +4,7 @@ import {
   isNavigationTransitionAllowed,
   nearestNavigationPoint,
   parseNavigationRuntimeMessage,
+  resolveNavigationMovement,
   transformSourceDirection,
   transformSourcePoint,
   type NavigationRuntime,
@@ -105,6 +106,85 @@ describe("v5 navigation enforcement", () => {
     )).toBe(false);
   });
 
+  it("steers a held forward input through a narrow authored doorway", () => {
+    const doorwayRuntime: NavigationRuntime = {
+      navigationMesh: {
+        vertices: [
+          [0, 0, 0], [3, 0, 0], [3, 0, 2], [0, 0, 2],
+          [1.2, 0, 2], [1.8, 0, 2], [1.8, 0, 4], [1.2, 0, 4],
+          [0, 0, 4], [3, 0, 4], [3, 0, 6], [0, 0, 6],
+        ],
+        indices: [
+          0, 1, 2, 0, 2, 3,
+          4, 5, 6, 4, 6, 7,
+          8, 9, 10, 8, 10, 11,
+        ],
+      },
+      obstacleBoxes: [],
+      doorwayBoxes: [{
+        entityId: "open-doorway",
+        min: [1.2, 0, 2],
+        max: [1.8, 2.5, 4],
+      }],
+      profile: { ...runtime.profile },
+    };
+    let position: [number, number, number] = [1.32, 1.6, 1.78];
+    expect(isNavigationPointAllowed(position, doorwayRuntime)).toBe(true);
+    expect(isNavigationTransitionAllowed(
+      position,
+      [position[0], position[1], position[2] + 0.08],
+      doorwayRuntime,
+    )).toBe(false);
+
+    for (let frame = 0; frame < 70 && position[2] <= 4.2; frame += 1) {
+      const resolved = resolveNavigationMovement(
+        position,
+        [position[0], position[1], position[2] + 0.08],
+        doorwayRuntime,
+      );
+      expect(resolved, `frame ${frame} at ${position.join(",")}`).not.toBeNull();
+      position = resolved!;
+    }
+
+    expect(position[2]).toBeGreaterThan(4.2);
+    expect(isNavigationPointAllowed(position, doorwayRuntime)).toBe(true);
+  });
+
+  it("does not steer through an authored obstacle blocking the doorway", () => {
+    const blockedRuntime: NavigationRuntime = {
+      navigationMesh: {
+        vertices: [
+          [0, 0, 0], [3, 0, 0], [3, 0, 6], [0, 0, 6],
+        ],
+        indices: [0, 1, 2, 0, 2, 3],
+      },
+      obstacleBoxes: [{
+        entityId: "closed-door",
+        min: [0, 0, 2],
+        max: [3, 2.5, 2.2],
+      }],
+      doorwayBoxes: [{
+        entityId: "closed-doorway",
+        min: [1.2, 0, 2],
+        max: [1.8, 2.5, 2.2],
+      }],
+      profile: { ...runtime.profile },
+    };
+    let position: [number, number, number] = [1.5, 1.6, 1.7];
+    for (let frame = 0; frame < 70; frame += 1) {
+      const resolved = resolveNavigationMovement(
+        position,
+        [position[0], position[1], position[2] + 0.08],
+        blockedRuntime,
+      );
+      if (resolved) position = resolved;
+    }
+
+    expect(position[2]).toBeLessThan(1.81);
+    expect(position[0]).toBeCloseTo(1.5, 8);
+    expect(isNavigationPointAllowed(position, blockedRuntime)).toBe(true);
+  });
+
   it("anchors an invalid camera position onto a clearance-safe point on the mesh", () => {
     const anchored = nearestNavigationPoint([3, 1.6, 3], runtime);
 
@@ -131,6 +211,11 @@ describe("v5 navigation enforcement", () => {
         min: [1.5, 0, 0.2],
         max: [2.5, 0.9, 0.8],
       }],
+      doorwayBoxes: [{
+        entityId: "doorway",
+        min: [1.2, 0, 0.8],
+        max: [1.8, 2.4, 1.2],
+      }],
       navigationProfile: runtime.profile,
     });
 
@@ -140,6 +225,11 @@ describe("v5 navigation enforcement", () => {
         entityId: "table",
         min: [1.5, 0, 0.2],
         max: [2.5, 0.9, 0.8],
+      }],
+      doorwayBoxes: [{
+        entityId: "doorway",
+        min: [1.2, 0, 0.8],
+        max: [1.8, 2.4, 1.2],
       }],
       profile: runtime.profile,
     });

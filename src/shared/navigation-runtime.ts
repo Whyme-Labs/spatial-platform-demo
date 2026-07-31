@@ -16,11 +16,13 @@ export type NavigationMesh = {
   indices: number[];
 };
 
-export type NavigationObstacleBox = {
+export type NavigationEntityBox = {
   entityId: string;
   min: Vector3Tuple;
   max: Vector3Tuple;
 };
+
+export type NavigationObstacleBox = NavigationEntityBox;
 
 export type NavigationProfile = {
   worldUnit?: WorldUnit;
@@ -33,6 +35,7 @@ export type NavigationProfile = {
 export type NavigationRuntime = {
   navigationMesh: NavigationMesh;
   obstacleBoxes: NavigationObstacleBox[];
+  doorwayBoxes?: NavigationEntityBox[];
   profile: NavigationProfile;
 };
 
@@ -87,20 +90,8 @@ export function parseNavigationRuntimeMessage(
     }
   }
 
-  const rawObstacles = Reflect.get(message, "obstacleBoxes");
-  const obstacleBoxes = Array.isArray(rawObstacles)
-    ? rawObstacles.flatMap((value) => {
-        if (!value || typeof value !== "object") return [];
-        const min = finiteTuple(Reflect.get(value, "min"));
-        const max = finiteTuple(Reflect.get(value, "max"));
-        if (!min || !max) return [];
-        return [{
-          entityId: String(Reflect.get(value, "entityId") ?? ""),
-          min,
-          max,
-        }];
-      })
-    : [];
+  const obstacleBoxes = parseNavigationBoxes(Reflect.get(message, "obstacleBoxes"));
+  const doorwayBoxes = parseNavigationBoxes(Reflect.get(message, "doorwayBoxes"));
   const rawProfile = Reflect.get(message, "navigationProfile");
   const profile = rawProfile && typeof rawProfile === "object"
     ? {
@@ -137,6 +128,7 @@ export function parseNavigationRuntimeMessage(
       indices: validAuthoredMesh ? indices : legacyIndices,
     },
     obstacleBoxes,
+    doorwayBoxes,
     profile,
   };
 }
@@ -238,6 +230,71 @@ export function isNavigationTransitionAllowed(
   return true;
 }
 
+/**
+ * Resolves one camera movement while retaining authored navigation clearance.
+ * Near an authored doorway, rotate a rejected same-length step by the smallest
+ * viable angle so held forward input can enter without weakening other edges.
+ */
+export function resolveNavigationMovement(
+  from: Vector3Tuple,
+  to: Vector3Tuple,
+  runtime: NavigationRuntime,
+): Vector3Tuple | null {
+  if (isNavigationTransitionAllowed(from, to, runtime)) {
+    return [...to];
+  }
+  if (!isDoorwayAssistActive(from, to, runtime)) return null;
+
+  const deltaX = to[0] - from[0];
+  const deltaZ = to[2] - from[2];
+  const planarDistance = Math.hypot(deltaX, deltaZ);
+  if (planarDistance <= Number.EPSILON) return null;
+  const forwardX = deltaX / planarDistance;
+  const forwardZ = deltaZ / planarDistance;
+
+  for (const angleDegrees of [
+    -15, 15, -30, 30, -45, 45, -60, 60, -75, 75,
+  ]) {
+    const angle = angleDegrees * Math.PI / 180;
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    const candidate: Vector3Tuple = [
+      from[0] + deltaX * cosine - deltaZ * sine,
+      to[1],
+      from[2] + deltaX * sine + deltaZ * cosine,
+    ];
+    const forwardProgress =
+      (candidate[0] - from[0]) * forwardX +
+      (candidate[2] - from[2]) * forwardZ;
+    if (
+      forwardProgress > Number.EPSILON &&
+      isNavigationTransitionAllowed(from, candidate, runtime)
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isDoorwayAssistActive(
+  from: Vector3Tuple,
+  to: Vector3Tuple,
+  runtime: NavigationRuntime,
+): boolean {
+  const padding = Math.max(
+    runtime.profile.agentRadius,
+    runtime.profile.maxStepMetres * 2,
+  );
+  return (runtime.doorwayBoxes ?? []).some((doorway) =>
+    [from, to].some((point) =>
+      point[0] >= doorway.min[0] - padding &&
+      point[0] <= doorway.max[0] + padding &&
+      point[2] >= doorway.min[2] - padding &&
+      point[2] <= doorway.max[2] + padding
+    )
+  );
+}
+
 export function nearestNavigationPoint(
   cameraPosition: Vector3Tuple,
   runtime: NavigationRuntime,
@@ -314,6 +371,21 @@ function finiteTuple(value: unknown): Vector3Tuple | null {
   const coordinates = value.map(Number);
   if (coordinates.some((coordinate) => !Number.isFinite(coordinate))) return null;
   return [coordinates[0]!, coordinates[1]!, coordinates[2]!];
+}
+
+function parseNavigationBoxes(value: unknown): NavigationEntityBox[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((box) => {
+    if (!box || typeof box !== "object") return [];
+    const min = finiteTuple(Reflect.get(box, "min"));
+    const max = finiteTuple(Reflect.get(box, "max"));
+    if (!min || !max) return [];
+    return [{
+      entityId: String(Reflect.get(box, "entityId") ?? ""),
+      min,
+      max,
+    }];
+  });
 }
 
 function boundedRuntimeNumber(

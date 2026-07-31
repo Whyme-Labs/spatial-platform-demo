@@ -15,9 +15,9 @@ import {
 } from "./look-controls";
 import {
   isNavigationPointAllowed,
-  isNavigationTransitionAllowed,
   nearestNavigationPoint,
   parseNavigationRuntimeMessage,
+  resolveNavigationMovement,
   type NavigationRuntime,
   type SourceToWorldTransform,
   type Vector3Tuple,
@@ -481,10 +481,9 @@ async function start(): Promise<void> {
     if (navigationRuntime) {
       const destination = camera.position.toArray() as Vector3Tuple;
       const origin = movementStart.toArray() as Vector3Tuple;
-      if (
-        isNavigationPointAllowed(destination, navigationRuntime) &&
-        isNavigationTransitionAllowed(origin, destination, navigationRuntime)
-      ) {
+      const resolved = resolveNavigationMovement(origin, destination, navigationRuntime);
+      if (resolved) {
+        camera.position.fromArray(resolved);
         lastWalkablePosition = camera.position.clone();
       } else if (lastWalkablePosition) {
         camera.position.copy(lastWalkablePosition);

@@ -883,12 +883,20 @@ function setRendererCamera(cameraPose: CameraPose): Promise<CameraPose> {
 function sendSpatialRuntime(): void {
   const spatial = activeManifest?.spatial;
   if (!spatial) return;
+  const doorwayEntityIds = new Set(
+    spatial.entities
+      .filter((entity) => entity.kind === "doorway")
+      .map((entity) => entity.id),
+  );
   frame.contentWindow?.postMessage({
     source: "spatial-host",
     type: "set-spatial-runtime",
     collisionBoxes: spatial.collisionProxy.boxes,
     navigationMesh: spatial.navigationMesh,
     obstacleBoxes: spatial.obstacleProxy?.boxes ?? [],
+    doorwayBoxes: spatial.collisionProxy.boxes.filter((box) =>
+      doorwayEntityIds.has(box.entityId)
+    ),
     navigationProfile: spatial.navigationProfile,
   }, location.origin);
 }

@@ -42,12 +42,24 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         id: "77777777-7777-4777-8777-777777777777",
         kind: "room",
         label: "Room",
+      }, {
+        id: "88888888-8888-4888-8888-888888888888",
+        kind: "doorway",
+        label: "Doorway",
       }],
       routes: [],
       routeStops: [],
       collisionProxy: {
         version: "box-union-v1",
-        boxes: [{ entityId: "room", label: "Room", min: [0, 0, 0], max: [4, 3, 4] }],
+        boxes: [
+          { entityId: "room", label: "Room", min: [0, 0, 0], max: [4, 3, 4] },
+          {
+            entityId: "88888888-8888-4888-8888-888888888888",
+            label: "Doorway",
+            min: [1.5, 0, 3.5],
+            max: [2.5, 2.4, 4.5],
+          },
+        ],
       },
       navigationMesh: {
         version: "authored-polygon-triangles-v2",
@@ -347,6 +359,11 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       entityId: "table",
       min: [1, 0, 1],
       max: [2, 1, 2],
+    }],
+    doorwayBoxes: [{
+      entityId: "88888888-8888-4888-8888-888888888888",
+      min: [1.5, 0, 3.5],
+      max: [2.5, 2.4, 4.5],
     }],
     navigationProfile: {
       worldUnit: "scene_units",
