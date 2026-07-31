@@ -1702,6 +1702,30 @@ describe("Spatial Studio Worker", () => {
     expect(repeatedJobResponse.status).toBe(200);
     await expect(repeatedJobResponse.json()).resolves.toMatchObject({ idempotent: true });
 
+    const generatedPosterAssetId = crypto.randomUUID();
+    const generatedPosterKey =
+      `delivery-private/generated-poster/${completed.asset.versionId}/poster.png`;
+    await env.SPATIAL_ASSETS.put(generatedPosterKey, new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]), {
+      httpMetadata: { contentType: "image/png" },
+      customMetadata: { sha256: "c".repeat(64) },
+    });
+    await env.DB.prepare(`
+      INSERT INTO assets (
+        id, organisation_id, project_id, version_id, kind, format, object_key,
+        file_name, mime_type, size_bytes, sha256, integrity_status
+      )
+      SELECT ?, organisation_id, project_id, version_id, 'poster', 'png', ?,
+        'poster.png', 'image/png', 8, ?, 'verified'
+      FROM assets WHERE id = ?
+    `).bind(
+      generatedPosterAssetId,
+      generatedPosterKey,
+      "c".repeat(64),
+      completed.asset.id,
+    ).run();
+
     await recordCompletedPrivacyScan(project.id, completed.asset.versionId, completed.asset.id);
     const approvalRequest = {
       method: "POST",
@@ -2075,7 +2099,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(manifestResponse.status).toBe(200);
     const manifest = await manifestResponse.json<{
-      scene: { contentUrl: string };
+      scene: { contentUrl: string; posterUrl: string | null };
       spatial: {
         entities: Array<{ id: string; label: string }>;
         navigationMesh: { indices: number[]; sourceEntityIds: string[] };
@@ -2097,6 +2121,9 @@ describe("Spatial Studio Worker", () => {
       };
     }>();
     expect(manifest.scene.contentUrl).toContain("/scene.rad?token=");
+    expect(manifest.scene.posterUrl).toContain(
+      `/${generatedPosterAssetId}/poster.png?token=`,
+    );
     expect(manifest.viewer.initialCamera.up).toEqual([-0.01, -0.87, -0.49]);
     expect(manifest.spatial).toMatchObject({
       entities: [{ id: snapshotEntity.entity.id, label: "Published walkable room" }],

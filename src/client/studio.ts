@@ -10484,11 +10484,17 @@ function privacyQaReadiness(spatial: SpatialWorkspace | null): { ready: boolean;
 async function approveVersion(form: FormData): Promise<void> {
   const version = state.selected?.versions[0];
   if (!version) return;
+  const verifiedPoster = state.selected?.assets.find((asset) =>
+    asset.version_id === version.id &&
+    asset.kind === "poster" &&
+    asset.integrity_status === "verified"
+  );
   try {
     await api(`/api/versions/${version.id}/approve`, {
       method: "POST",
       body: JSON.stringify({
         webAssetId: String(form.get("webAssetId") ?? ""),
+        posterAssetId: verifiedPoster?.id ?? null,
         visualGrade: String(form.get("visualGrade") ?? "B"),
         measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
         privacyStatus: "approved",

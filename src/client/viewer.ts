@@ -2,6 +2,7 @@ import "@fontsource-variable/manrope";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import { api } from "./api";
+import { rendererLoadTimeoutMs } from "../shared/renderer-readiness";
 import { runAction, SingleFlight } from "./action-state";
 import {
   buildFloorPlans,
@@ -355,7 +356,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     const rendererUrl = publishedRendererUrl(manifest);
     frame.src = rendererUrl.toString();
     frame.hidden = false;
-    const timeoutMs = activeRendererRuntime === "playcanvas" ? 90_000 : 60_000;
+    const timeoutMs = rendererLoadTimeoutMs(manifest.scene.format, manifest.scene.sizeBytes);
     loadTimeout = window.setTimeout(() => {
       const rendererName = activeRendererRuntime === "playcanvas" ? "The native SOG viewer" : "Spark";
       showError(

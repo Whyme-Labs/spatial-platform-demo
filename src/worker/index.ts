@@ -11561,8 +11561,18 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (!approved?.manifest_json) return validationError(context, { project: ["Project has no approved scene version"] });
   const approval = parseStoredObject(approved.manifest_json);
   const webAssetId = readStringProperty(approval, "webAssetId");
-  const posterAssetId = readNullableStringProperty(approval, "posterAssetId");
+  let posterAssetId = readNullableStringProperty(approval, "posterAssetId");
   if (!webAssetId) return validationError(context, { project: ["Approved version has no web asset"] });
+  if (!posterAssetId) {
+    const generatedPoster = await context.env.DB.prepare(`
+      SELECT id FROM assets
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND kind = 'poster' AND integrity_status = 'verified'
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1
+    `).bind(auth.organisationId, project.id, approved.id).first<{ id: string }>();
+    posterAssetId = generatedPoster?.id ?? null;
+  }
   if (parsed.data.viewerConfig.sourceToWorld) {
     const evidence = await context.env.DB.prepare(`
       SELECT id, status, review_decision, parameters_json
