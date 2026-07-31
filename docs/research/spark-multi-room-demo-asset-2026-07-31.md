@@ -29,7 +29,8 @@ an offline evaluation bridge and is not the FJD/XGRIDS ingestion architecture.
 The runtime remains Spark-only. The v3 release has authored provisional
 collision regions and a navigation mesh, but has no metric scale, certified
 collision, measured floor plan, accessibility evidence, or invented bridges
-across gaps between the separately reconstructed room components.
+to the distant separately reconstructed component. Two adjacent gaps now carry
+explicitly provisional, operator-authored doorway traversal assists.
 
 ## Strongest direct-Spark candidate: Villa Badam
 
@@ -224,34 +225,40 @@ the public channel on 2026-07-31:
 - public viewer: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
 - project: `8575b01f-af96-401f-a245-3013fda91706`;
 - immutable version: `fcdbecb7-3042-40d1-a96b-1bbc4fc3913c`;
-- active release: `665dc7ca-53c8-4d35-931d-51f749a3d394`;
+- active release: `abacafa1-b0b2-4df4-a064-e1d1635bf750`;
 - immutable upright PLY: 150,480,651 bytes, SHA-256
   `1d4c11e4e6f159e9997d953c22a6c5e8a9fecc45f1fa0ec4ad4ad207fc835148`;
 - production-generated RAD: 73,437,240 bytes, SHA-256
   `ee0342109aff6661fe5c0a75e91f7a5401dcc23ee47c866105a23299d36462cf`;
 - reviewed transform evidence: `cc2f2648-4838-4df5-871f-9adf8301ff25`;
 - QA report: `eb1ac575-466f-406d-b3ee-be9f83c77ac2`;
-- deployed application commit: `0be9cdc`;
-- Cloudflare Worker version: `3861a40e-4363-4823-b3aa-4aec582da573`.
+- deployed application commit: `24205ec`;
+- Cloudflare Worker version: `f5c535a6-4d93-4348-b83b-35db4fe9d822`.
 
 The active manifest records a 4M splat budget, reviewed identity Y-up/SU
 transform, opening camera `[3.433, 1.75, -2.433]` looking toward
-`[2.433, 1.75, -2.433]`, four authored floor entities, 82 runtime navigation
-triangles, a 0.30 SU agent radius, and no authored obstacles. The four polygons
-retain 30.53 SU² of relative Recast footprint across four disconnected
-components; the platform does not claim that SU is metres or that the gaps are
-real doors.
+`[2.433, 1.75, -2.433]`, four authored floor entities, two provisional doorway
+connectors, 86 runtime navigation triangles, a 0.18 SU agent radius, and no
+authored obstacles. The two connectors join the three adjacent Recast
+components across reviewed threshold gaps; the distant fourth component remains
+disconnected because the evidence does not justify inventing a long corridor.
+The platform does not claim that SU is metres or that the authored assists are
+measured doors.
 
-A fresh production Chrome run reached `Scene ready`, displayed `Walking
-enabled · clear route map`, emitted no console errors, and visibly moved the
-camera forward after 18 real Arrow Up keypresses. A late-iframe-load regression
-that could overwrite the ready label with `Preparing scene` was reproduced in
-Playwright, fixed, and deployed with a dedicated regression assertion.
+A fresh production Chrome run reached `Scene ready`, displayed `Walking enabled
+· clear route map`, and accepted real arrow-key movement. A deterministic check
+against the exact public manifest sampled the complete 0.18 SU camera footprint
+at 0.04 SU intervals and proved both authored joins connected: main-to-side
+reached `[-2.06, 1.77, -0.99]`, while side-to-side reached
+`[-5.48, 1.77, -0.67]`. Runtime doorway assistance is scoped to those frozen
+doorway boxes and tries the smallest viable steering angle; walls, void edges,
+and closed obstacles retain the hard-stop behavior.
 
-Before production deployment, `npm run check` passed 163 unit/worker tests, 39
+Before production deployment, `npm run check` passed 165 unit/worker tests, 39
 Playwright tests, all type/build/static audits, and the Cloudflare production
-deployment dry-run. The temporary upload credential was revoked after the
-immutable PLY and derivatives were verified.
+deployment dry-run. Two-axis review finished with zero remaining standards or
+spec findings. The temporary upload credential was revoked after the immutable
+PLY and derivatives were verified.
 
 The prior visual-only release remains in immutable history as version
 `388c4f7b-fcbd-4f1b-bffa-5f223fa13d10` / release
