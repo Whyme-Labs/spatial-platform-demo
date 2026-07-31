@@ -455,6 +455,73 @@ test("visual-only releases do not imply a metric scale", async ({ page }) => {
   await expect(page.locator("#scaleStatus")).toHaveText("Visual only — scale not declared");
 });
 
+test("keeps a native SOG frame renderable behind its loading handoff", async ({ page }) => {
+  await page.route("**/api/releases/native-sog-loading/manifest", (route) => json(route, {
+    schemaVersion: "1",
+    release: {
+      id: "74444444-4444-4444-8444-444444444444",
+      slug: "native-sog-loading",
+      publishedAt: "2026-07-31T00:00:00.000Z",
+      expiresAt: null,
+      accessPolicy: "public",
+    },
+    project: {
+      id: "75555555-5555-4555-8555-555555555555",
+      versionId: "76666666-6666-4666-8666-666666666666",
+      name: "Native SOG loading",
+      captureAdapter: "open-import",
+      provenance: {},
+    },
+    scene: {
+      format: "sog",
+      contentUrl: "/native-room.sog",
+      posterUrl: "/native-room-poster.png",
+      sizeBytes: 54_803_033,
+      etag: null,
+    },
+    viewer: {
+      title: "Native SOG loading",
+      measurementDisclaimer: "Visual experience only.",
+      splatBudgetMillions: 2,
+    },
+    spatial: {
+      entities: [],
+      routes: [],
+      routeStops: [],
+      collisionProxy: { version: "box-union-v1", boxes: [] },
+      navigationMesh: {
+        version: "room-box-triangles-v1",
+        vertices: [],
+        indices: [],
+        sourceEntityIds: [],
+      },
+      obstacleProxy: { version: "authored-obstacle-boxes-v1", boxes: [] },
+      navigationProfile: {
+        worldUnit: "metres",
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
+      },
+    },
+  }));
+  await page.route("**/api/releases/native-sog-loading/telemetry", (route) => json(route, {}));
+  await page.route("**/playcanvas-renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: "<html><body style=\"background:#5d7044\">Native renderer loading</body></html>",
+  }));
+
+  await page.goto("/s/native-sog-loading", { waitUntil: "commit" });
+
+  const rendererFrame = page.locator("#rendererFrame");
+  const loader = page.locator("#loadingOverlay");
+  await expect(rendererFrame).toHaveClass(/native-streaming/);
+  await expect(rendererFrame).toHaveCSS("opacity", "1");
+  await expect(loader).toHaveClass(/native-streaming/);
+  await expect(loader).toHaveCSS("background-color", "rgba(9, 11, 10, 0.62)");
+});
+
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({
     status: 200,

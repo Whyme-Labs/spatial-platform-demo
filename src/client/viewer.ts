@@ -337,6 +337,8 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId<HTMLButtonElement>("openNavigator").hidden = true;
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
+  frame.classList.remove("native-streaming");
+  loading.classList.remove("native-streaming");
   frame.hidden = true;
   if (loadTimeout !== null) window.clearTimeout(loadTimeout);
 
@@ -354,6 +356,9 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     if (reviewMode) await loadSceneReview();
     void recordTelemetry("viewer_open");
     const rendererUrl = publishedRendererUrl(manifest);
+    const nativeStreaming = activeRendererRuntime === "playcanvas";
+    frame.classList.toggle("native-streaming", nativeStreaming);
+    loading.classList.toggle("native-streaming", nativeStreaming);
     frame.src = rendererUrl.toString();
     frame.hidden = false;
     const timeoutMs = rendererLoadTimeoutMs(manifest.scene.format, manifest.scene.sizeBytes);
@@ -458,6 +463,8 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   loadTimeout = null;
   errorPanel.hidden = true;
   frame.hidden = false;
+  frame.classList.remove("native-streaming");
+  loading.classList.remove("native-streaming");
   frame.classList.remove("is-loading");
   setLoading(false);
   rendererReady = true;
@@ -1129,6 +1136,8 @@ function showError(title: string, message: string): void {
   setLoading(false);
   byId<HTMLElement>("viewerHud").hidden = true;
   frame.classList.add("is-loading");
+  frame.classList.remove("native-streaming");
+  loading.classList.remove("native-streaming");
   frame.hidden = true;
   errorPanel.hidden = false;
   byId("errorTitle").textContent = title;
