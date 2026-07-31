@@ -151,9 +151,11 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
 
   const parentLoader = page.locator("#loadingOverlay");
   const releaseInfo = page.locator("#releaseInfo");
+  const viewerHud = page.locator("#viewerHud");
   const rendererFrame = page.locator("#rendererFrame");
   await expect(rendererFrame).toHaveAttribute("allowfullscreen", "");
   await expect(parentLoader).toBeVisible();
+  await expect(viewerHud).toBeHidden();
   await expect(releaseInfo).toBeHidden();
   await expect(rendererFrame).toHaveClass(/is-loading/);
   await expect(rendererFrame).toHaveCSS("opacity", "0");
@@ -178,7 +180,12 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(rendererFrame).not.toHaveClass(/is-loading/);
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(parentLoader).toBeHidden();
+  await expect(viewerHud).toBeVisible();
   await expect(releaseInfo).toBeVisible();
+  await expect(page.locator(".performance-chip")).toHaveCount(0);
+  await expect(page.locator("#rendererStatus")).toHaveText("Scene ready");
+  await expect(page.locator("#releaseInfoDetails")).toBeHidden();
+  await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
   await expect(page.locator("#scaleStatus")).toHaveText(
     "Provisional scene units (SU)",
   );
@@ -186,6 +193,27 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   const qualityStatus = page.frameLocator("#rendererFrame").locator("#quality-status");
   await expect(exploreRooms).toBeVisible();
   await expect(qualityStatus).toBeVisible();
+  await expect(page.locator("#viewerHud")).toContainText("Loading handoff fixture");
+  await expect.poll(() => page.locator("#viewerHud").evaluate((hud) =>
+    ["releaseInfo", "spatialNavigator", "openNavigator"].every((id) =>
+      document.getElementById(id)?.parentElement === hud
+    )
+  )).toBe(true);
+
+  await page.locator("#toggleReleaseInfo").click();
+  await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#releaseInfoDetails")).toBeVisible();
+  await expect(page.locator("#spatialNavigator")).toBeHidden();
+
+  await exploreRooms.click();
+  await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#releaseInfoDetails")).toBeHidden();
+  await expect(page.locator("#spatialNavigator")).toBeVisible();
+  await expect(exploreRooms).toBeHidden();
+  await page.locator("#closeNavigator").click();
+  await expect(page.locator("#spatialNavigator")).toBeHidden();
+  await expect(exploreRooms).toBeVisible();
+
   const [exploreBox, qualityBox] = await Promise.all([
     exploreRooms.boundingBox(),
     qualityStatus.boundingBox(),

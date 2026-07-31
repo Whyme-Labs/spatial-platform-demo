@@ -228,7 +228,6 @@ if (activeReleaseSlug) {
   document.body.className = "viewer-page";
   byId<HTMLElement>("marketingPage").hidden = true;
   byId<HTMLElement>("releaseApp").hidden = false;
-  byId("deviceProfile").textContent = deviceProfile;
   const shareButton = byId<HTMLButtonElement>("shareButton");
   shareButton.addEventListener("click", () => {
     void runAction({
@@ -247,6 +246,7 @@ if (activeReleaseSlug) {
   });
   window.addEventListener("message", handleRendererMessage);
   if (reviewMode) bindReviewInterface();
+  bindViewerHud();
   bindSpatialNavigator();
   void loadPublishedRelease();
 } else {
@@ -269,7 +269,11 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
   errorPanel.hidden = true;
+  setReleaseInfoExpanded(false);
+  byId<HTMLElement>("viewerHud").hidden = true;
   releaseInfo.hidden = true;
+  byId<HTMLElement>("spatialNavigator").hidden = true;
+  byId<HTMLButtonElement>("openNavigator").hidden = true;
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
   frame.hidden = true;
@@ -322,7 +326,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
 
 frame.addEventListener("load", () => {
   if (!activeManifest) return;
-  byId("rendererStatus").textContent = "Spark initialising";
+  byId("rendererStatus").textContent = "Preparing scene";
   sendSpatialRuntime();
 });
 
@@ -385,10 +389,11 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   frame.classList.remove("is-loading");
   setLoading(false);
   rendererReady = true;
+  byId<HTMLElement>("viewerHud").hidden = false;
   releaseInfo.hidden = false;
   byId("reviewPanel").hidden = !reviewMode;
   setNavigatorReady(true);
-  byId("rendererStatus").textContent = `Spark ${message.version} ready`;
+  byId("rendererStatus").textContent = "Scene ready";
   sendSpatialRuntime();
   void recordTelemetry("renderer_ready", message.timeToFirstFrameMs, {
     runtime: message.runtime,
@@ -437,9 +442,28 @@ function applyManifest(manifest: ReleaseManifest): void {
   renderSpatialNavigator(manifest);
 }
 
+function bindViewerHud(): void {
+  const toggle = byId<HTMLButtonElement>("toggleReleaseInfo");
+  toggle.addEventListener("click", () => {
+    setReleaseInfoExpanded(toggle.getAttribute("aria-expanded") !== "true");
+  });
+}
+
+function setReleaseInfoExpanded(expanded: boolean): void {
+  const toggle = byId<HTMLButtonElement>("toggleReleaseInfo");
+  toggle.setAttribute("aria-expanded", String(expanded));
+  byId<HTMLElement>("releaseInfoDetails").hidden = !expanded;
+  releaseInfo.classList.toggle("is-expanded", expanded);
+  if (!expanded) return;
+
+  byId<HTMLElement>("spatialNavigator").hidden = true;
+  byId<HTMLButtonElement>("openNavigator").hidden = !hasSpatialNavigation(activeManifest);
+}
+
 function bindSpatialNavigator(): void {
   const panel = byId("spatialNavigator");
   byId("openNavigator").addEventListener("click", () => {
+    setReleaseInfoExpanded(false);
     panel.hidden = false;
     byId<HTMLButtonElement>("openNavigator").hidden = true;
   });
@@ -453,6 +477,14 @@ function bindSpatialNavigator(): void {
     activeFloorPlanId = selected;
     renderActiveFloorPlan();
   });
+}
+
+function hasSpatialNavigation(manifest: ReleaseManifest | null): boolean {
+  const spatial = manifest?.spatial;
+  return Boolean(
+    spatial?.routes.length ||
+    spatial?.entities.some((entity) => entity.kind === "room" || entity.kind === "poi"),
+  );
 }
 
 function renderSpatialNavigator(manifest: ReleaseManifest): void {
@@ -470,7 +502,7 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   renderFloorPlanSelector();
   renderActiveFloorPlan();
   const trigger = byId<HTMLButtonElement>("openNavigator");
-  if (!rooms.length && !routes.length) {
+  if (!hasSpatialNavigation(manifest)) {
     trigger.hidden = true;
     byId("spatialNavigator").hidden = true;
     return;
@@ -901,6 +933,7 @@ function showError(title: string, message: string): void {
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
   setLoading(false);
+  byId<HTMLElement>("viewerHud").hidden = true;
   frame.classList.add("is-loading");
   frame.hidden = true;
   errorPanel.hidden = false;

@@ -30,6 +30,10 @@ const SPARK_RUNTIME_VERSION = "2.1.0";
 const parentOrigin = location.origin;
 const startedAt = performance.now();
 
+if (window.parent !== window) {
+  document.documentElement.classList.add("spark-embedded");
+}
+
 type SparkSceneFormat = "rad" | "spz" | "sog";
 type WalkableBoundarySource = "authored" | "none";
 

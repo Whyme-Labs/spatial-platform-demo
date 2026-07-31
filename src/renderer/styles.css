@@ -275,6 +275,10 @@ button {
   backdrop-filter: blur(16px);
 }
 
+.spark-embedded .spark-runtime {
+  display: none;
+}
+
 .spark-runtime-dot {
   width: 7px;
   height: 7px;

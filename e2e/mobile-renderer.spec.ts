@@ -187,6 +187,20 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
   await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 });
 
+test("hides the diagnostic runtime badge when the renderer is embedded", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const frame = document.createElement("iframe");
+    frame.id = "embedded-renderer";
+    frame.src = "/renderer/index.html";
+    document.body.append(frame);
+  });
+
+  const renderer = page.frameLocator("#embedded-renderer");
+  await expect(renderer.locator("html")).toHaveClass(/spark-embedded/);
+  await expect(renderer.locator(".spark-runtime")).toBeHidden();
+});
+
 test("summarizes authored walking readiness without exposing mesh jargon", async ({ page }) => {
   await page.route("**/asset/test-scene.spz", (route) =>
     route.fulfill({
