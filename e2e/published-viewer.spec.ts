@@ -509,7 +509,17 @@ test("keeps a native SOG frame renderable behind its loading handoff", async ({ 
   await page.route("**/playcanvas-renderer/index.html?*", (route) => route.fulfill({
     status: 200,
     contentType: "text/html",
-    body: "<html><body style=\"background:#5d7044\">Native renderer loading</body></html>",
+    body: `<html><body style="background:#5d7044">
+      <button id="controls" onclick="
+        window.helpVisible = !window.helpVisible;
+        parent.postMessage({
+          source: 'spatial-playcanvas',
+          type: 'control-help',
+          visible: window.helpVisible,
+          height: window.helpVisible ? 120 : 0
+        }, location.origin);
+      ">Controls</button>
+    </body></html>`,
   }));
 
   await page.goto("/s/native-sog-loading", { waitUntil: "commit" });
@@ -520,6 +530,38 @@ test("keeps a native SOG frame renderable behind its loading handoff", async ({ 
   await expect(rendererFrame).toHaveCSS("opacity", "1");
   await expect(loader).toHaveClass(/native-streaming/);
   await expect(loader).toHaveCSS("background-color", "rgba(9, 11, 10, 0.62)");
+
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-playcanvas",
+      type: "ready",
+      runtime: "playcanvas",
+      version: "test",
+      timeToFirstFrameMs: 1200,
+      format: "sog",
+      splatBudget: 2_000_000,
+    }, location.origin);
+  });
+  await expect(page.locator("#viewerHud")).toBeVisible();
+  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Controls" }).click();
+  await expect(page.locator("#viewerHud")).toBeHidden();
+  await page.frameLocator("#rendererFrame").getByRole("button", { name: "Controls" }).click();
+  await expect(page.locator("#viewerHud")).toBeVisible();
+});
+
+test("anchors native control help away from the release HUD edge", async ({ page }) => {
+  await page.goto("/playcanvas-renderer/index.html", { waitUntil: "domcontentloaded" });
+  await page.locator("#spatialNativeToolbar").evaluate((toolbar) => {
+    toolbar.removeAttribute("hidden");
+  });
+  await page.getByRole("button", { name: "Controls" }).click();
+
+  const help = page.locator("#spatialNativeHelpPanel");
+  await expect(help).toBeVisible();
+  await expect.poll(async () => {
+    const box = await help.boundingBox();
+    return box?.x ?? Number.POSITIVE_INFINITY;
+  }).toBeLessThan(80);
 });
 
 function json(route: Route, body: unknown): Promise<void> {

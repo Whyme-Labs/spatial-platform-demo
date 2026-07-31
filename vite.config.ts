@@ -131,7 +131,7 @@ function playCanvasToolbarCss(): string {
 }
 .spatial-native-help {
     position: absolute;
-    right: 0;
+    left: 0;
     bottom: calc(100% + 10px);
     width: min(360px, calc(100vw - 32px));
     padding: 16px 18px;
@@ -310,8 +310,14 @@ function playCanvasBridgeScript(): string {
       reset?.addEventListener("click", () => viewer()?.global.events.fire("inputEvent", "reset"));
       help?.addEventListener("click", () => {
         const expanded = help.getAttribute("aria-expanded") === "true";
-        help.setAttribute("aria-expanded", String(!expanded));
+        const visible = !expanded;
+        help.setAttribute("aria-expanded", String(visible));
         if (helpPanel) helpPanel.hidden = expanded;
+        post({
+          type: "control-help",
+          visible,
+          height: visible && helpPanel ? helpPanel.getBoundingClientRect().height : 0
+        });
       });
       fullscreen?.addEventListener("click", () => {
         if (document.fullscreenElement) void document.exitFullscreen();

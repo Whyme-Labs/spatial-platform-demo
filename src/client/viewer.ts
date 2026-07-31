@@ -243,6 +243,12 @@ type PlayCanvasRendererMessage =
       accepted: boolean;
       message?: string;
       cameraPose: CameraPose;
+    }
+  | {
+      source: "spatial-playcanvas";
+      type: "control-help";
+      visible: boolean;
+      height: number;
     };
 type SpatialRendererMessage = SparkRendererMessage | PlayCanvasRendererMessage;
 type SpatialRendererRuntime = "spark" | "playcanvas";
@@ -426,7 +432,7 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     byId("viewport").classList.toggle("mobile-controls-onboarding", message.visible);
     return;
   }
-  if (message.source === "spatial-spark" && message.type === "control-help") {
+  if (message.type === "control-help") {
     const viewport = byId<HTMLElement>("viewport");
     const helpHeight = Number.isFinite(message.height)
       ? Math.min(innerHeight, Math.max(0, message.height))
@@ -437,6 +443,9 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
       setViewerHudMode("collapsed");
     } else {
       viewport.style.removeProperty("--renderer-help-height");
+    }
+    if (message.source === "spatial-playcanvas") {
+      byId<HTMLElement>("viewerHud").hidden = message.visible;
     }
     return;
   }
@@ -491,7 +500,7 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   const type = Reflect.get(value, "type");
   if (source === "spatial-playcanvas") {
     return type === "progress" || type === "ready" || type === "error" ||
-      type === "camera" || type === "camera-set";
+      type === "camera" || type === "camera-set" || type === "control-help";
   }
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
