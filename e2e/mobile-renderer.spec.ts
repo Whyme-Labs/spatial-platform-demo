@@ -190,6 +190,12 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
 test("hides the diagnostic runtime badge when the renderer is embedded", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
+    Reflect.set(window, "rendererMessages", []);
+    window.addEventListener("message", (event) => {
+      if (event.data?.source === "spatial-spark") {
+        Reflect.get(window, "rendererMessages").push(event.data);
+      }
+    });
     const frame = document.createElement("iframe");
     frame.id = "embedded-renderer";
     frame.src = "/renderer/index.html";
@@ -199,6 +205,17 @@ test("hides the diagnostic runtime badge when the renderer is embedded", async (
   const renderer = page.frameLocator("#embedded-renderer");
   await expect(renderer.locator("html")).toHaveClass(/spark-embedded/);
   await expect(renderer.locator(".spark-runtime")).toBeHidden();
+  await renderer.getByRole("button", { name: "Controls" }).click();
+  await expect(renderer.locator("#controlHelp")).toBeVisible();
+  await expect.poll(() => page.evaluate(() =>
+    Reflect.get(window, "rendererMessages").find(
+      (message: { type?: string }) => message.type === "control-help",
+    )
+  )).toMatchObject({
+    type: "control-help",
+    visible: true,
+    height: expect.any(Number),
+  });
 });
 
 test("summarizes authored walking readiness without exposing mesh jargon", async ({ page }) => {
@@ -249,8 +266,32 @@ test("summarizes authored walking readiness without exposing mesh jargon", async
   await expect(status).toHaveAttribute("data-tone", "ready");
   await expect(status).not.toContainText("triangles");
   await expect(page.getByRole("button", { name: "Reset view" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Controls" })).toBeVisible();
+  const controlsButton = page.getByRole("button", { name: "Controls" });
+  await expect(controlsButton).toBeVisible();
   await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();
+
+  await controlsButton.click();
+  await expect(page.locator("#controlHelp")).toBeVisible();
+  await expect(status).toBeHidden();
+  const controlsLayout = await page.evaluate(() => {
+    const help = document.querySelector<HTMLElement>("#controlHelp");
+    const controls = document.querySelector<HTMLElement>(".spark-controls");
+    if (!help || !controls) return null;
+    const helpBounds = help.getBoundingClientRect();
+    const controlBounds = controls.getBoundingClientRect();
+    return {
+      overlaps:
+        helpBounds.left < controlBounds.right &&
+        helpBounds.right > controlBounds.left &&
+        helpBounds.top < controlBounds.bottom &&
+        helpBounds.bottom > controlBounds.top,
+    };
+  });
+  expect(controlsLayout).toEqual({ overlaps: false });
+
+  await controlsButton.click();
+  await expect(page.locator("#controlHelp")).toBeHidden();
+  await expect(status).toBeVisible();
 });
 
 test("keeps renderer status and controls separated in a compact fine-pointer viewport", async ({

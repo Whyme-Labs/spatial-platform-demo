@@ -187,6 +187,12 @@ type SparkRendererMessage =
       source: "spatial-spark";
       type: "control-onboarding";
       visible: boolean;
+    }
+  | {
+      source: "spatial-spark";
+      type: "control-help";
+      visible: boolean;
+      height: number;
     };
 
 const byId = <T extends Element = HTMLElement>(id: string): T => {
@@ -268,6 +274,8 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
+  byId("viewport").classList.remove("renderer-help-open");
+  byId<HTMLElement>("viewport").style.removeProperty("--renderer-help-height");
   errorPanel.hidden = true;
   setViewerHudMode("collapsed");
   byId<HTMLElement>("viewerHud").hidden = true;
@@ -371,6 +379,20 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     byId("viewport").classList.toggle("mobile-controls-onboarding", message.visible);
     return;
   }
+  if (message.type === "control-help") {
+    const viewport = byId<HTMLElement>("viewport");
+    const helpHeight = Number.isFinite(message.height)
+      ? Math.min(innerHeight, Math.max(0, message.height))
+      : 0;
+    viewport.classList.toggle("renderer-help-open", message.visible);
+    if (message.visible) {
+      viewport.style.setProperty("--renderer-help-height", `${helpHeight}px`);
+      setViewerHudMode("collapsed");
+    } else {
+      viewport.style.removeProperty("--renderer-help-height");
+    }
+    return;
+  }
   if (message.type === "progress") {
     setLoading(true, message.detail, message.progress);
     byId("rendererStatus").textContent = message.detail;
@@ -412,7 +434,7 @@ function isSparkRendererMessage(value: unknown): value is SparkRendererMessage {
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
-      type === "control-onboarding");
+      type === "control-onboarding" || type === "control-help");
 }
 
 function applyManifest(manifest: ReleaseManifest): void {
@@ -929,6 +951,8 @@ function showError(title: string, message: string): void {
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
+  byId("viewport").classList.remove("renderer-help-open");
+  byId<HTMLElement>("viewport").style.removeProperty("--renderer-help-height");
   setLoading(false);
   byId<HTMLElement>("viewerHud").hidden = true;
   frame.classList.add("is-loading");

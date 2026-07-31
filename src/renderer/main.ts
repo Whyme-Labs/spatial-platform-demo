@@ -102,6 +102,12 @@ type RendererMessage =
       source: "spatial-spark";
       type: "control-onboarding";
       visible: boolean;
+    }
+  | {
+      source: "spatial-spark";
+      type: "control-help";
+      visible: boolean;
+      height: number;
     };
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -122,6 +128,7 @@ const qualityLabel = byId<HTMLElement>("sparkQuality");
 const resetButton = byId<HTMLButtonElement>("resetView");
 const helpButton = byId<HTMLButtonElement>("toggleHelp");
 const helpPanel = byId<HTMLElement>("controlHelp");
+const sparkViewport = byId<HTMLElement>("sparkViewport");
 const fullscreenButton = byId<HTMLButtonElement>("enterFullscreen");
 const controlStatus = byId<HTMLElement>("controlStatus");
 const freeRoamToggle = byId<HTMLButtonElement>("freeRoamToggle");
@@ -131,7 +138,7 @@ const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
 const mobileControls = new MobileControlSurface({
   coarsePointer: matchMedia("(any-pointer: coarse)"),
   elements: {
-    viewport: byId("sparkViewport"),
+    viewport: sparkViewport,
     toggle: freeRoamToggle,
     pad: byId("movementPad"),
     knob: byId("movementKnob"),
@@ -805,6 +812,7 @@ function bindChrome(): void {
   helpButton.addEventListener("click", toggleHelp);
   fullscreenButton.addEventListener("click", requestFullscreen);
   document.addEventListener("fullscreenchange", updateFullscreenControl);
+  window.addEventListener("resize", handleControlHelpResize);
 }
 
 function resetView(): void {
@@ -822,8 +830,24 @@ function resetView(): void {
 }
 
 function toggleHelp(): void {
-  helpPanel.hidden = !helpPanel.hidden;
-  helpButton.setAttribute("aria-expanded", String(!helpPanel.hidden));
+  setControlHelpVisible(helpPanel.hidden);
+}
+
+function setControlHelpVisible(visible: boolean): void {
+  helpPanel.hidden = !visible;
+  helpButton.setAttribute("aria-expanded", String(visible));
+  sparkViewport.classList.toggle("control-help-open", visible);
+  post({
+    source: "spatial-spark",
+    type: "control-help",
+    visible,
+    height: visible ? Math.ceil(helpPanel.getBoundingClientRect().height) : 0,
+  });
+}
+
+function handleControlHelpResize(): void {
+  if (helpPanel.hidden) return;
+  setControlHelpVisible(true);
 }
 
 function requestFullscreen(): void {
@@ -876,6 +900,7 @@ function dispose(): void {
   if (__SPATIAL_E2E__) {
     window.removeEventListener("spatial:e2e-mobile-controls-ready", enableMobileControlsForTest);
   }
+  window.removeEventListener("resize", handleControlHelpResize);
   document.removeEventListener("fullscreenchange", updateFullscreenControl);
   resetButton.removeEventListener("click", resetView);
   helpButton.removeEventListener("click", toggleHelp);

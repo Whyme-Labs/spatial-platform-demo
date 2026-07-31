@@ -87,11 +87,35 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
               background: #101514;
               color: white;
               font: 14px sans-serif;
+              pointer-events: none;
             }
             @media (max-width: 640px) {
               #quality-status {
                 top: 14px;
                 bottom: auto;
+              }
+            }
+            #control-help {
+              position: fixed;
+              right: 14px;
+              bottom: 114px;
+              width: 360px;
+              min-height: 138px;
+              padding: 16px;
+              border: 1px solid #39403e;
+              border-radius: 14px;
+              background: #101514;
+              color: white;
+              font: 14px/1.5 sans-serif;
+            }
+            #control-help[hidden] { display: none; }
+            @media (max-width: 640px) {
+              #control-help {
+                right: 14px;
+                bottom: 70px;
+                left: 14px;
+                width: auto;
+                min-height: 160px;
               }
             }
           </style>
@@ -119,6 +143,21 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
             type: 'control-onboarding',
             visible: false
           }, location.origin)">Close onboarding</button>
+          <button id="toggle-controls" onclick="
+            const help = document.getElementById('control-help');
+            help.hidden = !help.hidden;
+            parent.postMessage({
+              source: 'spatial-spark',
+              type: 'control-help',
+              visible: !help.hidden,
+              height: help.hidden ? 0 : help.getBoundingClientRect().height
+            }, location.origin);
+          ">Controls</button>
+          <div id="control-help" hidden>
+            <strong>Explore the scene</strong>
+            <p>Drag to look · scroll or two-finger swipe to travel</p>
+            <p>Desktop: WASD or arrow keys to move · Shift for speed</p>
+          </div>
           <button id="renderer-ready" onclick="parent.postMessage({
             source: 'spatial-spark',
             type: 'ready',
@@ -202,11 +241,32 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   )).toBe(true);
   await expect(page.locator("#viewerHud .glass-panel")).toHaveCount(1);
 
+  const controlsHelp = page.frameLocator("#rendererFrame").locator("#control-help");
+  const controlsButton = page.frameLocator("#rendererFrame").getByRole("button", {
+    name: "Controls",
+  });
+  const expectHudAndHelpSeparated = async (): Promise<void> => {
+    await expect.poll(async () => {
+      const [hudBox, helpBox] = await Promise.all([
+        viewerHud.boundingBox(),
+        controlsHelp.boundingBox(),
+      ]);
+      return hudBox !== null && helpBox !== null && rectanglesOverlap(hudBox, helpBox);
+    }).toBe(false);
+  };
+
   await page.locator("#toggleReleaseInfo").click();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#releaseInfoDetails")).toBeVisible();
   await expect(page.locator("#spatialNavigator")).toBeHidden();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
+  await controlsButton.click();
+  await expect(controlsHelp).toBeVisible();
+  await expect(page.locator("#releaseInfoDetails")).toBeHidden();
+  await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
+  await expectHudAndHelpSeparated();
+  await controlsButton.click();
+  await expect(controlsHelp).toBeHidden();
 
   await exploreRooms.click();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
@@ -214,10 +274,36 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#spatialNavigator")).toBeVisible();
   await expect(exploreRooms).toBeVisible();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
+  await controlsButton.click();
+  await expect(controlsHelp).toBeVisible();
+  await expect(page.locator("#spatialNavigator")).toBeHidden();
+  await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
+  await expectHudAndHelpSeparated();
+  await controlsButton.click();
+  await expect(controlsHelp).toBeHidden();
+
+  await exploreRooms.click();
+  await expect(page.locator("#spatialNavigator")).toBeVisible();
   await page.locator("#closeNavigator").click();
   await expect(page.locator("#spatialNavigator")).toBeHidden();
   await expect(exploreRooms).toBeVisible();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
+
+  await controlsButton.click();
+  await expect(controlsHelp).toBeVisible();
+  await expectHudAndHelpSeparated();
+  await page.setViewportSize({ width: 700, height: 760 });
+  await expect(viewerHud).toBeHidden();
+  await controlsButton.click();
+  await expect(controlsHelp).toBeHidden();
+  await expect(viewerHud).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await controlsButton.click();
+  await expect(controlsHelp).toBeVisible();
+  await expect(viewerHud).toBeHidden();
+  await controlsButton.click();
+  await expect(controlsHelp).toBeHidden();
+  await expect(viewerHud).toBeVisible();
 
   const [exploreBox, qualityBox] = await Promise.all([
     exploreRooms.boundingBox(),

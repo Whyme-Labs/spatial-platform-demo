@@ -284,8 +284,9 @@ form[aria-busy="true"] .dialog-close {
 .landing-proof div { display:grid; gap:5px; }.landing-proof dt { color:var(--muted); font-size:10px; }.landing-proof dd { margin:0; font-size:11px; }
 .viewer-error { position:absolute; z-index:12; left:50%; top:50%; transform:translate(-50%,-50%); width:min(500px,calc(100% - 32px)); border-radius:24px; padding:30px; }
 .viewer-error h2 { font:400 30px/1.05 Georgia,serif; margin:11px 0; }.viewer-error p { color:var(--muted); line-height:1.55; }
-.viewer-hud { position:absolute; z-index:9; right:18px; bottom:110px; width:min(360px,calc(100% - 36px)); pointer-events:none; }
+.viewer-hud { position:absolute; z-index:9; right:18px; bottom:110px; width:min(360px,calc(100% - 36px)); pointer-events:none; transition:bottom .2s ease,opacity .16s ease; }
 .viewer-hud > * { pointer-events:auto; }
+.viewport.renderer-help-open .viewer-hud { bottom:calc(126px + var(--renderer-help-height,0px)); }
 .release-info { position:relative; width:100%; overflow:hidden; border-radius:18px; padding:0; }
 .release-info-toggle { width:100%; min-height:62px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:14px; padding:11px 13px 11px 15px; border:0; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
 .release-info-toggle:hover,.release-info-toggle:focus-visible { background:rgba(255,255,255,.045); outline:none; }
@@ -652,6 +653,7 @@ form[aria-busy="true"] .dialog-close {
   .landing-panel h1 { font-size:44px; }
   .landing-proof { grid-template-columns:1fr; }
   .viewer-hud { right:12px; width:min(360px,calc(100% - 24px)); }
+  .viewport.renderer-help-open .viewer-hud { display:none; }
   .review-panel { top:auto; bottom:12px; left:12px; width:calc(100% - 24px); max-height:58%; }
   .spatial-navigator,.release-info-details { max-height:calc(100dvh - 250px); }
   .viewport.mobile-controls-onboarding .navigator-trigger { display:none; }
@@ -683,6 +685,7 @@ form[aria-busy="true"] .dialog-close {
 }
 @media (any-pointer: coarse) {
   .viewer-hud { top:110px; right:10px; bottom:auto; width:min(360px,calc(100% - 20px)); }
+  .viewport.renderer-help-open .viewer-hud { display:none; }
   .spatial-navigator,.release-info-details { max-height:calc(100dvh - 220px); }
 }
 @media (max-width: 480px) {

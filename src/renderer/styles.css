@@ -231,6 +231,11 @@ button {
   color: #d4ff58;
 }
 
+.spark-controls #toggleHelp[aria-expanded="true"] {
+  background: rgb(212 255 88 / 9%);
+  color: #e5f6b1;
+}
+
 .spark-help {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));
@@ -325,6 +330,10 @@ button {
 }
 
 .spark-control-status:empty {
+  display: none;
+}
+
+.spark-viewport.control-help-open .spark-control-status {
   display: none;
 }
 
