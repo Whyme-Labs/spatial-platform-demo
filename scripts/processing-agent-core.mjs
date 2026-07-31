@@ -1,4 +1,10 @@
+import { strFromU8, unzipSync } from "fflate";
+
 const maximumHeaderBytes = 2 * 1024 * 1024;
+const maximumSogEntries = 128;
+const maximumSogEntryBytes = 192 * 1024 * 1024;
+const maximumSogExpandedBytes = 256 * 1024 * 1024;
+const maximumSogCompressionRatio = 50;
 
 export class ProcessingAgentError extends Error {
   constructor(code, message, {
@@ -185,13 +191,19 @@ export function validateEvidenceAsset(bytes, { format, purpose }) {
       signature = "RAD0";
       assertBytes(header, [0x52, 0x41, 0x44, 0x30], format);
       break;
+    case "spz": {
+      const container = inspectSpzContainer(header);
+      signature = container.container === "gzip" ? "SPZ-gzip" : "SPZ-NGSP-v4";
+      break;
+    }
+    case "sog":
+      signature = "SOG-PKZIP";
+      assertPkZip(header, format);
+      validateSogArchive(source);
+      break;
     case "zip":
       signature = "PKZIP";
-      if (
-        !startsWithBytes(header, [0x50, 0x4b, 0x03, 0x04]) &&
-        !startsWithBytes(header, [0x50, 0x4b, 0x05, 0x06]) &&
-        !startsWithBytes(header, [0x50, 0x4b, 0x07, 0x08])
-      ) throw evidenceSignatureError(format, "ZIP evidence is missing a PK archive signature");
+      assertPkZip(header, format);
       break;
     case "jpg":
     case "jpeg":
@@ -270,6 +282,222 @@ export function validateEvidenceAsset(bytes, { format, purpose }) {
   };
 }
 
+export function validateSogArchive(bytes) {
+  const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  inspectSogZipDirectory(source);
+  let entries;
+  try {
+    entries = unzipSync(source);
+  } catch (error) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG is not a readable ZIP archive",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        cause: error,
+      },
+    );
+  }
+
+  const metaBytes = entries["meta.json"];
+  if (!metaBytes) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG archive is missing meta.json",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+
+  let metadata;
+  try {
+    metadata = JSON.parse(strFromU8(metaBytes));
+  } catch (error) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG meta.json is not valid JSON",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        cause: error,
+      },
+    );
+  }
+
+  const version = metadata?.version;
+  const count = metadata?.count;
+  if (![1, 2].includes(version) || !Number.isSafeInteger(count) || count <= 0) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG metadata must declare a supported version and positive Gaussian count",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: { version, count },
+      },
+    );
+  }
+
+  const referencedFiles = new Set();
+  collectSogFileReferences(metadata, referencedFiles);
+  if (!referencedFiles.size) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG metadata does not reference any WebP payloads",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  const missingFiles = [...referencedFiles].filter((name) => !entries[name]?.byteLength);
+  if (missingFiles.length) {
+    throw new ProcessingAgentError(
+      "INVALID_SOG_ARCHIVE",
+      "SOG archive is missing referenced WebP payloads",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: { missingFiles },
+      },
+    );
+  }
+
+  return {
+    version,
+    gaussianCount: count,
+    entryCount: Object.keys(entries).length,
+    referencedFiles: [...referencedFiles].sort(),
+  };
+}
+
+function inspectSogZipDirectory(source) {
+  const view = new DataView(source.buffer, source.byteOffset, source.byteLength);
+  const minimumEocdBytes = 22;
+  const maximumCommentBytes = 65_535;
+  let eocdOffset = -1;
+  for (
+    let offset = source.byteLength - minimumEocdBytes;
+    offset >= Math.max(0, source.byteLength - minimumEocdBytes - maximumCommentBytes);
+    offset -= 1
+  ) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+  if (eocdOffset < 0) {
+    throw invalidSogArchive("SOG archive has no ZIP central directory");
+  }
+
+  const diskNumber = view.getUint16(eocdOffset + 4, true);
+  const centralDirectoryDisk = view.getUint16(eocdOffset + 6, true);
+  const diskEntryCount = view.getUint16(eocdOffset + 8, true);
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  const directoryBytes = view.getUint32(eocdOffset + 12, true);
+  const directoryOffset = view.getUint32(eocdOffset + 16, true);
+  if (
+    diskNumber !== 0 ||
+    centralDirectoryDisk !== 0 ||
+    diskEntryCount !== entryCount ||
+    entryCount === 0xffff ||
+    directoryBytes === 0xffffffff ||
+    directoryOffset === 0xffffffff
+  ) {
+    throw invalidSogArchive("SOG archive must be a single-disk non-ZIP64 bundle");
+  }
+  if (entryCount === 0 || entryCount > maximumSogEntries) {
+    throw sogArchiveLimitError("SOG archive has an unsafe number of entries", {
+      entryCount,
+      maximumEntries: maximumSogEntries,
+    });
+  }
+  if (
+    directoryOffset + directoryBytes > eocdOffset ||
+    directoryOffset + directoryBytes > source.byteLength
+  ) {
+    throw invalidSogArchive("SOG ZIP central directory is out of bounds");
+  }
+
+  let offset = directoryOffset;
+  let expandedBytes = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > source.byteLength || view.getUint32(offset, true) !== 0x02014b50) {
+      throw invalidSogArchive("SOG ZIP central directory contains an invalid entry");
+    }
+    const flags = view.getUint16(offset + 8, true);
+    const compressionMethod = view.getUint16(offset + 10, true);
+    const compressedBytes = view.getUint32(offset + 20, true);
+    const uncompressedBytes = view.getUint32(offset + 24, true);
+    const fileNameBytes = view.getUint16(offset + 28, true);
+    const extraBytes = view.getUint16(offset + 30, true);
+    const commentBytes = view.getUint16(offset + 32, true);
+    const diskStart = view.getUint16(offset + 34, true);
+    if (
+      compressedBytes === 0xffffffff ||
+      uncompressedBytes === 0xffffffff ||
+      diskStart !== 0
+    ) {
+      throw invalidSogArchive("SOG entries must be single-disk and non-ZIP64");
+    }
+    if ((flags & 0x1) !== 0 || ![0, 8].includes(compressionMethod)) {
+      throw invalidSogArchive("SOG entries must be unencrypted ZIP store or deflate payloads");
+    }
+    expandedBytes += uncompressedBytes;
+    const ratio = uncompressedBytes === 0
+      ? 1
+      : uncompressedBytes / Math.max(compressedBytes, 1);
+    if (
+      uncompressedBytes > maximumSogEntryBytes ||
+      expandedBytes > maximumSogExpandedBytes ||
+      ratio > maximumSogCompressionRatio
+    ) {
+      throw sogArchiveLimitError("SOG archive exceeds safe expansion limits", {
+        entryIndex: index,
+        compressedBytes,
+        uncompressedBytes,
+        expandedBytes,
+        ratio,
+      });
+    }
+    offset += 46 + fileNameBytes + extraBytes + commentBytes;
+  }
+  if (offset !== directoryOffset + directoryBytes) {
+    throw invalidSogArchive("SOG ZIP central directory length is inconsistent");
+  }
+}
+
+function invalidSogArchive(message) {
+  return new ProcessingAgentError(
+    "INVALID_SOG_ARCHIVE",
+    message,
+    { failureClass: "input_validation", retryable: false },
+  );
+}
+
+function sogArchiveLimitError(message, details) {
+  return new ProcessingAgentError(
+    "SOG_ARCHIVE_LIMIT_EXCEEDED",
+    message,
+    {
+      failureClass: "capacity",
+      retryable: false,
+      details,
+    },
+  );
+}
+
+function collectSogFileReferences(value, output) {
+  if (typeof value === "string") {
+    if (value.toLowerCase().endsWith(".webp")) output.add(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectSogFileReferences(item, output);
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) collectSogFileReferences(item, output);
+  }
+}
+
 function startsWithBytes(bytes, expected) {
   if (bytes.byteLength < expected.length) return false;
   return expected.every((value, index) => bytes[index] === value);
@@ -278,6 +506,19 @@ function startsWithBytes(bytes, expected) {
 function assertBytes(bytes, expected, format) {
   if (!startsWithBytes(bytes, expected)) {
     throw evidenceSignatureError(format, `${String(format).toUpperCase()} evidence has an invalid file signature`);
+  }
+}
+
+function assertPkZip(bytes, format) {
+  if (
+    !startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04]) &&
+    !startsWithBytes(bytes, [0x50, 0x4b, 0x05, 0x06]) &&
+    !startsWithBytes(bytes, [0x50, 0x4b, 0x07, 0x08])
+  ) {
+    throw evidenceSignatureError(
+      format,
+      `${String(format).toUpperCase()} evidence is missing a PK archive signature`,
+    );
   }
 }
 

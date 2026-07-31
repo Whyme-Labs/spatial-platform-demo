@@ -1052,6 +1052,25 @@ async function readGaussianPlyValidation(sourcePath) {
 }
 
 async function validateEvidenceSource(sourcePath, format, purpose) {
+  if (format === "sog") {
+    const sourceStat = await stat(sourcePath);
+    const maximumSogValidationBytes = 256 * 1024 * 1024;
+    if (sourceStat.size > maximumSogValidationBytes) {
+      throw new ProcessingAgentError(
+        "SOG_VALIDATION_CAPACITY_EXCEEDED",
+        "SOG web scenes larger than 256 MiB require a streaming validation path",
+        {
+          failureClass: "capacity",
+          retryable: false,
+          details: {
+            sourceBytes: sourceStat.size,
+            maximumBytes: maximumSogValidationBytes,
+          },
+        },
+      );
+    }
+    return validateEvidenceAsset(await readFile(sourcePath), { format, purpose });
+  }
   const handle = await open(sourcePath, "r");
   try {
     const sourceStat = await handle.stat();

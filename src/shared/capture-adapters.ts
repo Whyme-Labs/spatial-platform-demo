@@ -176,7 +176,7 @@ export type CaptureAssetImportPlan =
 
 const formatsByPurpose: Record<CaptureAssetPurpose, readonly CaptureAssetFormat[]> = {
   gaussian_splat: ["ply", "spz", "sog", "splat", "ksplat", "zip"],
-  web_scene: ["rad"],
+  web_scene: ["rad", "spz", "sog"],
   vendor_project: ["zip", "xbin", "fjdslam", "lcc", "lcc2"],
   raw_capture: ["zip", "xbin", "fjdslam"],
   source_images: ["zip", "jpg", "jpeg", "png", "webp"],

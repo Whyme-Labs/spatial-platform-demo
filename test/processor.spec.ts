@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { zipSync } from "fflate";
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
@@ -12,6 +13,7 @@ import {
   sparkMaximumSphericalHarmonicDegree,
   validateEvidenceAsset,
   validateGaussianPlyHeader,
+  validateSogArchive,
 } from "../scripts/processing-agent-core.mjs";
 
 const gaussianHeader = [
@@ -169,6 +171,44 @@ describe("processing agent core", () => {
       purpose: "web_scene",
       signatureVerified: true,
     });
+    const sog = zipSync({
+      "meta.json": new TextEncoder().encode(JSON.stringify({
+        version: 2,
+        count: 42,
+        means: { files: ["means_l.webp", "means_u.webp"] },
+        scales: { files: ["scales.webp"] },
+        quats: { files: ["quats.webp"] },
+        sh0: { files: ["sh0.webp"] },
+      })),
+      "means_l.webp": new Uint8Array([1]),
+      "means_u.webp": new Uint8Array([2]),
+      "scales.webp": new Uint8Array([3]),
+      "quats.webp": new Uint8Array([4]),
+      "sh0.webp": new Uint8Array([5]),
+    });
+    expect(validateEvidenceAsset(
+      sog,
+      { format: "sog", purpose: "web_scene" },
+    )).toMatchObject({
+      format: "sog",
+      purpose: "web_scene",
+      signature: "SOG-PKZIP",
+      signatureVerified: true,
+    });
+    expect(validateSogArchive(sog)).toMatchObject({
+      version: 2,
+      gaussianCount: 42,
+      entryCount: 6,
+    });
+    expect(validateEvidenceAsset(
+      Buffer.from([0x4e, 0x47, 0x53, 0x50, 0x04, 0x00, 0x00, 0x00]),
+      { format: "spz", purpose: "web_scene" },
+    )).toMatchObject({
+      format: "spz",
+      purpose: "web_scene",
+      signature: "SPZ-NGSP-v4",
+      signatureVerified: true,
+    });
   });
 
   it("rejects mislabeled capture evidence without retrying it", () => {
@@ -178,6 +218,29 @@ describe("processing agent core", () => {
     )).toThrowError(expect.objectContaining({
       code: "EVIDENCE_SIGNATURE_MISMATCH",
       failureClass: "input_validation",
+      retryable: false,
+    }));
+    expect(() => validateEvidenceAsset(
+      zipSync({ "readme.txt": new TextEncoder().encode("not a SOG") }),
+      { format: "sog", purpose: "web_scene" },
+    )).toThrowError(expect.objectContaining({
+      code: "INVALID_SOG_ARCHIVE",
+      failureClass: "input_validation",
+      retryable: false,
+    }));
+    expect(() => validateEvidenceAsset(
+      zipSync({
+        "meta.json": new TextEncoder().encode(JSON.stringify({
+          version: 2,
+          count: 42,
+          means: { files: ["means_l.webp"] },
+        })),
+        "means_l.webp": new Uint8Array(512 * 1024),
+      }, { level: 9 }),
+      { format: "sog", purpose: "web_scene" },
+    )).toThrowError(expect.objectContaining({
+      code: "SOG_ARCHIVE_LIMIT_EXCEEDED",
+      failureClass: "capacity",
       retryable: false,
     }));
   });

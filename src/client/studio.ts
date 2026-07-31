@@ -10090,7 +10090,7 @@ const captureFormatLabels: Record<CaptureAssetFormat, string> = {
 
 const capturePurposeHelp: Record<CaptureAssetPurpose, string> = {
   gaussian_splat: "Spark validates this portable Gaussian master and derives an immutable browser-ready RAD scene.",
-  web_scene: "The platform verifies this prebuilt Spark RAD scene and records it directly as a browser-delivery asset.",
+  web_scene: "The platform verifies this prebuilt Spark RAD, SPZ, or SOG scene and records it directly as a browser-delivery asset.",
   vendor_project: "The original vendor project remains private evidence; it is not treated as a browser scene.",
   raw_capture: "The raw scanner or capture container remains private evidence and requires a later reconstruction output.",
   source_images: "Original imagery is preserved for reproducibility and future reconstruction. A ZIP should retain the source filenames and metadata.",

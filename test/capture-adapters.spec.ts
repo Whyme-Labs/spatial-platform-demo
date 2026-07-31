@@ -51,17 +51,19 @@ describe("capture adapter import contract", () => {
     });
   });
 
-  it("accepts a prebuilt Spark scene as a web asset without rebuilding it", () => {
-    expect(planCaptureAssetImport({
-      adapter: "open-import",
-      purpose: "web_scene",
-      format: "rad",
-    })).toMatchObject({
-      accepted: true,
-      jobType: "asset.evidence-validate",
-      assetKind: "web",
-      browserRenderable: true,
-    });
+  it("accepts prebuilt Spark scenes as web assets without rebuilding them", () => {
+    for (const format of ["rad", "spz", "sog"] as const) {
+      expect(planCaptureAssetImport({
+        adapter: "open-import",
+        purpose: "web_scene",
+        format,
+      })).toMatchObject({
+        accepted: true,
+        jobType: "asset.evidence-validate",
+        assetKind: "web",
+        browserRenderable: true,
+      });
+    }
   });
 
   it("accepts portable calibration evidence for every calibrated capture path", () => {
