@@ -7,6 +7,7 @@ import { runAction, SingleFlight } from "./action-state";
 import {
   buildFloorPlans,
   cameraPoseForPlanRoom,
+  floorPlanDisplayLabel,
   locatePlanRoom,
   projectFloorPlan,
   projectPlanPoint,
@@ -140,6 +141,8 @@ type ReleaseManifest = {
     max_initial_bytes: number;
   };
 };
+
+type SpatialEntity = NonNullable<ReleaseManifest["spatial"]>["entities"][number];
 type CameraPose = {
   position: [number, number, number];
   target: [number, number, number];
@@ -610,11 +613,18 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   byId("navigatorTriggerLabel").textContent = routes.length ? "Start guided visit" : "Explore rooms";
   const roomDirectory = byId("roomDirectory");
   roomDirectory.replaceChildren();
-  for (const room of rooms) {
+  const floorPlanEntities = activeFloorPlans
+    .flatMap((plan) => plan.rooms)
+    .map((room) => spatial?.entities.find((entity) => entity.id === room.id))
+    .filter((entity): entity is SpatialEntity => Boolean(entity));
+  const directoryRooms = rooms.length ? rooms : floorPlanEntities;
+  for (const [index, room] of directoryRooms.entries()) {
     const button = document.createElement("button");
     button.className = "navigator-item";
     button.type = "button";
-    button.textContent = room.label;
+    button.textContent = floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label
+      ? room.label
+      : `${index + 1}. ${room.label}`;
     button.disabled = !rendererReady;
     button.addEventListener("click", () => {
       const pose = cameraFromEntity(room);
@@ -672,7 +682,7 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   }
 }
 
-function cameraFromEntity(entity: NonNullable<ReleaseManifest["spatial"]>["entities"][number]): CameraPose | null {
+function cameraFromEntity(entity: SpatialEntity): CameraPose | null {
   try {
     const metadata = JSON.parse(entity.metadata_json) as Record<string, unknown>;
     if (metadata.cameraPose) return metadata.cameraPose as CameraPose;
@@ -735,7 +745,7 @@ function renderActiveFloorPlan(): void {
   byId<HTMLSelectElement>("floorPlanSelect").value = plan.id;
   const projected = projectFloorPlan(plan);
   byId<SVGSVGElement>("floorPlanMap").setAttribute("viewBox", projected.viewBox);
-  for (const projectedRoom of projected.rooms) {
+  for (const [index, projectedRoom] of projected.rooms.entries()) {
     const room = planRoomsById.get(projectedRoom.id);
     if (!room) continue;
     const group = svgElement("g");
@@ -752,9 +762,15 @@ function renderActiveFloorPlan(): void {
     path.setAttribute("d", projectedRoom.path);
     const label = svgElement("text");
     label.classList.add("floor-plan-label");
+    const displayLabel = floorPlanDisplayLabel(
+      projectedRoom.label,
+      index,
+      projected.rooms.length,
+    );
+    label.classList.toggle("is-index", displayLabel !== projectedRoom.label);
     label.setAttribute("x", String(projectedRoom.labelPosition[0]));
     label.setAttribute("y", String(projectedRoom.labelPosition[1]));
-    label.textContent = room.label;
+    label.textContent = displayLabel;
     const activate = (): void => navigateToPlanRoom(room);
     group.addEventListener("click", activate);
     group.addEventListener("keydown", (event) => {

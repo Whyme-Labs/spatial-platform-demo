@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildFloorPlans,
   cameraPoseForPlanRoom,
+  floorPlanDisplayLabel,
   locatePlanRoom,
   projectFloorPlan,
 } from "../src/client/floor-plan";
@@ -101,6 +102,12 @@ describe("floor-plan projection", () => {
       ],
       bounds: { minX: -3, minZ: 0, maxX: 4, maxZ: 3 },
     })]);
+  });
+
+  it("uses numbered map labels when full room names would collide", () => {
+    expect(floorPlanDisplayLabel("Walk zone 3 — side room", 2, 4)).toBe("3");
+    expect(floorPlanDisplayLabel("Lobby", 0, 2)).toBe("Lobby");
+    expect(floorPlanDisplayLabel("A very long authored room name", 0, 1)).toBe("1");
   });
 
   it("preserves scene proportions in a bounded SVG projection", () => {

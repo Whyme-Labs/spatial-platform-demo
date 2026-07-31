@@ -335,6 +335,7 @@ form[aria-busy="true"] .dialog-close {
 .floor-plan-room-target[aria-disabled="true"] { cursor:wait; opacity:.52; }
 .floor-plan-room-target.is-pending .floor-plan-room { fill:rgba(214,255,75,.25); stroke:var(--accent); }
 .floor-plan-label { fill:var(--text); font:600 10px/1 Manrope,sans-serif; text-anchor:middle; dominant-baseline:middle; pointer-events:none; paint-order:stroke; stroke:#0b0d0b; stroke-width:3px; stroke-linejoin:round; }
+.floor-plan-label.is-index { font-size:16px; font-weight:750; }
 .floor-plan-marker { filter:drop-shadow(0 2px 5px rgba(0,0,0,.65)); pointer-events:none; }
 .floor-plan-marker circle { fill:var(--accent); stroke:#11150e; stroke-width:3; vector-effect:non-scaling-stroke; }
 .floor-plan-marker path { fill:var(--accent); stroke:#11150e; stroke-width:2; vector-effect:non-scaling-stroke; }

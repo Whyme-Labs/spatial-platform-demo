@@ -53,6 +53,14 @@ export type RoomCameraPose = {
   fovDegrees: number;
 };
 
+export function floorPlanDisplayLabel(
+  label: string,
+  index: number,
+  roomCount: number,
+): string {
+  return roomCount > 2 || label.length > 18 ? String(index + 1) : label;
+}
+
 export function buildFloorPlans(entities: FloorPlanEntity[]): FloorPlan[] {
   const floors = entities
     .filter((entity) => entity.kind === "floor")

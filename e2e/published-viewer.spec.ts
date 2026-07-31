@@ -316,6 +316,8 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#floorPlanSection")).toBeVisible();
   await expect(page.locator(".floor-plan-room-target")).toHaveCount(1);
   await expect(page.locator("#floorPlanSection")).toContainText("Walk zone");
+  await expect(page.locator("#roomDirectory").getByRole("button", { name: "Walk zone" }))
+    .toBeVisible();
   await expect(exploreRooms).toBeVisible();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
   await controlsButton.click();
