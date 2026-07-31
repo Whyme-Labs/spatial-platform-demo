@@ -134,6 +134,8 @@ import {
   PROVISIONAL_MEASUREMENT_DISCLAIMER,
   type WorldUnit,
 } from "../shared/world-units";
+import { hasNonIdentitySceneRotation } from "../shared/scene-rotation";
+import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
   CloudflareSaasError,
   createCloudflareCustomHostname,
@@ -11621,6 +11623,15 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     project.id,
     approved.id,
   );
+  if (
+    hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees) &&
+    hasAuthoredSpatialRuntime(spatialSnapshot)
+  ) {
+    return conflict(
+      context,
+      "Visual scene rotation cannot be published with authored spatial geometry; rotate the complete spatial frame instead",
+    );
+  }
   const snapshotProfile = Reflect.get(spatialSnapshot, "navigationProfile");
   const navigationWorldUnit = parseWorldUnit(
     snapshotProfile && typeof snapshotProfile === "object"

@@ -348,6 +348,67 @@ describe("v5 coordinate contracts", () => {
     }
   });
 
+  it("rejects scene rotations outside the Studio authoring bounds", () => {
+    const result = releaseInputSchema.safeParse({
+      slug: "invalid-scene-rotation",
+      accessPolicy: "unlisted",
+      viewerConfig: {
+        title: "Invalid rotation",
+        measurementDisclaimer: "Visual experience only.",
+        sceneRotationDegrees: [0, 0, 361],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects ambiguous scene rotation and source-to-world composition", () => {
+    const result = releaseInputSchema.safeParse({
+      slug: "ambiguous-scene-transform",
+      accessPolicy: "unlisted",
+      sourceToWorldEvidenceId: crypto.randomUUID(),
+      viewerConfig: {
+        title: "Ambiguous transform",
+        measurementDisclaimer: "Visual experience only.",
+        sceneRotationDegrees: [0, 0, 180],
+        sourceToWorld: {
+          sourceUpAxis: "Y",
+          worldUnit: "metres",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("canonicalizes an identity scene rotation before transform validation", () => {
+    const result = releaseInputSchema.safeParse({
+      slug: "identity-scene-transform",
+      accessPolicy: "unlisted",
+      sourceToWorldEvidenceId: crypto.randomUUID(),
+      viewerConfig: {
+        title: "Identity transform",
+        measurementDisclaimer: "Visual experience only.",
+        sceneRotationDegrees: [0, 0, 0],
+        sourceToWorld: {
+          sourceUpAxis: "Y",
+          worldUnit: "metres",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.viewerConfig.sceneRotationDegrees).toBeUndefined();
+    }
+  });
+
   it("emits unit-neutral provisional semantic measurements", () => {
     const floor = rectangularSurface(0, 4, 0, 3, 0);
     const signature = parsePlySceneSignature(asciiPly(floor), {

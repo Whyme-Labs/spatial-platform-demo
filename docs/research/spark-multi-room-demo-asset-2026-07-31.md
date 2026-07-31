@@ -4,22 +4,26 @@ Research date: 2026-07-31
 
 ## Decision
 
-No evaluated third-party asset currently clears all four release gates at once:
+**Home Scan** is the selected Spark-compatible multi-room visual demo. It now
+clears all four release gates:
 
 1. a real, connected multi-room indoor capture;
 2. rights that permit commercial use and redistribution with stated attribution;
 3. a portable Gaussian format that Spark can ingest directly (`PLY`, `SPZ`, `SOG`, `ZIP`, or `RAD`); and
 4. a verified Spark render that is visually faithful from an authored camera.
 
-Do **not** publish a replacement demo asset yet. The closest direct-format
-candidate is **Villa Badam**. Its SOG successfully builds into a Spark RAD, but
-the resulting validation poster is nearly black and does not yet establish
-visual equivalence. The most convincing finished-home content is **Home Scan**,
-but it is distributed as streamed SSOG rather than a format supported directly
-by the platform. Its temporary offline PLY-to-RAD experiment now completes, but
-the cross-renderer camera-equivalence gate still fails. This converter is not
-the FJD/XGRIDS production architecture and must not reintroduce a PlayCanvas
-runtime path.
+The earlier Home Scan failure was a coordinate-frame mismatch, not corrupted
+Gaussian data or a Spark decoder failure. SplatTransform's PLY presentation
+frame applies a 180-degree rotation around Z; Spark correctly preserved the raw
+PLY/RAD frame. Applying that rotation as explicit per-release viewer metadata
+raised normalized cross-correlation against the reference from `0.347871` to
+`0.984221` with the same authored camera.
+
+Publish it only as an attributed, visual-only Gaussian demonstration. The
+source is distributed as streamed SSOG, so `@playcanvas/splat-transform` remains
+an offline evaluation bridge and is not the FJD/XGRIDS ingestion architecture.
+The runtime remains Spark-only. Collision, navmesh, floorplan, metric scale,
+walkability, and room semantics are not authored for this release.
 
 ## Strongest direct-Spark candidate: Villa Badam
 
@@ -112,7 +116,7 @@ documented in the companion
 The FJD/XGRIDS ingestion contract should inspect source metadata, preserve the
 source degree, and clamp rather than invent missing SH coefficients.
 
-## Strongest content candidate: Home Scan, evaluation only
+## Selected content: Home Scan, corrected Spark release
 
 Source: [SuperSplat scene `3f89bbd3`](https://superspl.at/scene/3f89bbd3),
 published by `luxury_scans`.
@@ -181,14 +185,31 @@ Two offline experiments completed:
 | Spark RAD from LoD 3 | Direct Spark 2.1 build; 3,887,159 LoD splats | 73,417,608 | `8b287f358f19c50cf2593a293b3f05973630ee7f8c16b1b4341e442efe681e36` |
 | LoD 3 reference poster | Temporary converter render from the evaluation PLY | 59,728 | `53098ea7632a1969b8cb09f8683dd4596435721df117491f78d4ce101203cec8` |
 | LoD 3 Spark poster | Spatial Studio Spark renderer from the RAD | 84,496 | `0e040160351ee3cbb63dc1b65b394392de9ea349c8be23ae2746c6139e53f7f6` |
+| Corrected Spark comparison frame | Same camera with explicit `[0, 0, 180]` scene rotation | 84,913 | `fb0f03c6abcc059dee0e6bd12e5b2f79b365fddefdf56fd2ac34e06e405493f6` |
 
 The direct Spark PLY and Spark RAD produce the same recognizable whole-home
 dollhouse from the tested numeric camera, which clears the PLY-to-RAD integrity
-check. The temporary reference renderer produces a materially different view
-from those same camera numbers, so the required authored camera/transform
-equivalence is still unresolved. Interior, walkability, and close-range quality
-also remain unverified. Do not publish this artifact as the replacement demo
-yet.
+check. Inspection of SplatTransform's installed source map identified its PLY
+presentation transform as a 180-degree Z rotation. Spark intentionally does not
+invent that transform. Applying the same orientation to Spark produces a
+reference-equivalent frame: normalized cross-correlation improved from
+`0.347871` before correction to `0.984221` after correction.
+
+The production release therefore authors both inputs instead of relying on
+guesswork:
+
+```text
+sceneRotationDegrees: [0, 0, 180]
+camera.position: [16, 13, 15]
+camera.target: [-3.93, -1.3, -6.07]
+camera.up: [0, 1, 0]
+camera.fovDegrees: 55
+```
+
+This clears the whole-home dollhouse visual gate. It does not clear interior
+walking, collision, navigation, metric, floor-plan, or close-range fidelity
+gates; those remain explicit non-claims in the project, QA record, and release
+disclaimer.
 
 `@playcanvas/splat-transform` must remain an offline evaluation bridge only.
 The production FJD/XGRIDS path should accept a creator/vendor export in a
@@ -227,10 +248,11 @@ crash. Require all of the following:
   separate authored or derived artifacts with their own provenance; and
 - browser validation in Spatial Studio for desktop and phone before publish.
 
-Villa Badam is suitable for debugging this contract because it reaches the
-direct-Spark build stage and has named spaces. It is not suitable as the public
-demo until its camera/transform mismatch is explained and its Spark render
-passes the same-camera visual gate.
+Home Scan is the visual demo that currently clears this contract's image,
+rights, connectivity, and authored-frame gates. Villa Badam remains useful for
+debugging native SOG ingestion, but it is not suitable as the public demo until
+its camera/transform mismatch is explained and its Spark render passes the
+same-camera visual gate.
 
 ## Primary sources
 

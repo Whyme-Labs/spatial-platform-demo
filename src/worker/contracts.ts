@@ -5,6 +5,11 @@ import {
   captureAssetPurposes,
 } from "../shared/capture-adapters";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../shared/world-units";
+import {
+  hasNonIdentitySceneRotation,
+  SCENE_ROTATION_MAX_DEGREES,
+  SCENE_ROTATION_MIN_DEGREES,
+} from "../shared/scene-rotation";
 import { captureBundleRoles } from "./capture-bundle";
 
 const captureAdapterSchema = z.enum(captureAdapterIds);
@@ -1356,11 +1361,24 @@ export const releaseInputSchema = z.object({
     captureDate: z.string().date().optional(),
     measurementDisclaimer: z.string().trim().min(1).max(500),
     splatBudgetMillions: z.number().min(0.25).max(8).default(2),
-    sceneRotationDegrees: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
+    sceneRotationDegrees: z.tuple([
+      z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
+      z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
+      z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
+    ]).transform((rotation) =>
+      hasNonIdentitySceneRotation(rotation) ? rotation : undefined
+    ).optional(),
     sourceToWorld: sourceToWorldTransformSchema.optional(),
     initialCamera: cameraPoseSchema.optional(),
   }),
 }).superRefine((value, context) => {
+  if (value.viewerConfig.sceneRotationDegrees && value.viewerConfig.sourceToWorld) {
+    context.addIssue({
+      code: "custom",
+      path: ["viewerConfig"],
+      message: "Scene rotation cannot be combined with a reviewed source-to-world transform",
+    });
+  }
   if (value.viewerConfig.sourceToWorld && !value.sourceToWorldEvidenceId) {
     context.addIssue({
       code: "custom",

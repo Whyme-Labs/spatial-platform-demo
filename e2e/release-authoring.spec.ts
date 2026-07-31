@@ -1,0 +1,282 @@
+import { expect, test, type Page, type Route } from "@playwright/test";
+
+const now = "2026-07-31T13:30:00.000Z";
+const organisationId = "11111111-1111-4111-8111-111111111111";
+const projectId = "22222222-2222-4222-8222-222222222222";
+const versionId = "33333333-3333-4333-8333-333333333333";
+
+test("release authoring resets project-specific fields and submits scene rotation", async ({ page }) => {
+  let publishedBody: Record<string, unknown> | null = null;
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await mockApprovedProject(page, (body) => {
+    publishedBody = body;
+  });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Corrected Spark room" })).toBeVisible();
+
+  const openRelease = page.getByRole("button", { name: "Publish new release", exact: true });
+  await openRelease.click();
+  const dialog = page.locator("#releaseDialog");
+  await dialog.getByRole("textbox", { name: "Subtitle", exact: true }).fill("Stale project copy");
+  await dialog.locator("input[name='initialCameraPosition']").fill("1, 2, 3");
+  await dialog.locator("input[name='sceneRotationZ']").fill("180");
+  await dialog.getByRole("button", { name: "×", exact: true }).click();
+
+  await openRelease.click();
+  await expect(dialog.getByRole("textbox", { name: "Subtitle", exact: true })).toHaveValue("");
+  await expect(dialog.locator("input[name='initialCameraPosition']")).toHaveValue("");
+  await expect(dialog.locator("input[name='sceneRotationZ']")).toHaveValue("0");
+
+  await dialog.locator("input[name='sceneRotationZ']").fill("361");
+  expect(pageErrors).toEqual([]);
+  await dialog.locator("input[name='sceneRotationZ']").fill("180");
+  await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await expect.poll(() => publishedBody).not.toBeNull();
+  expect(publishedBody).toMatchObject({
+    viewerConfig: {
+      title: "Corrected Spark room",
+      sceneRotationDegrees: [0, 0, 180],
+    },
+  });
+  expect(pageErrors).toEqual([]);
+});
+
+test("release authoring loads spatial guards before enabling visual rotation", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { authoredSpatial: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  await expect(dialog.locator("input[name='sceneRotationZ']")).toBeDisabled();
+  await expect(dialog.locator("#sceneRotationNote")).toContainText(
+    "this version has authored spatial geometry",
+  );
+});
+
+test("release authoring makes visual rotation and reviewed transforms mutually exclusive", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { reviewedTransform: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  const applyTransform = dialog.getByRole("checkbox", {
+    name: "Apply authored source-to-world transform",
+    exact: true,
+  });
+  const rotationZ = dialog.locator("input[name='sceneRotationZ']");
+  await expect(applyTransform).toBeChecked();
+  await expect(rotationZ).toBeDisabled();
+
+  await applyTransform.uncheck();
+  await expect(rotationZ).toBeEnabled();
+  await rotationZ.fill("180");
+  await expect(applyTransform).not.toBeChecked();
+  await expect(applyTransform).toBeDisabled();
+
+  await rotationZ.fill("0");
+  await expect(applyTransform).toBeEnabled();
+  await applyTransform.check();
+  await expect(rotationZ).toHaveValue("0");
+  await expect(rotationZ).toBeDisabled();
+});
+
+async function mockApprovedProject(
+  page: Page,
+  onPublish: (body: Record<string, unknown>) => void,
+  options: { authoredSpatial?: boolean; reviewedTransform?: boolean } = {},
+): Promise<void> {
+  const project = {
+    id: projectId,
+    name: "Corrected Spark room",
+    slug: "corrected-spark-room",
+    status: "APPROVED",
+    captureAdapter: "open-import",
+    deliveryTemplate: "Property showcase",
+    notes: "Visual-only Gaussian fixture.",
+    customerName: "WhyMe Labs",
+    customFields: {},
+    latestVersionId: versionId,
+    latestVersionNumber: 1,
+    activeReleaseSlug: null,
+    updatedAt: now,
+  };
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const method = request.method();
+    const user = {
+      userId: "44444444-4444-4444-8444-444444444444",
+      organisationId,
+      email: "qa@whymelabs.com",
+      displayName: "Release QA",
+      role: "platform_admin",
+    };
+
+    if (path === "/api/auth/session") return json(route, 200, { authenticated: true, user });
+    if (path === "/api/auth/organisations") {
+      return json(route, 200, {
+        currentOrganisationId: organisationId,
+        organisations: [{
+          id: organisationId,
+          name: "WhyMe Labs",
+          slug: "whymelabs",
+          role: "platform_admin",
+          membershipUpdatedAt: now,
+          current: true,
+        }],
+      });
+    }
+    if (path === "/api/dashboard") {
+      return json(route, 200, {
+        activeProjects: 1,
+        processingJobs: 0,
+        hostedAssets: 1,
+        hostedBytes: 73_400_000,
+        activeReleases: 0,
+      });
+    }
+    if (path === "/api/projects" && method === "GET") return json(route, 200, { projects: [project] });
+    if (path === `/api/projects/${projectId}` && method === "GET") {
+      return json(route, 200, {
+        project,
+        versions: [{ id: versionId, version_number: 1, status: "APPROVED", created_at: now }],
+        assets: [{
+          id: "55555555-5555-4555-8555-555555555555",
+          version_id: versionId,
+          kind: "web",
+          format: "rad",
+          file_name: "scene.rad",
+          size_bytes: 73_400_000,
+          integrity_status: "verified",
+        }],
+        jobs: [],
+        releases: [],
+        captureBundles: [],
+      });
+    }
+    if (path === `/api/projects/${projectId}/spatial`) {
+      const reviewedTransform = options.reviewedTransform
+        ? [{
+          id: "66666666-6666-4666-8666-666666666666",
+          version_id: versionId,
+          input_asset_id: "77777777-7777-4777-8777-777777777777",
+          job_id: "88888888-8888-4888-8888-888888888888",
+          method: "registered-ply-walkable-candidates-v1",
+          status: "REVIEWED",
+          parameters_json: JSON.stringify({
+            sourceToWorld: {
+              sourceUpAxis: "Y",
+              worldUnit: "scene_units",
+              metresPerSourceUnit: 1,
+              yawDegrees: 0,
+              translationMetres: [0, 0, 0],
+            },
+          }),
+          summary_json: null,
+          candidate_count: 0,
+          review_decision: "accept_selected",
+          review_note: "Reviewed transform",
+          job_state: "SUCCEEDED",
+          job_progress: 100,
+          job_progress_message: "Reviewed",
+          job_error_json: null,
+          input_file_name: "scene.ply",
+          input_size_bytes: 100,
+          created_at: now,
+        }]
+        : [];
+      return json(route, 200, {
+        version: { id: versionId, version_number: 1 },
+        entities: options.authoredSpatial
+          ? [{
+            id: "99999999-9999-4999-8999-999999999999",
+            parent_id: null,
+            kind: "room",
+            label: "Authored room",
+            description: null,
+            position_json: null,
+            geometry_json: JSON.stringify({
+              type: "box",
+              points: [[0, 0, 0], [4, 3, 4]],
+            }),
+            metadata_json: "{}",
+            sort_order: 0,
+            world_unit: "scene_units",
+          }]
+          : [],
+        routes: [],
+        routeStops: [],
+        privacyRegions: [],
+        privacyScans: [],
+        privacyCandidates: [],
+        changeReports: [],
+        captureCompletenessReports: [],
+        rawChangeReports: [],
+        semanticExtractions: reviewedTransform,
+        semanticCandidates: [],
+        deliveryPolicy: null,
+        collisionProxy: { version: "empty-v1", boxes: [] },
+        navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
+        navigationObstacles: [],
+        obstacleProxy: { version: "empty-v1", boxes: [] },
+        navigationProfile: {
+          worldUnit: "scene_units",
+          agentRadius: 0.22,
+          agentHeight: 1.8,
+          eyeHeight: 1.6,
+          maxStepMetres: 0.1,
+        },
+      });
+    }
+    if (path === `/api/projects/${projectId}/releases` && method === "POST") {
+      onPublish(request.postDataJSON() as Record<string, unknown>);
+      return json(route, 200, {
+        release: {
+          url: "https://spatial.example/s/corrected-spark-room",
+          accessPolicy: "public",
+          accessToken: null,
+        },
+      });
+    }
+    if (path === "/api/review/inbox") return json(route, 200, { projects: [] });
+    if (path === "/api/jobs") return json(route, 200, { jobs: [] });
+    if (path === "/api/releases") return json(route, 200, { releases: [] });
+    if (path === "/api/hosting") {
+      return json(route, 200, {
+        paymentProviderConfigured: false,
+        plans: [],
+        subscriptions: [],
+        checkouts: [],
+        invoices: [],
+        alerts: [],
+        lifecycleRuns: [],
+      });
+    }
+    if (path === "/api/team") return json(route, 200, { members: [], invitations: [] });
+    if (path === "/api/team/identity-providers") return json(route, 200, { providers: [] });
+    if (path === "/api/capture-agents") return json(route, 200, { credentials: [] });
+    if (path === "/api/project-templates") return json(route, 200, { templates: [] });
+    if (path === "/api/project-views") return json(route, 200, { views: [] });
+    if (path === "/api/project-fields") return json(route, 200, { fields: [] });
+    if (path === "/api/uploads/recoverable") return json(route, 200, { uploads: [] });
+    if (path.startsWith("/api/projects/asset-handoffs") && method === "GET") {
+      return json(route, 200, { handoffs: [] });
+    }
+    return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
+  });
+}
+
+function json(route: Route, status: number, body: unknown): Promise<void> {
+  return route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+}

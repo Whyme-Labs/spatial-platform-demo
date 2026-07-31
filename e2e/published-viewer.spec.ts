@@ -483,6 +483,7 @@ test("routes SOG releases through the Spark renderer", async ({ page }) => {
       title: "Native SOG loading",
       measurementDisclaimer: "Visual experience only.",
       splatBudgetMillions: 2,
+      sceneRotationDegrees: [0, 0, 180],
     },
     spatial: {
       entities: [],
@@ -517,6 +518,7 @@ test("routes SOG releases through the Spark renderer", async ({ page }) => {
   const rendererFrame = page.locator("#rendererFrame");
   await expect(rendererFrame).not.toHaveClass(/native-streaming/);
   await expect(rendererFrame).toHaveAttribute("src", /\/renderer\/index\.html\?.*format=sog/);
+  await expect(rendererFrame).toHaveAttribute("src", /rotation=0%2C0%2C180/);
 
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
     parent.postMessage({

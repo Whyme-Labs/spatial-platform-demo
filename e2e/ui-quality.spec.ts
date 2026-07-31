@@ -1,4 +1,8 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import {
+  SCENE_ROTATION_MAX_DEGREES,
+  SCENE_ROTATION_MIN_DEGREES,
+} from "../src/shared/scene-rotation";
 
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
@@ -207,11 +211,28 @@ test.describe("authenticated studio UI", () => {
     await expect(page.locator(
       "#releaseForm select[name='releaseWorldUnit']",
     )).toHaveValue("scene_units");
+    await expect(page.locator(
+      "#releaseForm input[name='sceneRotationX']",
+    )).toHaveValue("0");
+    await expect(page.locator(
+      "#releaseForm input[name='sceneRotationY']",
+    )).toHaveValue("0");
+    await expect(page.locator(
+      "#releaseForm input[name='sceneRotationZ']",
+    )).toHaveValue("0");
+    for (const axis of ["X", "Y", "Z"]) {
+      const input = page.locator(`#releaseForm input[name='sceneRotation${axis}']`);
+      await expect(input).toHaveAttribute("min", String(SCENE_ROTATION_MIN_DEGREES));
+      await expect(input).toHaveAttribute("max", String(SCENE_ROTATION_MAX_DEGREES));
+    }
     await expect(page.locator("#semanticExtractionDialog")).toContainText(
       "SU supports aligned navigation but not metre or area claims",
     );
     await expect(page.locator("#releaseDialog")).toContainText(
       "Provisional SU releases support navigation",
+    );
+    await expect(page.locator("#releaseDialog")).toContainText(
+      "Visual orientation only",
     );
   });
 

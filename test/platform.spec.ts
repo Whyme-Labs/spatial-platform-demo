@@ -2031,6 +2031,24 @@ describe("Spatial Studio Worker", () => {
       obstacle: { id: string };
     }>();
 
+    const misalignedRotationResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "misaligned-spatial-runtime",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Misaligned spatial runtime",
+            measurementDisclaimer: "Visual experience only.",
+            sceneRotationDegrees: [0, 0, 180],
+          },
+        }),
+      },
+    );
+    expect(misalignedRotationResponse.status).toBe(409);
+
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {

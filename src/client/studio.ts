@@ -12,6 +12,12 @@ import {
 } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
 import {
+  parseSceneRotationDegrees,
+  SCENE_ROTATION_MAX_DEGREES,
+  SCENE_ROTATION_MIN_DEGREES,
+} from "../shared/scene-rotation";
+import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
+import {
   captureAdapterProfiles,
   captureFormatsForPurpose,
   type CaptureAssetFormat,
@@ -1956,20 +1962,41 @@ function bindInterface(): void {
   if (releaseEvidence instanceof HTMLSelectElement) {
     releaseEvidence.addEventListener("change", () => {
       if (releaseEvidence.value) {
+        if (applyReleaseTransform instanceof HTMLInputElement) {
+          applyReleaseTransform.checked = true;
+          for (const input of releaseSceneRotationInputs(releaseForm)) input.value = "0";
+        }
         applyReviewedTransformToReleaseForm(releaseEvidence.value);
       } else {
         setProvisionalReleaseDisclaimer(releaseForm, false);
       }
+      syncReleaseTransformModes(releaseForm);
     });
   }
   const applyReleaseTransform = releaseForm.elements.namedItem("applySourceToWorld");
   if (applyReleaseTransform instanceof HTMLInputElement) {
     applyReleaseTransform.addEventListener("change", () => {
+      if (applyReleaseTransform.checked) {
+        for (const input of releaseSceneRotationInputs(releaseForm)) input.value = "0";
+      }
       if (!applyReleaseTransform.checked) {
         setProvisionalReleaseDisclaimer(releaseForm, false);
       } else if (releaseEvidence instanceof HTMLSelectElement && releaseEvidence.value) {
         applyReviewedTransformToReleaseForm(releaseEvidence.value);
       }
+      syncReleaseTransformModes(releaseForm);
+    });
+  }
+  for (const input of releaseSceneRotationInputs(releaseForm)) {
+    input.min = String(SCENE_ROTATION_MIN_DEGREES);
+    input.max = String(SCENE_ROTATION_MAX_DEGREES);
+    input.addEventListener("input", () => {
+      if (hasEnteredSceneRotation(releaseForm) && applyReleaseTransform instanceof HTMLInputElement) {
+        applyReleaseTransform.checked = false;
+        if (releaseEvidence instanceof HTMLSelectElement) releaseEvidence.value = "";
+        setProvisionalReleaseDisclaimer(releaseForm, false);
+      }
+      syncReleaseTransformModes(releaseForm);
     });
   }
   const reviewerSubmit = reviewerForm.querySelector<HTMLButtonElement>("[type='submit']")!;
@@ -9302,7 +9329,13 @@ function renderProjectDetail(): void {
   }
   if (latestVersion?.status === "APPROVED" || latestVersion?.status === "PUBLISHED") {
     const publishButton = element("button", "primary-button wide", "Publish new release");
-    publishButton.addEventListener("click", openReleaseDialog);
+    publishButton.addEventListener("click", () => {
+      void runAction({
+        key: `open-release:${detail.project.id}`,
+        trigger: publishButton,
+        pendingLabel: "Loading release evidence…",
+      }, openReleaseDialog);
+    });
     controls.append(publishButton);
   }
   for (const release of detail.releases) {
@@ -10509,13 +10542,31 @@ async function approveVersion(form: FormData): Promise<void> {
   }
 }
 
-function openReleaseDialog(): void {
+async function openReleaseDialog(): Promise<void> {
   if (!state.selected) return;
+  const projectId = state.selected.project.id;
+  const versionId = state.selected.versions[0]?.id ?? null;
+  if (
+    state.spatialProjectId !== projectId ||
+    state.spatial?.version?.id !== versionId
+  ) {
+    await loadSpatialWorkspace(projectId);
+  }
+  if (
+    state.selected?.project.id !== projectId ||
+    state.selected.versions[0]?.id !== versionId
+  ) return;
   const form = byId<HTMLFormElement>("releaseForm");
+  form.reset();
   const slug = form.elements.namedItem("slug");
   const title = form.elements.namedItem("title");
   if (slug instanceof HTMLInputElement) slug.value = state.selected.project.activeReleaseSlug ?? state.selected.project.slug;
   if (title instanceof HTMLInputElement) title.value = state.selected.project.name;
+  const hasAuthoredSpatialGeometry = hasAuthoredSpatialRuntime(state.spatial);
+  form.dataset.hasAuthoredSpatialRuntime = String(hasAuthoredSpatialGeometry);
+  byId("sceneRotationNote").textContent = hasAuthoredSpatialGeometry
+    ? "Scene rotation is unavailable because this version has authored spatial geometry. Rotate the complete spatial frame before publication instead."
+    : "Visual orientation only. This renderer transform does not establish metric scale or replace reviewed source-to-world evidence.";
   const reviewedTransforms = reviewedSemanticSourceToWorld();
   const latestTransform = reviewedTransforms[0] ?? null;
   const evidenceSelect = form.elements.namedItem("sourceToWorldEvidenceId");
@@ -10543,9 +10594,47 @@ function openReleaseDialog(): void {
   } else {
     setProvisionalReleaseDisclaimer(form, false);
   }
+  syncReleaseTransformModes(form);
   releaseOperationId = crypto.randomUUID();
   byId("releaseError").textContent = "";
   releaseDialog.showModal();
+}
+
+function releaseSceneRotationInputs(form: HTMLFormElement): [
+  HTMLInputElement,
+  HTMLInputElement,
+  HTMLInputElement,
+] {
+  const inputs = ["sceneRotationX", "sceneRotationY", "sceneRotationZ"].map(
+    (name) => form.elements.namedItem(name),
+  );
+  if (inputs.some((input) => !(input instanceof HTMLInputElement))) {
+    throw new Error("Release scene rotation controls are unavailable.");
+  }
+  return inputs as [HTMLInputElement, HTMLInputElement, HTMLInputElement];
+}
+
+function syncReleaseTransformModes(form: HTMLFormElement): void {
+  const rotationInputs = releaseSceneRotationInputs(form);
+  const applyTransform = form.elements.namedItem("applySourceToWorld");
+  const evidence = form.elements.namedItem("sourceToWorldEvidenceId");
+  if (!(applyTransform instanceof HTMLInputElement) || !(evidence instanceof HTMLSelectElement)) {
+    return;
+  }
+  const hasAuthoredSpatialRuntime = form.dataset.hasAuthoredSpatialRuntime === "true";
+  const hasRotation = hasEnteredSceneRotation(form);
+  for (const input of rotationInputs) {
+    input.disabled = hasAuthoredSpatialRuntime || applyTransform.checked;
+  }
+  applyTransform.disabled = hasRotation;
+  evidence.disabled = hasRotation;
+}
+
+function hasEnteredSceneRotation(form: HTMLFormElement): boolean {
+  return releaseSceneRotationInputs(form).some((input) => {
+    const value = Number(input.value);
+    return Number.isFinite(value) && value !== 0;
+  });
 }
 
 async function publishRelease(form: FormData): Promise<void> {
@@ -10554,7 +10643,17 @@ async function publishRelease(form: FormData): Promise<void> {
   const expiresAtValue = optionalString(form.get("expiresAt"));
   try {
     const initialCamera = parseReleaseInitialCamera(form);
+    const sceneRotationDegrees = parseSceneRotationDegrees([
+      form.get("sceneRotationX"),
+      form.get("sceneRotationY"),
+      form.get("sceneRotationZ"),
+    ]);
     const sourceToWorld = parseReleaseSourceToWorld(form);
+    if (sceneRotationDegrees && sourceToWorld) {
+      throw new Error(
+        "Use either visual scene rotation or reviewed source-to-world evidence, not both.",
+      );
+    }
     const sourceToWorldEvidenceId = sourceToWorld
       ? String(form.get("sourceToWorldEvidenceId") ?? "")
       : null;
@@ -10589,6 +10688,7 @@ async function publishRelease(form: FormData): Promise<void> {
             captureDate: optionalString(form.get("captureDate")),
             measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
             splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
+            ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
             ...(sourceToWorld ? { sourceToWorld } : {}),
             ...(initialCamera ? { initialCamera } : {}),
           },
