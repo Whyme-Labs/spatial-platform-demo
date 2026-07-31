@@ -1932,64 +1932,6 @@ describe("Spatial Studio Worker", () => {
       },
     );
     expect(provisionalProfile.status).toBe(200);
-    const provisionalFloorResponse = await exports.default.fetch(
-      `${origin}/api/projects/${project.id}/spatial/entities`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({
-          clientOperationId: crypto.randomUUID(),
-          versionId: completed.asset.versionId,
-          kind: "floor",
-          label: "Profile-aligned provisional floor",
-          geometry: {
-            type: "polygon",
-            points: [[0, 0, 0], [2, 0, 0], [2, 0, 2], [0, 0, 2]],
-          },
-        }),
-      },
-    );
-    expect(provisionalFloorResponse.status).toBe(201);
-    const provisionalFloor = await provisionalFloorResponse.json() as {
-      entity: { id: string };
-    };
-    const profileAlignedProvisionalRelease = await exports.default.fetch(
-      `${origin}/api/projects/${project.id}/releases`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({
-          slug: "profile-aligned-provisional-release",
-          accessPolicy: "unlisted",
-          viewerConfig: {
-            title: "Profile-aligned provisional release",
-            measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
-          },
-        }),
-      },
-    );
-    expect(profileAlignedProvisionalRelease.status).toBe(201);
-    const profileAlignedManifest = await exports.default.fetch(
-      `${origin}/api/releases/profile-aligned-provisional-release/manifest`,
-    );
-    expect(profileAlignedManifest.status).toBe(200);
-    await expect(profileAlignedManifest.json()).resolves.toMatchObject({
-      spatial: {
-        navigationProfile: {
-          worldUnit: "scene_units",
-        },
-      },
-    });
-    expect((await exports.default.fetch(
-      `${origin}/api/projects/${project.id}/spatial/entities/${provisionalFloor.entity.id}`,
-      { method: "DELETE", headers: { cookie } },
-    )).status).toBe(204);
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM release_channels WHERE slug = ?")
-        .bind("profile-aligned-provisional-release"),
-      env.DB.prepare("DELETE FROM releases WHERE project_id = ? AND viewer_config_json LIKE ?")
-        .bind(project.id, '%"Profile-aligned provisional release"%'),
-    ]);
     const provenProvisionalRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
