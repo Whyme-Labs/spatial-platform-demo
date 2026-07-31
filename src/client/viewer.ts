@@ -207,6 +207,44 @@ type SparkRendererMessage =
       visible: boolean;
       height: number;
     };
+type PlayCanvasRendererMessage =
+  | {
+      source: "spatial-playcanvas";
+      type: "progress";
+      progress: number;
+      detail: string;
+    }
+  | {
+      source: "spatial-playcanvas";
+      type: "ready";
+      runtime: "playcanvas";
+      version: string;
+      timeToFirstFrameMs: number;
+      format: string;
+      splatBudget: number;
+    }
+  | {
+      source: "spatial-playcanvas";
+      type: "error";
+      code: string;
+      message: string;
+    }
+  | {
+      source: "spatial-playcanvas";
+      type: "camera";
+      requestId: string;
+      cameraPose: CameraPose;
+    }
+  | {
+      source: "spatial-playcanvas";
+      type: "camera-set";
+      requestId: string;
+      accepted: boolean;
+      message?: string;
+      cameraPose: CameraPose;
+    };
+type SpatialRendererMessage = SparkRendererMessage | PlayCanvasRendererMessage;
+type SpatialRendererRuntime = "spark" | "playcanvas";
 
 const byId = <T extends Element = HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -224,6 +262,7 @@ const viewerSessionId = crypto.randomUUID();
 const activeReleaseSlug = releaseSlug();
 const viewerActions = new SingleFlight();
 let activeManifest: ReleaseManifest | null = null;
+let activeRendererRuntime: SpatialRendererRuntime = "spark";
 let loadTimeout: number | null = null;
 let activeReview: SceneReview | null = null;
 let activeFloorPlans: FloorPlan[] = [];
@@ -313,33 +352,21 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     applyManifest(manifest);
     if (reviewMode) await loadSceneReview();
     void recordTelemetry("viewer_open");
-    const rendererUrl = new URL("/renderer/index.html", location.origin);
-    rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
-    rendererUrl.searchParams.set("format", manifest.scene.format);
-    rendererUrl.searchParams.set("budget", String(manifest.viewer.splatBudgetMillions ?? manifestBudget(manifest)));
-    if (manifest.viewer.sceneRotationDegrees) {
-      rendererUrl.searchParams.set("rotation", manifest.viewer.sceneRotationDegrees.join(","));
-    }
-    if (manifest.viewer.sourceToWorld) {
-      rendererUrl.searchParams.set(
-        "sourceToWorld",
-        JSON.stringify(manifest.viewer.sourceToWorld),
-      );
-    }
-    if (manifest.viewer.initialCamera) {
-      rendererUrl.searchParams.set("camera", manifest.viewer.initialCamera.position.join(","));
-      rendererUrl.searchParams.set("target", manifest.viewer.initialCamera.target.join(","));
-      if (manifest.viewer.initialCamera.up) {
-        rendererUrl.searchParams.set("up", manifest.viewer.initialCamera.up.join(","));
-      }
-      rendererUrl.searchParams.set("fov", String(manifest.viewer.initialCamera.fovDegrees ?? 58));
-    }
+    const rendererUrl = publishedRendererUrl(manifest);
     frame.src = rendererUrl.toString();
     frame.hidden = false;
+    const timeoutMs = activeRendererRuntime === "playcanvas" ? 90_000 : 60_000;
     loadTimeout = window.setTimeout(() => {
-      showError("Spark did not become ready within 60 seconds.", "Check the network connection or retry on a device with WebGL2 support.");
-      void recordTelemetry("renderer_error", 60_000, { reason: "load_timeout", runtime: "spark" });
-    }, 60_000);
+      const rendererName = activeRendererRuntime === "playcanvas" ? "The native SOG viewer" : "Spark";
+      showError(
+        `${rendererName} did not become ready within ${timeoutMs / 1000} seconds.`,
+        "Check the network connection or retry on a device with WebGL2 support.",
+      );
+      void recordTelemetry("renderer_error", timeoutMs, {
+        reason: "load_timeout",
+        runtime: activeRendererRuntime,
+      });
+    }, timeoutMs);
   } catch (error) {
     showError("This spatial release is unavailable.", error instanceof Error ? error.message : "The release could not be authorised.");
   }
@@ -358,7 +385,7 @@ frame.addEventListener("error", () => {
 
 function handleRendererMessage(event: MessageEvent<unknown>): void {
   if (event.origin !== location.origin || event.source !== frame.contentWindow) return;
-  if (!isSparkRendererMessage(event.data)) return;
+  if (!isSpatialRendererMessage(event.data)) return;
   const message = event.data;
   if (message.type === "camera") {
     const pending = cameraRequests.get(message.requestId);
@@ -368,7 +395,7 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     pending.resolve(message.cameraPose);
     return;
   }
-  if (message.type === "camera-update") {
+  if (message.source === "spatial-spark" && message.type === "camera-update") {
     updateFloorPlanCamera(message.cameraPose);
     return;
   }
@@ -385,15 +412,15 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     }
     return;
   }
-  if (message.type === "control-mode") {
+  if (message.source === "spatial-spark" && message.type === "control-mode") {
     byId("viewport").classList.toggle("mobile-free-roam-active", message.mode === "free-roam");
     return;
   }
-  if (message.type === "control-onboarding") {
+  if (message.source === "spatial-spark" && message.type === "control-onboarding") {
     byId("viewport").classList.toggle("mobile-controls-onboarding", message.visible);
     return;
   }
-  if (message.type === "control-help") {
+  if (message.source === "spatial-spark" && message.type === "control-help") {
     const viewport = byId<HTMLElement>("viewport");
     const helpHeight = Number.isFinite(message.height)
       ? Math.min(innerHeight, Math.max(0, message.height))
@@ -413,10 +440,16 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type === "error") {
-    showError("Spark could not render this release.", message.message);
+    const runtime = message.source === "spatial-playcanvas" ? "playcanvas" : "spark";
+    showError(
+      runtime === "playcanvas"
+        ? "The native SOG viewer could not render this release."
+        : "Spark could not render this release.",
+      message.message,
+    );
     void recordTelemetry("renderer_error", undefined, {
       reason: message.code,
-      runtime: "spark",
+      runtime,
     });
     return;
   }
@@ -441,14 +474,96 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   });
 }
 
-function isSparkRendererMessage(value: unknown): value is SparkRendererMessage {
+function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessage {
   if (!value || typeof value !== "object") return false;
   const source = Reflect.get(value, "source");
   const type = Reflect.get(value, "type");
+  if (source === "spatial-playcanvas") {
+    return type === "progress" || type === "ready" || type === "error" ||
+      type === "camera" || type === "camera-set";
+  }
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
       type === "control-onboarding" || type === "control-help");
+}
+
+function publishedRendererUrl(manifest: ReleaseManifest): URL {
+  const budget = manifest.viewer.splatBudgetMillions ?? manifestBudget(manifest);
+  if (manifest.scene.format.toLowerCase() === "sog") {
+    activeRendererRuntime = "playcanvas";
+    const rendererUrl = new URL("/playcanvas-renderer/index.html", location.origin);
+    rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
+    rendererUrl.searchParams.set("format", "sog");
+    rendererUrl.searchParams.set("budget", String(budget));
+    rendererUrl.searchParams.set("settings", playCanvasSettingsUrl(manifest));
+    rendererUrl.searchParams.set("webgl", "");
+    rendererUrl.searchParams.set("noui", "");
+    rendererUrl.searchParams.set("noanim", "");
+    rendererUrl.searchParams.set("nofx", "");
+    if (manifest.scene.posterUrl) rendererUrl.searchParams.set("poster", manifest.scene.posterUrl);
+    return rendererUrl;
+  }
+
+  activeRendererRuntime = "spark";
+  const rendererUrl = new URL("/renderer/index.html", location.origin);
+  rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
+  rendererUrl.searchParams.set("format", manifest.scene.format);
+  rendererUrl.searchParams.set("budget", String(budget));
+  if (manifest.viewer.sceneRotationDegrees) {
+    rendererUrl.searchParams.set("rotation", manifest.viewer.sceneRotationDegrees.join(","));
+  }
+  if (manifest.viewer.sourceToWorld) {
+    rendererUrl.searchParams.set(
+      "sourceToWorld",
+      JSON.stringify(manifest.viewer.sourceToWorld),
+    );
+  }
+  if (manifest.viewer.initialCamera) {
+    rendererUrl.searchParams.set("camera", manifest.viewer.initialCamera.position.join(","));
+    rendererUrl.searchParams.set("target", manifest.viewer.initialCamera.target.join(","));
+    if (manifest.viewer.initialCamera.up) {
+      rendererUrl.searchParams.set("up", manifest.viewer.initialCamera.up.join(","));
+    }
+    rendererUrl.searchParams.set("fov", String(manifest.viewer.initialCamera.fovDegrees ?? 58));
+  }
+  return rendererUrl;
+}
+
+function playCanvasSettingsUrl(manifest: ReleaseManifest): string {
+  const camera = manifest.viewer.initialCamera;
+  const settings = {
+    version: 2,
+    tonemapping: "none",
+    highPrecisionRendering: false,
+    background: { color: [0.043, 0.067, 0.055] },
+    postEffectSettings: {
+      sharpness: { enabled: false, amount: 0 },
+      bloom: { enabled: false, intensity: 1, blurLevel: 2 },
+      grading: {
+        enabled: false,
+        brightness: 0,
+        contrast: 1,
+        saturation: 1,
+        tint: [1, 1, 1],
+      },
+      vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
+      fringing: { enabled: false, intensity: 0.5 },
+    },
+    animTracks: [],
+    cameras: camera
+      ? [{
+          initial: {
+            position: camera.position,
+            target: camera.target,
+            fov: camera.fovDegrees ?? 58,
+          },
+        }]
+      : [],
+    annotations: [],
+    startMode: "default",
+  };
+  return `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(settings))}`;
 }
 
 function applyManifest(manifest: ReleaseManifest): void {

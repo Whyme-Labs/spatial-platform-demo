@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@playcanvas/splat-transform": "3.1.7",
+    "@playcanvas/supersplat-viewer": "1.28.0",
     "@sparkjsdev/spark": "2.1.0",
     "playwright": "1.62.0",
     "three": "0.180.0"

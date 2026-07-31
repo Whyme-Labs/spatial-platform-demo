@@ -12,7 +12,7 @@ It is the best candidate that clears all immediate gates:
 - a real captured residence rather than a synthetic render;
 - visibly connected living, dining, and kitchen spaces in the published viewer;
 - asset-specific **CC BY 4.0** permission and an enabled download;
-- a 52.26 MB SOG, which the Spark browser runtime supports natively;
+- a 52.26 MB SOG, which the upstream PlayCanvas SOG runtime renders directly;
 - a public authored opening camera.
 
 Keep Habitat-GS “Sales gallery” as a technical reference only. It is a much
@@ -86,11 +86,25 @@ polygons, or semantic labels.
 
 ### Spatial Studio compatibility
 
-Import the immutable SOG directly as a **Ready Spark web scene**. Do not route
-this SOG v2 package through `spark-build-lod`: the current Spark 2.1.0 builder
-panics while decoding it, even though the Spark browser renderer supports SOG
-delivery directly. Spatial Studio's web-scene import contract was extended to
-accept RAD, SPZ, and SOG so the original licensed asset can remain immutable.
+Import the immutable SOG directly as a **Ready web scene**. Do not route this
+SOG v2 package through `spark-build-lod`: the current Spark 2.1.0 builder
+panics while decoding it. Direct Spark rendering and a diagnostic SPZ
+conversion also produced severely blurred, spatially incorrect frames.
+
+Spatial Studio therefore selects the renderer by immutable scene format:
+
+- RAD remains on the existing Spark 2.1 runtime;
+- SOG uses the official MIT-licensed
+  [`@playcanvas/supersplat-viewer`](https://github.com/playcanvas/supersplat-viewer)
+  WebGL runtime;
+- the processor uses that same PlayCanvas SOG renderer and the authored camera
+  to generate the review poster.
+
+The native SOG and its PlayCanvas poster both reproduce the source living-room
+view sharply. The tested processor poster was 640 × 360 and completed from the
+stored 4,944,177-Gaussian archive without conversion. This keeps the licensed
+source bytes immutable and makes the QA evidence representative of the
+published viewport.
 
 An SPZ/RAD conversion was tested only as a diagnostic and must not be
 published: although the conversion completed, independent rendered previews
@@ -182,7 +196,7 @@ Before calling the release complete:
 
 1. Verify all six component hashes and package a loadable SOG.
 2. Import the immutable SOG as a ready web scene and load it through the same
-   native Spark SOG route used in production.
+   native PlayCanvas SOG route used in production.
 3. Start at the authored camera above and confirm living, dining, and kitchen
    connectivity in desktop and mobile browsers.
 4. Record the CC BY attribution in release metadata and the visible release

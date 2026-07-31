@@ -26,6 +26,31 @@ export function processOutputEvent(baseEvent, stream) {
   return stream === "stderr" ? `${baseEvent}.stderr` : baseEvent;
 }
 
+export function sparkPosterSceneDescriptor(format) {
+  if (format !== "rad") {
+    throw new ProcessingAgentError(
+      "UNSUPPORTED_POSTER_SCENE",
+      `Spark poster rendering does not support ${format}`,
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: { supportedFormats: ["rad"] },
+      },
+    );
+  }
+  return {
+    fileName: "scene.rad",
+    path: "/scene.rad",
+    paged: true,
+  };
+}
+
+export function webScenePosterRenderer(format, hasAuthoredCamera) {
+  if (format === "rad") return "spark";
+  if (format === "sog" && hasAuthoredCamera) return "playcanvas";
+  return null;
+}
+
 export function validateGaussianPlyHeader(bytes) {
   const headerBytes = bytes instanceof Uint8Array
     ? bytes.subarray(0, maximumHeaderBytes)

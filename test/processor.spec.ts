@@ -10,10 +10,12 @@ import {
   planMultipartParts,
   processOutputEvent,
   processorFailure,
+  sparkPosterSceneDescriptor,
   sparkMaximumSphericalHarmonicDegree,
   validateEvidenceAsset,
   validateGaussianPlyHeader,
   validateSogArchive,
+  webScenePosterRenderer,
 } from "../scripts/processing-agent-core.mjs";
 
 const gaussianHeader = [
@@ -57,6 +59,25 @@ describe("processing agent core", () => {
       fovDegrees: 100,
     });
     expect(parsePosterCameraJson(" ")).toBeNull();
+  });
+
+  it("keeps Spark poster rendering on the proven RAD lane", () => {
+    expect(sparkPosterSceneDescriptor("rad")).toEqual({
+      fileName: "scene.rad",
+      path: "/scene.rad",
+      paged: true,
+    });
+    expect(() => sparkPosterSceneDescriptor("sog")).toThrowError(expect.objectContaining({
+      code: "UNSUPPORTED_POSTER_SCENE",
+      retryable: false,
+    }));
+  });
+
+  it("selects the native PlayCanvas poster lane only when a SOG camera is authored", () => {
+    expect(webScenePosterRenderer("rad", false)).toBe("spark");
+    expect(webScenePosterRenderer("sog", true)).toBe("playcanvas");
+    expect(webScenePosterRenderer("sog", false)).toBeNull();
+    expect(webScenePosterRenderer("spz", true)).toBeNull();
   });
 
   it("rejects unusable authored poster cameras as configuration failures", () => {

@@ -15,7 +15,13 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  css as superSplatViewerCss,
+  html as superSplatViewerHtml,
+  js as superSplatViewerJs,
+} from "@playcanvas/supersplat-viewer";
 import { chromium } from "playwright";
+import { posterSampleIsReady } from "./poster-quality.mjs";
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
@@ -29,9 +35,11 @@ import {
   planMultipartParts,
   processOutputEvent,
   processorFailure,
+  sparkPosterSceneDescriptor,
   sparkMaximumSphericalHarmonicDegree,
   validateEvidenceAsset,
   validateGaussianPlyHeader,
+  webScenePosterRenderer,
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -75,14 +83,34 @@ if (posterOnly) {
   const source = process.argv[posterOnlyIndex + 1];
   const destination = process.argv[posterOnlyIndex + 2];
   if (!source || !destination) {
-    throw new Error("Usage: node scripts/processing-agent.mjs --poster-only <scene.rad> <poster.png>");
+    throw new Error("Usage: node scripts/processing-agent.mjs --poster-only <scene.rad|scene.sog> <poster.png>");
   }
-  await generateSparkPoster(
-    resolve(source),
-    resolve(destination),
-    process.env.PROCESSOR_CHROME_PATH?.trim(),
-    parsePosterCameraJson(process.env.PROCESSOR_POSTER_CAMERA_JSON),
-  );
+  const sourceFormat = extname(source).slice(1).toLowerCase();
+  const posterCamera = parsePosterCameraJson(process.env.PROCESSOR_POSTER_CAMERA_JSON);
+  const posterRenderer = webScenePosterRenderer(sourceFormat, Boolean(posterCamera));
+  if (posterRenderer === "playcanvas") {
+    await generatePlayCanvasPoster(
+      resolve(source),
+      resolve(destination),
+      process.env.PROCESSOR_CHROME_PATH?.trim(),
+      posterCamera,
+    );
+  } else if (posterRenderer === "spark") {
+    await generateSparkPoster(
+      resolve(source),
+      resolve(destination),
+      process.env.PROCESSOR_CHROME_PATH?.trim(),
+      posterCamera,
+    );
+  } else {
+    throw new ProcessingAgentError(
+      "UNSUPPORTED_POSTER_SCENE",
+      sourceFormat === "sog"
+        ? "Native SOG poster rendering requires PROCESSOR_POSTER_CAMERA_JSON"
+        : `Poster rendering does not support ${sourceFormat}`,
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
   console.log(JSON.stringify({
     event: "processor.poster_smoke_succeeded",
     source: resolve(source),
@@ -415,6 +443,38 @@ async function processNextJob() {
         job.input.format,
         job.input.purpose,
       );
+      const posterRenderer = job.input.purpose === "web_scene"
+        ? webScenePosterRenderer(job.input.format, Boolean(configuration.posterCamera))
+        : null;
+      let posterPath;
+      let posterMetadata;
+      if (posterRenderer) {
+        await heartbeat(
+          job.id,
+          lease.leaseToken,
+          65,
+          posterRenderer === "playcanvas"
+            ? "Rendering native PlayCanvas SOG poster"
+            : "Rendering Spark RAD poster",
+        );
+        posterPath = join(workDirectory, "poster.png");
+        if (posterRenderer === "playcanvas") {
+          await generatePlayCanvasPoster(
+            sourcePath,
+            posterPath,
+            configuration.chromePath,
+            configuration.posterCamera,
+          );
+        } else {
+          await generateSparkPoster(
+            sourcePath,
+            posterPath,
+            configuration.chromePath,
+            configuration.posterCamera,
+          );
+        }
+        posterMetadata = await fileMetadata(posterPath);
+      }
       const report = {
         schemaVersion: "1.0.0",
         status: "pending_human_review",
@@ -431,34 +491,81 @@ async function processNextJob() {
           sha256: download.sha256,
           validation,
         },
+          ...(posterMetadata
+          ? {
+            derivatives: {
+              poster: {
+                fileName: basename(posterPath),
+                sizeBytes: posterMetadata.sizeBytes,
+                sha256: posterMetadata.sha256,
+              },
+            },
+            rendering: {
+              renderer: posterRenderer,
+              posterCamera: configuration.posterCamera
+                ? { mode: "authored", ...configuration.posterCamera }
+                : { mode: "auto" },
+              sourceContainerPreserved: true,
+            },
+          }
+          : {}),
         checks: {
           sourceBytesVerified: true,
           sourceHashVerified: job.input.sha256 ? true : "not_supplied",
           boundedSignatureChecked: true,
           semanticValidation: false,
+          ...(posterRenderer
+            ? {
+              posterRenderedBy: posterRenderer,
+              privacyReview: "required",
+              visualReview: "required",
+            }
+            : {}),
           humanEvidenceReview: "required",
         },
         generatedAt: new Date().toISOString(),
       };
       await heartbeat(job.id, lease.leaseToken, 92, "Recording evidence integrity result");
+      const outputs = [];
+      if (posterPath) {
+        outputs.push(await uploadOutput(
+          job,
+          lease.leaseToken,
+          "poster",
+          posterPath,
+          "image/png",
+        ));
+      }
+      const outputBytes = outputs.reduce((total, output) => total + output.sizeBytes, 0);
       const computeDurationMs = Math.round(performance.now() - jobStartedAt);
       const completion = await fetchJson(`/api/worker/jobs/${job.id}/complete`, {
         method: "POST",
         body: JSON.stringify({
           leaseToken: lease.leaseToken,
-          progressMessage: "Immutable capture evidence passed bounded integrity validation",
-          outputs: [],
+          progressMessage: posterRenderer
+            ? `Immutable web scene verified and ${posterRenderer === "playcanvas" ? "native SOG" : "Spark"} poster generated`
+            : "Immutable capture evidence passed bounded integrity validation",
+          outputs,
           report,
           evidence: {
             processorVersion,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
-            outputBytes: 0,
+            outputBytes,
             toolVersions: {
               node: process.version,
               processor: "0.7.0",
               validator: "bounded-file-signature-v1",
+              ...(posterRenderer
+                ? {
+                  renderer: posterRenderer,
+                  ...(posterRenderer === "spark"
+                    ? { spark: sparkVersion }
+                    : { playcanvasViewer: "1.28.0" }),
+                  posterCamera: configuration.posterCamera ? "authored" : "auto",
+                }
+                : {}),
             },
           },
         }),
@@ -1268,8 +1375,208 @@ async function runProcess(command, args, timeoutMs, {
   });
 }
 
-async function generateSparkPoster(radPath, outputPath, configuredChromePath, posterCamera = null) {
-  const server = await startPosterServer(radPath, posterCamera);
+async function generatePlayCanvasPoster(
+  scenePath,
+  outputPath,
+  configuredChromePath,
+  posterCamera,
+) {
+  if (!posterCamera) {
+    throw new ProcessingAgentError(
+      "POSTER_CAMERA_REQUIRED",
+      "Native SOG poster rendering requires an authored camera",
+      { failureClass: "configuration", retryable: false },
+    );
+  }
+  const server = await startPlayCanvasPosterServer(scenePath, posterCamera);
+  const executablePath = configuredChromePath || await detectedChromePath();
+  let browser;
+  let page;
+  try {
+    browser = await chromium.launch({
+      ...(executablePath ? { executablePath } : {}),
+      headless: true,
+      args: [
+        "--disable-dev-shm-usage",
+        "--use-angle=swiftshader",
+        "--enable-webgl",
+        "--ignore-gpu-blocklist",
+      ],
+    });
+    page = await browser.newPage({ viewport: { width: 640, height: 360 }, deviceScaleFactor: 1 });
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        log("poster.browser_error", { renderer: "playcanvas", message: message.text().slice(0, 1000) });
+      }
+    });
+    page.on("pageerror", (error) => {
+      log("poster.page_error", { renderer: "playcanvas", message: error.message.slice(0, 1000) });
+    });
+    page.on("requestfailed", (request) => log("poster.request_failed", {
+      renderer: "playcanvas",
+      url: request.url(),
+      error: request.failure()?.errorText,
+    }));
+    const url = new URL(server.url);
+    url.searchParams.set("content", "/scene.sog");
+    url.searchParams.set("settings", "/settings.json");
+    url.searchParams.set("budget", "2");
+    url.searchParams.set("webgl", "");
+    url.searchParams.set("noui", "");
+    url.searchParams.set("noanim", "");
+    url.searchParams.set("nofx", "");
+    url.searchParams.set("fullload", "");
+    await page.goto(url.toString(), { waitUntil: "commit", timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.body.dataset.ready === "true" && typeof window.captureFrame === "function",
+      null,
+      { timeout: 180_000, polling: 500 },
+    );
+    const pngDataUrl = await page.evaluate(async () => {
+      const captured = await window.captureFrame({ width: 640, height: 360, supersample: 1 });
+      const binary = atob(captured.data);
+      const pixels = new Uint8ClampedArray(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        pixels[index] = binary.charCodeAt(index);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = captured.width;
+      canvas.height = captured.height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Poster encoding canvas is unavailable");
+      context.putImageData(new ImageData(pixels, captured.width, captured.height), 0, 0);
+      return canvas.toDataURL("image/png");
+    });
+    const encoded = pngDataUrl.match(/^data:image\/png;base64,(.+)$/)?.[1];
+    if (!encoded) throw new Error("PlayCanvas poster did not produce a PNG data URL");
+    const pngBytes = Buffer.from(encoded, "base64");
+    if (
+      pngBytes.byteLength < 1024 ||
+      !pngBytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    ) {
+      throw new Error("PlayCanvas poster PNG is empty or has an invalid signature");
+    }
+    await writeFile(outputPath, pngBytes, { mode: 0o600 });
+  } catch (error) {
+    const renderState = await page?.evaluate(() => ({
+      ready: document.body.dataset.ready ?? null,
+      hasCaptureFrame: typeof window.captureFrame === "function",
+    })).catch(() => null);
+    throw new ProcessingAgentError(
+      "PLAYCANVAS_POSTER_FAILED",
+      `Native SOG poster rendering failed: ${safeMessage(error)}${
+        renderState ? `; render state ${JSON.stringify(renderState)}` : ""
+      }`,
+      { failureClass: "conversion", retryable: true, cause: error, details: renderState },
+    );
+  } finally {
+    await browser?.close();
+    await server.close();
+  }
+}
+
+async function startPlayCanvasPosterServer(scenePath, posterCamera) {
+  const sceneStats = await stat(scenePath);
+  const viewerHtml = superSplatViewerHtml.replace(
+    "</head>",
+    `<script>window.firstFrame=()=>{document.body.dataset.ready="true";};</script></head>`,
+  );
+  const settings = playCanvasPosterSettings(posterCamera);
+  const server = createServer(async (request, response) => {
+    const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
+    if (pathname === "/") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(viewerHtml);
+      return;
+    }
+    if (pathname === "/index.css") {
+      response.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(superSplatViewerCss);
+      return;
+    }
+    if (pathname === "/index.js") {
+      response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-store" });
+      response.end(superSplatViewerJs);
+      return;
+    }
+    if (pathname === "/settings.json") {
+      response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      response.end(JSON.stringify(settings));
+      return;
+    }
+    if (pathname === "/scene.sog") {
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(sceneStats.size),
+        "Cache-Control": "no-store",
+      });
+      createReadStream(scenePath).pipe(response);
+      return;
+    }
+    if (pathname === "/favicon.ico") {
+      response.writeHead(204);
+      response.end();
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolvePromise);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Native SOG poster server did not bind to a TCP port");
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/`,
+    close: () => new Promise((resolvePromise, reject) => {
+      server.close((error) => error ? reject(error) : resolvePromise());
+    }),
+  };
+}
+
+function playCanvasPosterSettings(camera) {
+  return {
+    version: 2,
+    tonemapping: "none",
+    highPrecisionRendering: false,
+    background: { color: [0.043, 0.067, 0.055] },
+    postEffectSettings: {
+      sharpness: { enabled: false, amount: 0 },
+      bloom: { enabled: false, intensity: 1, blurLevel: 2 },
+      grading: {
+        enabled: false,
+        brightness: 0,
+        contrast: 1,
+        saturation: 1,
+        tint: [1, 1, 1],
+      },
+      vignette: { enabled: false, intensity: 0.5, inner: 0.3, outer: 0.75, curvature: 1 },
+      fringing: { enabled: false, intensity: 0.5 },
+    },
+    animTracks: [],
+    cameras: [{
+      initial: {
+        position: camera.position,
+        target: camera.target,
+        fov: camera.fovDegrees,
+      },
+    }],
+    annotations: [],
+    startMode: "default",
+  };
+}
+
+async function generateSparkPoster(
+  scenePath,
+  outputPath,
+  configuredChromePath,
+  posterCamera = null,
+) {
+  const sceneDescriptor = sparkPosterSceneDescriptor("rad");
+  const server = await startPosterServer(scenePath, posterCamera, sceneDescriptor);
   const executablePath = configuredChromePath || await detectedChromePath();
   let browser;
   let page;
@@ -1288,8 +1595,8 @@ async function generateSparkPoster(radPath, outputPath, configuredChromePath, po
       url: request.url(),
       error: request.failure()?.errorText,
     }));
-    // The poster module uses top-level await while Spark opens the paged RAD
-    // hierarchy, so DOMContentLoaded is not a valid navigation readiness signal.
+    // The poster module uses top-level await while Spark opens the scene, so
+    // DOMContentLoaded is not a valid navigation readiness signal.
     await page.goto(server.url, { waitUntil: "commit", timeout: 30_000 });
     try {
       await page.waitForFunction(
@@ -1298,10 +1605,19 @@ async function generateSparkPoster(radPath, outputPath, configuredChromePath, po
         { timeout: 90_000, polling: 500 },
       );
     } catch (readinessError) {
-      // Avoid rejecting a real frame that crossed the threshold at the exact
-      // Playwright timeout boundary.
-      const readyAtTimeout = await page.evaluate(() => document.body.dataset.ready === "true");
-      if (!readyAtTimeout) throw readinessError;
+      // A native SOG/SPZ decode can occupy the browser main thread beyond the
+      // Playwright clock. Accept the first completed frame only when its
+      // measured signal, luminance, and colour diversity pass the same gate.
+      const readinessAtTimeout = await page.evaluate(() => ({
+        ready: document.body.dataset.ready === "true",
+        stats: window.posterStats ?? null,
+      }));
+      if (
+        !readinessAtTimeout.ready &&
+        (!readinessAtTimeout.stats || !posterSampleIsReady(readinessAtTimeout.stats))
+      ) {
+        throw readinessError;
+      }
     }
     const pngDataUrl = await page.evaluate(() => {
       window.stopPosterRender?.();
@@ -1338,17 +1654,17 @@ async function generateSparkPoster(radPath, outputPath, configuredChromePath, po
   }
 }
 
-async function startPosterServer(radPath, posterCamera) {
+async function startPosterServer(scenePath, posterCamera, sceneDescriptor) {
   const sparkModule = join(repositoryRoot, "node_modules", "@sparkjsdev", "spark", "dist", "spark.module.js");
   const sparkAssets = join(repositoryRoot, "node_modules", "@sparkjsdev", "spark", "dist", "assets");
   const threeBuild = join(repositoryRoot, "node_modules", "three", "build");
   const threeAddons = join(repositoryRoot, "node_modules", "three", "examples", "jsm");
-  const radStats = await stat(radPath);
+  const sceneStats = await stat(scenePath);
   const server = createServer(async (request, response) => {
     const pathname = new URL(request.url || "/", "http://127.0.0.1").pathname;
     if (pathname === "/") {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-      response.end(posterHtml(posterCamera));
+      response.end(posterHtml(posterCamera, sceneDescriptor));
       return;
     }
     if (pathname === "/spark.module.js") return streamFile(response, sparkModule, "text/javascript");
@@ -1379,31 +1695,31 @@ async function startPosterServer(radPath, posterCamera) {
         : "text/javascript";
       return streamFile(response, join(sparkAssets, fileName), contentType);
     }
-    if (pathname === "/scene.rad") {
+    if (pathname === sceneDescriptor.path) {
       const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
       if (range) {
         const start = Number(range[1]);
-        const end = range[2] ? Number(range[2]) : radStats.size - 1;
-        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= radStats.size) {
-          response.writeHead(416, { "Content-Range": `bytes */${radStats.size}` });
+        const end = range[2] ? Number(range[2]) : sceneStats.size - 1;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= sceneStats.size) {
+          response.writeHead(416, { "Content-Range": `bytes */${sceneStats.size}` });
           response.end();
           return;
         }
         response.writeHead(206, {
           "Content-Type": "application/octet-stream",
           "Accept-Ranges": "bytes",
-          "Content-Range": `bytes ${start}-${end}/${radStats.size}`,
+          "Content-Range": `bytes ${start}-${end}/${sceneStats.size}`,
           "Content-Length": String(end - start + 1),
         });
-        createReadStream(radPath, { start, end }).pipe(response);
+        createReadStream(scenePath, { start, end }).pipe(response);
         return;
       }
       response.writeHead(200, {
         "Content-Type": "application/octet-stream",
         "Accept-Ranges": "bytes",
-        "Content-Length": String(radStats.size),
+        "Content-Length": String(sceneStats.size),
       });
-      createReadStream(radPath).pipe(response);
+      createReadStream(scenePath).pipe(response);
       return;
     }
     response.writeHead(404);
@@ -1423,8 +1739,9 @@ async function startPosterServer(radPath, posterCamera) {
   };
 }
 
-function posterHtml(posterCamera) {
+function posterHtml(posterCamera, sceneDescriptor) {
   const cameraJson = JSON.stringify(posterCamera);
+  const sceneJson = JSON.stringify(sceneDescriptor);
   return `<!doctype html>
 <html><head>
 <meta charset="utf-8">
@@ -1442,9 +1759,10 @@ renderer.outputColorSpace=THREE.SRGBColorSpace;
 const scene=new THREE.Scene();
 scene.background=new THREE.Color(0x0b110e);
 const camera=new THREE.PerspectiveCamera(50,640/360,0.01,10000);
-const spark=new SparkRenderer({renderer,lodSplatCount:500000,lodRenderScale:1,minPixelRadius:.2,maxPixelRadius:256,sortRadial:true,numLodFetchers:2});
+const spark=new SparkRenderer({renderer,lodSplatCount:2000000,lodRenderScale:1,minPixelRadius:.2,maxPixelRadius:256,sortRadial:true,numLodFetchers:2});
 scene.add(spark);
-const mesh=new SplatMesh({url:"/scene.rad",fileName:"scene.rad",paged:true,raycastable:false});
+const sceneDescriptor=${sceneJson};
+const mesh=new SplatMesh({url:sceneDescriptor.path,fileName:sceneDescriptor.fileName,paged:sceneDescriptor.paged,raycastable:false});
 scene.add(mesh);
 await mesh.initialized;
 const sphere=mesh.getBoundingBox().getBoundingSphere(new THREE.Sphere());
