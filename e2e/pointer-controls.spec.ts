@@ -91,6 +91,19 @@ test.describe("spatial navigation direction", () => {
     expect(dot(travel, planarForward)).toBeGreaterThan(0.01);
   });
 
+  test("a flat authored floor boundary permits eye-height walking", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?boundary=flat-floor");
+    const initial = await readCameraState(page);
+    const planarForward = normalise(projectOnPlane(initial.direction, initial.up));
+
+    await page.keyboard.press("ArrowUp");
+    await page.waitForTimeout(80);
+
+    const afterPress = await readCameraState(page);
+    const travel = subtract(afterPress.position, initial.position);
+    expect(dot(travel, planarForward)).toBeGreaterThan(0.01);
+  });
+
   test("a trackpad secondary click cannot translate or rotate the camera", async ({ page }) => {
     await page.goto("/e2e/fixtures/pointer-controls.html");
     const initial = await readCameraState(page);

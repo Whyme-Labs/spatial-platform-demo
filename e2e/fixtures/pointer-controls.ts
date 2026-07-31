@@ -35,13 +35,17 @@ const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(initialQuaternion
 const controls = createSpatialLookControls(canvas);
 controls.align(camera);
 const fixtureParameters = new URL(location.href).searchParams;
-const requestedBoundary = fixtureParameters.get("boundary") === "1";
+const requestedBoundary = fixtureParameters.get("boundary");
 if (requestedBoundary) {
   const padding = new THREE.Vector3(0.2, 0.2, 0.2);
   const boundary = {
     min: camera.position.clone().sub(padding),
     max: camera.position.clone().add(padding),
   };
+  if (requestedBoundary === "flat-floor") {
+    boundary.min.y = camera.position.y - 1.6;
+    boundary.max.y = boundary.min.y;
+  }
   controls.setNavigationBounds([boundary]);
   document.body.dataset.navigationBounds = JSON.stringify({
     min: boundary.min.toArray(),

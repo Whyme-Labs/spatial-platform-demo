@@ -398,11 +398,12 @@ export class SpatialNavigationControls {
 
   private isInsideNavigationBounds(position: THREE.Vector3): boolean {
     if (!this.navigationBounds.length) return true;
+    // These controls only translate on the navigation plane. Authored room
+    // bounds may be zero-height floor regions, while the camera remains at eye
+    // height; vertical eligibility is enforced by the navigation runtime.
     return this.navigationBounds.some(({ min, max }) =>
       position.x >= min.x &&
       position.x <= max.x &&
-      position.y >= min.y &&
-      position.y <= max.y &&
       position.z >= min.z &&
       position.z <= max.z
     );
