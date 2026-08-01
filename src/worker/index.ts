@@ -12278,7 +12278,7 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
   if (frozenConnectivity.componentCount > 0 && !frozenArtifactResult.success) {
     return conflict(
       context,
-      "Rollback blocked: this historical walkable release predates certified v6 navigation; republish it through the current acceptance gate",
+      "Rollback blocked: this historical walkable release predates verified v6 navigation; republish it through the current acceptance gate",
     );
   }
   if (frozenArtifactResult.success) {

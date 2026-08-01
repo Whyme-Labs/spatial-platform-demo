@@ -341,10 +341,10 @@ async function start(): Promise<void> {
         );
         if (navigationArtifact) {
           setMovementAvailability(controls, false);
-          setControlStatus("Preparing certified walking map");
+          setControlStatus("Preparing verified walking map");
           const collisionUrl = Reflect.get(event.data, "collisionUrl");
           if (typeof collisionUrl !== "string" || !collisionUrl) {
-            setControlStatus("Look around only · certified collision proxy is unavailable");
+            setControlStatus("Look around only · verified collision proxy is unavailable");
             return;
           }
           void Promise.all([
@@ -389,7 +389,7 @@ async function start(): Promise<void> {
             if (!physicalRuntime.placeCamera(projected)) {
               runtime.destroy();
               physicalRuntime.destroy();
-              throw new Error("Opening camera overlaps certified collision geometry");
+              throw new Error("Opening camera overlaps reviewed collision geometry");
             }
             detourNavigationRuntime = runtime;
             physicalNavigationRuntime = physicalRuntime;
@@ -462,7 +462,7 @@ async function start(): Promise<void> {
           accepted: supported,
           message: supported
             ? `${barrierId} is now ${active ? "closed" : "open"}`
-            : "The requested dynamic barrier is not part of this certified runtime.",
+            : "The requested dynamic barrier is not part of this verified runtime.",
         });
       }
       return;
@@ -543,7 +543,7 @@ async function start(): Promise<void> {
               type: "camera-set",
               requestId,
               accepted: false,
-              message: "The requested room is not reachable by the certified walking map.",
+              message: "The requested room is not reachable by the verified walking map.",
               cameraPose: cameraPose(camera),
             });
           }
@@ -575,7 +575,7 @@ async function start(): Promise<void> {
             type: "camera-set",
             requestId,
             accepted: false,
-            message: "The requested room camera overlaps certified collision geometry.",
+            message: "The requested room camera overlaps reviewed collision geometry.",
             cameraPose: cameraPose(camera),
           });
         }
