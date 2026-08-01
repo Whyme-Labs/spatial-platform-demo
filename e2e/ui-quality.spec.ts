@@ -322,6 +322,29 @@ test.describe("authenticated studio UI", () => {
 });
 
 test.describe("studio authentication lifecycle", () => {
+  test("does not present a signed-out identity while session bootstrap is pending", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let releaseSession!: () => void;
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve;
+    });
+    await page.route("**/api/auth/session", async (route) => {
+      await sessionGate;
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+
+    await expect(page.locator("#workspaceName")).toHaveText("Checking session…");
+    await expect(page.locator("#workspaceName")).not.toHaveText("Sign in required");
+    releaseSession();
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+    await expect(page.locator("#loginDialog")).not.toBeVisible();
+  });
+
   test("recovers a persisted session through the refresh cookie on page load", async ({
     page,
   }) => {

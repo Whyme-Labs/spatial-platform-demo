@@ -1200,6 +1200,8 @@ const state: {
   view: "projects",
 };
 
+let authenticationStatus: "checking" | "authenticated" | "signed-out" | "unavailable" = "checking";
+
 const loginDialog = byId<HTMLDialogElement>("loginDialog");
 const newProjectDialog = byId<HTMLDialogElement>("newProjectDialog");
 const savedViewDialog = byId<HTMLDialogElement>("savedViewDialog");
@@ -1367,6 +1369,8 @@ async function initialise(): Promise<void> {
     }
     if (!session.authenticated) {
       markAuthenticationSignedOut();
+      authenticationStatus = "signed-out";
+      renderIdentity();
       if (ssoStatus === "error") {
         byId("loginError").textContent = enterpriseLoginErrorMessage(ssoCode);
       }
@@ -1376,6 +1380,7 @@ async function initialise(): Promise<void> {
       return;
     }
     markAuthenticationEstablished();
+    authenticationStatus = "authenticated";
     state.user = session.user;
     renderIdentity();
     await refreshAll();
@@ -1386,10 +1391,14 @@ async function initialise(): Promise<void> {
     void reconcileBillingCheckoutReturn();
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
+      authenticationStatus = "signed-out";
+      renderIdentity();
       loginDialog.showModal();
       beginTurnstileInitialisation();
       return;
     }
+    authenticationStatus = "unavailable";
+    renderIdentity();
     showNotice(errorMessage(error), "error");
     if (!loginDialog.open) loginDialog.showModal();
     beginTurnstileInitialisation();
@@ -2472,6 +2481,7 @@ async function handleSignIn(form: FormData): Promise<void> {
     }),
   });
   markAuthenticationEstablished();
+  authenticationStatus = "authenticated";
   state.user = result.user;
   loginDialog.close();
   resetLogin();
@@ -2951,6 +2961,7 @@ async function signOut(): Promise<void> {
 }
 
 function transitionToSignedOut(message = ""): void {
+  authenticationStatus = "signed-out";
   state.user = null;
   state.organisations = [];
   rawSceneChangePollGeneration += 1;
@@ -4208,8 +4219,24 @@ async function cancelProjectAssetHandoff(): Promise<void> {
 }
 
 function renderIdentity(): void {
-  byId("workspaceName").textContent = state.user?.displayName ?? "Sign in required";
-  byId("workspaceRole").textContent = state.user ? `${state.user.email} · ${state.user.role}` : "Secure production environment";
+  const anonymousIdentity = authenticationStatus === "checking"
+    ? {
+      name: "Checking session…",
+      role: "Restoring secure workspace",
+    }
+    : authenticationStatus === "unavailable"
+      ? {
+        name: "Session check unavailable",
+        role: "Check your connection and retry",
+      }
+      : {
+        name: "Sign in required",
+        role: "Secure production environment",
+      };
+  byId("workspaceName").textContent = state.user?.displayName ?? anonymousIdentity.name;
+  byId("workspaceRole").textContent = state.user
+    ? `${state.user.email} · ${state.user.role}`
+    : anonymousIdentity.role;
   byId("signOutButton").hidden = !state.user;
   renderOrganisationSwitcher();
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
