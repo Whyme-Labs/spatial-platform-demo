@@ -33,6 +33,151 @@ async function login(): Promise<string> {
 }
 
 describe("capture adapter evidence ingestion", () => {
+  it("attaches collision to the approved visual version and persists the worker-verified SHA", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Collision attachment ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const projectRow = await env.DB.prepare(
+      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
+    ).bind(project.id).first<{ organisation_id: string; created_by: string }>();
+    const versionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'PUBLISHED', '{}', ?)
+      `).bind(versionId, project.id, projectRow!.created_by),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, etag, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'scene.rad', 'application/octet-stream',
+          32, 'visual-etag', ?, 'verified')
+      `).bind(
+        crypto.randomUUID(),
+        projectRow!.organisation_id,
+        project.id,
+        versionId,
+        `delivery-private/${projectRow!.organisation_id}/${project.id}/${versionId}/scene.rad`,
+        "1".repeat(64),
+      ),
+      env.DB.prepare(
+        "UPDATE projects SET status = 'PUBLISHED' WHERE id = ?",
+      ).bind(project.id),
+    ]);
+
+    const collisionBytes = new Uint8Array([0x67, 0x6c, 0x54, 0x46, 0x02, 0, 0, 0]);
+    const uploadResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          targetVersionId: versionId,
+          fileName: "reviewed-collision.glb",
+          sizeBytes: collisionBytes.byteLength,
+          format: "glb",
+          purpose: "collision_mesh",
+          mimeType: "model/gltf-binary",
+        }),
+      },
+    );
+    expect(uploadResponse.status).toBe(201);
+    const { upload } = await uploadResponse.json<{
+      upload: { id: string; versionId: string; assetId: string };
+    }>();
+    expect(upload.versionId).toBe(versionId);
+    const versionCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM scene_versions WHERE project_id = ?",
+    ).bind(project.id).first<{ count: number }>();
+    expect(versionCount?.count).toBe(1);
+
+    const partResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-length": String(collisionBytes.byteLength) },
+        body: collisionBytes,
+      },
+    );
+    const { part } = await partResponse.json<{ part: { etag: string } }>();
+    const completeResponse = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ partNumber: 1, etag: part.etag }] }),
+      },
+    );
+    const completed = await completeResponse.json<{ job: { id: string } }>();
+    expect(completeResponse.status).toBe(200);
+
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workerId: "collision-verifier", jobId: completed.job.id }),
+    });
+    const lease = await leaseResponse.json<{ leaseToken: string }>();
+    const verifiedSha256 = "a".repeat(64);
+    const workerComplete = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${completed.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Collision integrity verified",
+          outputs: [],
+          report: { source: { sha256: verifiedSha256 } },
+          evidence: {
+            processorVersion: "spatial-evidence/1.0.0",
+            computeDurationMs: 10,
+            activeHumanDurationMs: 0,
+            inputBytes: collisionBytes.byteLength,
+            outputBytes: 0,
+            toolVersions: { processor: "test" },
+          },
+        }),
+      },
+    );
+    expect(workerComplete.status).toBe(200);
+    const stored = await env.DB.prepare(`
+      SELECT a.integrity_status, a.sha256, sv.status AS version_status,
+        p.status AS project_status
+      FROM assets a
+      JOIN scene_versions sv ON sv.id = a.version_id
+      JOIN projects p ON p.id = a.project_id
+      WHERE a.id = ?
+    `).bind(upload.assetId).first<{
+      integrity_status: string;
+      sha256: string;
+      version_status: string;
+      project_status: string;
+    }>();
+    expect(stored).toEqual({
+      integrity_status: "verified",
+      sha256: verifiedSha256,
+      version_status: "PUBLISHED",
+      project_status: "PUBLISHED",
+    });
+  });
+
   it("binds an authored SOG opening camera to the immutable version and processor lease", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {

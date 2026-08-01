@@ -9762,6 +9762,11 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
     format: parsed.data.format,
   });
   if (!importPlan.accepted) return context.json({ error: importPlan.reason }, 422);
+  if (parsed.data.targetVersionId && purpose !== "collision_mesh") {
+    return unprocessable(context, {
+      targetVersionId: ["Only auxiliary collision geometry may attach to an existing scene version"],
+    });
+  }
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
       SELECT u.id, u.project_id, u.version_id, u.asset_id, u.file_name, u.format, u.purpose,
@@ -9791,6 +9796,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         existing.format !== parsed.data.format ||
         existing.purpose !== purpose ||
         existing.expected_size_bytes !== parsed.data.sizeBytes ||
+        (parsed.data.targetVersionId && existing.version_id !== parsed.data.targetVersionId) ||
         JSON.stringify(storedPosterCamera(existing.source_provenance_json) ?? null) !==
           JSON.stringify(parsed.data.posterCamera ?? null)
       ) {
@@ -9818,11 +9824,43 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
     }
   }
 
-  const versionNumberRow = await context.env.DB.prepare(
-    "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_number FROM scene_versions WHERE project_id = ?",
-  ).bind(project.id).first<{ next_number: number }>();
-  const versionNumber = versionNumberRow?.next_number ?? 1;
-  const versionId = crypto.randomUUID();
+  let versionId = crypto.randomUUID();
+  let versionNumber: number | null = null;
+  const auxiliaryAttachment = Boolean(parsed.data.targetVersionId);
+  if (parsed.data.targetVersionId) {
+    const targetVersion = await context.env.DB.prepare(`
+      SELECT sv.id, sv.status,
+        EXISTS(
+          SELECT 1 FROM assets a
+          WHERE a.version_id = sv.id AND a.project_id = sv.project_id
+            AND a.organisation_id = ? AND a.kind = 'web'
+            AND a.integrity_status = 'verified' AND a.deleted_at IS NULL
+        ) AS has_verified_web
+      FROM scene_versions sv
+      WHERE sv.id = ? AND sv.project_id = ?
+    `).bind(
+      organisationId,
+      parsed.data.targetVersionId,
+      project.id,
+    ).first<{ id: string; status: string; has_verified_web: number }>();
+    if (
+      !targetVersion ||
+      !["APPROVED", "PUBLISHED"].includes(targetVersion.status) ||
+      targetVersion.has_verified_web !== 1
+    ) {
+      return unprocessable(context, {
+        targetVersionId: [
+          "Auxiliary collision geometry requires an approved or published version with a verified web scene",
+        ],
+      });
+    }
+    versionId = targetVersion.id;
+  } else {
+    const versionNumberRow = await context.env.DB.prepare(
+      "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_number FROM scene_versions WHERE project_id = ?",
+    ).bind(project.id).first<{ next_number: number }>();
+    versionNumber = versionNumberRow?.next_number ?? 1;
+  }
   const assetId = crypto.randomUUID();
   const uploadSessionId = crypto.randomUUID();
   const fileName = safeFileName(parsed.data.fileName);
@@ -9842,8 +9880,9 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   });
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   try {
-    await context.env.DB.batch([
-      context.env.DB.prepare(`
+    const uploadStatements: D1PreparedStatement[] = [];
+    if (!auxiliaryAttachment) {
+      uploadStatements.push(context.env.DB.prepare(`
         INSERT INTO scene_versions
           (id, project_id, version_number, status, source_provenance_json,
             created_by, capture_agent_credential_id)
@@ -9860,7 +9899,9 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         }),
         uploadPrincipalUserId(principal),
         credentialId,
-      ),
+      ));
+    }
+    uploadStatements.push(
       context.env.DB.prepare(`
         INSERT INTO upload_sessions
           (id, organisation_id, project_id, version_id, asset_id, object_key,
@@ -9888,8 +9929,13 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         parsed.data.clientOperationId ?? null,
         credentialId,
       ),
-      context.env.DB.prepare("UPDATE projects SET status = 'UPLOADING', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, organisationId),
-    ]);
+    );
+    if (!auxiliaryAttachment) {
+      uploadStatements.push(
+        context.env.DB.prepare("UPDATE projects SET status = 'UPLOADING', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, organisationId),
+      );
+    }
+    await context.env.DB.batch(uploadStatements);
   } catch (error) {
     await multipartUpload.abort();
     throw error;
@@ -10007,7 +10053,12 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
     ? "open-import-v1"
     : "spatial-evidence/1.0.0";
   const idempotencyKey = `${importPlan.jobType}:${upload.asset_id}:v1`;
-  await context.env.DB.batch([
+  const versionBeforeUpload = await context.env.DB.prepare(
+    "SELECT status FROM scene_versions WHERE id = ? AND project_id = ?",
+  ).bind(upload.version_id, upload.project_id).first<{ status: string }>();
+  const auxiliaryAttachment = upload.purpose === "collision_mesh" &&
+    ["APPROVED", "PUBLISHED"].includes(versionBeforeUpload?.status ?? "");
+  const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       INSERT INTO assets
         (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status)
@@ -10027,8 +10078,6 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       upload.sha256,
     ),
     context.env.DB.prepare("UPDATE upload_sessions SET status = 'COMPLETED', completed_at = datetime('now') WHERE id = ? AND status = 'OPEN'").bind(upload.id),
-    context.env.DB.prepare("UPDATE scene_versions SET status = 'INGESTED', updated_at = datetime('now') WHERE id = ?").bind(upload.version_id),
-    context.env.DB.prepare("UPDATE projects SET status = 'INGESTED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(upload.project_id, organisationId),
     context.env.DB.prepare(`
       INSERT INTO processing_jobs
         (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state)
@@ -10043,7 +10092,14 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       processorVersion,
       idempotencyKey,
     ),
-  ]);
+  ];
+  if (!auxiliaryAttachment) {
+    completionStatements.splice(2, 0,
+      context.env.DB.prepare("UPDATE scene_versions SET status = 'INGESTED', updated_at = datetime('now') WHERE id = ?").bind(upload.version_id),
+      context.env.DB.prepare("UPDATE projects SET status = 'INGESTED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(upload.project_id, organisationId),
+    );
+  }
+  await context.env.DB.batch(completionStatements);
   await auditUploadPrincipal(context, principal, "upload.complete", "asset", upload.asset_id, {
     projectId: upload.project_id,
     jobId,
@@ -10795,10 +10851,12 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
-      j.job_type, j.state, a.size_bytes AS input_size_bytes, a.sha256 AS input_sha256,
+      j.job_type, j.state, a.kind AS input_kind, a.size_bytes AS input_size_bytes,
+      a.sha256 AS input_sha256, sv.status AS version_status,
       nb.authoring_hash AS navigation_authoring_hash
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
+    JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
     LEFT JOIN scene_navigation_builds nb ON nb.job_id = j.id
     WHERE j.id = ? AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
       AND j.lease_expires_at > ?
@@ -10810,8 +10868,10 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     input_asset_id: string | null;
     job_type: string;
     state: string;
+    input_kind: string;
     input_size_bytes: number;
     input_sha256: string | null;
+    version_status: string;
     navigation_authoring_hash: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
@@ -10820,6 +10880,24 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   }
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
     return validationError(context, { evidence: ["Reported input bytes do not match the leased source asset"] });
+  }
+  let verifiedInputSha256 = job.input_sha256;
+  if (job.job_type === "asset.evidence-validate") {
+    const reportSource = Reflect.get(parsed.data.report, "source");
+    const reportedSha256 = reportSource && typeof reportSource === "object"
+      ? readStringProperty(reportSource, "sha256")?.toLowerCase()
+      : null;
+    if (!reportedSha256 || !/^[a-f0-9]{64}$/.test(reportedSha256)) {
+      return validationError(context, {
+        report: ["Evidence validation must report the SHA-256 of the exact downloaded input"],
+      });
+    }
+    if (job.input_sha256 && reportedSha256 !== job.input_sha256.toLowerCase()) {
+      return validationError(context, {
+        report: ["Reported input SHA-256 does not match the immutable asset record"],
+      });
+    }
+    verifiedInputSha256 = reportedSha256;
   }
   let navigationArtifact: ReturnType<typeof navigationArtifactSchema.parse> | null = null;
   if (job.job_type === "navigation.build-v1") {
@@ -10921,9 +10999,10 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   const completionStatements: D1PreparedStatement[] = [
     ...assetStatements,
     ...navigationStatements,
-    context.env.DB.prepare(
-      "UPDATE assets SET integrity_status = 'verified' WHERE id = ? AND organisation_id = ?",
-    ).bind(job.input_asset_id, job.organisation_id),
+    context.env.DB.prepare(`
+      UPDATE assets SET integrity_status = 'verified', sha256 = COALESCE(sha256, ?)
+      WHERE id = ? AND organisation_id = ?
+    `).bind(verifiedInputSha256, job.input_asset_id, job.organisation_id),
     context.env.DB.prepare(`
       UPDATE processing_jobs
       SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?,
@@ -10946,6 +11025,9 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     ),
   ];
   if (!navigationCompletion) {
+    const auxiliaryCollisionCompletion = job.job_type === "asset.evidence-validate" &&
+      job.input_kind === "collision" &&
+      ["APPROVED", "PUBLISHED"].includes(job.version_status);
     completionStatements.push(context.env.DB.prepare(`
       INSERT INTO qa_reports (id, organisation_id, project_id, version_id, status, report_json)
       VALUES (?, ?, ?, ?, 'pending', ?)
@@ -10956,14 +11038,16 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       job.version_id,
       JSON.stringify(parsed.data.report),
     ));
-    completionStatements.push(
-    context.env.DB.prepare(
-      "UPDATE scene_versions SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ?",
-    ).bind(job.version_id),
-    context.env.DB.prepare(
-      "UPDATE projects SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
-    ).bind(job.project_id, job.organisation_id),
-    );
+    if (!auxiliaryCollisionCompletion) {
+      completionStatements.push(
+        context.env.DB.prepare(
+          "UPDATE scene_versions SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ?",
+        ).bind(job.version_id),
+        context.env.DB.prepare(
+          "UPDATE projects SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
+        ).bind(job.project_id, job.organisation_id),
+      );
+    }
   }
   await context.env.DB.batch(completionStatements);
   return context.json({ job: { id: job.id, state: "SUCCEEDED" }, outputs: outputSummary, qaReportId });

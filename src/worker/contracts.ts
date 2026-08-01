@@ -355,6 +355,7 @@ const uploadPosterCameraSchema = z.object({
 
 export const uploadInputSchema = z.object({
   clientOperationId: z.string().uuid().optional(),
+  targetVersionId: z.string().uuid().optional(),
   fileName: z.string().trim().min(1).max(255),
   sizeBytes: z.number().int().positive(),
   format: z.enum(captureAssetFormats),

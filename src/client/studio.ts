@@ -1276,6 +1276,7 @@ let pendingUploadOperation: {
   fileSize: number;
   format: string;
   purpose: CaptureAssetPurpose;
+  targetVersionId: string | null;
 } | null = null;
 let activeUpload: {
   id: string;
@@ -10390,8 +10391,27 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   if (formats.includes(prior as CaptureAssetFormat)) formatSelect.value = prior;
   const fileInput = byId<HTMLInputElement>("uploadAssetInput");
   fileInput.accept = formats.map((format) => `.${format}`).join(",");
-  byId("uploadPurposeHelp").textContent = capturePurposeHelp[purpose];
+  const collisionTarget = purpose === "collision_mesh"
+    ? auxiliaryCollisionTargetVersion()
+    : null;
+  byId("uploadPurposeHelp").textContent = collisionTarget
+    ? `${capturePurposeHelp[purpose]} It will attach to v${collisionTarget.version_number}, the latest approved visual version, without replacing its immutable scene bytes.`
+    : capturePurposeHelp[purpose];
   syncUploadPosterCameraRequirement();
+}
+
+function auxiliaryCollisionTargetVersion(): Version | null {
+  if (!state.selected) return null;
+  return [...state.selected.versions]
+    .sort((left, right) => right.version_number - left.version_number)
+    .find((version) =>
+      ["APPROVED", "PUBLISHED"].includes(version.status) &&
+      state.selected!.assets.some((asset) =>
+        asset.version_id === version.id &&
+        asset.kind === "web" &&
+        asset.integrity_status === "verified"
+      )
+    ) ?? null;
 }
 
 function syncUploadPosterCameraRequirement(): void {
@@ -10537,6 +10557,12 @@ async function uploadAsset(form: FormData): Promise<void> {
   if (!(file instanceof File)) return;
   const format = String(form.get("format") ?? "");
   const purpose = String(form.get("purpose") ?? "") as CaptureAssetPurpose;
+  const targetVersionId = purpose === "collision_mesh"
+    ? auxiliaryCollisionTargetVersion()?.id ?? null
+    : null;
+  if (purpose === "collision_mesh" && !targetVersionId) {
+    throw new Error("Approve a visual scene version before attaching collision geometry.");
+  }
   const posterCameraText = String(form.get("posterCamera") ?? "").trim();
   let posterCamera: unknown;
   if (posterCameraText) {
@@ -10568,7 +10594,8 @@ async function uploadAsset(form: FormData): Promise<void> {
         pendingUploadOperation.fileName === file.name &&
         pendingUploadOperation.fileSize === file.size &&
         pendingUploadOperation.format === format &&
-        pendingUploadOperation.purpose === purpose;
+        pendingUploadOperation.purpose === purpose &&
+        pendingUploadOperation.targetVersionId === targetVersionId;
       if (!operationMatches) {
         pendingUploadOperation = {
           id: crypto.randomUUID(),
@@ -10577,6 +10604,7 @@ async function uploadAsset(form: FormData): Promise<void> {
           fileSize: file.size,
           format,
           purpose,
+          targetVersionId,
         };
       }
       const operationId = pendingUploadOperation?.id;
@@ -10593,6 +10621,7 @@ async function uploadAsset(form: FormData): Promise<void> {
             format,
             purpose,
             mimeType: file.type || "application/octet-stream",
+            ...(targetVersionId ? { targetVersionId } : {}),
             ...(posterCamera ? { posterCamera } : {}),
           }),
           signal: uploadAbortController.signal,
