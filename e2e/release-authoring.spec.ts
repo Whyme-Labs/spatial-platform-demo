@@ -98,6 +98,58 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
   await expect(page.locator("#releaseDialog")).toBeVisible();
 });
 
+test("navigation authoring actions and review rows never touch or overlap", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Author spatial experience", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
+
+  const card = page.locator("article.workspace-card-large").filter({
+    has: page.getByRole("heading", { name: "Routes and movement runtime" }),
+  });
+  const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
+  const tuneNavigation = card.getByRole("button", { name: "Tune navigation agent", exact: true });
+  const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
+  const firstApprove = card.getByRole("button", { name: "Approve navigation", exact: true }).first();
+
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await card.scrollIntoViewIfNeeded();
+    await firstApprove.focus();
+
+    const boxes = await Promise.all([
+      createRoute.boundingBox(),
+      tuneNavigation.boundingBox(),
+      buildNavigation.boundingBox(),
+      firstApprove.boundingBox(),
+    ]);
+    const [createBox, tuneBox, buildBox, approveBox] = boxes;
+    if (!createBox || !tuneBox || !buildBox || !approveBox) {
+      throw new Error(`${viewport.width}px navigation controls are not measurable`);
+    }
+
+    expect(
+      tuneBox.y - (createBox.y + createBox.height),
+      `${viewport.width}px create/tune gap`,
+    ).toBeGreaterThanOrEqual(12);
+    expect(
+      buildBox.y - (tuneBox.y + tuneBox.height),
+      `${viewport.width}px tune/build gap`,
+    ).toBeGreaterThanOrEqual(12);
+    expect(
+      approveBox.y - (buildBox.y + buildBox.height),
+      `${viewport.width}px build/review separation`,
+    ).toBeGreaterThanOrEqual(20);
+  }
+});
+
 async function mockApprovedProject(
   page: Page,
   onPublish: (body: Record<string, unknown>) => void,
@@ -105,6 +157,7 @@ async function mockApprovedProject(
     authoredSpatial?: boolean;
     reviewedTransform?: boolean;
     auxiliaryQaVersion?: boolean;
+    navigationBuildHistory?: boolean;
   } = {},
 ): Promise<void> {
   const project = {
@@ -172,15 +225,28 @@ async function mockApprovedProject(
             : []),
           { id: versionId, version_number: 1, status: "APPROVED", created_at: now },
         ],
-        assets: [{
-          id: "55555555-5555-4555-8555-555555555555",
-          version_id: versionId,
-          kind: "web",
-          format: "rad",
-          file_name: "scene.rad",
-          size_bytes: 73_400_000,
-          integrity_status: "verified",
-        }],
+        assets: [
+          {
+            id: "55555555-5555-4555-8555-555555555555",
+            version_id: versionId,
+            kind: "web",
+            format: "rad",
+            file_name: "scene.rad",
+            size_bytes: 73_400_000,
+            integrity_status: "verified",
+          },
+          ...(options.navigationBuildHistory
+            ? [{
+              id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              version_id: versionId,
+              kind: "collision",
+              format: "glb",
+              file_name: "collision.glb",
+              size_bytes: 4096,
+              integrity_status: "verified",
+            }]
+            : []),
+        ],
         jobs: [],
         releases: [],
         captureBundles: [],
@@ -258,6 +324,39 @@ async function mockApprovedProject(
           eyeHeight: 1.6,
           maxStepMetres: 0.1,
         },
+        navigationBuilds: options.navigationBuildHistory
+          ? [
+            {
+              id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+              collision_asset_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              job_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              status: "READY_FOR_REVIEW",
+              parameters_json: "{}",
+              artifact_json: null,
+              navmesh_asset_id: null,
+              report_asset_id: null,
+              review_note: null,
+              reviewed_at: null,
+              created_at: "2026-08-01T15:18:04.000Z",
+              updated_at: "2026-08-01T15:18:04.000Z",
+            },
+            {
+              id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+              collision_asset_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+              job_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+              status: "APPROVED",
+              parameters_json: "{}",
+              artifact_json: null,
+              navmesh_asset_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+              report_asset_id: "12121212-1212-4212-8212-121212121212",
+              review_note: "Reviewed collision evidence.",
+              reviewed_at: "2026-08-01T09:18:12.000Z",
+              created_at: "2026-08-01T09:18:12.000Z",
+              updated_at: "2026-08-01T09:18:12.000Z",
+            },
+          ]
+          : [],
+        navigationArtifact: null,
       });
     }
     if (path === `/api/projects/${projectId}/releases` && method === "POST") {

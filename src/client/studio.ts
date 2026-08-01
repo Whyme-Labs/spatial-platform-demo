@@ -6439,23 +6439,27 @@ function renderSpatial(): void {
     ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapier sphere sweeps."
     : "Upload a verified collision GLB on this immutable version first.";
   buildNavigation.addEventListener("click", openNavigationBuildDialog);
-  routes.append(addRoute, tuneNavigation, buildNavigation);
+  const navigationActions = element("div", "navigation-authoring-actions");
+  navigationActions.append(addRoute, tuneNavigation, buildNavigation);
+  routes.append(navigationActions);
 
   const navigationBuilds = spatial.navigationBuilds ?? [];
+  const navigationBuildHistory = element("div", "navigation-build-history");
   if (!navigationBuilds.length) {
-    routes.append(element(
+    navigationBuildHistory.append(element(
       "p",
       "field-note",
       "No approved navigation artifact exists. A future movement-enabled release remains blocked until one passes processor validation and operator review.",
     ));
   }
   for (const build of navigationBuilds.slice(0, 6)) {
-    const row = element("div", "semantic-row");
+    const row = element("div", "semantic-row navigation-build-row");
     const label = element(
       "span",
       "",
       `${humanStatus(build.status)} · ${parseTimestamp(build.created_at).toLocaleString()}`,
     );
+    const actions = element("div", "navigation-build-actions");
     row.append(label);
     if (build.status === "READY_FOR_REVIEW") {
       const approve = element("button", "primary-button", "Approve navigation");
@@ -6481,7 +6485,7 @@ function renderSpatial(): void {
           pendingLabel: "Rejecting…",
         }, () => reviewNavigationBuild(build.id, "reject", note));
       });
-      row.append(approve, reject);
+      actions.append(approve, reject);
     } else if (["QUEUED", "PROCESSING"].includes(build.status)) {
       const refresh = element("button", "quiet-button", "Refresh");
       refresh.addEventListener("click", () => {
@@ -6491,7 +6495,7 @@ function renderSpatial(): void {
           pendingLabel: "Refreshing…",
         }, () => loadSpatialWorkspace(project.id));
       });
-      row.append(refresh);
+      actions.append(refresh);
     } else if (build.status === "FAILED") {
       const retry = element("button", "quiet-button", "Retry");
       retry.addEventListener("click", () => {
@@ -6501,10 +6505,12 @@ function renderSpatial(): void {
           pendingLabel: "Queueing retry…",
         }, () => retryNavigationBuild(build.job_id));
       });
-      row.append(retry);
+      actions.append(retry);
     }
-    routes.append(row);
+    if (actions.childElementCount) row.append(actions);
+    navigationBuildHistory.append(row);
   }
+  routes.append(navigationBuildHistory);
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
