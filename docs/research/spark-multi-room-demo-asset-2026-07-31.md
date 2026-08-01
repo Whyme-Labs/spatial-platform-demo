@@ -5,7 +5,8 @@ Research date: 2026-07-31
 ## Decision
 
 **Home Scan** is the selected Spark-compatible multi-room visual and
-provisional-walking demo. The current v3 release clears these gates:
+provisional-walking demo. The current public release combines visual version v3
+with navigation version v6 and clears these gates:
 
 1. a real, connected multi-room indoor capture;
 2. rights that permit commercial use and redistribution with stated attribution;
@@ -13,8 +14,9 @@ provisional-walking demo. The current v3 release clears these gates:
 4. a verified Spark render that is visually faithful from an authored camera;
 5. an immutable baked-upright PLY and reviewed identity Y-up transform that
    bind the visual asset to authored geometry; and
-6. four inspected provisional walk zones that support bounded keyboard
-   movement without making metric or certified-collision claims.
+6. four inspected provisional room floors plus five reviewed threshold/aisle
+   connectors that form one radius-cleared Detour component and support bounded
+   keyboard movement without making metric or certified-collision claims.
 
 The earlier Home Scan failure was a coordinate-frame mismatch, not corrupted
 Gaussian data or a Spark decoder failure. SplatTransform's PLY presentation
@@ -26,11 +28,11 @@ raised normalized cross-correlation against the reference from `0.347871` to
 Publish it only as an attributed visual-navigation demonstration. The
 source is distributed as streamed SSOG, so `@playcanvas/splat-transform` remains
 an offline evaluation bridge and is not the FJD/XGRIDS ingestion architecture.
-The runtime remains Spark-only. The v3 release has authored provisional
-collision regions and a navigation mesh, but has no metric scale, certified
-collision, measured floor plan, accessibility evidence, or invented bridges
-to the distant separately reconstructed component. Two adjacent gaps now carry
-explicitly provisional, operator-authored doorway traversal assists.
+The runtime remains Spark-only. The release has authored provisional floor
+support, a navigation mesh, and a reviewed west-side aisle visible in the
+source scene, but has no metric scale, certified collision, measured floor
+plan, furniture/wall-volume collision, or accessibility evidence. The five
+floor/threshold joins are explicitly provisional and operator reviewed.
 
 ## Strongest direct-Spark candidate: Villa Badam
 
@@ -213,57 +215,61 @@ camera.up: [0, 1, 0]
 camera.fovDegrees: 55
 ```
 
-That v1 release cleared the whole-home dollhouse visual gate only. The current
-v3 release bakes the same 180-degree correction into an immutable PLY, rebuilds
-RAD from that master, and adds reviewed provisional navigation evidence.
+That v1 release cleared the whole-home dollhouse visual gate only. Visual
+version v3 bakes the same 180-degree correction into an immutable PLY and
+rebuilds RAD from that master. Navigation version v6 adds the reviewed
+provisional whole-home walking evidence.
 
 ### Current production walkable release verification
 
-The walkable Spark v3 release was published and independently re-opened from
-the public channel on 2026-07-31:
+The corrected walkable release was published and independently re-opened from
+the public channel on 2026-08-01:
 
 - public viewer: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
 - project: `8575b01f-af96-401f-a245-3013fda91706`;
 - immutable version: `fcdbecb7-3042-40d1-a96b-1bbc4fc3913c`;
-- active release: `abacafa1-b0b2-4df4-a064-e1d1635bf750`;
+- active release: `8eb6779b-e9dc-49f8-88d6-3386cd5a0bda`;
 - immutable upright PLY: 150,480,651 bytes, SHA-256
   `1d4c11e4e6f159e9997d953c22a6c5e8a9fecc45f1fa0ec4ad4ad207fc835148`;
 - production-generated RAD: 73,437,240 bytes, SHA-256
   `ee0342109aff6661fe5c0a75e91f7a5401dcc23ee47c866105a23299d36462cf`;
 - reviewed transform evidence: `cc2f2648-4838-4df5-871f-9adf8301ff25`;
 - QA report: `eb1ac575-466f-406d-b3ee-be9f83c77ac2`;
-- deployed application commit: `24205ec`;
-- Cloudflare Worker version: `f5c535a6-4d93-4348-b83b-35db4fe9d822`.
+- reviewed collision asset: 3,808 bytes, 110 vertices, 90 source triangles,
+  SHA-256 `d3b515215a9fac7405158bae331a4a1bde4724bc0d98b8aa6686fca2a0a82357`;
+- navigation authoring hash:
+  `05e3aaa0567c5010f168d17a6a5bce71e07fa4fde9831dee6a565793dd8ab9da`;
+- production navigation build: `589a27e0-39a1-4beb-b55b-8c17505d82ed`;
+- deployed application commit: `e2ff483`;
+- Cloudflare Worker version: `d17c765c-7362-4b19-82d1-055a6afacb9b`.
 
 The active manifest records a 4M splat budget, reviewed identity Y-up/SU
 transform, opening camera `[3.433, 1.75, -2.433]` looking toward
-`[2.433, 1.75, -2.433]`, four authored floor entities, two provisional doorway
-connectors, 86 runtime navigation triangles, a 0.18 SU agent radius, and no
-authored obstacles. The two connectors join the three adjacent Recast
-components across reviewed threshold gaps; the distant fourth component remains
-disconnected because the evidence does not justify inventing a long corridor.
-The platform does not claim that SU is metres or that the authored assists are
-measured doors.
+`[2.433, 1.75, -2.433]`, four authored room floors, five reviewed
+threshold/aisle connectors, 73 radius-cleared Detour triangles, a 0.18 SU agent
+radius, and no authored obstacles. All four room destinations belong to one
+component and are reachable both outbound and inbound. Rapier's kinematic
+capsule validation passed all eight direction-specific routes; the far-room
+route is approximately 15.35 SU. The platform does not claim that SU is metres,
+that the connector polygons are measured doors, or that furniture and wall
+volumes have certified collision.
 
 A fresh production Chrome run reached `Scene ready`, displayed `Walking enabled
-· clear route map`, and accepted real arrow-key movement. A deterministic check
-against the exact public manifest sampled the complete 0.18 SU camera footprint
-at 0.04 SU intervals and proved both authored joins connected: main-to-side
-reached `[-2.06, 1.77, -0.99]`, while side-to-side reached
-`[-5.48, 1.77, -0.67]`. Runtime doorway assistance is scoped to those frozen
-doorway boxes and tries the smallest viable steering angle; walls, void edges,
-and closed obstacles retain the hard-stop behavior.
+· Detour + capsule collision verified`, and accepted real arrow-key movement.
+Repeated `ArrowUp` input moved the live floor-plan marker out of `Main living
+room` and into the connector route. The exact public manifest then passed the
+repository verifier with four primary regions, five connectors, and one
+component. Runtime movement is constrained to the frozen, radius-cleared Detour
+mesh; floor and lateral route boundaries retain hard-stop behavior.
 
-Before production deployment, `npm run check` passed 165 unit/worker tests, 39
-Playwright tests, all type/build/static audits, and the Cloudflare production
-deployment dry-run. Two-axis review finished with zero remaining standards or
-spec findings. The temporary upload credential was revoked after the immutable
-PLY and derivatives were verified.
+Before production deployment, `npm run check` passed 176 Vitest tests, 9
+navigation tests, 42 Playwright tests, all type/build/static audits, and the
+Cloudflare production deployment dry-run. The public manifest verifier and
+production health endpoint also passed after publishing. The temporary upload
+credential was revoked after the immutable PLY and derivatives were verified.
 
-The prior visual-only release remains in immutable history as version
-`388c4f7b-fcbd-4f1b-bffa-5f223fa13d10` / release
-`9f62c462-5420-4f53-b02a-0c90022064a9`, but it is no longer the active channel
-target.
+Earlier visual-only and partially connected releases remain in immutable
+history, but they are no longer the active channel target.
 
 `@playcanvas/splat-transform` must remain an offline evaluation bridge only.
 The production FJD/XGRIDS path should accept a creator/vendor export in a
