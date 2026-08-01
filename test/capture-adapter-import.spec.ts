@@ -176,6 +176,16 @@ describe("capture adapter evidence ingestion", () => {
       version_status: "PUBLISHED",
       project_status: "PUBLISHED",
     });
+    const detailResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}`,
+      { headers: { cookie } },
+    );
+    expect(detailResponse.status).toBe(200);
+    const detail = await detailResponse.json<{
+      assets: Array<{ id: string; sha256: string | null }>;
+    }>();
+    expect(detail.assets.find((asset) => asset.id === upload.assetId)?.sha256)
+      .toBe(verifiedSha256);
   });
 
   it("binds an authored SOG opening camera to the immutable version and processor lease", async () => {

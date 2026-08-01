@@ -4225,7 +4225,7 @@ app.get("/api/projects/:projectId", async (context) => {
   if (!project) return notFound(context, "Project not found");
   const detailResults = await context.env.DB.batch([
     context.env.DB.prepare("SELECT * FROM scene_versions WHERE project_id = ? ORDER BY version_number DESC").bind(projectId),
-    context.env.DB.prepare("SELECT id, version_id, kind, format, file_name, mime_type, size_bytes, integrity_status, created_at FROM assets WHERE project_id = ? AND organisation_id = ? ORDER BY created_at DESC").bind(projectId, auth.organisationId),
+    context.env.DB.prepare("SELECT id, version_id, kind, format, file_name, mime_type, size_bytes, sha256, integrity_status, created_at FROM assets WHERE project_id = ? AND organisation_id = ? ORDER BY created_at DESC").bind(projectId, auth.organisationId),
     context.env.DB.prepare("SELECT id, version_id, job_type, state, attempt_count, progress, progress_message, error_json, created_at, updated_at FROM processing_jobs WHERE project_id = ? AND organisation_id = ? ORDER BY created_at DESC").bind(projectId, auth.organisationId),
     context.env.DB.prepare(`
       SELECT r.id, r.version_id, r.access_policy, r.published_at, r.expires_at, r.revoked_at, rc.slug,
