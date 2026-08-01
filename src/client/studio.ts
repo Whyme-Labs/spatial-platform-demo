@@ -1146,6 +1146,7 @@ const state: {
   hosting: HostingWorkspace | null;
   spatial: SpatialWorkspace | null;
   spatialProjectId: string | null;
+  spatialVersionId: string | null;
   measurement: MeasurementWorkspace | null;
   measurementProjectId: string | null;
   recoverableUploads: RecoverableUpload[];
@@ -1176,6 +1177,7 @@ const state: {
   hosting: null,
   spatial: null,
   spatialProjectId: null,
+  spatialVersionId: null,
   measurement: null,
   measurementProjectId: null,
   recoverableUploads: [],
@@ -4268,6 +4270,7 @@ function clearTenantWorkspace(): void {
   state.hosting = null;
   state.spatial = null;
   state.spatialProjectId = null;
+  state.spatialVersionId = null;
   state.measurement = null;
   state.measurementProjectId = null;
   state.team = null;
@@ -6147,6 +6150,43 @@ function renderSpatial(): void {
     container.append(emptyState("Upload and process an immutable scene version before authoring semantics."));
     return;
   }
+  const versionControl = element("article", "workspace-card-large spatial-version-control");
+  const versionSelect = document.createElement("select");
+  versionSelect.setAttribute("aria-label", "Spatial version");
+  for (const version of state.selected?.versions ?? []) {
+    const hasCollision = (state.selected?.assets ?? []).some((asset) =>
+      asset.version_id === version.id &&
+      asset.kind === "collision" &&
+      asset.integrity_status === "verified" &&
+      Boolean(asset.sha256)
+    );
+    versionSelect.append(new Option(
+      `v${version.version_number} · ${humanStatus(version.status)}${hasCollision ? " · verified collision" : ""}`,
+      version.id,
+    ));
+  }
+  versionSelect.value = spatial.version.id;
+  versionSelect.addEventListener("change", () => {
+    const versionId = versionSelect.value;
+    versionSelect.disabled = true;
+    container.setAttribute("aria-busy", "true");
+    void loadSpatialWorkspace(project.id, versionId).catch((error) => {
+      showNotice(errorMessage(error), "error");
+      versionSelect.disabled = false;
+      container.removeAttribute("aria-busy");
+    });
+  });
+  versionControl.append(
+    element("span", "eyebrow", "IMMUTABLE AUTHORING TARGET"),
+    element("h3", "", "Choose the visual version to author"),
+    element(
+      "p",
+      "muted-copy",
+      "Collision, rooms, routes, and navigation builds remain bound to this exact immutable scene version.",
+    ),
+    versionSelect,
+  );
+  container.append(versionControl);
   const hierarchy = element("article", "workspace-card-large");
   hierarchy.append(
     element("span", "eyebrow", `VERSION ${spatial.version.version_number}`),
@@ -6923,15 +6963,16 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
   return workflow;
 }
 
-async function loadSpatialWorkspace(projectId: string): Promise<void> {
+async function loadSpatialWorkspace(projectId: string, requestedVersionId?: string): Promise<void> {
   const versionId = state.selected?.project.id === projectId
-    ? state.selected.versions[0]?.id
-    : undefined;
+    ? requestedVersionId ?? state.spatialVersionId ?? state.selected.versions[0]?.id
+    : requestedVersionId;
   const query = versionId ? `?versionId=${encodeURIComponent(versionId)}` : "";
   const workspace = await api<SpatialWorkspace>(`/api/projects/${projectId}/spatial${query}`);
   if (state.selected?.project.id !== projectId) return;
   state.spatial = workspace;
   state.spatialProjectId = projectId;
+  state.spatialVersionId = workspace.version?.id ?? null;
   if (state.view === "spatial") renderSpatial();
 }
 
@@ -9407,6 +9448,7 @@ async function selectProject(
     if (state.selected?.project.id !== projectId || selectedVersionChanged) {
       state.spatial = null;
       state.spatialProjectId = null;
+      state.spatialVersionId = null;
       state.measurement = null;
       state.measurementProjectId = null;
       state.recoverableUploads = [];
@@ -10814,16 +10856,20 @@ async function approveVersion(form: FormData): Promise<void> {
 async function openReleaseDialog(): Promise<void> {
   if (!state.selected) return;
   const projectId = state.selected.project.id;
-  const versionId = state.selected.versions[0]?.id ?? null;
+  const versionId = auxiliaryCollisionTargetVersion()?.id ?? null;
+  if (!versionId) {
+    showNotice("Approve a visual scene version before publishing a release.", "error");
+    return;
+  }
   if (
     state.spatialProjectId !== projectId ||
     state.spatial?.version?.id !== versionId
   ) {
-    await loadSpatialWorkspace(projectId);
+    await loadSpatialWorkspace(projectId, versionId);
   }
   if (
     state.selected?.project.id !== projectId ||
-    state.selected.versions[0]?.id !== versionId
+    state.spatial?.version?.id !== versionId
   ) return;
   const form = byId<HTMLFormElement>("releaseForm");
   form.reset();
