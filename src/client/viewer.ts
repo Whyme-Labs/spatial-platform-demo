@@ -2,7 +2,6 @@ import "@fontsource-variable/manrope";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import { api } from "./api";
-import { rendererLoadTimeoutMs } from "../shared/renderer-readiness";
 import { runAction, SingleFlight } from "./action-state";
 import {
   buildFloorPlans,
@@ -39,6 +38,7 @@ type ReleaseManifest = {
   schemaVersion: string;
   release: {
     id: string;
+    number: number;
     slug: string;
     publishedAt: string;
     expiresAt: string | null;
@@ -47,6 +47,7 @@ type ReleaseManifest = {
   project: {
     id: string;
     versionId: string;
+    versionNumber: number;
     name: string;
     captureAdapter: string;
     provenance: unknown;
@@ -252,7 +253,6 @@ const viewerSessionId = crypto.randomUUID();
 const activeReleaseSlug = releaseSlug();
 const viewerActions = new SingleFlight();
 let activeManifest: ReleaseManifest | null = null;
-let loadTimeout: number | null = null;
 let activeReview: SceneReview | null = null;
 let activeFloorPlans: FloorPlan[] = [];
 let activeFloorPlanId: string | null = null;
@@ -338,8 +338,6 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
   frame.hidden = true;
-  if (loadTimeout !== null) window.clearTimeout(loadTimeout);
-
   try {
     const accessToken = new URL(location.href).searchParams.get("access_token");
     const query = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : "";
@@ -356,17 +354,6 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     const rendererUrl = publishedRendererUrl(manifest);
     frame.src = rendererUrl.toString();
     frame.hidden = false;
-    const timeoutMs = rendererLoadTimeoutMs(manifest.scene.format, manifest.scene.sizeBytes);
-    loadTimeout = window.setTimeout(() => {
-      showError(
-        `Spark did not become ready within ${timeoutMs / 1000} seconds.`,
-        "Check the network connection or retry on a device with WebGL2 support.",
-      );
-      void recordTelemetry("renderer_error", timeoutMs, {
-        reason: "load_timeout",
-        runtime: "spark",
-      });
-    }, timeoutMs);
   } catch (error) {
     showError("This spatial release is unavailable.", error instanceof Error ? error.message : "The release could not be authorised.");
   }
@@ -466,8 +453,6 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type !== "ready") return;
-  if (loadTimeout !== null) window.clearTimeout(loadTimeout);
-  loadTimeout = null;
   errorPanel.hidden = true;
   frame.hidden = false;
   frame.classList.remove("is-loading");
@@ -1236,7 +1221,6 @@ function setLoading(visible: boolean, detail = "", progress?: number): void {
 }
 
 function showError(title: string, message: string): void {
-  if (loadTimeout !== null) window.clearTimeout(loadTimeout);
   rendererReady = false;
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");

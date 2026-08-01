@@ -479,11 +479,14 @@ curl --fail https://spatial.whymelabs.com/api/health
 
 Apply database migrations before code that depends on them. D1 migrations are
 append-only after production deployment; do not edit an already applied file.
-The current release requires `0037_refresh_rotation_replay.sql` and
-`0038_recast_navigation_builds.sql` in both environments before deploying the
+The current release requires `0037_refresh_rotation_replay.sql`,
+`0038_recast_navigation_builds.sql`, and
+`0039_numeric_release_revisions.sql` in both environments before deploying the
 Worker. Migration `0037` preserves refresh-token replay evidence; `0038` stores
 the exact v7 navigation build state, tuning, authoring hashes, approved
-report/Detour assets, and review evidence used by the publication gate.
+report/Detour assets, and review evidence used by the publication gate; `0039`
+backfills deterministic project-local release revisions and enforces their
+uniqueness.
 `wrangler deploy` publishes both the Worker and its declared
 domain and schedule; verify both the `workers.dev` and branded JWKS after a
 signing-key secret change.
@@ -502,7 +505,10 @@ unique run ID and is deleted before the command succeeds.
 4. Create a disposable project in staging.
 5. Upload a valid Gaussian PLY or SPZ, run `npm run processor:once`, confirm the
    job reaches `SUCCEEDED` and its immutable version reaches `QA_REQUIRED`.
-6. Approve QA, publish the Spark RAD release, open it, and revoke it.
+6. Approve QA, publish the Spark RAD release, confirm the numeric scene version
+   and release revision, open it, and revoke it. Repeating an identical
+   non-token publish with a new operation ID must return the active release
+   instead of adding a duplicate history row.
 7. Confirm a revoked manifest is unavailable.
 8. Open Spatial authoring and confirm the selected project loads, create a
    disposable room with walkable bounds, and confirm collision/navigation counts

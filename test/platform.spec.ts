@@ -2577,7 +2577,10 @@ describe("Spatial Studio Worker", () => {
       },
     );
     expect(releaseResponse.status).toBe(201);
-    const release = await releaseResponse.clone().json<{ release: { id: string } }>();
+    const release = await releaseResponse.clone().json<{
+      release: { id: string; releaseNumber: number; versionNumber: number };
+    }>();
+    expect(release.release).toMatchObject({ releaseNumber: 1, versionNumber: 1 });
     const repeatedReleaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -2603,22 +2606,95 @@ describe("Spatial Studio Worker", () => {
     );
     expect(repeatedReleaseResponse.status).toBe(200);
     await expect(repeatedReleaseResponse.json()).resolves.toMatchObject({
-      release: { id: release.release.id },
+      release: {
+        id: release.release.id,
+        releaseNumber: 1,
+        versionNumber: 1,
+      },
       idempotent: true,
     });
+
+    const accidentalDuplicateResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "55555555-5555-4555-8555-555555555556",
+          slug: "publishable-apartment",
+          accessPolicy: "public",
+          viewerConfig: {
+            title: "Publishable apartment",
+            measurementDisclaimer: "Visual experience only.",
+            splatBudgetMillions: 1,
+            initialCamera: {
+              position: [3.14, 0.18, -3.56],
+              target: [3.08, -0.31, -2.69],
+              up: [-0.01, -0.87, -0.49],
+              fovDegrees: 58,
+            },
+          },
+        }),
+      },
+    );
+    expect(accidentalDuplicateResponse.status).toBe(200);
+    await expect(accidentalDuplicateResponse.json()).resolves.toMatchObject({
+      release: { id: release.release.id, releaseNumber: 1, versionNumber: 1 },
+      idempotent: true,
+      duplicate: true,
+    });
+
+    const revisedReleaseResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: "55555555-5555-4555-8555-555555555557",
+          slug: "publishable-apartment",
+          accessPolicy: "public",
+          viewerConfig: {
+            title: "Publishable apartment — revised presentation",
+            measurementDisclaimer: "Visual experience only.",
+            splatBudgetMillions: 1,
+            initialCamera: {
+              position: [3.14, 0.18, -3.56],
+              target: [3.08, -0.31, -2.69],
+              up: [-0.01, -0.87, -0.49],
+              fovDegrees: 58,
+            },
+          },
+        }),
+      },
+    );
+    expect(revisedReleaseResponse.status).toBe(201);
+    const revisedRelease = await revisedReleaseResponse.json<{
+      release: { id: string; releaseNumber: number; versionNumber: number };
+    }>();
+    expect(revisedRelease.release).toMatchObject({ releaseNumber: 2, versionNumber: 1 });
+    expect(revisedRelease.release.id).not.toBe(release.release.id);
+    const supersededAssetResponse = await exports.default.fetch(new URL(
+      `/public-asset/${release.release.id}/${upload.assetId}/scene.rad`,
+      origin,
+    ));
+    expect(supersededAssetResponse.status).toBe(404);
 
     const releasesResponse = await exports.default.fetch(`${origin}/api/releases`, {
       headers: { cookie },
     });
     expect(releasesResponse.status).toBe(200);
-    await expect(releasesResponse.json()).resolves.toMatchObject({
-      releases: [{
-        id: release.release.id,
-        project_id: project.id,
-        project_name: "Publishable apartment",
-        slug: "publishable-apartment",
-        is_active: 1,
-      }],
+    const releaseInventory = await releasesResponse.json<{
+      releases: Array<Record<string, unknown>>;
+    }>();
+    expect(releaseInventory.releases).toHaveLength(2);
+    expect(releaseInventory.releases[0]).toMatchObject({
+      id: revisedRelease.release.id,
+      project_id: project.id,
+      project_name: "Publishable apartment",
+      version_number: 1,
+      release_number: 2,
+      slug: "publishable-apartment",
+      is_active: 1,
     });
 
     const manifestResponse = await exports.default.fetch(
@@ -2626,6 +2702,8 @@ describe("Spatial Studio Worker", () => {
     );
     expect(manifestResponse.status).toBe(200);
     const manifest = await manifestResponse.json<{
+      release: { number: number };
+      project: { versionNumber: number };
       scene: { contentUrl: string; posterUrl: string | null; collisionUrl: string | null };
       spatial: {
         entities: Array<{ id: string; label: string }>;
@@ -2658,7 +2736,10 @@ describe("Spatial Studio Worker", () => {
         };
       };
     }>();
-    expect(manifest.scene.contentUrl).toContain("/scene.rad?token=");
+    expect(manifest.release.number).toBe(2);
+    expect(manifest.project.versionNumber).toBe(1);
+    expect(manifest.scene.contentUrl).toContain("/public-asset/");
+    expect(manifest.scene.contentUrl).not.toContain("?token=");
     expect(manifest.scene.posterUrl).toContain(
       `/${generatedPosterAssetId}/poster.png?token=`,
     );
@@ -2810,6 +2891,10 @@ describe("Spatial Studio Worker", () => {
       new URL(manifest.scene.contentUrl, origin),
     );
     expect(assetResponse.status).toBe(200);
+    expect(assetResponse.headers.get("cache-control")).toBe(
+      "public, max-age=1800, s-maxage=31536000, immutable",
+    );
+    expect(assetResponse.headers.get("x-spatial-asset-cache")).toBe("MISS");
     expect(
       new TextDecoder().decode(await assetResponse.arrayBuffer()),
     ).toBe("test-spark-rad-scene");
@@ -2819,6 +2904,7 @@ describe("Spatial Studio Worker", () => {
       { headers: { range: "bytes=5-13" } },
     );
     expect(rangeResponse.status).toBe(206);
+    expect(rangeResponse.headers.get("x-spatial-asset-cache")).toBe("HIT");
     expect(rangeResponse.headers.get("accept-ranges")).toBe("bytes");
     expect(rangeResponse.headers.get("content-range")).toBe(
       `bytes 5-13/${sceneBytes.byteLength}`,
@@ -2845,6 +2931,10 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/releases/publishable-apartment/manifest`,
     );
     expect(revokedManifest.status).toBe(404);
+    const revokedAsset = await exports.default.fetch(
+      new URL(manifest.scene.contentUrl, origin),
+    );
+    expect(revokedAsset.status).toBe(404);
 
     const archiveResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/archive`,

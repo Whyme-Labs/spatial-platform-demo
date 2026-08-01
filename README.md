@@ -18,7 +18,7 @@ Project
   -> immutable scene version
   -> leased/idempotent processing job
   -> operator QA approval
-  -> immutable release
+  -> numbered immutable release revision
   -> stable public/private release channel
   -> short-lived scene session
   -> range-capable R2 delivery
@@ -49,9 +49,12 @@ room seeds; they are never survey, legal-room, area, clearance, construction,
 or accessibility claims. Metric-only geometry-change and pose-path coverage
 evidence stays unavailable until a new measured scene version is authored.
 Measurement briefs, millimetre QA, and metric deliverables are blocked on the
-same boundary. RAD is the preferred large-scene format because
-Spark can page its prebuilt LoD tree directly through the range-capable private
-R2 release endpoint.
+same boundary. RAD is the preferred large-scene format because Spark can page
+its prebuilt LoD tree directly through the range-capable R2 release endpoint.
+Public releases use stable immutable asset URLs backed by browser and
+Cloudflare edge caching. The browser cache remains bounded to 30 minutes while
+the Worker checks the live channel before using its long-lived per-edge copy;
+protected releases retain short-lived signed URLs and private caching.
 
 ## Platform boundaries
 
@@ -123,8 +126,11 @@ Implemented:
   dead-letter state
 - a pinned Spark 2.1 processing agent with byte-verified input, multipart output,
   processor evidence, classified failure, retry, and cancellation
-- immutable releases with public, unlisted, token, or customer-authenticated
-  policies
+- immutable releases with a project-local numeric release revision, a numeric
+  scene version, exact duplicate suppression, and public, unlisted, token, or
+  customer-authenticated policies; UUIDs remain internal identity keys
+- recoverable project archival that removes retired work from current Projects,
+  Jobs, and Releases views while retaining its immutable project history
 - short-lived signed scene sessions, HTTP range delivery, revocation, and
   rollback
 - Spark RAD, SPZ, and SOG browser delivery

@@ -2,6 +2,18 @@ import { expect, test, type Route } from "@playwright/test";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 test("published viewer hands startup progress to the embedded Spark loader", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetTimeout = window.setTimeout.bind(window);
+    const scheduledTimeouts: number[] = [];
+    Object.defineProperty(window, "__scheduledTimeouts", {
+      configurable: false,
+      value: scheduledTimeouts,
+    });
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      scheduledTimeouts.push(Number(timeout ?? 0));
+      return originalSetTimeout(handler, timeout, ...args);
+    }) as typeof window.setTimeout;
+  });
   await page.route("**/api/releases/loading-handoff/manifest", (route) => json(route, {
     schemaVersion: "1",
     release: {
@@ -288,6 +300,9 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#loadingDetail")).toHaveText("Streaming scene detail");
   await expect(page.locator("#progressBar")).toHaveJSProperty("style.width", "42%");
   await expect(releaseInfo).toBeHidden();
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & { __scheduledTimeouts: number[] }).__scheduledTimeouts
+  ).filter((timeout) => timeout >= 60_000))).toEqual([]);
 
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
     parent.postMessage({

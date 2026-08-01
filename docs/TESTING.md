@@ -14,6 +14,12 @@ only when the public behavior at its relevant seam is covered and the complete
 | End to end | Production browser bundle | `npm run test:e2e` | Landing and live-demo messaging, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls, navigation authoring/review spacing, Spark renderer chrome, Walk/Fly input, floor plan, and the host-to-renderer navigation snapshot handoff |
 | Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
+The Studio browser gate measures column starts and resolved grid tracks across
+every columnar Projects, Jobs, Releases, and Team row, including their headers
+and differing action states. The published-viewer gate also rejects any
+absolute Spark startup watchdog; progress continues until Spark reports ready,
+an explicit renderer error, or the operator retries.
+
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`
 runs the instrumented Worker suite plus browser E2E.
 

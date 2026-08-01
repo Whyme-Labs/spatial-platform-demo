@@ -697,6 +697,7 @@ type JobOutputUploadRow = {
 
 type ReleaseRow = {
   id: string;
+  release_number: number;
   organisation_id: string;
   project_id: string;
   version_id: string;
@@ -713,6 +714,7 @@ type ReleaseRow = {
   project_name: string;
   capture_adapter: string;
   source_provenance_json: string;
+  version_number: number;
 };
 
 type CustomDomainRow = {
@@ -4229,9 +4231,24 @@ app.get("/api/projects/:projectId", async (context) => {
     context.env.DB.prepare("SELECT id, version_id, kind, format, file_name, mime_type, size_bytes, sha256, integrity_status, created_at FROM assets WHERE project_id = ? AND organisation_id = ? ORDER BY created_at DESC").bind(projectId, auth.organisationId),
     context.env.DB.prepare("SELECT id, version_id, job_type, state, attempt_count, progress, progress_message, error_json, created_at, updated_at FROM processing_jobs WHERE project_id = ? AND organisation_id = ? ORDER BY created_at DESC").bind(projectId, auth.organisationId),
     context.env.DB.prepare(`
-      SELECT r.id, r.version_id, r.access_policy, r.published_at, r.expires_at, r.revoked_at, rc.slug,
-        CASE WHEN rc.active_release_id = r.id THEN 1 ELSE 0 END AS is_active
-      FROM releases r JOIN release_channels rc ON rc.project_id = r.project_id
+      SELECT r.id, r.version_id, sv.version_number, r.release_number, r.access_policy,
+        r.published_at, r.expires_at, r.revoked_at,
+        COALESCE(
+          (SELECT active.slug FROM release_channels active
+            WHERE active.active_release_id = r.id
+              AND active.organisation_id = r.organisation_id LIMIT 1),
+          (SELECT historical.slug FROM release_channels historical
+            WHERE historical.project_id = r.project_id
+              AND historical.organisation_id = r.organisation_id
+            ORDER BY historical.updated_at DESC LIMIT 1)
+        ) AS slug,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM release_channels active
+          WHERE active.active_release_id = r.id
+            AND active.organisation_id = r.organisation_id
+        ) THEN 1 ELSE 0 END AS is_active
+      FROM releases r
+      JOIN scene_versions sv ON sv.id = r.version_id
       WHERE r.project_id = ? AND r.organisation_id = ?
       ORDER BY r.published_at DESC
     `).bind(projectId, auth.organisationId),
@@ -10157,7 +10174,7 @@ app.get("/api/jobs", async (context) => {
       j.error_json, j.compute_duration_ms, j.active_human_duration_ms, j.input_bytes,
       j.output_bytes, j.evidence_json, j.created_at, j.updated_at, p.name AS project_name
     FROM processing_jobs j JOIN projects p ON p.id = j.project_id
-    WHERE j.organisation_id = ?
+    WHERE j.organisation_id = ? AND p.status != 'ARCHIVED'
     ORDER BY CASE j.state WHEN 'RUNNING' THEN 0 WHEN 'LEASED' THEN 1 WHEN 'QUEUED' THEN 2 ELSE 3 END,
       j.priority ASC, j.created_at ASC
     LIMIT 200
@@ -10169,7 +10186,8 @@ app.get("/api/releases", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
   const result = await context.env.DB.prepare(`
-    SELECT r.id, r.project_id, p.name AS project_name, r.version_id, r.access_policy,
+    SELECT r.id, r.project_id, p.name AS project_name, r.version_id,
+      sv.version_number, r.release_number, r.access_policy,
       r.published_at, r.expires_at, r.revoked_at,
       COALESCE(
         (SELECT active.slug FROM release_channels active
@@ -10184,7 +10202,8 @@ app.get("/api/releases", async (context) => {
       ) THEN 1 ELSE 0 END AS is_active
     FROM releases r
     JOIN projects p ON p.id = r.project_id
-    WHERE r.organisation_id = ?
+    JOIN scene_versions sv ON sv.id = r.version_id
+    WHERE r.organisation_id = ? AND p.status != 'ARCHIVED'
     ORDER BY r.published_at DESC
     LIMIT 500
   `).bind(auth.organisationId).all();
@@ -11955,15 +11974,27 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (!project) return notFound(context, "Project not found");
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
-      SELECT r.id, r.project_id, r.access_policy, r.published_at, rc.slug
+      SELECT r.id, r.project_id, r.access_policy, r.published_at, r.release_number,
+        sv.version_number,
+        COALESCE(
+          (SELECT active.slug FROM release_channels active
+            WHERE active.active_release_id = r.id
+              AND active.organisation_id = r.organisation_id LIMIT 1),
+          (SELECT historical.slug FROM release_channels historical
+            WHERE historical.project_id = r.project_id
+              AND historical.organisation_id = r.organisation_id
+            ORDER BY historical.updated_at DESC LIMIT 1)
+        ) AS slug
       FROM releases r
-      LEFT JOIN release_channels rc ON rc.active_release_id = r.id
+      JOIN scene_versions sv ON sv.id = r.version_id
       WHERE r.organisation_id = ? AND r.client_operation_id = ?
     `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
       id: string;
       project_id: string;
       access_policy: string;
       published_at: string;
+      release_number: number;
+      version_number: number;
       slug: string | null;
     }>();
     if (existing) {
@@ -11985,17 +12016,23 @@ app.post("/api/projects/:projectId/releases", async (context) => {
           accessPolicy: existing.access_policy,
           accessToken,
           publishedAt: existing.published_at,
+          releaseNumber: existing.release_number,
+          versionNumber: existing.version_number,
         },
         idempotent: true,
       });
     }
   }
   const approved = await context.env.DB.prepare(`
-    SELECT sv.id, sv.manifest_json
+    SELECT sv.id, sv.version_number, sv.manifest_json
     FROM scene_versions sv
     WHERE sv.project_id = ? AND sv.status IN ('APPROVED', 'PUBLISHED')
     ORDER BY sv.version_number DESC LIMIT 1
-  `).bind(project.id).first<{ id: string; manifest_json: string | null }>();
+  `).bind(project.id).first<{
+    id: string;
+    version_number: number;
+    manifest_json: string | null;
+  }>();
   if (!approved?.manifest_json) return validationError(context, { project: ["Project has no approved scene version"] });
   const approval = parseStoredObject(approved.manifest_json);
   const webAssetId = readStringProperty(approval, "webAssetId");
@@ -12174,6 +12211,54 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       "Provisional releases must use the platform-authored non-measurement warning",
     );
   }
+  const viewerConfigJson = JSON.stringify(parsed.data.viewerConfig);
+  const spatialSnapshotJson = JSON.stringify(spatialSnapshot);
+  if (parsed.data.accessPolicy !== "token") {
+    const duplicateRelease = await context.env.DB.prepare(`
+      SELECT r.id, r.release_number, r.published_at, sv.version_number
+      FROM release_channels rc
+      JOIN releases r ON r.id = rc.active_release_id
+      JOIN scene_versions sv ON sv.id = r.version_id
+      WHERE rc.slug = ? AND rc.organisation_id = ? AND rc.project_id = ?
+        AND r.version_id = ? AND r.web_asset_id = ? AND r.poster_asset_id IS ?
+        AND r.access_policy = ? AND r.viewer_config_json = ?
+        AND r.spatial_snapshot_json = ? AND r.expires_at IS ?
+        AND r.revoked_at IS NULL
+      LIMIT 1
+    `).bind(
+      parsed.data.slug,
+      auth.organisationId,
+      project.id,
+      approved.id,
+      webAssetId,
+      posterAssetId,
+      parsed.data.accessPolicy,
+      viewerConfigJson,
+      spatialSnapshotJson,
+      parsed.data.expiresAt ?? null,
+    ).first<{
+      id: string;
+      release_number: number;
+      published_at: string;
+      version_number: number;
+    }>();
+    if (duplicateRelease) {
+      return context.json({
+        release: {
+          id: duplicateRelease.id,
+          slug: parsed.data.slug,
+          url: `${new URL(context.req.url).origin}/s/${parsed.data.slug}`,
+          accessPolicy: parsed.data.accessPolicy,
+          accessToken: null,
+          publishedAt: duplicateRelease.published_at,
+          releaseNumber: duplicateRelease.release_number,
+          versionNumber: duplicateRelease.version_number,
+        },
+        idempotent: true,
+        duplicate: true,
+      });
+    }
+  }
   const releaseId = crypto.randomUUID();
   const channelId = crypto.randomUUID();
   const existingChannel = await context.env.DB.prepare(
@@ -12197,8 +12282,9 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       INSERT INTO releases
         (id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id,
           access_policy, access_token_hash, viewer_config_json, spatial_snapshot_json,
-          published_at, expires_at, created_by, client_operation_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          published_at, expires_at, created_by, client_operation_id, release_number)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        (SELECT COALESCE(MAX(release_number), 0) + 1 FROM releases WHERE project_id = ?))
     `).bind(
       releaseId,
       auth.organisationId,
@@ -12208,12 +12294,13 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       posterAssetId,
       parsed.data.accessPolicy,
       accessTokenHash,
-      JSON.stringify(parsed.data.viewerConfig),
-      JSON.stringify(spatialSnapshot),
+      viewerConfigJson,
+      spatialSnapshotJson,
       publishedAt,
       parsed.data.expiresAt ?? null,
       auth.userId,
       parsed.data.clientOperationId ?? null,
+      project.id,
     ),
     context.env.DB.prepare(`
       INSERT INTO release_channels (id, organisation_id, project_id, slug, active_release_id)
@@ -12227,10 +12314,16 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     context.env.DB.prepare("UPDATE scene_versions SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ?").bind(approved.id),
     context.env.DB.prepare("UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, auth.organisationId),
   ]);
+  const storedRelease = await context.env.DB.prepare(`
+    SELECT release_number FROM releases WHERE id = ? AND organisation_id = ?
+  `).bind(releaseId, auth.organisationId).first<{ release_number: number }>();
+  if (!storedRelease) throw new Error("Published release revision was not stored");
   await audit(context, auth, "release.publish", "release", releaseId, {
     slug: parsed.data.slug,
     accessPolicy: parsed.data.accessPolicy,
     sourceToWorldEvidenceId: parsed.data.sourceToWorldEvidenceId ?? null,
+    releaseNumber: storedRelease.release_number,
+    versionNumber: approved.version_number,
   });
   return context.json({
     release: {
@@ -12240,6 +12333,8 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       accessPolicy: parsed.data.accessPolicy,
       accessToken: rawAccessToken,
       publishedAt,
+      releaseNumber: storedRelease.release_number,
+      versionNumber: approved.version_number,
     },
   }, 201);
 });
@@ -12520,6 +12615,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     schemaVersion: "1.0.0",
     release: {
       id: release.id,
+      number: release.release_number,
       slug: release.slug,
       publishedAt: release.published_at,
       expiresAt: release.expires_at,
@@ -12528,13 +12624,16 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     project: {
       id: release.project_id,
       versionId: release.version_id,
+      versionNumber: release.version_number,
       name: release.project_name,
       captureAdapter: release.capture_adapter,
       provenance: parseStoredObject(release.source_provenance_json),
     },
     scene: {
       format: webAsset.format,
-      contentUrl: `/asset/${release.id}/${webAsset.id}/${encodeURIComponent(webAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`,
+      contentUrl: release.access_policy === "public"
+        ? `/public-asset/${release.id}/${webAsset.id}/${encodeURIComponent(webAsset.file_name)}`
+        : `/asset/${release.id}/${webAsset.id}/${encodeURIComponent(webAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`,
       posterUrl: posterAsset
         ? `/asset/${release.id}/${posterAsset.id}/${encodeURIComponent(posterAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`
         : null,
@@ -12564,6 +12663,29 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       assetSha256: webAsset.sha256,
       sessionExpiresAt: new Date((Math.floor(Date.now() / 1000) + tokenTtl) * 1000).toISOString(),
     },
+  });
+});
+
+app.get("/public-asset/:releaseId/:assetId/:fileName", async (context) => {
+  const asset = await context.env.DB.prepare(`
+    SELECT a.* FROM assets a
+    JOIN releases r ON r.web_asset_id = a.id
+    JOIN release_channels rc ON rc.active_release_id = r.id
+    WHERE r.id = ? AND a.id = ? AND r.access_policy = 'public'
+      AND r.revoked_at IS NULL AND a.deleted_at IS NULL
+      AND (r.expires_at IS NULL OR r.expires_at > ?)
+  `).bind(
+    context.req.param("releaseId"),
+    context.req.param("assetId"),
+    new Date().toISOString(),
+  ).first<AssetRow>();
+  if (!asset) return notFound(context, "Public scene asset not found");
+  if (context.req.param("fileName") !== asset.file_name) {
+    return notFound(context, "Public scene asset not found");
+  }
+  return serveR2Object(context, asset.object_key, {
+    cacheControl: "public, max-age=1800, s-maxage=31536000, immutable",
+    edgeCacheKey: `${asset.id}:${asset.etag ?? asset.sha256 ?? asset.size_bytes}`,
   });
 });
 
@@ -12617,12 +12739,39 @@ app.get("/comparison-asset/:projectId/:versionId/:assetId/:fileName", async (con
 async function serveR2Object(
   context: Context<AppEnvironment>,
   objectKey: string,
+  options: { cacheControl?: string; edgeCacheKey?: string } = {},
 ): Promise<Response> {
   const metadata = await context.env.SPATIAL_ASSETS.head(objectKey);
   if (!metadata) return notFound(context, "Stored object not found");
   const range = parseRangeHeader(context.req.header("Range"), metadata.size);
   if (context.req.header("Range") && !range) {
     return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${metadata.size}` } });
+  }
+  const edgeCacheUrl = options.edgeCacheKey
+    ? new URL(
+        `/__spatial-asset-cache/${encodeURIComponent(options.edgeCacheKey)}`,
+        context.env.APP_ORIGIN,
+      ).toString()
+    : null;
+  if (edgeCacheUrl) {
+    const cacheHeaders = new Headers();
+    for (const name of ["Range", "If-None-Match", "If-Modified-Since"]) {
+      const value = context.req.header(name);
+      if (value) cacheHeaders.set(name, value);
+    }
+    const cached = await caches.default.match(new Request(edgeCacheUrl, {
+      headers: cacheHeaders,
+    }));
+    if (cached) {
+      const headers = new Headers(cached.headers);
+      headers.set("Cache-Control", options.cacheControl ?? "public, max-age=1800, s-maxage=31536000, immutable");
+      headers.set("X-Spatial-Asset-Cache", "HIT");
+      return new Response(cached.body, {
+        status: cached.status,
+        statusText: cached.statusText,
+        headers,
+      });
+    }
   }
   const object = await context.env.SPATIAL_ASSETS.get(objectKey, {
     onlyIf: context.req.raw.headers,
@@ -12634,7 +12783,8 @@ async function serveR2Object(
   headers.set("ETag", object.httpEtag);
   headers.set("Accept-Ranges", "bytes");
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Cache-Control", "private, max-age=1800, immutable");
+  headers.set("Cache-Control", options.cacheControl ?? "private, max-age=1800, immutable");
+  if (edgeCacheUrl) headers.set("X-Spatial-Asset-Cache", "MISS");
   if (!("body" in object)) return new Response(null, { status: 304, headers });
   if (range) {
     const offset = range && "offset" in range && typeof range.offset === "number"
@@ -12646,7 +12796,21 @@ async function serveR2Object(
     return new Response(object.body, { status: 206, headers });
   }
   headers.set("Content-Length", String(object.size));
-  return new Response(object.body, { headers });
+  const response = new Response(object.body, { headers });
+  if (edgeCacheUrl) {
+    const cacheResponse = response.clone();
+    cacheResponse.headers.delete("X-Spatial-Asset-Cache");
+    context.executionCtx.waitUntil(
+      caches.default.put(new Request(edgeCacheUrl), cacheResponse).catch((error) => {
+        console.warn(JSON.stringify({
+          event: "asset.edge_cache_write_failed",
+          cacheKey: options.edgeCacheKey,
+          error: errorMessage(error),
+        }));
+      }),
+    );
+  }
+  return response;
 }
 
 app.post("/api/telemetry", async (context) => {
@@ -14666,7 +14830,7 @@ async function activeRelease(database: D1Database, slug: string): Promise<Releas
   return database.prepare(`
     SELECT r.*, rc.slug, p.name AS project_name,
       COALESCE(p.capture_adapter_v2, p.capture_adapter) AS capture_adapter,
-      sv.source_provenance_json
+      sv.source_provenance_json, sv.version_number
     FROM release_channels rc
     JOIN releases r ON r.id = rc.active_release_id
     JOIN projects p ON p.id = r.project_id

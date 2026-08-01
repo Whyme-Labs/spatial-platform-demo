@@ -226,6 +226,8 @@ type Release = {
   project_id?: string;
   project_name?: string;
   version_id: string;
+  version_number: number;
+  release_number: number;
   access_policy: string;
   published_at: string;
   expires_at?: string | null;
@@ -4326,6 +4328,8 @@ function clearTenantWorkspace(): void {
 function renderProjects(): void {
   const container = byId("projectTable");
   container.replaceChildren();
+  container.setAttribute("role", "table");
+  container.setAttribute("aria-label", "Production projects");
   const projects = visibleProjects();
   if (!projects.length) {
     renderBulkProjectActions();
@@ -4333,6 +4337,7 @@ function renderProjects(): void {
     return;
   }
   const header = element("div", "project-row header");
+  header.setAttribute("role", "row");
   const selectVisible = document.createElement("input");
   selectVisible.type = "checkbox";
   selectVisible.className = "project-select";
@@ -4348,11 +4353,15 @@ function renderProjects(): void {
     bulkLifecycleOperation = null;
     renderProjects();
   });
-  header.append(selectVisible);
+  const selectVisibleCell = element("span", "project-select-cell");
+  selectVisibleCell.append(selectVisible);
+  header.append(selectVisibleCell);
   ["Project", "Source", "Stage", "Updated", ""].forEach((label) => header.append(element("span", "", label)));
+  for (const cell of header.children) cell.setAttribute("role", "columnheader");
   container.append(header);
   for (const project of projects) {
     const row = element("div", "project-row");
+    row.setAttribute("role", "row");
     if (state.selectedProjectIds.has(project.id)) row.classList.add("selected");
     const selected = document.createElement("input");
     selected.type = "checkbox";
@@ -4380,7 +4389,12 @@ function renderProjects(): void {
         pendingLabel: "Opening…",
       }, () => selectProject(project.id));
     });
-    row.append(selected, identity, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)), open);
+    const selectedCell = element("span", "project-select-cell");
+    selectedCell.append(selected);
+    const openCell = element("span", "project-action-cell");
+    openCell.append(open);
+    row.append(selectedCell, identity, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)), openCell);
+    for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
   renderBulkProjectActions();
@@ -4389,6 +4403,7 @@ function renderProjects(): void {
 function visibleProjects(): Project[] {
   const query = state.projectQuery.trim().toLowerCase();
   const projects = state.projects.filter((project) => {
+    if (!state.projectStatuses.length && project.status === "ARCHIVED") return false;
     if (state.projectStatuses.length && !state.projectStatuses.includes(project.status)) return false;
     if (state.projectAdapter && project.captureAdapter !== state.projectAdapter) return false;
     if (state.projectDelivery && project.deliveryTemplate !== state.projectDelivery) return false;
@@ -4510,16 +4525,21 @@ function renderReleases(): void {
     return;
   }
   const header = element("div", "release-list-row header");
+  header.setAttribute("role", "row");
   ["Project", "Channel", "Policy", "Published", "State", ""].forEach((label) =>
     header.append(element("span", "", label))
   );
+  for (const cell of header.children) cell.setAttribute("role", "columnheader");
+  container.setAttribute("role", "table");
+  container.setAttribute("aria-label", "Published release history");
   container.append(header);
   for (const release of state.releases) {
     const row = element("div", "release-list-row");
+    row.setAttribute("role", "row");
     const project = element("span");
     project.append(
       element("strong", "", release.project_name ?? "Project"),
-      element("small", "", `Version ${release.version_id.slice(0, 8)}`),
+      element("small", "", `Scene v${release.version_number} · Release ${release.release_number}`),
     );
     const channel = document.createElement("a");
     channel.href = `/s/${release.slug}`;
@@ -4574,6 +4594,7 @@ function renderReleases(): void {
       element("span", `release-state ${stateLabel.toLowerCase()}`, stateLabel),
       actions,
     );
+    for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
 }

@@ -211,6 +211,54 @@ test.describe("authenticated studio UI", () => {
     }
   });
 
+  test("every columnar Studio row shares one column geometry contract", async ({ page }) => {
+    for (const viewport of viewports) {
+      await page.setViewportSize(viewport);
+
+      await page.getByRole("button", { name: "◇ Projects", exact: true }).click();
+      await expectColumnsAligned(page, ".project-row");
+
+      await page.getByRole("button", { name: "⇄ Processing jobs", exact: true }).click();
+      await expectColumnsAligned(page, ".queue-item");
+
+      await page.getByRole("button", { name: "↗ Releases", exact: true }).click();
+      await expectColumnsAligned(page, ".release-list-row");
+
+      await page.getByRole("button", { name: "◌ Team access", exact: true }).click();
+      await expectColumnsAligned(page, ".team-member-row");
+
+      await page.evaluate(() => {
+        const fixture = document.createElement("div");
+        fixture.dataset.geometryColumnFixture = "true";
+        for (const values of [
+          ["Kitchen wall", "12 mm max", "Unchanged"],
+          ["Long corridor partition label", "180 mm max", "Changed"],
+        ]) {
+          const row = document.createElement("div");
+          row.className = "geometry-change-row";
+          for (const [index, value] of values.entries()) {
+            const cell = document.createElement("span");
+            cell.textContent = value;
+            if (index === 2) cell.className = "status-pill";
+            row.append(cell);
+          }
+          fixture.append(row);
+        }
+        document.querySelector(".studio-main")?.append(fixture);
+      });
+      await expectColumnsAligned(page, ".geometry-change-row");
+      await page.locator("[data-geometry-column-fixture]").evaluate((fixture) => fixture.remove());
+      await expectResponsiveSurface(page, ".studio-shell");
+    }
+  });
+
+  test("archived projects stay out of current production and remain recoverable", async ({ page }) => {
+    await expect(page.getByText("Archived alignment fixture", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Archived", exact: true }).click();
+    await expect(page.getByText("Archived alignment fixture", { exact: true })).toBeVisible();
+    await expect(page.getByText("Responsive indoor scene", { exact: true })).toHaveCount(0);
+  });
+
   test("provisional navigation authoring is labelled in scene units instead of metres", async ({
     page,
   }) => {
@@ -599,7 +647,7 @@ test.describe("studio authentication lifecycle", () => {
 
     await Promise.all(pages.map((studioPage) => studioPage.goto("/studio.html#projects")));
     await Promise.all(pages.map((studioPage) =>
-      expect(studioPage.getByRole("button", { name: "Manage" })).toBeVisible()
+      expect(studioPage.getByRole("button", { name: "Manage" }).first()).toBeVisible()
     ));
 
     await Promise.all(pages.map((studioPage) => studioPage.locator("#refreshButton").click()));
@@ -649,7 +697,7 @@ test.describe("studio authentication lifecycle", () => {
       secondary.goto("/studio.html#projects"),
     ]);
     await Promise.all([primary, secondary].map((studioPage) =>
-      expect(studioPage.getByRole("button", { name: "Manage" })).toBeVisible()
+      expect(studioPage.getByRole("button", { name: "Manage" }).first()).toBeVisible()
     ));
 
     await primary.locator("#refreshButton").click();
@@ -794,6 +842,23 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
       activeReleaseSlug: null,
       updatedAt: now,
     };
+    const secondProject = {
+      ...project,
+      id: "44444444-4444-4444-8444-444444444444",
+      name: "A longer project name for alignment",
+      slug: "longer-project",
+      status: "PUBLISHED",
+      latestVersionId: "55555555-5555-4555-8555-555555555555",
+      latestVersionNumber: 2,
+      activeReleaseSlug: "longer-project",
+    };
+    const archivedProject = {
+      ...project,
+      id: "44444444-4444-4444-8444-444444444445",
+      name: "Archived alignment fixture",
+      slug: "archived-alignment-fixture",
+      status: "ARCHIVED",
+    };
 
     if (path === "/api/auth/session") return json(route, 200, { authenticated: true, user });
     if (path === "/api/auth/organisations") {
@@ -820,10 +885,66 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
       });
     }
     if (path === "/api/projects" && method === "GET") {
-      return json(route, 200, { projects: [project] });
+      return json(route, 200, { projects: [project, secondProject, archivedProject] });
     }
-    if (path === "/api/jobs") return json(route, 200, { jobs: [] });
-    if (path === "/api/releases") return json(route, 200, { releases: [] });
+    if (path === "/api/jobs") {
+      return json(route, 200, {
+        jobs: [{
+          id: "66666666-6666-4666-8666-666666666661",
+          project_id: project.id,
+          version_id: secondProject.latestVersionId,
+          project_name: project.name,
+          job_type: "asset.validate",
+          state: "SUCCEEDED",
+          progress: 100,
+          progress_message: "Validated",
+          attempt_count: 1,
+          max_attempts: 3,
+          created_at: now,
+        }, {
+          id: "66666666-6666-4666-8666-666666666662",
+          project_id: secondProject.id,
+          version_id: secondProject.latestVersionId,
+          project_name: secondProject.name,
+          job_type: "semantic.extract-v1",
+          state: "FAILED",
+          progress: 52,
+          progress_message: "Needs retry",
+          attempt_count: 1,
+          max_attempts: 3,
+          created_at: now,
+        }],
+      });
+    }
+    if (path === "/api/releases") {
+      return json(route, 200, {
+        releases: [{
+          id: "77777777-7777-4777-8777-777777777771",
+          project_id: secondProject.id,
+          project_name: secondProject.name,
+          version_id: secondProject.latestVersionId,
+          version_number: 2,
+          release_number: 2,
+          access_policy: "public",
+          published_at: now,
+          revoked_at: null,
+          slug: secondProject.activeReleaseSlug,
+          is_active: 1,
+        }, {
+          id: "77777777-7777-4777-8777-777777777772",
+          project_id: secondProject.id,
+          project_name: secondProject.name,
+          version_id: secondProject.latestVersionId,
+          version_number: 2,
+          release_number: 1,
+          access_policy: "public",
+          published_at: now,
+          revoked_at: null,
+          slug: secondProject.activeReleaseSlug,
+          is_active: 0,
+        }],
+      });
+    }
     if (path === "/api/hosting") {
       return json(route, 200, {
         paymentProviderConfigured: false,
@@ -835,7 +956,26 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
         lifecycleRuns: [],
       });
     }
-    if (path === "/api/team") return json(route, 200, { members: [], invitations: [] });
+    if (path === "/api/team") {
+      return json(route, 200, {
+        members: [{
+          userId,
+          email: user.email,
+          displayName: user.displayName,
+          role: user.role,
+          status: "active",
+          lastActiveAt: now,
+        }, {
+          userId: "88888888-8888-4888-8888-888888888888",
+          email: "reviewer@whymelabs.com",
+          displayName: "Reviewer",
+          role: "reviewer",
+          status: "invited",
+          lastActiveAt: null,
+        }],
+        invitations: [],
+      });
+    }
     if (path === "/api/team/identity-providers") return json(route, 200, { providers: [] });
     if (path === "/api/capture-agents") return json(route, 200, { credentials: [] });
     if (path === "/api/project-templates") return json(route, 200, { templates: [] });
@@ -847,6 +987,24 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
     }
     return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
   });
+}
+
+async function expectColumnsAligned(page: Page, selector: string): Promise<void> {
+  const rows = await page.locator(selector).evaluateAll((elements) => (
+    elements
+      .filter((element) => element.getClientRects().length > 0)
+      .map((element) => ({
+        tracks: getComputedStyle(element).gridTemplateColumns,
+        cells: [...element.children].map((child) => child.getBoundingClientRect().left),
+      }))
+  ));
+  expect(rows.length, `${selector} needs more than one row`).toBeGreaterThan(1);
+  expect(new Set(rows.map((row) => row.tracks)).size, `${selector} grid tracks`).toBe(1);
+  const columnCount = Math.min(...rows.map((row) => row.cells.length));
+  for (let column = 0; column < columnCount; column += 1) {
+    const lefts = rows.map((row) => row.cells[column]!);
+    expect(Math.max(...lefts) - Math.min(...lefts), `${selector} column ${column + 1} left edge`).toBeLessThanOrEqual(1);
+  }
 }
 
 function json(route: Route, status: number, body: unknown): Promise<void> {

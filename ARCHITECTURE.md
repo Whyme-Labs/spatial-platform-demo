@@ -143,8 +143,14 @@ UPLOAD_FAILED | PROCESSING_FAILED | QA_REJECTED | REVOKED
 ```
 
 Each upload creates a new `scene_version`. Existing versions and releases are
-not overwritten. `release_channels` provide stable slugs that point to one
-immutable release, enabling rollback without rebuilding an asset.
+not overwritten. Scene versions expose a project-local numeric version and
+releases expose a separate project-local numeric revision; UUIDs remain
+internal identity and foreign keys. Publishing an output identical to the
+active non-token release returns that release instead of manufacturing a
+duplicate history row. `release_channels` provide stable slugs that point to
+one immutable release, enabling rollback without rebuilding an asset.
+Archived projects remain recoverable through the explicit Archived filter;
+their jobs and releases are omitted from current operational inventories.
 
 Portfolio lifecycle mutations use `project_bulk_operations` as an idempotency
 ledger. The canonical action and sorted project ID set are SHA-256 hashed and
@@ -217,9 +223,17 @@ their original byte boundaries across releases; new source uploads use 10 MiB
 parts to bound retry cost and request duration without changing R2 multipart
 integrity.
 
-Spark RAD releases use the same private R2 object endpoint as compact SPZ and
-SOG releases. The endpoint supports authenticated HTTP Range requests, allowing
-Spark to page LoD chunks without exposing an R2 credential or object key.
+Spark RAD releases use the same private R2 bucket as compact SPZ and SOG
+releases. Protected delivery uses short-lived signed URLs and private caching.
+Public delivery uses a stable release-and-asset URL, a one-year immutable
+per-edge cache policy, and Cloudflare's Cache API keyed by immutable asset ETag;
+browsers retain the same 30-minute ceiling as protected delivery, and the
+Worker verifies that the release is still the live channel before every edge
+cache lookup.
+Both paths support HTTP Range requests, allowing Spark to page LoD chunks
+without exposing an R2 credential or object key. Renderer progress is
+open-ended: the viewer reports Spark progress and explicit errors but does not
+turn a slow download into a synthetic absolute-timeout failure.
 
 ## Product data branches
 
