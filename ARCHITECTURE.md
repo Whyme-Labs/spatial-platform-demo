@@ -241,23 +241,25 @@ scene_version
 
 Semantic entities are vendor-neutral D1 records. Authored room/floor boxes or
 concave polygons and doorway connectors compile into a triangulated walkable
-surface. Furniture and other non-walkable volumes are authored separately as
-obstacle boxes, then inflated by the selected agent radius at runtime. The
-version-specific navigation profile records agent radius, height, eye height,
-and maximum step. Room boxes and polygons also project into a scale-preserving
-SVG floor plan in the published viewer.
+surface used for spawn projection, routes, reachability, and the floor plan.
+V7 releases additionally bind an explicit, reviewed structural shell with
+classified floors, walls, ceilings, active doors, furniture, and triggers.
+Player collision includes structural classes and excludes furniture for the
+current demo profile; no wall is inferred from a floor boundary. The frozen
+movement profile records input, shape, gravity, filters, speed, and recovery
+bounds independently from the Detour topology.
 
 Every new release freezes the exact semantic entities, routes, stops, navigation
 mesh, obstacles, and navigation profile into an immutable spatial snapshot.
 Legacy releases without a snapshot retain their historical live-query fallback.
 After Spark reports scene readiness, the host sends the frozen runtime to the
-renderer by same-origin message. The renderer constrains the camera to the
-triangle mesh, keeps concave voids and inflated obstacles blocked, samples
-movement transitions to prevent tunnelling, and maintains the authored eye
-height above the selected floor. Room moves use a request/acknowledgement
-message so rejected cameras leave the host control recoverable. The Gaussian
-asset remains a visual layer; the platform does not infer measurement accuracy
-from it.
+renderer by same-origin message. Legacy v6 movement remains constrained by the
+Detour surface and authored obstacles. V7 keyboard movement instead drives a
+Rapier capsule in Walk mode or a no-gravity sphere in Fly mode directly against
+the structural shell; Detour remains authoritative for topology and guided
+routes. Room moves use a request/acknowledgement message so rejected cameras
+leave the host control recoverable. The Gaussian asset remains a visual layer;
+the platform does not infer collision or measurement accuracy from it.
 
 Point-cloud semantic extraction is a separate evidence-first processing lane.
 D1 binds one immutable version, one verified source/master/point-cloud PLY, an

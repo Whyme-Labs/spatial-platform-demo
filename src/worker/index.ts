@@ -6939,7 +6939,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-        'spatial-processor/0.8.0', ?, 'QUEUED', 65, 3,
+        'spatial-processor/0.9.0', ?, 'QUEUED', 65, 3,
         'Waiting for an offline Recast navigation worker')
     `).bind(
       jobId,
@@ -7712,7 +7712,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.8.0', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.9.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -8178,7 +8178,7 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.8.0', ?, 'QUEUED', 78, 3,
+        'spatial-processor/0.9.0', ?, 'QUEUED', 78, 3,
         'Waiting for a vendor-neutral floor-plan worker')
     `).bind(
       jobId,
@@ -12076,7 +12076,17 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (walkableConnectivity.componentCount > 0 && !approvedNavigation) {
     return conflict(
       context,
-      "Walkable publication blocked: build and approve a v6 Recast + Rapier navigation artifact for this exact scene version",
+      "Walkable publication blocked: build and approve a Recast + Rapier navigation artifact for this exact scene version",
+    );
+  }
+  if (
+    parsed.data.viewerConfig.defaultMovementMode === "fly" &&
+    (!approvedNavigation || typeof approvedNavigation !== "object" ||
+      Reflect.get(approvedNavigation, "schemaVersion") !== "spatial-navigation-v7")
+  ) {
+    return conflict(
+      context,
+      "Fly publication blocked: the exact scene version requires an approved v7 structural-shell navigation artifact",
     );
   }
   if (approvedNavigation && typeof approvedNavigation === "object") {

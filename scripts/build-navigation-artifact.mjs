@@ -6,7 +6,10 @@ import {
   buildRecastNavigationArtifact,
   extractCollisionGeometryFromGlb,
 } from "./navigation-build-core.mjs";
-import { validatePhysicalNavigation } from "./physical-navigation-validation.mjs";
+import {
+  validatePhysicalNavigation,
+  validateStructuralNavigation,
+} from "./physical-navigation-validation.mjs";
 
 const [collisionArgument, configArgument, outputArgument] = process.argv.slice(2);
 if (!collisionArgument || !configArgument || !outputArgument) {
@@ -24,15 +27,27 @@ const geometry = await extractCollisionGeometryFromGlb(collisionBytes);
 const sha256 = createHash("sha256").update(collisionBytes).digest("hex");
 const authoringHash = config.source?.authoringHash ?? createHash("sha256")
   .update(JSON.stringify({
+    authoring: config.authoring ?? null,
     agent: config.agent,
     destinations: config.destinations ?? [],
     obstacles: config.obstacleBoxes ?? [],
+    structuralGeometry: geometry.structuralGeometry ?? null,
+    dynamicBarriers: geometry.dynamicBarriers ?? [],
   }))
   .digest("hex");
 const artifact = await buildRecastNavigationArtifact({
   ...config,
   positions: geometry.positions,
   indices: geometry.indices,
+  ...(geometry.collisionSemantics
+    ? {
+        collisionSemantics: geometry.collisionSemantics,
+        dynamicBarriers: geometry.dynamicBarriers,
+        ...(geometry.structuralGeometry
+          ? { structuralGeometry: geometry.structuralGeometry }
+          : {}),
+      }
+    : {}),
   source: {
     ...config.source,
     assetId: config.source?.assetId ?? basename(collisionPath),
@@ -46,6 +61,14 @@ artifact.physicalValidation = await validatePhysicalNavigation({
   indices: geometry.indices,
   obstacleBoxes: config.obstacleBoxes ?? [],
 });
+if (artifact.schemaVersion === "spatial-navigation-v7") {
+  artifact.structuralValidation = await validateStructuralNavigation({
+    artifact,
+    positions: geometry.positions,
+    indices: geometry.indices,
+    ignoredMeshCount: geometry.ignoredMeshCount,
+  });
+}
 const binary = Uint8Array.from(
   atob(artifact.detour.bytesBase64),
   (character) => character.charCodeAt(0),

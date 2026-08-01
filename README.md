@@ -129,9 +129,13 @@ Implemented:
   rollback
 - Spark RAD, SPZ, and SOG browser delivery
 - bundled Spark 2.1 and Three.js runtime; no client-side CDN dependency
-- device-adaptive Spark budgets, guided navigation, authored walkable
-  collision regions, room/POI semantics, and a responsive authored-geometry
-  floor plan with live camera position and acknowledged room navigation
+- device-adaptive Spark budgets, guided navigation, room/POI semantics, and a
+  responsive authored-geometry floor plan with live camera position
+- v7 structural collision with reviewed floor/wall/ceiling groups, furniture-
+  ignoring Rapier Walk and Fly profiles, direct arrow/WASD motion, touch
+  altitude controls, synchronized open/closed door barriers, Detour route
+  topology, frozen six-direction shell probes at every published room anchor,
+  and bidirectional sphere sweeps across every reviewed wall
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset
@@ -217,6 +221,16 @@ SPATIAL_API_ORIGIN=http://localhost:8787 \
 PROCESSOR_MAX_CHANGE_INPUT_MIB=1024 \
 npm run processor:start
 ```
+
+The v7 navigation lane requires operator-authored shells to use
+`authored-structural-collision-v2`: floors, ceilings, and wall segments are
+separate reviewed inputs, so the publisher cannot manufacture walls by
+extruding a floor edge. Primitives are classified as structural floor,
+structural barrier, dynamic barrier, or ignored furniture. The processor builds
+Detour topology, replays all room routes with a Rapier capsule, proves every
+room anchor is enclosed in all six directions, and sweeps both sides of every
+reviewed wall before publication. The example Home Scan authoring contract is
+[`assets/home-scan-structural-v7.json`](./assets/home-scan-structural-v7.json).
 
 The processor reads `WORKER_API_TOKEN` from the environment. Use
 `npm run processor:once` for a single lease attempt or deployment smoke. It does

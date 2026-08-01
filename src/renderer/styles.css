@@ -401,6 +401,34 @@ button {
     rgb(13 17 19 / 66%);
 }
 
+.spark-flight-altitude {
+  position: absolute;
+  z-index: 10;
+  left: max(18px, env(safe-area-inset-left));
+  bottom: calc(max(18px, env(safe-area-inset-bottom)) + 144px);
+  gap: 8px;
+  touch-action: none;
+}
+
+.spark-flight-altitude button {
+  min-width: 62px;
+  min-height: 44px;
+  border: 1px solid rgb(212 255 88 / 28%);
+  border-radius: 999px;
+  background: rgb(13 17 19 / 78%);
+  color: #e1f4a9;
+  font: 650 0.75rem/1 "Manrope Variable", sans-serif;
+  backdrop-filter: blur(12px);
+}
+
+.spark-flight-altitude button[data-active],
+.spark-flight-altitude button:focus-visible {
+  border-color: #d4ff58;
+  background: #d4ff58;
+  color: #12160d;
+  outline: none;
+}
+
 .spark-movement-ring {
   position: absolute;
   width: 94px;
@@ -601,6 +629,10 @@ button {
     display: grid !important;
   }
 
+  .spark-flight-altitude.spark-mobile-only:not([hidden]) {
+    display: flex !important;
+  }
+
   .spark-mobile-onboarding.spark-mobile-only:not([hidden]) {
     display: block !important;
   }
@@ -682,6 +714,21 @@ button {
 
   .spark-onboarding-actions {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (any-pointer: coarse) and (max-height: 480px) and (orientation: landscape) {
+  .spark-flight-altitude {
+    bottom: max(18px, env(safe-area-inset-bottom));
+    left: calc(max(18px, env(safe-area-inset-left)) + 144px);
+  }
+
+  .spark-help {
+    right: max(10px, env(safe-area-inset-right));
+    left: auto;
+    width: min(320px, calc(100% - 320px));
+    max-height: calc(100% - 120px);
+    overflow: auto;
   }
 }
 

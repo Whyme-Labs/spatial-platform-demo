@@ -25,6 +25,7 @@ import {
 import { parseWorldUnit } from "../shared/world-units";
 import type { DetourNavigationRuntime } from "./detour-navigation";
 import type { PhysicalNavigationRuntime } from "./physical-navigation";
+import type { PhysicalMovementMode } from "./physical-navigation";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -102,6 +103,20 @@ type RendererMessage =
     }
   | {
       source: "spatial-spark";
+      type: "movement-mode";
+      mode: PhysicalMovementMode;
+    }
+  | {
+      source: "spatial-spark";
+      type: "dynamic-barrier-state";
+      requestId: string;
+      barrierId: string;
+      active: boolean;
+      accepted: boolean;
+      message: string;
+    }
+  | {
+      source: "spatial-spark";
       type: "control-onboarding";
       visible: boolean;
     }
@@ -137,6 +152,11 @@ const freeRoamToggle = byId<HTMLButtonElement>("freeRoamToggle");
 const mobileMovementHelp = byId<HTMLElement>("mobileMovementHelp");
 const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
 const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
+const desktopVerticalHelp = byId<HTMLElement>("desktopVerticalHelp");
+const movementModeToggle = byId<HTMLButtonElement>("movementModeToggle");
+const flightAltitudeControls = byId<HTMLElement>("flightAltitudeControls");
+const flyAscend = byId<HTMLButtonElement>("flyAscend");
+const flyDescend = byId<HTMLButtonElement>("flyDescend");
 const mobileControls = new MobileControlSurface({
   coarsePointer: matchMedia("(any-pointer: coarse)"),
   elements: {
@@ -156,6 +176,7 @@ const mobileControls = new MobileControlSurface({
       type: "control-mode",
       mode: active ? "free-roam" : "orbit",
     });
+    updateMovementModeChrome();
   },
   onOnboardingChange: (visible) => {
     post({
@@ -189,6 +210,9 @@ let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
 let navigationRuntime: NavigationRuntime | null = null;
 let detourNavigationRuntime: DetourNavigationRuntime | null = null;
 let physicalNavigationRuntime: PhysicalNavigationRuntime | null = null;
+let collisionDrivenMovement = false;
+let movementMode: PhysicalMovementMode = "walk";
+let mobileVerticalMovement = 0;
 let navigationRuntimeGeneration = 0;
 let walkableBoundarySource: WalkableBoundarySource = "none";
 let movementRuntimeReady = false;
@@ -263,6 +287,12 @@ async function start(): Promise<void> {
       detourNavigationRuntime = null;
       physicalNavigationRuntime?.destroy();
       physicalNavigationRuntime = null;
+      collisionDrivenMovement = false;
+      movementMode = "walk";
+      stopMobileVerticalMovement();
+      controls.setMovementMode("walk");
+      movementModeToggle.hidden = true;
+      flightAltitudeControls.hidden = true;
       movementRuntimeReady = false;
       const boxes = Reflect.get(event.data, "collisionBoxes");
       const authoredBoxes = Array.isArray(boxes)
@@ -281,9 +311,14 @@ async function start(): Promise<void> {
         })),
       );
       if (authoredRuntime) {
+        const runtimeMessage = event.data;
         navigationRuntime = authoredRuntime;
         walkableBoxes = authoredBoxes;
         const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
+        const structuralV7 = navigationArtifact && typeof navigationArtifact === "object" &&
+          Reflect.get(navigationArtifact, "schemaVersion") === "spatial-navigation-v7";
+        const requestedMode = Reflect.get(runtimeMessage, "defaultMovementMode");
+        const preserveAuthoredFlyOpening = structuralV7 && requestedMode === "fly";
         if (navigationArtifact) walkableBoxes = [];
         if (!walkableBoxes.length) {
           const bounds = navigationMeshBounds(authoredRuntime);
@@ -292,7 +327,11 @@ async function start(): Promise<void> {
         walkableBoundarySource = "authored";
         movementRuntimeReady = !navigationArtifact;
         setMovementAvailability(controls, movementRuntimeReady);
-        anchorCameraToWalkable(camera);
+        if (preserveAuthoredFlyOpening) {
+          lastWalkablePosition = camera.position.clone();
+        } else {
+          anchorCameraToWalkable(camera);
+        }
         const obstacleCount = authoredRuntime.obstacleBoxes.length;
         setControlStatus(
           `Walking enabled · ${obstacleCount
@@ -312,12 +351,16 @@ async function start(): Promise<void> {
             import("./detour-navigation"),
             import("./physical-navigation"),
           ]).then(async ([detourModule, physicalModule]) => {
+            const initialMode: PhysicalMovementMode = structuralV7 && requestedMode === "fly"
+              ? "fly"
+              : "walk";
             const results = await Promise.allSettled([
               detourModule.DetourNavigationRuntime.create(navigationArtifact),
               physicalModule.PhysicalNavigationRuntime.create(
                 collisionUrl,
                 navigationArtifact,
                 authoredRuntime.obstacleBoxes,
+                initialMode,
               ),
             ]);
             const detourResult = results[0];
@@ -337,8 +380,11 @@ async function start(): Promise<void> {
               physicalRuntime.destroy();
               return;
             }
-            const projected = runtime.projectCamera(camera.position.toArray() as Vector3Tuple) ??
-              runtime.openingCamera();
+            const authoredPosition = camera.position.toArray() as Vector3Tuple;
+            const projected = physicalRuntime.mode === "fly" &&
+              physicalRuntime.canPlaceCamera(authoredPosition)
+              ? authoredPosition
+              : runtime.projectCamera(authoredPosition) ?? runtime.openingCamera();
             camera.position.fromArray(projected);
             if (!physicalRuntime.placeCamera(projected)) {
               runtime.destroy();
@@ -347,14 +393,31 @@ async function start(): Promise<void> {
             }
             detourNavigationRuntime = runtime;
             physicalNavigationRuntime = physicalRuntime;
+            collisionDrivenMovement = Reflect.get(navigationArtifact as object, "schemaVersion") ===
+              "spatial-navigation-v7";
+            movementMode = physicalRuntime.mode;
+            controls.configureMovementProfiles(navigationArtifact);
+            controls.setMovementMode(movementMode);
+            movementModeToggle.hidden = !collisionDrivenMovement;
+            updateMovementModeChrome();
             lastWalkablePosition = camera.position.clone();
             controls.align(camera);
+            initialView = {
+              position: camera.position.clone(),
+              quaternion: camera.quaternion.clone(),
+            };
             movementRuntimeReady = true;
             setMovementAvailability(controls, true);
-            setControlStatus("Walking enabled · Detour + capsule collision verified", "ready");
+            setControlStatus(
+              collisionDrivenMovement
+                ? movementStatusText()
+                : "Walking enabled · Detour + capsule collision verified",
+              "ready",
+            );
           }).catch((error) => {
             if (runtimeGeneration !== navigationRuntimeGeneration) return;
             detourNavigationRuntime = null;
+            collisionDrivenMovement = false;
             movementRuntimeReady = false;
             setMovementAvailability(controls, false);
             setControlStatus(
@@ -369,6 +432,38 @@ async function start(): Promise<void> {
         movementRuntimeReady = false;
         setMovementAvailability(controls, false);
         setControlStatus("Look around only · no walking map");
+      }
+      return;
+    }
+    if (Reflect.get(event.data, "type") === "set-dynamic-barrier-state") {
+      const requestId = typeof Reflect.get(event.data, "requestId") === "string"
+        ? String(Reflect.get(event.data, "requestId"))
+        : null;
+      const barrierId = String(Reflect.get(event.data, "barrierId") ?? "");
+      const active = Reflect.get(event.data, "active");
+      const supported = Boolean(
+        requestId &&
+        barrierId &&
+        typeof active === "boolean" &&
+        detourNavigationRuntime?.hasDynamicBarrier(barrierId) &&
+        physicalNavigationRuntime?.hasDynamicBarrier(barrierId),
+      );
+      if (supported) {
+        detourNavigationRuntime!.setDynamicBarrierState(barrierId, active as boolean);
+        physicalNavigationRuntime!.setDynamicBarrierState(barrierId, active as boolean);
+      }
+      if (requestId) {
+        post({
+          source: "spatial-spark",
+          type: "dynamic-barrier-state",
+          requestId,
+          barrierId,
+          active: active === true,
+          accepted: supported,
+          message: supported
+            ? `${barrierId} is now ${active ? "closed" : "open"}`
+            : "The requested dynamic barrier is not part of this certified runtime.",
+        });
       }
       return;
     }
@@ -438,8 +533,9 @@ async function start(): Promise<void> {
         const currentPosition = camera.position.toArray() as Vector3Tuple;
         if (
           !projectedPosition ||
-          !detourNavigationRuntime.hasCompletePath(currentPosition, projectedPosition) ||
-          !physicalNavigationRuntime?.canPlaceCamera(projectedPosition)
+          !(collisionDrivenMovement && movementMode === "fly"
+            ? detourNavigationRuntime.hasCompleteTopologyPath(currentPosition, projectedPosition)
+            : detourNavigationRuntime.hasCompletePath(currentPosition, projectedPosition))
         ) {
           if (requestId) {
             post({
@@ -453,7 +549,9 @@ async function start(): Promise<void> {
           }
           return;
         }
-        acceptedPosition = new THREE.Vector3().fromArray(projectedPosition);
+        acceptedPosition = collisionDrivenMovement && movementMode === "fly"
+          ? requestedPosition
+          : new THREE.Vector3().fromArray(projectedPosition);
       } else if (navigationRuntime && !isCameraPositionAllowed(requestedPosition)) {
         if (requestId) {
           post({
@@ -467,18 +565,9 @@ async function start(): Promise<void> {
         }
         return;
       }
-      camera.position.copy(acceptedPosition);
-      camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
-      camera.lookAt(new THREE.Vector3().fromArray(pose.target));
-      controls.align(camera);
-      if (typeof pose.fovDegrees === "number") camera.fov = Math.min(100, Math.max(20, pose.fovDegrees));
-      camera.updateProjectionMatrix();
-      if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
-        lastWalkablePosition = camera.position.clone();
-      }
       if (
         physicalNavigationRuntime &&
-        !physicalNavigationRuntime.placeCamera(camera.position.toArray() as Vector3Tuple)
+        !physicalNavigationRuntime.placeCamera(acceptedPosition.toArray() as Vector3Tuple)
       ) {
         if (requestId) {
           post({
@@ -491,6 +580,15 @@ async function start(): Promise<void> {
           });
         }
         return;
+      }
+      camera.position.copy(acceptedPosition);
+      camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
+      camera.lookAt(new THREE.Vector3().fromArray(pose.target));
+      controls.align(camera);
+      if (typeof pose.fovDegrees === "number") camera.fov = Math.min(100, Math.max(20, pose.fovDegrees));
+      camera.updateProjectionMatrix();
+      if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
+        lastWalkablePosition = camera.position.clone();
       }
       if (requestId) {
         post({
@@ -595,8 +693,25 @@ async function start(): Promise<void> {
     const deltaSeconds = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
     lastFrameAt = now;
     const movementStart = lastWalkablePosition?.clone() ?? camera.position.clone();
-    controls.update(camera, deltaSeconds, mobileControls.movement);
-    if (detourNavigationRuntime) {
+    controls.update(camera, deltaSeconds, {
+      ...mobileControls.movement,
+      y: mobileVerticalMovement,
+    });
+    if (collisionDrivenMovement && physicalNavigationRuntime) {
+      const destination = camera.position.toArray() as Vector3Tuple;
+      const origin = movementStart.toArray() as Vector3Tuple;
+      const resolved = physicalNavigationRuntime.moveCamera(
+        origin,
+        destination,
+        deltaSeconds,
+      );
+      if (resolved) {
+        camera.position.fromArray(resolved);
+        lastWalkablePosition = camera.position.clone();
+      } else if (lastWalkablePosition) {
+        camera.position.copy(lastWalkablePosition);
+      }
+    } else if (detourNavigationRuntime) {
       const destination = camera.position.toArray() as Vector3Tuple;
       const origin = movementStart.toArray() as Vector3Tuple;
       const detourResolved = detourNavigationRuntime.moveCamera(origin, destination);
@@ -799,6 +914,9 @@ function finiteTuple(value: unknown): Vector3Tuple | null {
 }
 
 function isCameraPositionAllowed(position: THREE.Vector3): boolean {
+  if (collisionDrivenMovement && physicalNavigationRuntime) {
+    return physicalNavigationRuntime.canPlaceCamera(position.toArray() as Vector3Tuple);
+  }
   if (detourNavigationRuntime) {
     return detourNavigationRuntime.isCameraAllowed(position.toArray() as Vector3Tuple);
   }
@@ -831,6 +949,19 @@ function navigationMeshBounds(
 }
 
 function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
+  if (
+    collisionDrivenMovement &&
+    movementMode === "fly" &&
+    physicalNavigationRuntime
+  ) {
+    const position = camera.position.toArray() as Vector3Tuple;
+    if (!physicalNavigationRuntime.placeCamera(position)) {
+      lastWalkablePosition = null;
+      return false;
+    }
+    lastWalkablePosition = camera.position.clone();
+    return false;
+  }
   if (detourNavigationRuntime) {
     const nearest = detourNavigationRuntime.projectCamera(
       camera.position.toArray() as Vector3Tuple,
@@ -887,7 +1018,7 @@ function setMovementAvailability(
   available: boolean,
 ): void {
   controls.setTranslationEnabled(available);
-  controls.setNavigationBounds(available ? walkableBoxes : []);
+  controls.setNavigationBounds(available && !collisionDrivenMovement ? walkableBoxes : []);
   mobileControls.setReady(available && readySent);
   freeRoamToggle.textContent = available
     ? (mobileControls.active ? "Exit roam" : "Free roam")
@@ -896,12 +1027,19 @@ function setMovementAvailability(
     ? "Enable touch-friendly movement"
     : "Walking is unavailable until this scene has a navigation map";
   mobileMovementHelp.textContent = available
-    ? "Drag to look · use the Free roam joystick to move"
+    ? collisionDrivenMovement && movementMode === "fly"
+      ? "Drag to look · use Free roam to fly · Rise and Lower change altitude"
+      : "Drag to look · use the Free roam joystick to move"
     : "Drag to look · walking is unavailable for this scene";
   desktopMovementHelp.textContent = available
-    ? "Drag to look · scroll or two-finger swipe to travel"
+    ? collisionDrivenMovement && movementMode === "fly"
+      ? "Drag to look · move through the full camera direction"
+      : "Drag to look · scroll or two-finger swipe to travel"
     : "Drag to look · walking is unavailable for this scene";
   desktopKeyboardHelp.hidden = !available;
+  desktopVerticalHelp.hidden = !available || !collisionDrivenMovement || movementMode !== "fly";
+  flightAltitudeControls.hidden = !available || !collisionDrivenMovement ||
+    movementMode !== "fly" || !mobileControls.active;
 }
 
 function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
@@ -967,19 +1105,114 @@ function updateFullscreenControl(): void {
 
 function bindChrome(): void {
   resetButton.addEventListener("click", resetView);
+  movementModeToggle.addEventListener("click", toggleMovementMode);
+  flyAscend.addEventListener("pointerdown", startFlyAscend);
+  flyDescend.addEventListener("pointerdown", startFlyDescend);
+  for (const button of [flyAscend, flyDescend]) {
+    button.addEventListener("pointerup", stopMobileVerticalMovement);
+    button.addEventListener("pointercancel", stopMobileVerticalMovement);
+    button.addEventListener("lostpointercapture", stopMobileVerticalMovement);
+  }
   helpButton.addEventListener("click", toggleHelp);
   fullscreenButton.addEventListener("click", requestFullscreen);
   document.addEventListener("fullscreenchange", updateFullscreenControl);
   window.addEventListener("resize", handleControlHelpResize);
 }
 
+function toggleMovementMode(): void {
+  const camera = activeCamera();
+  if (!camera || !physicalNavigationRuntime || !collisionDrivenMovement) return;
+  const nextMode: PhysicalMovementMode = movementMode === "walk" ? "fly" : "walk";
+  if (!physicalNavigationRuntime.setMode(
+    nextMode,
+    camera.position.toArray() as Vector3Tuple,
+  )) {
+    setControlStatus(
+      nextMode === "walk"
+        ? "Cannot land here · move into clear structural space"
+        : "Cannot enter Fly mode at this position",
+      "error",
+    );
+    return;
+  }
+  movementMode = nextMode;
+  stopMobileVerticalMovement();
+  rendererControls?.setMovementMode(nextMode);
+  lastWalkablePosition = camera.position.clone();
+  updateMovementModeChrome();
+  setControlStatus(movementStatusText(), "ready");
+  canvas.focus({ preventScroll: true });
+  post({ source: "spatial-spark", type: "movement-mode", mode: nextMode });
+}
+
+function updateMovementModeChrome(): void {
+  movementModeToggle.hidden = !collisionDrivenMovement;
+  const compact = matchMedia("(any-pointer: coarse)").matches;
+  movementModeToggle.textContent = movementMode === "walk"
+    ? (compact ? "Fly" : "Fly mode")
+    : (compact ? "Walk" : "Walk mode");
+  movementModeToggle.setAttribute("aria-pressed", String(movementMode === "fly"));
+  desktopVerticalHelp.hidden = !movementRuntimeReady || movementMode !== "fly";
+  flightAltitudeControls.hidden = !movementRuntimeReady || movementMode !== "fly" ||
+    !mobileControls.active;
+  desktopMovementHelp.textContent = movementMode === "fly"
+    ? "Drag to look · move through the full camera direction"
+    : "Drag to look · scroll or two-finger swipe to travel";
+}
+
+function movementStatusText(): string {
+  return movementMode === "fly"
+    ? "Fly enabled · structural shell collision · furniture ignored"
+    : "Walk enabled · structural shell collision · furniture ignored";
+}
+
+function startFlyAscend(event: PointerEvent): void {
+  startMobileVerticalMovement(event, flyAscend, 1);
+}
+
+function startFlyDescend(event: PointerEvent): void {
+  startMobileVerticalMovement(event, flyDescend, -1);
+}
+
+function startMobileVerticalMovement(
+  event: PointerEvent,
+  button: HTMLButtonElement,
+  direction: -1 | 1,
+): void {
+  if (!movementRuntimeReady || movementMode !== "fly" || !mobileControls.active) return;
+  event.preventDefault();
+  mobileVerticalMovement = direction;
+  button.toggleAttribute("data-active", true);
+  try {
+    button.setPointerCapture(event.pointerId);
+  } catch {
+    // Synthetic and assistive pointer sources may not expose native capture.
+  }
+}
+
+function stopMobileVerticalMovement(): void {
+  mobileVerticalMovement = 0;
+  flyAscend.removeAttribute("data-active");
+  flyDescend.removeAttribute("data-active");
+}
+
 function resetView(): void {
   if (!initialView) return;
   mobileControls.suspend();
+  stopMobileVerticalMovement();
   const camera = activeCamera();
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
+  if (
+    physicalNavigationRuntime &&
+    !physicalNavigationRuntime.placeCamera(camera.position.toArray() as Vector3Tuple)
+  ) {
+    const opening = detourNavigationRuntime?.openingCamera();
+    if (opening && physicalNavigationRuntime.placeCamera(opening)) {
+      camera.position.fromArray(opening);
+    }
+  }
   rendererControls?.align(camera);
   if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
     lastWalkablePosition = camera.position.clone();
@@ -1061,6 +1294,14 @@ function dispose(): void {
   window.removeEventListener("resize", handleControlHelpResize);
   document.removeEventListener("fullscreenchange", updateFullscreenControl);
   resetButton.removeEventListener("click", resetView);
+  movementModeToggle.removeEventListener("click", toggleMovementMode);
+  flyAscend.removeEventListener("pointerdown", startFlyAscend);
+  flyDescend.removeEventListener("pointerdown", startFlyDescend);
+  for (const button of [flyAscend, flyDescend]) {
+    button.removeEventListener("pointerup", stopMobileVerticalMovement);
+    button.removeEventListener("pointercancel", stopMobileVerticalMovement);
+    button.removeEventListener("lostpointercapture", stopMobileVerticalMovement);
+  }
   helpButton.removeEventListener("click", toggleHelp);
   fullscreenButton.removeEventListener("click", requestFullscreen);
   mobileControls.dispose();

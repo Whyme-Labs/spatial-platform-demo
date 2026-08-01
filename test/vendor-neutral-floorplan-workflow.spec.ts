@@ -311,12 +311,12 @@ describe("vendor-neutral floor-plan workflow", () => {
       output: { ...output.output, sha256: await sha256Hex(reportBytes) },
       report,
       evidence: {
-        processorVersion: "spatial-processor/0.8.0",
+        processorVersion: "spatial-processor/0.9.0",
         computeDurationMs: 42,
         activeHumanDurationMs: 0,
         inputBytes: source.byteLength,
         outputBytes: reportBytes.byteLength,
-        toolVersions: { processor: "0.8.0", normalizer: "native-ply-v1" },
+        toolVersions: { processor: "0.9.0", normalizer: "native-ply-v1" },
         normalization: {
           sourceFormat: "ply",
           sourceUpAxis: "y",
@@ -553,7 +553,7 @@ describe("vendor-neutral floor-plan workflow", () => {
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id,
           job_type, processor_version, idempotency_key, state
-        ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1', 'spatial-processor/0.8.0', ?, 'SUCCEEDED')
+        ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1', 'spatial-processor/0.9.0', ?, 'SUCCEEDED')
       `).bind(
         concurrentJobIds[index],
         storedProject!.organisation_id,

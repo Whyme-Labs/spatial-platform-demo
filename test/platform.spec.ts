@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
+import { navigationArtifactSchema } from "../src/worker/contracts";
 import { sha256Hex } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
@@ -2168,7 +2169,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(missingVerifiedNavigation.status).toBe(409);
     await expect(missingVerifiedNavigation.json()).resolves.toMatchObject({
-      error: expect.stringContaining("build and approve a v6 Recast + Rapier navigation artifact"),
+      error: expect.stringContaining("build and approve a Recast + Rapier navigation artifact"),
     });
 
     const collisionAssetId = crypto.randomUUID();
@@ -2304,6 +2305,111 @@ describe("Spatial Studio Worker", () => {
         })),
       },
     };
+    const v7Directions = ["east", "west", "up", "down", "south", "north"] as const;
+    const v7ArtifactContract = navigationArtifactSchema.safeParse({
+      ...navigationArtifact,
+      schemaVersion: "spatial-navigation-v7",
+      collisionSemantics: {
+        schemaVersion: "spatial-structural-collision-v1",
+        provenance: "operator_reviewed",
+        structuralShellComplete: true,
+        includedGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        ignoredGroups: ["FURNITURE", "TRIGGER"],
+      },
+      dynamicBarriers: [],
+      structuralGeometry: {
+        schemaVersion: "authored-structural-collision-v2",
+        floorRectangles: [{ id: "floor", min: [0, 0], max: [4, 4], elevation: 0 }],
+        ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [4, 4], elevation: 2.6 }],
+        barrierSegments: [{
+          id: "wall",
+          start: [0, 0],
+          end: [0, 4],
+          minY: 0,
+          maxY: 2.6,
+        }],
+        dynamicBarrierIds: [],
+      },
+      movementProfiles: {
+        defaultMode: "walk",
+        supportedModes: ["walk", "fly"],
+        walk: {
+          shape: "capsule",
+          gravity: true,
+          groundSnap: true,
+          collisionGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+          input: {
+            forward: ["KeyW", "ArrowUp"], backward: ["KeyS", "ArrowDown"],
+            left: ["KeyA", "ArrowLeft"], right: ["KeyD", "ArrowRight"],
+            boost: ["ShiftLeft", "ShiftRight"],
+          },
+          speedUnitsPerSecond: 1.6,
+          boostMultiplier: 3,
+          recoveryBounds: [[-0.22, -1.8, -0.22], [4.22, 4.4, 4.22]],
+        },
+        fly: {
+          shape: "sphere",
+          gravity: false,
+          groundSnap: false,
+          collisionGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+          input: {
+            forward: ["KeyW", "ArrowUp"], backward: ["KeyS", "ArrowDown"],
+            left: ["KeyA", "ArrowLeft"], right: ["KeyD", "ArrowRight"],
+            boost: ["ShiftLeft", "ShiftRight"], ascend: ["Space", "KeyE"],
+            descend: ["KeyC", "KeyQ"],
+          },
+          speedUnitsPerSecond: 1.6,
+          boostMultiplier: 3,
+          recoveryBounds: [[-0.22, -1.8, -0.22], [4.22, 4.4, 4.22]],
+        },
+      },
+      structuralValidation: {
+        passed: true,
+        engine: "rapier3d",
+        version: "0.19.3",
+        shape: "sphere",
+        ignoredFurnitureMeshCount: 1,
+        anchorCount: 2,
+        probeCount: 12,
+        probes: [
+          ...v7Directions.map((direction) => ({
+            anchorId: "opening",
+            origin: [0.5, 1.6, 0.5],
+            direction,
+            blocked: true,
+            requestedDistance: 10,
+            actualDistance: 1,
+          })),
+          ...v7Directions.map((direction) => ({
+            anchorId: snapshotEntity.entity.id,
+            origin: [0.7, 1.6, 0.7],
+            direction,
+            blocked: true,
+            requestedDistance: 10,
+            actualDistance: 1,
+          })),
+        ],
+        boundaryCount: 1,
+        boundaryProbeCount: 2,
+        boundaryProbes: [-1, 1].map((side) => ({
+          barrierId: "wall",
+          side,
+          origin: [0.3 * side, 1.3, 2],
+          direction: [-side, 0, 0],
+          requestedDistance: 0.6,
+          hitDistance: 0.3,
+          blocked: true,
+        })),
+        boundaryTopology: {
+          passed: true,
+          method: "explicit-closed-segment-loops-v1",
+          loopCount: 1,
+          floorComponentCount: 1,
+          dynamicClosureCount: 0,
+        },
+      },
+    });
+    expect(v7ArtifactContract.success).toBe(true);
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO assets (
@@ -2323,7 +2429,7 @@ describe("Spatial Studio Worker", () => {
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
           processor_version, idempotency_key, state, progress, progress_message
-        ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.8.0',
+        ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.9.0',
           ?, 'SUCCEEDED', 100, 'Fixture Recast and Rapier evidence accepted')
       `).bind(
         navigationJobId,
@@ -2355,6 +2461,27 @@ describe("Spatial Studio Worker", () => {
         provisionalEvidenceOwner!.created_by,
       ),
     ]);
+
+    const unsupportedFlyRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "v6-cannot-default-to-fly",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Unsafe v6 Fly default",
+            measurementDisclaimer: "Visual experience only.",
+            defaultMovementMode: "fly",
+          },
+        }),
+      },
+    );
+    expect(unsupportedFlyRelease.status).toBe(409);
+    await expect(unsupportedFlyRelease.json()).resolves.toMatchObject({
+      error: expect.stringContaining("requires an approved v7 structural-shell navigation artifact"),
+    });
 
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,

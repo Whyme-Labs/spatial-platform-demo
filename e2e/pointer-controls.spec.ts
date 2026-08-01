@@ -77,6 +77,27 @@ test.describe("spatial navigation direction", () => {
     expect(dot(strafeDelta, planarRight)).toBeLessThan(-0.1);
   });
 
+  test("fly mode moves vertically and follows the full camera direction", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly");
+    const initial = await readCameraState(page);
+
+    await page.keyboard.down("Space");
+    await page.waitForTimeout(180);
+    await page.keyboard.up("Space");
+    const afterRise = await readCameraState(page);
+    expect(afterRise.position[1]! - initial.position[1]!).toBeGreaterThan(0.1);
+
+    await drag(page, { x: 500, y: 360 }, { x: 500, y: 220 });
+    const afterLook = await readCameraState(page);
+    await page.keyboard.down("KeyW");
+    await page.waitForTimeout(180);
+    await page.keyboard.up("KeyW");
+    const afterForward = await readCameraState(page);
+    const travel = subtract(afterForward.position, afterLook.position);
+    expect(dot(travel, afterLook.direction)).toBeGreaterThan(0.1);
+    expect(Math.abs(travel[1]!)).toBeGreaterThan(0.01);
+  });
+
   test("a quick arrow-key press still advances one rendered frame", async ({ page }) => {
     await page.goto("/e2e/fixtures/pointer-controls.html");
     const initial = await readCameraState(page);

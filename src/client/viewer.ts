@@ -26,9 +26,14 @@ const VIEWER_MOVEMENT_KEYS = new Set([
   "ArrowDown",
   "ArrowLeft",
   "ArrowRight",
+  "Space",
+  "KeyE",
+  "KeyC",
+  "KeyQ",
   "ShiftLeft",
   "ShiftRight",
 ]);
+const forwardedViewerKeys = new Set<string>();
 
 type ReleaseManifest = {
   schemaVersion: string;
@@ -60,6 +65,7 @@ type ReleaseManifest = {
     captureDate?: string;
     measurementDisclaimer: string;
     splatBudgetMillions?: number;
+    defaultMovementMode?: "walk" | "fly";
     sceneRotationDegrees?: [number, number, number];
     sourceToWorld?: SourceToWorldTransform;
     initialCamera?: {
@@ -516,15 +522,17 @@ function bindViewerKeyboardBridge(): void {
       !VIEWER_MOVEMENT_KEYS.has(event.code) ||
       isViewerEditableTarget(event.target)
     ) return;
+    forwardedViewerKeys.add(event.code);
     sendViewerMovementKey(event.code, true);
     event.preventDefault();
   });
   window.addEventListener("keyup", (event) => {
-    if (!rendererReady || !VIEWER_MOVEMENT_KEYS.has(event.code)) return;
+    if (!rendererReady || !forwardedViewerKeys.delete(event.code)) return;
     sendViewerMovementKey(event.code, false);
     event.preventDefault();
   });
   window.addEventListener("blur", () => {
+    forwardedViewerKeys.clear();
     frame.contentWindow?.postMessage({
       source: "spatial-host",
       type: "movement-keys-clear",
@@ -546,7 +554,8 @@ function isViewerEditableTarget(target: EventTarget | null): boolean {
   return target.isContentEditable ||
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement;
+    target instanceof HTMLSelectElement ||
+    target.closest("button, a[href], [role='button'], [role='link']") !== null;
 }
 
 function setViewerHudMode(mode: "collapsed" | "release" | "navigator"): void {
@@ -942,6 +951,7 @@ function sendSpatialRuntime(): void {
     navigationProfile: spatial.navigationProfile,
     navigationArtifact: spatial.navigationArtifact ?? null,
     collisionUrl: activeManifest?.scene.collisionUrl ?? null,
+    defaultMovementMode: activeManifest?.viewer.defaultMovementMode ?? "walk",
   }, location.origin);
 }
 

@@ -1,9 +1,12 @@
 import * as THREE from "three";
 
-type PlanarMovement = {
+type MovementInput = {
   x: number;
+  y?: number;
   z: number;
 };
+
+export type SpatialMovementMode = "walk" | "fly";
 
 type NavigationBounds = {
   min: THREE.Vector3;
@@ -13,8 +16,8 @@ type NavigationBounds = {
 const LOCAL_RIGHT = new THREE.Vector3(1, 0, 0);
 const MAX_PITCH_RADIANS = THREE.MathUtils.degToRad(85);
 const LOOK_RADIANS_PER_PIXEL = 0.002;
-const WALK_SPEED_METRES_PER_SECOND = 1.4;
-const FAST_WALK_MULTIPLIER = 3;
+const DEFAULT_MOVEMENT_SPEED_UNITS_PER_SECOND = 1.4;
+const DEFAULT_BOOST_MULTIPLIER = 3;
 const TRACKPAD_METRES_PER_PIXEL = 0.0025;
 const MAX_TRACKPAD_DELTA_PIXELS = 80;
 const MOVEMENT_EPSILON = 1e-6;
@@ -32,6 +35,15 @@ export class SpatialNavigationControls {
   private readonly pendingKeys = new Set<string>();
   private readonly activeTouches = new Set<number>();
   private navigationBounds: NavigationBounds[] = [];
+  private movementMode: SpatialMovementMode = "walk";
+  private movementSpeeds: Record<SpatialMovementMode, number> = {
+    walk: DEFAULT_MOVEMENT_SPEED_UNITS_PER_SECOND,
+    fly: DEFAULT_MOVEMENT_SPEED_UNITS_PER_SECOND,
+  };
+  private boostMultipliers: Record<SpatialMovementMode, number> = {
+    walk: DEFAULT_BOOST_MULTIPLIER,
+    fly: DEFAULT_BOOST_MULTIPLIER,
+  };
   private translationEnabled = true;
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
@@ -80,6 +92,27 @@ export class SpatialNavigationControls {
     });
   }
 
+  setMovementMode(mode: SpatialMovementMode): void {
+    this.movementMode = mode;
+    this.clearKeyboardState();
+    this.wheelDeltaX = 0;
+    this.wheelDeltaY = 0;
+  }
+
+  configureMovementProfiles(artifact: unknown): void {
+    if (!artifact || typeof artifact !== "object") return;
+    const profiles = Reflect.get(artifact, "movementProfiles");
+    if (!profiles || typeof profiles !== "object") return;
+    for (const mode of ["walk", "fly"] as const) {
+      const profile = Reflect.get(profiles, mode);
+      if (!profile || typeof profile !== "object") continue;
+      const speed = Number(Reflect.get(profile, "speedUnitsPerSecond"));
+      const boost = Number(Reflect.get(profile, "boostMultiplier"));
+      if (Number.isFinite(speed) && speed > 0) this.movementSpeeds[mode] = speed;
+      if (Number.isFinite(boost) && boost >= 1) this.boostMultipliers[mode] = boost;
+    }
+  }
+
   setTranslationEnabled(enabled: boolean): void {
     this.translationEnabled = enabled;
     if (enabled) return;
@@ -106,7 +139,7 @@ export class SpatialNavigationControls {
   update(
     camera: THREE.PerspectiveCamera,
     deltaSeconds: number,
-    externalMovement: PlanarMovement = { x: 0, z: 0 },
+    externalMovement: MovementInput = { x: 0, y: 0, z: 0 },
   ): boolean {
     const positionBeforeMovement = this.navigationBounds.length
       ? camera.position.clone()
@@ -328,7 +361,7 @@ export class SpatialNavigationControls {
     const magnitude = Math.hypot(deltaX, deltaY);
     if (magnitude < MOVEMENT_EPSILON) return false;
 
-    const basis = this.navigationBasis(camera);
+    const basis = this.movementBasis(camera);
     if (!basis) return false;
     const boundedScale = TRACKPAD_METRES_PER_PIXEL *
       Math.min(1, MAX_TRACKPAD_DELTA_PIXELS / magnitude);
@@ -338,7 +371,7 @@ export class SpatialNavigationControls {
     return true;
   }
 
-  private combinedMovement(externalMovement: PlanarMovement): PlanarMovement {
+  private combinedMovement(externalMovement: MovementInput): Required<MovementInput> {
     const keyboardX = Number(
       this.hasKeyboardKey("KeyD") || this.hasKeyboardKey("ArrowRight"),
     ) - Number(
@@ -349,33 +382,39 @@ export class SpatialNavigationControls {
     ) - Number(
       this.hasKeyboardKey("KeyW") || this.hasKeyboardKey("ArrowUp"),
     );
+    const keyboardY = this.movementMode === "fly"
+      ? Number(this.hasKeyboardKey("Space") || this.hasKeyboardKey("KeyE")) -
+        Number(this.hasKeyboardKey("KeyC") || this.hasKeyboardKey("KeyQ"))
+      : 0;
     return {
       x: clampInput(externalMovement.x) + keyboardX,
+      y: clampInput(externalMovement.y ?? 0) + keyboardY,
       z: clampInput(externalMovement.z) + keyboardZ,
     };
   }
 
   private applyMovement(
     camera: THREE.PerspectiveCamera,
-    movement: PlanarMovement,
+    movement: Required<MovementInput>,
     deltaSeconds: number,
   ): boolean {
-    const inputMagnitude = Math.hypot(movement.x, movement.z);
+    const inputMagnitude = Math.hypot(movement.x, movement.y, movement.z);
     if (inputMagnitude < MOVEMENT_EPSILON || deltaSeconds <= 0) return false;
 
     const normalisation = inputMagnitude > 1 ? 1 / inputMagnitude : 1;
-    const basis = this.navigationBasis(camera);
+    const basis = this.movementBasis(camera);
     if (!basis) return false;
     const speedMultiplier = this.hasKeyboardKey("ShiftLeft") ||
         this.hasKeyboardKey("ShiftRight")
-      ? FAST_WALK_MULTIPLIER
+      ? this.boostMultipliers[this.movementMode]
       : 1;
-    const distance = WALK_SPEED_METRES_PER_SECOND *
+    const distance = this.movementSpeeds[this.movementMode] *
       speedMultiplier *
       Math.min(0.05, deltaSeconds);
     camera.position
       .addScaledVector(basis.right, movement.x * normalisation * distance)
-      .addScaledVector(basis.forward, -movement.z * normalisation * distance);
+      .addScaledVector(basis.forward, -movement.z * normalisation * distance)
+      .addScaledVector(this.navigationUp, movement.y * normalisation * distance);
     return true;
   }
 
@@ -383,29 +422,33 @@ export class SpatialNavigationControls {
     return this.activeKeys.has(code) || this.pendingKeys.has(code);
   }
 
-  private navigationBasis(
+  private movementBasis(
     camera: THREE.PerspectiveCamera,
   ): { forward: THREE.Vector3; right: THREE.Vector3 } | null {
-    const forward = camera.getWorldDirection(new THREE.Vector3())
-      .projectOnPlane(this.navigationUp);
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    if (this.movementMode === "walk") forward.projectOnPlane(this.navigationUp);
     if (forward.lengthSq() < MOVEMENT_EPSILON) return null;
     forward.normalize();
+    const screenRight = LOCAL_RIGHT.clone().applyQuaternion(camera.quaternion);
+    const right = this.movementMode === "fly"
+      ? screenRight.normalize()
+      : forward.clone().cross(this.navigationUp).normalize();
     return {
       forward,
-      right: forward.clone().cross(this.navigationUp).normalize(),
+      right,
     };
   }
 
   private isInsideNavigationBounds(position: THREE.Vector3): boolean {
     if (!this.navigationBounds.length) return true;
-    // These controls only translate on the navigation plane. Authored room
-    // bounds may be zero-height floor regions, while the camera remains at eye
-    // height; vertical eligibility is enforced by the navigation runtime.
     return this.navigationBounds.some(({ min, max }) =>
       position.x >= min.x &&
       position.x <= max.x &&
       position.z >= min.z &&
-      position.z <= max.z
+      position.z <= max.z &&
+      (this.movementMode === "walk" || (
+        position.y >= min.y && position.y <= max.y
+      ))
     );
   }
 }
@@ -419,6 +462,10 @@ const MOVEMENT_KEYS = new Set([
   "ArrowDown",
   "ArrowLeft",
   "ArrowRight",
+  "Space",
+  "KeyE",
+  "KeyC",
+  "KeyQ",
   "ShiftLeft",
   "ShiftRight",
 ]);
@@ -432,7 +479,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target.isContentEditable ||
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
-    target instanceof HTMLSelectElement;
+    target instanceof HTMLSelectElement ||
+    target.closest("button, a[href], [role='button'], [role='link']") !== null;
 }
 
 export function createSpatialLookControls(

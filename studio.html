@@ -586,6 +586,8 @@
         <label><span>Capture date</span><input name="captureDate" type="date" /></label>
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
         <label><span>Splat budget (millions)</span><input name="splatBudgetMillions" type="number" min="0.25" max="8" step="0.25" value="2" required /></label>
+        <label><span>Opening movement</span><select name="defaultMovementMode"><option value="walk">Walk</option><option value="fly">Fly in 3D</option></select></label>
+        <p class="field-note full">Fly requires an approved v7 closed structural shell. Walk and Fly collide with reviewed floors, walls, and ceilings while ignoring classified furniture.</p>
         <label><span>Scene rotation X (degrees)</span><input name="sceneRotationX" type="number" step="0.1" value="0" required /></label>
         <label><span>Scene rotation Y (degrees)</span><input name="sceneRotationY" type="number" step="0.1" value="0" required /></label>
         <label><span>Scene rotation Z (degrees)</span><input name="sceneRotationZ" type="number" step="0.1" value="0" required /></label>

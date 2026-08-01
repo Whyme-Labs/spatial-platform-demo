@@ -35,6 +35,13 @@
           disabled
           hidden
         >Free roam</button>
+        <button
+          id="movementModeToggle"
+          type="button"
+          aria-pressed="false"
+          title="Switch between grounded walking and collision-aware 3D flight"
+          hidden
+        >Fly mode</button>
         <button id="toggleHelp" type="button" aria-expanded="false" aria-controls="controlHelp">Controls</button>
         <button id="enterFullscreen" type="button">Full screen</button>
       </div>
@@ -45,6 +52,7 @@
         <span id="mobileMovementHelp" class="spark-mobile-only">Drag to look · use the Free roam joystick to move</span>
         <span id="desktopMovementHelp" class="spark-desktop-only">Drag to look · scroll or two-finger swipe to travel</span>
         <span id="desktopKeyboardHelp" class="spark-desktop-only">Desktop: WASD or arrow keys to move · Shift for speed</span>
+        <span id="desktopVerticalHelp" class="spark-desktop-only" hidden>Fly: Space/E rise · C/Q descend</span>
         <span>Reset returns you to the opening view.</span>
       </div>
 
@@ -60,6 +68,16 @@
         <span class="spark-movement-ring" aria-hidden="true"></span>
         <span id="movementKnob" class="spark-movement-knob" aria-hidden="true"></span>
         <span class="spark-movement-label" aria-hidden="true">MOVE</span>
+      </div>
+      <div
+        id="flightAltitudeControls"
+        class="spark-flight-altitude spark-mobile-only"
+        role="group"
+        aria-label="Flight altitude"
+        hidden
+      >
+        <button id="flyAscend" type="button" aria-label="Rise while flying">Rise</button>
+        <button id="flyDescend" type="button" aria-label="Lower while flying">Lower</button>
       </div>
       <span id="movementStatus" class="spark-sr-only" role="status" aria-live="polite">Stopped</span>
       <div id="mobileLookHint" class="spark-look-hint spark-mobile-only" hidden>

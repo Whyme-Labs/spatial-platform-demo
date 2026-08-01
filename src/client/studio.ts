@@ -432,6 +432,7 @@ type VersionComparison = {
     sessionExpiresAt: string;
     viewer: {
       splatBudgetMillions?: number;
+      defaultMovementMode?: "walk" | "fly";
       sceneRotationDegrees?: [number, number, number];
       sourceToWorld?: {
         sourceUpAxis: "Y" | "Z";
@@ -6377,7 +6378,7 @@ function renderSpatial(): void {
   const routes = element("article", "workspace-card-large");
   routes.append(
     element("span", "eyebrow", "GUIDED NAVIGATION"),
-    element("h3", "", "Routes and walkable runtime"),
+    element("h3", "", "Routes and movement runtime"),
     projectFact("Collision regions", String(spatial.collisionProxy.boxes.length)),
     projectFact("Navigation triangles", String(Math.floor(spatial.navigationMesh.indices.length / 3))),
     projectFact("Navigation obstacles", String(spatial.obstacleProxy.boxes.length)),
@@ -6404,11 +6405,11 @@ function renderSpatial(): void {
   addRoute.addEventListener("click", openRouteDialog);
   const tuneNavigation = element("button", "quiet-button wide", "Tune navigation agent");
   tuneNavigation.addEventListener("click", openNavigationProfileDialog);
-  const buildNavigation = element("button", "primary-button wide", "Build verified walking map");
+  const buildNavigation = element("button", "primary-button wide", "Build verified navigation");
   const collisionAssets = navigationCollisionAssets();
   buildNavigation.disabled = collisionAssets.length === 0;
   buildNavigation.title = collisionAssets.length
-    ? "Build Recast/Detour navigation and replay every route with a Rapier capsule."
+    ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapier sphere sweeps."
     : "Upload a verified collision GLB on this immutable version first.";
   buildNavigation.addEventListener("click", openNavigationBuildDialog);
   routes.append(addRoute, tuneNavigation, buildNavigation);
@@ -6418,7 +6419,7 @@ function renderSpatial(): void {
     routes.append(element(
       "p",
       "field-note",
-      "No v6 navigation artifact exists. A future walkable release will remain blocked until one passes processor validation and operator review.",
+      "No approved navigation artifact exists. A future movement-enabled release remains blocked until one passes processor validation and operator review.",
     ));
   }
   for (const build of navigationBuilds.slice(0, 6)) {
@@ -6430,7 +6431,7 @@ function renderSpatial(): void {
     );
     row.append(label);
     if (build.status === "READY_FOR_REVIEW") {
-      const approve = element("button", "primary-button", "Approve walking map");
+      const approve = element("button", "primary-button", "Approve navigation");
       approve.addEventListener("click", () => {
         const note = window.prompt(
           "Record what you reviewed (minimum 10 characters).",
@@ -11004,6 +11005,7 @@ async function publishRelease(form: FormData): Promise<void> {
             captureDate: optionalString(form.get("captureDate")),
             measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
             splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
+            defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
             ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
             ...(sourceToWorld ? { sourceToWorld } : {}),
             ...(initialCamera ? { initialCamera } : {}),

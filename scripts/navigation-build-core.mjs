@@ -9,7 +9,8 @@ import { generateTiledNavMesh } from "@recast-navigation/generators";
 import { Vector3 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-const SCHEMA_VERSION = "spatial-navigation-v6";
+const LEGACY_SCHEMA_VERSION = "spatial-navigation-v6";
+const STRUCTURAL_SCHEMA_VERSION = "spatial-navigation-v7";
 const GENERATOR_VERSION = "0.43.1";
 const NATIVE_RECAST_COMMIT = "599fd0f023181c0a484df2a18cf1d75a3553852e";
 const MAX_COLLISION_GLB_BYTES = 256 * 1024 * 1024;
@@ -28,7 +29,17 @@ export class NavigationBuildError extends Error {
 
 export async function extractCollisionGeometryFromGlb(bytes) {
   const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  preflightCollisionGlb(data);
+  const document = preflightCollisionGlb(data);
+  const collisionSemantics = structuralCollisionSemantics(document);
+  const dynamicBarriers = structuralDynamicBarriers(document);
+  const structuralGeometry = structuralGeometryReview(document);
+  if (collisionSemantics &&
+    collisionSemantics.includedGroups.includes("DYNAMIC_BARRIER") !== Boolean(dynamicBarriers.length)) {
+    throw new NavigationBuildError(
+      "INVALID_COLLISION_SEMANTICS",
+      "DYNAMIC_BARRIER semantics must exactly match the embedded dynamic barrier list",
+    );
+  }
   const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   let gltf;
   try {
@@ -44,8 +55,34 @@ export async function extractCollisionGeometryFromGlb(bytes) {
   const indices = [];
   const point = new Vector3();
   let meshCount = 0;
+  let includedMeshCount = 0;
+  let ignoredMeshCount = 0;
+  const meshGroups = [];
   gltf.scene.traverse((object) => {
     if (!object.isMesh || !object.geometry?.attributes?.position) return;
+    const collisionGroup = typeof object.userData?.collisionGroup === "string"
+      ? object.userData.collisionGroup
+      : null;
+    meshGroups.push(collisionGroup ?? "LEGACY_UNCLASSIFIED");
+    if (collisionSemantics) {
+      if (!collisionGroup || !COLLISION_GROUPS.has(collisionGroup)) {
+        throw new NavigationBuildError(
+          "INVALID_COLLISION_SEMANTICS",
+          `Structural collision mesh ${object.name || meshCount + 1} has no valid collision group`,
+        );
+      }
+      if (collisionSemantics.ignoredGroups.includes(collisionGroup)) {
+        ignoredMeshCount += 1;
+        meshCount += 1;
+        return;
+      }
+      if (!collisionSemantics.includedGroups.includes(collisionGroup)) {
+        throw new NavigationBuildError(
+          "INVALID_COLLISION_SEMANTICS",
+          `Collision group ${collisionGroup} is neither included nor ignored`,
+        );
+      }
+    }
     const geometry = object.geometry;
     const position = geometry.attributes.position;
     const offset = positions.length / 3;
@@ -81,6 +118,7 @@ export async function extractCollisionGeometryFromGlb(bytes) {
       const third = Number(sourceIndices[index + 2]) + offset;
       indices.push(first, mirrored ? third : second, mirrored ? second : third);
     }
+    includedMeshCount += 1;
     meshCount += 1;
   });
   if (!meshCount || positions.length < 9 || indices.length < 3) {
@@ -89,7 +127,17 @@ export async function extractCollisionGeometryFromGlb(bytes) {
       "Collision GLB contains no indexed or non-indexed triangle meshes",
     );
   }
-  return { positions, indices, meshCount };
+  return {
+    positions,
+    indices,
+    meshCount,
+    includedMeshCount,
+    ignoredMeshCount,
+    meshGroups,
+    collisionSemantics,
+    dynamicBarriers,
+    structuralGeometry,
+  };
 }
 
 function preflightCollisionGlb(data) {
@@ -142,6 +190,116 @@ function preflightCollisionGlb(data) {
       "Collision GLB must embed every buffer and image; external or data URIs are rejected",
     );
   }
+  return document;
+}
+
+function structuralCollisionSemantics(document) {
+  const asset = document?.asset;
+  const extras = asset && typeof asset === "object" ? asset.extras : null;
+  const value = extras && typeof extras === "object" ? extras.spatialCollision : null;
+  return value ? canonicalCollisionSemantics(value) : null;
+}
+
+function structuralDynamicBarriers(document) {
+  const extras = document?.asset && typeof document.asset === "object"
+    ? document.asset.extras
+    : null;
+  const values = extras && typeof extras === "object" ? extras.dynamicBarriers : null;
+  return canonicalDynamicBarriers(values ?? []);
+}
+
+function structuralGeometryReview(document) {
+  const extras = document?.asset && typeof document.asset === "object"
+    ? document.asset.extras
+    : null;
+  const value = extras && typeof extras === "object" ? extras.authoring : null;
+  if (!value) return null;
+  if (value.schemaVersion !== "authored-structural-collision-v2") {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      "Operator-authored structural collision must use explicit v2 surfaces",
+    );
+  }
+  const floorRectangles = canonicalHorizontalRectangles(value.floorRectangles, "floor");
+  const ceilingRectangles = canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling");
+  const dynamicBarrierIds = canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier");
+  const barrierSegments = canonicalBarrierSegments(value.barrierSegments);
+  return {
+    schemaVersion: "authored-structural-collision-v2",
+    floorRectangles,
+    ceilingRectangles,
+    barrierSegments,
+    dynamicBarrierIds,
+  };
+}
+
+function canonicalIds(values, label) {
+  if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !value.trim())) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} ids are invalid`,
+    );
+  }
+  const normalized = values.map((value) => value.trim());
+  if (new Set(normalized).size !== normalized.length) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} ids must be unique`,
+    );
+  }
+  return normalized;
+}
+
+function canonicalBarrierSegments(values) {
+  if (!Array.isArray(values) || !values.length) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      "Explicit structural barriers are required",
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const start = pointTuple2(value?.start);
+    const end = pointTuple2(value?.end);
+    const minY = Number(value?.minY);
+    const maxY = Number(value?.maxY);
+    if (!id || ids.has(id) || !start || !end || !Number.isFinite(minY) ||
+      !Number.isFinite(maxY) || minY >= maxY ||
+      Math.hypot(end[0] - start[0], end[1] - start[1]) <= 1e-6) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural barrier ${id || "unknown"} is invalid`,
+      );
+    }
+    ids.add(id);
+    return { id, start, end, minY, maxY };
+  });
+}
+
+function canonicalHorizontalRectangles(values, label) {
+  if (!Array.isArray(values) || !values.length) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} rectangles are required`,
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const min = pointTuple2(value?.min);
+    const max = pointTuple2(value?.max);
+    const elevation = Number(value?.elevation);
+    if (!id || ids.has(id) || !min || !max || !Number.isFinite(elevation) ||
+      min.some((coordinate, axis) => coordinate >= max[axis])) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural ${label} rectangle ${id || "unknown"} is invalid`,
+      );
+    }
+    ids.add(id);
+    return { id, min, max, elevation };
+  });
 }
 
 /**
@@ -152,6 +310,7 @@ function preflightCollisionGlb(data) {
 export async function buildRecastNavigationArtifact(input) {
   validateBuildInput(input);
   await ensureInitialized();
+  const artifactBounds = boundsOf(input.positions);
   const recastConfig = recastConfigFor(input.agent, input.build);
   const generated = generateTiledNavMesh(input.positions, input.indices, {
     ...recastConfig,
@@ -280,8 +439,37 @@ export async function buildRecastNavigationArtifact(input) {
     }
 
     const binary = exportNavMesh(navMesh);
+    const collisionSemantics = input.collisionSemantics
+      ? canonicalCollisionSemantics(input.collisionSemantics)
+      : null;
+    const structuralGeometry = input.structuralGeometry
+      ? canonicalStructuralGeometry(input.structuralGeometry)
+      : null;
+    if (collisionSemantics?.provenance === "operator_reviewed" && !structuralGeometry) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        "Operator-reviewed v7 collision requires explicit floor, ceiling, and barrier metadata",
+      );
+    }
+    const dynamicBarriers = collisionSemantics
+      ? canonicalDynamicBarriers(input.dynamicBarriers ?? [])
+      : [];
+    if (structuralGeometry) {
+      const frozenDynamicIds = structuralGeometry.dynamicBarrierIds;
+      if (
+        frozenDynamicIds.length !== dynamicBarriers.length ||
+        frozenDynamicIds.some((id, index) => id !== dynamicBarriers[index]?.id)
+      ) {
+        throw new NavigationBuildError(
+          "INVALID_STRUCTURAL_AUTHORING",
+          "Explicit structural authoring and dynamic barrier metadata do not match",
+        );
+      }
+    }
     return {
-      schemaVersion: SCHEMA_VERSION,
+      schemaVersion: collisionSemantics
+        ? STRUCTURAL_SCHEMA_VERSION
+        : LEGACY_SCHEMA_VERSION,
       generator: {
         name: "recast-navigation-js",
         version: GENERATOR_VERSION,
@@ -301,10 +489,22 @@ export async function buildRecastNavigationArtifact(input) {
         triangleCount: input.indices.length / 3,
         vertexCount: input.positions.length / 3,
       },
+      ...(collisionSemantics
+        ? {
+            collisionSemantics,
+            dynamicBarriers,
+            ...(structuralGeometry ? { structuralGeometry } : {}),
+            movementProfiles: movementProfiles(
+              collisionSemantics.includedGroups,
+              input.agent,
+              artifactBounds,
+            ),
+          }
+        : {}),
       agent: { ...input.agent },
       build: { ...input.build },
       recastConfig,
-      bounds: input.bounds ?? boundsOf(input.positions),
+      bounds: artifactBounds,
       spawn: {
         id: input.spawn.id,
         requestedPosition: [...input.spawn.position],
@@ -330,7 +530,9 @@ export async function buildRecastNavigationArtifact(input) {
 }
 
 export async function importNavigationArtifact(artifact) {
-  if (!artifact || artifact.schemaVersion !== SCHEMA_VERSION) {
+  if (!artifact || ![LEGACY_SCHEMA_VERSION, STRUCTURAL_SCHEMA_VERSION].includes(
+    artifact.schemaVersion,
+  )) {
     throw new NavigationBuildError(
       "UNSUPPORTED_NAVIGATION_ARTIFACT",
       "Navigation artifact is missing or uses an unsupported schema",
@@ -466,7 +668,156 @@ function validateBuildInput(input) {
       "Navigation authoring hash must be SHA-256",
     );
   }
+  if (input.collisionSemantics) canonicalCollisionSemantics(input.collisionSemantics);
 }
+
+function canonicalCollisionSemantics(value) {
+  const includedGroups = Array.isArray(value?.includedGroups)
+    ? [...new Set(value.includedGroups)]
+    : [];
+  const ignoredGroups = Array.isArray(value?.ignoredGroups)
+    ? [...new Set(value.ignoredGroups)]
+    : [];
+  if (
+    value?.schemaVersion !== "spatial-structural-collision-v1" ||
+    !["operator_reviewed", "registered_metric_mesh"].includes(value?.provenance) ||
+    value?.structuralShellComplete !== true ||
+    !sameStringSet(includedGroups, [
+      "STRUCTURAL_FLOOR",
+      "STRUCTURAL_BARRIER",
+      ...(includedGroups.includes("DYNAMIC_BARRIER") ? ["DYNAMIC_BARRIER"] : []),
+    ]) ||
+    !sameStringSet(ignoredGroups, ["FURNITURE", "TRIGGER"])
+  ) {
+    throw new NavigationBuildError(
+      "INVALID_COLLISION_SEMANTICS",
+      "V7 requires a complete reviewed structural floor/barrier shell that explicitly ignores furniture",
+    );
+  }
+  return {
+    schemaVersion: "spatial-structural-collision-v1",
+    provenance: value.provenance,
+    structuralShellComplete: true,
+    includedGroups,
+    ignoredGroups,
+  };
+}
+
+function sameStringSet(actual, expected) {
+  return actual.length === expected.length && expected.every((value) => actual.includes(value));
+}
+
+function canonicalDynamicBarriers(values) {
+  if (!Array.isArray(values)) {
+    throw new NavigationBuildError(
+      "INVALID_DYNAMIC_BARRIERS",
+      "Structural dynamic barriers must be an array",
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const min = pointTuple(value?.min);
+    const max = pointTuple(value?.max);
+    if (!id || ids.has(id) || !min || !max ||
+      min.some((coordinate, axis) => coordinate >= max[axis]) ||
+      typeof value?.defaultActive !== "boolean") {
+      throw new NavigationBuildError(
+        "INVALID_DYNAMIC_BARRIERS",
+        `Dynamic barrier ${id || "unknown"} has invalid identity, bounds, or state`,
+      );
+    }
+    ids.add(id);
+    return { id, min, max, defaultActive: value.defaultActive };
+  });
+}
+
+function canonicalStructuralGeometry(value) {
+  if (!value || typeof value !== "object" ||
+    value.schemaVersion !== "authored-structural-collision-v2") {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      "Structural geometry review metadata is missing or unsupported",
+    );
+  }
+  return {
+    schemaVersion: "authored-structural-collision-v2",
+    floorRectangles: canonicalHorizontalRectangles(value.floorRectangles, "floor"),
+    ceilingRectangles: canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling"),
+    barrierSegments: canonicalBarrierSegments(value.barrierSegments),
+    dynamicBarrierIds: canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier"),
+  };
+}
+
+function pointTuple(value) {
+  return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite)
+    ? value.map(Number)
+    : null;
+}
+
+function pointTuple2(value) {
+  return Array.isArray(value) && value.length === 2 && value.every(Number.isFinite)
+    ? value.map(Number)
+    : null;
+}
+
+function movementProfiles(collisionGroups, agent, bounds) {
+  const recoveryBounds = [
+    [
+      bounds[0][0] - agent.radius,
+      bounds[0][1] - agent.height,
+      bounds[0][2] - agent.radius,
+    ],
+    [
+      bounds[1][0] + agent.radius,
+      bounds[1][1] + agent.height,
+      bounds[1][2] + agent.radius,
+    ],
+  ];
+  const planarInput = {
+    forward: ["KeyW", "ArrowUp"],
+    backward: ["KeyS", "ArrowDown"],
+    left: ["KeyA", "ArrowLeft"],
+    right: ["KeyD", "ArrowRight"],
+    boost: ["ShiftLeft", "ShiftRight"],
+  };
+  return {
+    defaultMode: "walk",
+    supportedModes: ["walk", "fly"],
+    walk: {
+      shape: "capsule",
+      gravity: true,
+      groundSnap: true,
+      collisionGroups: [...collisionGroups],
+      input: planarInput,
+      speedUnitsPerSecond: agent.maxSpeed,
+      boostMultiplier: 3,
+      recoveryBounds,
+    },
+    fly: {
+      shape: "sphere",
+      gravity: false,
+      groundSnap: false,
+      collisionGroups: [...collisionGroups],
+      input: {
+        ...planarInput,
+        ascend: ["Space", "KeyE"],
+        descend: ["KeyC", "KeyQ"],
+      },
+      speedUnitsPerSecond: agent.maxSpeed,
+      boostMultiplier: 3,
+      recoveryBounds,
+    },
+  };
+}
+
+const COLLISION_GROUPS = new Set([
+  "STRUCTURAL_FLOOR",
+  "STRUCTURAL_BARRIER",
+  "FURNITURE",
+  "DYNAMIC_BARRIER",
+  "TRIGGER",
+]);
 
 function toOffMeshConnection(connection) {
   return {

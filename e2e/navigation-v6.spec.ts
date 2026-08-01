@@ -50,11 +50,17 @@ test("initialises the frozen Detour mesh and Rapier collision proxy before enabl
   await page.route("**/e2e/navigation-host.html", (route) => route.fulfill({
     status: 200,
     contentType: "text/html",
-    body: `<!doctype html><iframe id="renderer" title="Walking runtime"
+    body: `<!doctype html><style>
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      #renderer { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+    </style><iframe id="renderer" title="Walking runtime"
       src="/renderer/index.html?content=/asset/test-scene.spz&format=spz"></iframe>`,
   }));
   await page.goto("/e2e/navigation-host.html");
   await expect(page.locator("#renderer")).toBeVisible();
+  await expect(page.frameLocator("#renderer").locator("#sparkLoading")).toBeHidden({
+    timeout: 15_000,
+  });
 
   await page.evaluate(({ navigationArtifact }) => {
     const renderer = document.querySelector<HTMLIFrameElement>("#renderer")?.contentWindow;

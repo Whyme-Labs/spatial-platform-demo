@@ -35,6 +35,7 @@ const screenRight = new THREE.Vector3(1, 0, 0).applyQuaternion(initialQuaternion
 const controls = createSpatialLookControls(canvas);
 controls.align(camera);
 const fixtureParameters = new URL(location.href).searchParams;
+if (fixtureParameters.get("mode") === "fly") controls.setMovementMode("fly");
 const requestedBoundary = fixtureParameters.get("boundary");
 if (requestedBoundary) {
   const padding = new THREE.Vector3(0.2, 0.2, 0.2);

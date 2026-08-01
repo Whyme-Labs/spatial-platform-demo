@@ -145,6 +145,93 @@ describe("Unreal-equivalent navigation artifact", () => {
     );
   });
 
+  it("freezes structural collision semantics and dual movement profiles in v7", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 6, 4);
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      source: {
+        assetId: "structural-shell",
+        sha256: "d".repeat(64),
+        authoringHash: "5".repeat(64),
+        worldUnit: "scene_units",
+      },
+      collisionSemantics: {
+        schemaVersion: "spatial-structural-collision-v1",
+        provenance: "operator_reviewed",
+        structuralShellComplete: true,
+        includedGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        ignoredGroups: ["FURNITURE", "TRIGGER"],
+      },
+      structuralGeometry: {
+        schemaVersion: "authored-structural-collision-v2",
+        floorRectangles: [{ id: "floor", min: [0, 0], max: [6, 4], elevation: 0 }],
+        ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [6, 4], elevation: 3 }],
+        barrierSegments: [{
+          id: "wall",
+          start: [0, 0],
+          end: [0, 4],
+          minY: 0,
+          maxY: 3,
+        }],
+        dynamicBarrierIds: [],
+      },
+      agent: profile,
+      build,
+      spawn: { id: "opening", position: [1, 0, 2] },
+      destinations: [{ id: "room", position: [5, 0, 2] }],
+    });
+
+    assert.equal(artifact.schemaVersion, "spatial-navigation-v7");
+    assert.equal(artifact.collisionSemantics.structuralShellComplete, true);
+    assert.equal(artifact.structuralGeometry.barrierSegments.length, 1);
+    assert.deepEqual(artifact.collisionSemantics.ignoredGroups, ["FURNITURE", "TRIGGER"]);
+    assert.deepEqual(artifact.movementProfiles, {
+      defaultMode: "walk",
+      supportedModes: ["walk", "fly"],
+      walk: {
+        shape: "capsule",
+        gravity: true,
+        groundSnap: true,
+        collisionGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        input: {
+          forward: ["KeyW", "ArrowUp"],
+          backward: ["KeyS", "ArrowDown"],
+          left: ["KeyA", "ArrowLeft"],
+          right: ["KeyD", "ArrowRight"],
+          boost: ["ShiftLeft", "ShiftRight"],
+        },
+        speedUnitsPerSecond: 1.6,
+        boostMultiplier: 3,
+        recoveryBounds: [[-0.22, -1.8, -0.22], [6.22, 1.8, 4.22]],
+      },
+      fly: {
+        shape: "sphere",
+        gravity: false,
+        groundSnap: false,
+        collisionGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        input: {
+          forward: ["KeyW", "ArrowUp"],
+          backward: ["KeyS", "ArrowDown"],
+          left: ["KeyA", "ArrowLeft"],
+          right: ["KeyD", "ArrowRight"],
+          boost: ["ShiftLeft", "ShiftRight"],
+          ascend: ["Space", "KeyE"],
+          descend: ["KeyC", "KeyQ"],
+        },
+        speedUnitsPerSecond: 1.6,
+        boostMultiplier: 3,
+        recoveryBounds: [[-0.22, -1.8, -0.22], [6.22, 1.8, 4.22]],
+      },
+    });
+
+    const runtime = await importNavigationArtifact(artifact);
+    assert.ok(runtime.path([1, 0, 2], [5, 0, 2])?.length > 1);
+    runtime.destroy();
+  });
+
   it("fails closed when collision blocks a Detour-approved doorway", async () => {
     const positions = [];
     const indices = [];

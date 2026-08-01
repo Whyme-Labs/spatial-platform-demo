@@ -23,7 +23,10 @@ import {
   extractCollisionGeometryFromGlb,
   NavigationBuildError,
 } from "./navigation-build-core.mjs";
-import { validatePhysicalNavigation } from "./physical-navigation-validation.mjs";
+import {
+  validatePhysicalNavigation,
+  validateStructuralNavigation,
+} from "./physical-navigation-validation.mjs";
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
@@ -46,7 +49,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.8.0";
+const processorVersion = "spatial-processor/0.9.0";
 const sparkVersion = "2.1.0";
 const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
@@ -308,7 +311,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.8.0",
+              processor: "0.9.0",
               extractor: "metric-pointcloud-floorplan-v1",
               normalizer: normalized.tool,
             },
@@ -365,6 +368,15 @@ async function processNextJob() {
           ...job.navigationBuildConfig,
           positions: geometry.positions,
           indices: geometry.indices,
+          ...(geometry.collisionSemantics
+            ? {
+                collisionSemantics: geometry.collisionSemantics,
+                dynamicBarriers: geometry.dynamicBarriers,
+                ...(geometry.structuralGeometry
+                  ? { structuralGeometry: geometry.structuralGeometry }
+                  : {}),
+              }
+            : {}),
           source: {
             ...job.navigationBuildConfig.source,
             assetId: job.input.id,
@@ -378,6 +390,14 @@ async function processNextJob() {
           indices: geometry.indices,
           obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
         });
+        if (artifact.schemaVersion === "spatial-navigation-v7") {
+          artifact.structuralValidation = await validateStructuralNavigation({
+            artifact,
+            positions: geometry.positions,
+            indices: geometry.indices,
+            ignoredMeshCount: geometry.ignoredMeshCount,
+          });
+        }
       } catch (error) {
         if (error instanceof NavigationBuildError) {
           throw new ProcessingAgentError(error.code, error.message, {
@@ -432,7 +452,7 @@ async function processNextJob() {
             outputBytes: navmeshOutput.sizeBytes + reportOutput.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.8.0",
+              processor: "0.9.0",
               recastNavigationJs: "0.43.1",
               nativeRecast: artifact.generator.nativeRecastCommit,
               rapier3d: artifact.physicalValidation.version,
@@ -527,7 +547,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.8.0",
+              processor: "0.9.0",
               extractor: sourceToWorld
                 ? "registered-ply-walkable-candidates-v2"
                 : "registered-ply-walkable-candidates-v1",
@@ -660,7 +680,7 @@ async function processNextJob() {
             outputBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.8.0",
+              processor: "0.9.0",
               validator: "bounded-file-signature-v1",
               ...(posterRenderer
                 ? {
@@ -787,7 +807,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.8.0",
+            processor: "0.9.0",
             posterCamera: posterCamera ? "authored" : "auto",
           },
         },
@@ -1004,7 +1024,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.8.0",
+          processor: "0.9.0",
           method: "registered-ply-voxel-change-v1",
         },
       },

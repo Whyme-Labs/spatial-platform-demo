@@ -16,7 +16,7 @@ const reportPath = join(
   "reports",
   "pdal-container-verification.json",
 );
-const image = process.env.PROCESSOR_IMAGE ?? "spatial-processor:0.8.0";
+const image = process.env.PROCESSOR_IMAGE ?? "spatial-processor:0.9.0";
 const fixtures = [
   { id: "ply", fileName: "pdal-issue-2421.ply" },
   { id: "las", fileName: "pdal-simple.las" },

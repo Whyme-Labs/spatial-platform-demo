@@ -7,10 +7,17 @@ import {
 import type { Vector3Tuple } from "../shared/navigation-runtime";
 
 export type DetourNavigationArtifact = {
-  schemaVersion: "spatial-navigation-v6";
+  schemaVersion: "spatial-navigation-v6" | "spatial-navigation-v7";
   generator: { version: "0.43.1" };
   agent: { radius: number; height: number; eyeHeight: number };
   build: { cellSize: number; cellHeight: number };
+  bounds: [Vector3Tuple, Vector3Tuple];
+  dynamicBarriers?: Array<{
+    id: string;
+    min: Vector3Tuple;
+    max: Vector3Tuple;
+    defaultActive: boolean;
+  }>;
   spawn: { projectedPosition: Vector3Tuple };
   detour: {
     format: "recast-navigation-js-export-v1";
@@ -25,6 +32,11 @@ export class DetourNavigationRuntime {
   readonly #query: NavMeshQuery;
   readonly #artifact: DetourNavigationArtifact;
   readonly #halfExtents: { x: number; y: number; z: number };
+  readonly #dynamicBarriers = new Map<string, {
+    min: Vector3Tuple;
+    max: Vector3Tuple;
+    active: boolean;
+  }>();
 
   private constructor(navMesh: NavMesh, artifact: DetourNavigationArtifact) {
     this.#navMesh = navMesh;
@@ -35,6 +47,13 @@ export class DetourNavigationRuntime {
       y: Math.max(artifact.agent.height, artifact.build.cellHeight * 2),
       z: Math.max(artifact.agent.radius * 2, artifact.build.cellSize * 2),
     };
+    for (const barrier of artifact.dynamicBarriers ?? []) {
+      this.#dynamicBarriers.set(barrier.id, {
+        min: [...barrier.min],
+        max: [...barrier.max],
+        active: barrier.defaultActive,
+      });
+    }
   }
 
   static async create(value: unknown): Promise<DetourNavigationRuntime> {
@@ -67,6 +86,17 @@ export class DetourNavigationRuntime {
   openingCamera(): Vector3Tuple {
     const [x, y, z] = this.#artifact.spawn.projectedPosition;
     return [x, y + this.#artifact.agent.eyeHeight, z];
+  }
+
+  hasDynamicBarrier(id: string): boolean {
+    return this.#dynamicBarriers.has(id);
+  }
+
+  setDynamicBarrierState(id: string, active: boolean): boolean {
+    const barrier = this.#dynamicBarriers.get(id);
+    if (!barrier) return false;
+    barrier.active = active;
+    return true;
   }
 
   isCameraAllowed(position: Vector3Tuple): boolean {
@@ -107,7 +137,32 @@ export class DetourNavigationRuntime {
       maxStraightPathPoints: 4096,
     });
     const last = result.path.at(-1);
-    return Boolean(result.success && last && distance(endFeet, last) <= this.#artifact.build.cellSize * 2);
+    return Boolean(
+      result.success &&
+      last &&
+      distance(endFeet, last) <= this.#artifact.build.cellSize * 2 &&
+      !this.#pathBlockedByDynamicBarrier(result.path),
+    );
+  }
+
+  hasCompleteTopologyPath(from: Vector3Tuple, to: Vector3Tuple): boolean {
+    const start = this.#projectTopologyCamera(from);
+    const end = this.#projectTopologyCamera(to);
+    if (!start || !end) return false;
+    const startFeet = this.#cameraToFeet(start);
+    const endFeet = this.#cameraToFeet(end);
+    const result = this.#query.computePath(toVector(startFeet), toVector(endFeet), {
+      halfExtents: this.#topologyHalfExtents(),
+      maxPathPolys: 4096,
+      maxStraightPathPoints: 4096,
+    });
+    const last = result.path.at(-1);
+    return Boolean(
+      result.success &&
+      last &&
+      distance(endFeet, last) <= this.#artifact.build.cellSize * 2 &&
+      !this.#pathBlockedByDynamicBarrier(result.path),
+    );
   }
 
   destroy(): void {
@@ -118,11 +173,49 @@ export class DetourNavigationRuntime {
   #cameraToFeet(position: Vector3Tuple): Vector3Tuple {
     return [position[0], position[1] - this.#artifact.agent.eyeHeight, position[2]];
   }
+
+  #projectTopologyCamera(position: Vector3Tuple): Vector3Tuple | null {
+    const feet = this.#cameraToFeet(position);
+    const projected = this.#query.findClosestPoint(toVector(feet), {
+      halfExtents: this.#topologyHalfExtents(),
+    });
+    return projected.success
+      ? [projected.point.x, projected.point.y + this.#artifact.agent.eyeHeight, projected.point.z]
+      : null;
+  }
+
+  #topologyHalfExtents(): { x: number; y: number; z: number } {
+    const [minimum, maximum] = this.#artifact.bounds;
+    return {
+      x: this.#halfExtents.x,
+      y: Math.max(this.#halfExtents.y, maximum[1] - minimum[1] + this.#artifact.agent.height),
+      z: this.#halfExtents.z,
+    };
+  }
+
+  #pathBlockedByDynamicBarrier(path: Array<{ x: number; y: number; z: number }>): boolean {
+    const active = [...this.#dynamicBarriers.values()].filter((barrier) => barrier.active);
+    if (!active.length) return false;
+    for (let index = 1; index < path.length; index += 1) {
+      const start = path[index - 1]!;
+      const end = path[index]!;
+      if (active.some((barrier) => segmentIntersectsExpandedBox(
+        [start.x, start.y, start.z],
+        [end.x, end.y, end.z],
+        barrier.min,
+        barrier.max,
+        this.#artifact.agent.radius,
+      ))) return true;
+    }
+    return false;
+  }
 }
 
 function parseArtifact(value: unknown): DetourNavigationArtifact {
   if (!value || typeof value !== "object") throw new Error("Navigation artifact is missing");
-  if (Reflect.get(value, "schemaVersion") !== "spatial-navigation-v6") {
+  if (!["spatial-navigation-v6", "spatial-navigation-v7"].includes(
+    String(Reflect.get(value, "schemaVersion")),
+  )) {
     throw new Error("Unsupported navigation artifact schema");
   }
   const generator = Reflect.get(value, "generator");
@@ -133,11 +226,15 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
   const build = Reflect.get(value, "build");
   const spawn = Reflect.get(value, "spawn");
   const detour = Reflect.get(value, "detour");
+  const bounds = Reflect.get(value, "bounds");
+  const dynamicBarriers = Reflect.get(value, "dynamicBarriers");
   if (!agent || typeof agent !== "object" || !build || typeof build !== "object" ||
     !spawn || typeof spawn !== "object" || !finiteTuple(Reflect.get(spawn, "projectedPosition")) ||
+    !Array.isArray(bounds) || bounds.length !== 2 || !bounds.every(finiteTuple) ||
     !detour || typeof detour !== "object" ||
     Reflect.get(detour, "format") !== "recast-navigation-js-export-v1" ||
-    typeof Reflect.get(detour, "bytesBase64") !== "string") {
+    typeof Reflect.get(detour, "bytesBase64") !== "string" ||
+    !validDynamicBarriers(dynamicBarriers)) {
     throw new Error("Navigation artifact is incomplete");
   }
   for (const [record, names] of [
@@ -149,6 +246,50 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
     }
   }
   return value as DetourNavigationArtifact;
+}
+
+function validDynamicBarriers(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value)) return false;
+  const ids = new Set<string>();
+  return value.every((barrier) => {
+    if (!barrier || typeof barrier !== "object") return false;
+    const id = Reflect.get(barrier, "id");
+    const min = Reflect.get(barrier, "min");
+    const max = Reflect.get(barrier, "max");
+    const active = Reflect.get(barrier, "defaultActive");
+    if (typeof id !== "string" || !id || ids.has(id) || !finiteTuple(min) ||
+      !finiteTuple(max) || min.some((coordinate, axis) => coordinate >= max[axis]!) ||
+      typeof active !== "boolean") return false;
+    ids.add(id);
+    return true;
+  });
+}
+
+function segmentIntersectsExpandedBox(
+  start: Vector3Tuple,
+  end: Vector3Tuple,
+  minimum: Vector3Tuple,
+  maximum: Vector3Tuple,
+  expansion: number,
+): boolean {
+  let near = 0;
+  let far = 1;
+  for (let axis = 0; axis < 3; axis += 1) {
+    const delta = end[axis]! - start[axis]!;
+    const min = minimum[axis]! - expansion;
+    const max = maximum[axis]! + expansion;
+    if (Math.abs(delta) < 1e-9) {
+      if (start[axis]! < min || start[axis]! > max) return false;
+      continue;
+    }
+    const first = (min - start[axis]!) / delta;
+    const second = (max - start[axis]!) / delta;
+    near = Math.max(near, Math.min(first, second));
+    far = Math.min(far, Math.max(first, second));
+    if (near > far) return false;
+  }
+  return true;
 }
 
 function finiteTuple(value: unknown): value is Vector3Tuple {

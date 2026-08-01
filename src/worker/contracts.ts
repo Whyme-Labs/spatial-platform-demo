@@ -794,7 +794,7 @@ export const navigationBuildReviewSchema = z.object({
 });
 
 export const navigationArtifactSchema = z.object({
-  schemaVersion: z.literal("spatial-navigation-v6"),
+  schemaVersion: z.enum(["spatial-navigation-v6", "spatial-navigation-v7"]),
   generator: z.object({
     name: z.literal("recast-navigation-js"),
     version: z.literal("0.43.1"),
@@ -814,6 +814,92 @@ export const navigationArtifactSchema = z.object({
     triangleCount: z.number().int().positive(),
     vertexCount: z.number().int().positive(),
   }).passthrough(),
+  collisionSemantics: z.object({
+    schemaVersion: z.literal("spatial-structural-collision-v1"),
+    provenance: z.enum(["operator_reviewed", "registered_metric_mesh"]),
+    structuralShellComplete: z.literal(true),
+    includedGroups: z.array(z.enum([
+      "STRUCTURAL_FLOOR",
+      "STRUCTURAL_BARRIER",
+      "DYNAMIC_BARRIER",
+    ])).min(2),
+    ignoredGroups: z.array(z.enum(["FURNITURE", "TRIGGER"])).min(1),
+  }).optional(),
+  dynamicBarriers: z.array(z.object({
+    id: z.string().min(1).max(120),
+    min: point3Schema,
+    max: point3Schema,
+    defaultActive: z.boolean(),
+  })).max(500).optional(),
+  structuralGeometry: z.object({
+    schemaVersion: z.literal("authored-structural-collision-v2"),
+    floorRectangles: z.array(z.object({
+      id: z.string().min(1).max(120),
+      min: z.tuple([z.number().finite(), z.number().finite()]),
+      max: z.tuple([z.number().finite(), z.number().finite()]),
+      elevation: z.number().finite(),
+    })).min(1).max(2000),
+    ceilingRectangles: z.array(z.object({
+      id: z.string().min(1).max(120),
+      min: z.tuple([z.number().finite(), z.number().finite()]),
+      max: z.tuple([z.number().finite(), z.number().finite()]),
+      elevation: z.number().finite(),
+    })).min(1).max(2000),
+    barrierSegments: z.array(z.object({
+      id: z.string().min(1).max(120),
+      start: z.tuple([z.number().finite(), z.number().finite()]),
+      end: z.tuple([z.number().finite(), z.number().finite()]),
+      minY: z.number().finite(),
+      maxY: z.number().finite(),
+    })).min(1).max(5000),
+    dynamicBarrierIds: z.array(z.string().min(1).max(120)).max(500),
+  }).optional(),
+  movementProfiles: z.object({
+    defaultMode: z.enum(["walk", "fly"]),
+    supportedModes: z.tuple([z.literal("walk"), z.literal("fly")]),
+    walk: z.object({
+      shape: z.literal("capsule"),
+      gravity: z.literal(true),
+      groundSnap: z.literal(true),
+      collisionGroups: z.array(z.enum([
+        "STRUCTURAL_FLOOR",
+        "STRUCTURAL_BARRIER",
+        "DYNAMIC_BARRIER",
+      ])).min(2),
+      input: z.object({
+        forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
+        backward: z.tuple([z.literal("KeyS"), z.literal("ArrowDown")]),
+        left: z.tuple([z.literal("KeyA"), z.literal("ArrowLeft")]),
+        right: z.tuple([z.literal("KeyD"), z.literal("ArrowRight")]),
+        boost: z.tuple([z.literal("ShiftLeft"), z.literal("ShiftRight")]),
+      }),
+      speedUnitsPerSecond: z.number().positive().max(20),
+      boostMultiplier: z.number().min(1).max(10),
+      recoveryBounds: z.tuple([point3Schema, point3Schema]),
+    }),
+    fly: z.object({
+      shape: z.literal("sphere"),
+      gravity: z.literal(false),
+      groundSnap: z.literal(false),
+      collisionGroups: z.array(z.enum([
+        "STRUCTURAL_FLOOR",
+        "STRUCTURAL_BARRIER",
+        "DYNAMIC_BARRIER",
+      ])).min(2),
+      input: z.object({
+        forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
+        backward: z.tuple([z.literal("KeyS"), z.literal("ArrowDown")]),
+        left: z.tuple([z.literal("KeyA"), z.literal("ArrowLeft")]),
+        right: z.tuple([z.literal("KeyD"), z.literal("ArrowRight")]),
+        boost: z.tuple([z.literal("ShiftLeft"), z.literal("ShiftRight")]),
+        ascend: z.tuple([z.literal("Space"), z.literal("KeyE")]),
+        descend: z.tuple([z.literal("KeyC"), z.literal("KeyQ")]),
+      }),
+      speedUnitsPerSecond: z.number().positive().max(20),
+      boostMultiplier: z.number().min(1).max(10),
+      recoveryBounds: z.tuple([point3Schema, point3Schema]),
+    }),
+  }).optional(),
   agent: z.object({
     radius: z.number().min(0.05).max(2),
     height: z.number().min(0.5).max(4),
@@ -909,7 +995,255 @@ export const navigationArtifactSchema = z.object({
       });
     }
   }),
+  structuralValidation: z.object({
+    passed: z.literal(true),
+    engine: z.literal("rapier3d"),
+    version: z.literal("0.19.3"),
+    shape: z.literal("sphere"),
+    ignoredFurnitureMeshCount: z.number().int().nonnegative(),
+    anchorCount: z.number().int().positive(),
+    probeCount: z.number().int().positive(),
+    probes: z.array(z.object({
+      anchorId: z.string().min(1).max(120),
+      origin: point3Schema,
+      direction: z.enum(["east", "west", "up", "down", "south", "north"]),
+      blocked: z.literal(true),
+      requestedDistance: z.number().positive(),
+      actualDistance: z.number().nonnegative(),
+    })).min(6),
+    boundaryCount: z.number().int().nonnegative(),
+    boundaryProbeCount: z.number().int().nonnegative(),
+    boundaryProbes: z.array(z.object({
+      barrierId: z.string().min(1).max(120),
+      side: z.union([z.literal(-1), z.literal(1)]),
+      origin: point3Schema,
+      direction: point3Schema,
+      requestedDistance: z.number().positive(),
+      hitDistance: z.number().nonnegative(),
+      blocked: z.literal(true),
+    })).max(10_000),
+    boundaryTopology: z.object({
+      passed: z.literal(true),
+      method: z.enum([
+        "explicit-closed-segment-loops-v1",
+        "registered-mesh-anchor-enclosure",
+      ]),
+      loopCount: z.number().int().nonnegative(),
+      floorComponentCount: z.number().int().nonnegative(),
+      dynamicClosureCount: z.number().int().nonnegative(),
+    }),
+  }).superRefine((value, context) => {
+    if (value.probeCount !== value.probes.length || value.probeCount !== value.anchorCount * 6) {
+      context.addIssue({
+        code: "custom",
+        path: ["probeCount"],
+        message: "Every structural anchor must have exactly six blocked sphere probes",
+      });
+    }
+    const directionsByAnchor = new Map<string, Set<string>>();
+    for (const probe of value.probes) {
+      const directions = directionsByAnchor.get(probe.anchorId) ?? new Set<string>();
+      directions.add(probe.direction);
+      directionsByAnchor.set(probe.anchorId, directions);
+    }
+    if (
+      directionsByAnchor.size !== value.anchorCount ||
+      [...directionsByAnchor.values()].some((directions) => directions.size !== 6)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["probes"],
+        message: "Structural probe evidence must cover all six directions once per anchor",
+      });
+    }
+    if (
+      value.boundaryProbeCount !== value.boundaryProbes.length ||
+      value.boundaryProbeCount !== value.boundaryCount * 2
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["boundaryProbeCount"],
+        message: "Every reviewed structural barrier must pass two opposing sphere sweeps",
+      });
+    }
+  }).optional(),
 }).superRefine((value, context) => {
+  if (value.schemaVersion === "spatial-navigation-v7") {
+    if (!value.collisionSemantics) {
+      context.addIssue({
+        code: "custom",
+        path: ["collisionSemantics"],
+        message: "V7 requires frozen structural collision semantics",
+      });
+    }
+    if (!value.movementProfiles) {
+      context.addIssue({
+        code: "custom",
+        path: ["movementProfiles"],
+        message: "V7 requires Walk and Fly movement profiles",
+      });
+    }
+    if (!value.structuralValidation) {
+      context.addIssue({
+        code: "custom",
+        path: ["structuralValidation"],
+        message: "V7 requires Rapier evidence that every authored anchor is enclosed by the structural shell",
+      });
+    } else {
+      const expectedAnchors = new Map<string, [number, number, number]>([
+        [value.spawn.id, [
+          value.spawn.projectedPosition[0],
+          value.spawn.projectedPosition[1] + value.agent.eyeHeight,
+          value.spawn.projectedPosition[2],
+        ]],
+        ...value.validation.destinations.map((destination) => [
+          destination.id,
+          [
+            destination.projectedPosition[0],
+            destination.projectedPosition[1] + value.agent.eyeHeight,
+            destination.projectedPosition[2],
+          ] as [number, number, number],
+        ] as const),
+      ]);
+      const actualAnchorIds = new Set(value.structuralValidation.probes.map((probe) => probe.anchorId));
+      if (
+        expectedAnchors.size !== value.validation.destinationCount + 1 ||
+        value.structuralValidation.anchorCount !== expectedAnchors.size ||
+        actualAnchorIds.size !== expectedAnchors.size ||
+        [...expectedAnchors.keys()].some((id) => !actualAnchorIds.has(id)) ||
+        [...actualAnchorIds].some((id) => !expectedAnchors.has(id))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["structuralValidation", "probes"],
+          message: "Structural probe anchors must exactly match the spawn and every published destination",
+        });
+      }
+      if (value.structuralGeometry && (
+        value.structuralValidation.boundaryTopology.method !==
+          "explicit-closed-segment-loops-v1" ||
+        value.structuralValidation.boundaryTopology.loopCount < 1 ||
+        value.structuralValidation.boundaryTopology.floorComponentCount < 1
+      )) {
+        context.addIssue({
+          code: "custom",
+          path: ["structuralValidation", "boundaryTopology"],
+          message: "Operator-authored structural surfaces require proven closed loops around every floor component",
+        });
+      }
+      for (const probe of value.structuralValidation.probes) {
+        const expected = expectedAnchors.get(probe.anchorId);
+        if (!expected || probe.origin.some((coordinate, axis) =>
+          Math.abs(coordinate - expected[axis]!) > 0.001
+        )) {
+          context.addIssue({
+            code: "custom",
+            path: ["structuralValidation", "probes"],
+            message: `Structural probe ${probe.anchorId} has an origin that does not match its frozen navigation anchor`,
+          });
+          break;
+        }
+      }
+      const expectedBarrierIds = new Set(
+        value.structuralGeometry?.barrierSegments.map((barrier) => barrier.id) ?? [],
+      );
+      const sidesByBarrier = new Map<string, Set<number>>();
+      for (const probe of value.structuralValidation.boundaryProbes) {
+        const sides = sidesByBarrier.get(probe.barrierId) ?? new Set<number>();
+        sides.add(probe.side);
+        sidesByBarrier.set(probe.barrierId, sides);
+      }
+      if (
+        value.structuralValidation.boundaryCount !== expectedBarrierIds.size ||
+        sidesByBarrier.size !== expectedBarrierIds.size ||
+        [...expectedBarrierIds].some((id) => {
+          const sides = sidesByBarrier.get(id);
+          return !sides || !sides.has(-1) || !sides.has(1) || sides.size !== 2;
+        }) ||
+        [...sidesByBarrier.keys()].some((id) => !expectedBarrierIds.has(id))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["structuralValidation", "boundaryProbes"],
+          message: "Structural boundary evidence must cover both sides of every frozen barrier",
+        });
+      }
+    }
+    if (value.collisionSemantics?.provenance === "operator_reviewed" && !value.structuralGeometry) {
+      context.addIssue({
+        code: "custom",
+        path: ["structuralGeometry"],
+        message: "Operator-reviewed v7 collision requires explicit v2 floor, ceiling, and barrier metadata",
+      });
+    }
+  }
+  if (value.collisionSemantics && (
+    !value.collisionSemantics.includedGroups.includes("STRUCTURAL_FLOOR") ||
+    !value.collisionSemantics.includedGroups.includes("STRUCTURAL_BARRIER") ||
+    value.collisionSemantics.includedGroups.length !==
+      new Set(value.collisionSemantics.includedGroups).size ||
+    value.collisionSemantics.ignoredGroups.length !== 2 ||
+    new Set(value.collisionSemantics.ignoredGroups).size !== 2 ||
+    !value.collisionSemantics.ignoredGroups.includes("FURNITURE") ||
+    !value.collisionSemantics.ignoredGroups.includes("TRIGGER")
+  )) {
+    context.addIssue({
+      code: "custom",
+      path: ["collisionSemantics"],
+      message: "Structural collision must include floors and barriers while ignoring furniture",
+    });
+  }
+  const dynamicBarrierIds = new Set((value.dynamicBarriers ?? []).map((barrier) => barrier.id));
+  if (
+    dynamicBarrierIds.size !== (value.dynamicBarriers?.length ?? 0) ||
+    value.dynamicBarriers?.some((barrier) =>
+      barrier.min.some((coordinate, axis) => coordinate >= barrier.max[axis]!))
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["dynamicBarriers"],
+      message: "Dynamic barriers require unique ids and strictly ordered bounds",
+    });
+  }
+  if (value.collisionSemantics) {
+    const dynamicGroupIncluded = value.collisionSemantics.includedGroups.includes("DYNAMIC_BARRIER");
+    if (dynamicGroupIncluded !== Boolean(value.dynamicBarriers?.length)) {
+      context.addIssue({
+        code: "custom",
+        path: ["dynamicBarriers"],
+        message: "The DYNAMIC_BARRIER collision group must exactly match the frozen barrier list",
+      });
+    }
+  }
+  if (value.structuralGeometry) {
+    const floorIds = new Set(value.structuralGeometry.floorRectangles.map((surface) => surface.id));
+    const ceilingIds = new Set(value.structuralGeometry.ceilingRectangles.map((surface) => surface.id));
+    const barrierIds = new Set(value.structuralGeometry.barrierSegments.map((barrier) => barrier.id));
+    const authoredDynamicIds = value.structuralGeometry.dynamicBarrierIds;
+    if (
+      floorIds.size !== value.structuralGeometry.floorRectangles.length ||
+      ceilingIds.size !== value.structuralGeometry.ceilingRectangles.length ||
+      value.structuralGeometry.floorRectangles.some((surface) =>
+        surface.min.some((coordinate, axis) => coordinate >= surface.max[axis]!)) ||
+      value.structuralGeometry.ceilingRectangles.some((surface) =>
+        surface.min.some((coordinate, axis) => coordinate >= surface.max[axis]!)) ||
+      barrierIds.size !== value.structuralGeometry.barrierSegments.length ||
+      value.structuralGeometry.barrierSegments.some((barrier) =>
+        barrier.minY >= barrier.maxY ||
+        Math.hypot(
+          barrier.end[0] - barrier.start[0],
+          barrier.end[1] - barrier.start[1],
+        ) <= 0.000001) ||
+      authoredDynamicIds.length !== dynamicBarrierIds.size ||
+      authoredDynamicIds.some((id, index) => id !== value.dynamicBarriers?.[index]?.id)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["structuralGeometry"],
+        message: "Explicit structural geometry requires unique valid surfaces and exact dynamic barrier ids",
+      });
+    }
+  }
   if (value.navMesh.indices.length % 3 !== 0) {
     context.addIssue({
       code: "custom",
@@ -1600,6 +1934,7 @@ export const releaseInputSchema = z.object({
     captureDate: z.string().date().optional(),
     measurementDisclaimer: z.string().trim().min(1).max(500),
     splatBudgetMillions: z.number().min(0.25).max(8).default(2),
+    defaultMovementMode: z.enum(["walk", "fly"]).default("walk"),
     sceneRotationDegrees: z.tuple([
       z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
       z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),

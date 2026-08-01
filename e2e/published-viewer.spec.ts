@@ -436,7 +436,13 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await page.locator("#toggleReleaseInfo").focus();
   await page.keyboard.press("ArrowUp");
   await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
-    () => Reflect.get(window, "movementMessages"),
+    () => Reflect.get(window, "movementMessages") ?? [],
+  )).toEqual([]);
+
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("ArrowUp");
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => Reflect.get(window, "movementMessages") ?? [],
   )).toEqual([
     {
       source: "spatial-host",
