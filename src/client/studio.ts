@@ -9599,6 +9599,7 @@ function renderProjectDetail(): void {
 
   const controls = detailCard("Release controls");
   const latestVersion = detail.versions[0];
+  const releasableVisualVersion = auxiliaryCollisionTargetVersion();
   if (latestVersion?.status === "QA_REQUIRED") {
     const qaButton = element("button", "quiet-button wide", "Run QA approval");
     qaButton.addEventListener("click", () => {
@@ -9610,7 +9611,7 @@ function renderProjectDetail(): void {
     });
     controls.append(qaButton);
   }
-  if (latestVersion?.status === "APPROVED" || latestVersion?.status === "PUBLISHED") {
+  if (releasableVisualVersion) {
     const publishButton = element("button", "primary-button wide", "Publish new release");
     publishButton.addEventListener("click", () => {
       void runAction({

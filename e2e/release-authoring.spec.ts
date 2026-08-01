@@ -4,6 +4,7 @@ const now = "2026-07-31T13:30:00.000Z";
 const organisationId = "11111111-1111-4111-8111-111111111111";
 const projectId = "22222222-2222-4222-8222-222222222222";
 const versionId = "33333333-3333-4333-8333-333333333333";
+const auxiliaryQaVersionId = "99999999-9999-4999-8999-999999999999";
 
 test("release authoring resets project-specific fields and submits scene rotation", async ({ page }) => {
   let publishedBody: Record<string, unknown> | null = null;
@@ -87,10 +88,24 @@ test("release authoring makes visual rotation and reviewed transforms mutually e
   await expect(rotationZ).toBeDisabled();
 });
 
+test("an auxiliary QA version does not hide publishing for the approved visual version", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Run QA approval", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+  await expect(page.locator("#releaseDialog")).toBeVisible();
+});
+
 async function mockApprovedProject(
   page: Page,
   onPublish: (body: Record<string, unknown>) => void,
-  options: { authoredSpatial?: boolean; reviewedTransform?: boolean } = {},
+  options: {
+    authoredSpatial?: boolean;
+    reviewedTransform?: boolean;
+    auxiliaryQaVersion?: boolean;
+  } = {},
 ): Promise<void> {
   const project = {
     id: projectId,
@@ -102,8 +117,8 @@ async function mockApprovedProject(
     notes: "Visual-only Gaussian fixture.",
     customerName: "WhyMe Labs",
     customFields: {},
-    latestVersionId: versionId,
-    latestVersionNumber: 1,
+    latestVersionId: options.auxiliaryQaVersion ? auxiliaryQaVersionId : versionId,
+    latestVersionNumber: options.auxiliaryQaVersion ? 2 : 1,
     activeReleaseSlug: null,
     updatedAt: now,
   };
@@ -146,7 +161,17 @@ async function mockApprovedProject(
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
         project,
-        versions: [{ id: versionId, version_number: 1, status: "APPROVED", created_at: now }],
+        versions: [
+          ...(options.auxiliaryQaVersion
+            ? [{
+              id: auxiliaryQaVersionId,
+              version_number: 2,
+              status: "QA_REQUIRED",
+              created_at: "2026-07-31T14:00:00.000Z",
+            }]
+            : []),
+          { id: versionId, version_number: 1, status: "APPROVED", created_at: now },
+        ],
         assets: [{
           id: "55555555-5555-4555-8555-555555555555",
           version_id: versionId,
