@@ -793,6 +793,21 @@ export const navigationBuildReviewSchema = z.object({
   note: z.string().trim().min(10).max(2000),
 });
 
+const frozenNavigationAssetSchema = <Format extends "json" | "bin">(format: Format) =>
+  z.object({
+    assetId: z.string().uuid(),
+    format: z.literal(format),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    sizeBytes: z.number().int().positive(),
+  });
+
+export const navigationAssetsSchema = z.object({
+  buildId: z.string().uuid(),
+  authoringHash: z.string().regex(/^[a-f0-9]{64}$/i),
+  artifact: frozenNavigationAssetSchema("json"),
+  detour: frozenNavigationAssetSchema("bin"),
+});
+
 export const navigationArtifactSchema = z.object({
   schemaVersion: z.enum(["spatial-navigation-v6", "spatial-navigation-v7"]),
   generator: z.object({
@@ -856,7 +871,11 @@ export const navigationArtifactSchema = z.object({
   }).optional(),
   movementProfiles: z.object({
     defaultMode: z.enum(["walk", "fly"]),
-    supportedModes: z.tuple([z.literal("walk"), z.literal("fly")]),
+    supportedModes: z.tuple([
+      z.literal("walk"),
+      z.literal("fly"),
+      z.literal("noclip"),
+    ]),
     walk: z.object({
       shape: z.literal("capsule"),
       gravity: z.literal(true),
@@ -886,6 +905,25 @@ export const navigationArtifactSchema = z.object({
         "STRUCTURAL_BARRIER",
         "DYNAMIC_BARRIER",
       ])).min(2),
+      input: z.object({
+        forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
+        backward: z.tuple([z.literal("KeyS"), z.literal("ArrowDown")]),
+        left: z.tuple([z.literal("KeyA"), z.literal("ArrowLeft")]),
+        right: z.tuple([z.literal("KeyD"), z.literal("ArrowRight")]),
+        boost: z.tuple([z.literal("ShiftLeft"), z.literal("ShiftRight")]),
+        ascend: z.tuple([z.literal("Space"), z.literal("KeyE")]),
+        descend: z.tuple([z.literal("KeyC"), z.literal("KeyQ")]),
+      }),
+      speedUnitsPerSecond: z.number().positive().max(20),
+      boostMultiplier: z.number().min(1).max(10),
+      recoveryBounds: z.tuple([point3Schema, point3Schema]),
+    }),
+    noclip: z.object({
+      operatorOnly: z.literal(true),
+      shape: z.literal("none"),
+      gravity: z.literal(false),
+      groundSnap: z.literal(false),
+      collisionGroups: z.tuple([]),
       input: z.object({
         forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
         backward: z.tuple([z.literal("KeyS"), z.literal("ArrowDown")]),
@@ -1015,6 +1053,8 @@ export const navigationArtifactSchema = z.object({
     boundaryProbeCount: z.number().int().nonnegative(),
     boundaryProbes: z.array(z.object({
       barrierId: z.string().min(1).max(120),
+      mode: z.enum(["walk", "fly"]),
+      shape: z.enum(["capsule", "sphere"]),
       side: z.union([z.literal(-1), z.literal(1)]),
       origin: point3Schema,
       direction: point3Schema,
@@ -1022,6 +1062,30 @@ export const navigationArtifactSchema = z.object({
       hitDistance: z.number().nonnegative(),
       blocked: z.literal(true),
     })).max(10_000),
+    cornerCount: z.number().int().nonnegative(),
+    cornerProbeCount: z.number().int().nonnegative(),
+    cornerProbes: z.array(z.object({
+      cornerId: z.string().min(1).max(120),
+      origin: point3Schema,
+      requestedEnd: point3Schema,
+      actualEnd: point3Schema,
+      blocked: z.literal(true),
+      remainedInside: z.literal(true),
+    })).max(10_000),
+    dynamicBarrierCount: z.number().int().nonnegative(),
+    dynamicBarrierProbeCount: z.number().int().nonnegative(),
+    dynamicBarrierProbes: z.array(z.object({
+      barrierId: z.string().min(1).max(120),
+      axis: z.enum(["x", "z"]),
+      open: z.object({
+        physicsPassable: z.literal(true),
+        routePassable: z.literal(true),
+      }),
+      closed: z.object({
+        physicsBlocked: z.literal(true),
+        routeBlocked: z.literal(true),
+      }),
+    })).max(500),
     boundaryTopology: z.object({
       passed: z.literal(true),
       method: z.enum([
@@ -1058,12 +1122,32 @@ export const navigationArtifactSchema = z.object({
     }
     if (
       value.boundaryProbeCount !== value.boundaryProbes.length ||
-      value.boundaryProbeCount !== value.boundaryCount * 2
+      value.boundaryProbeCount !== value.boundaryCount * 4
     ) {
       context.addIssue({
         code: "custom",
         path: ["boundaryProbeCount"],
-        message: "Every reviewed structural barrier must pass two opposing sphere sweeps",
+        message: "Every reviewed structural barrier must pass opposing Walk capsule and Fly sphere sweeps",
+      });
+    }
+    if (
+      value.cornerProbeCount !== value.cornerProbes.length ||
+      value.cornerProbeCount !== value.cornerCount
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["cornerProbeCount"],
+        message: "Every reviewed structural corner must pass a capsule slide probe",
+      });
+    }
+    if (
+      value.dynamicBarrierProbeCount !== value.dynamicBarrierProbes.length ||
+      value.dynamicBarrierProbeCount !== value.dynamicBarrierCount
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["dynamicBarrierProbeCount"],
+        message: "Every dynamic barrier must prove synchronized open and closed physics and route state",
       });
     }
   }).optional(),
@@ -1147,10 +1231,16 @@ export const navigationArtifactSchema = z.object({
       const expectedBarrierIds = new Set(
         value.structuralGeometry?.barrierSegments.map((barrier) => barrier.id) ?? [],
       );
-      const sidesByBarrier = new Map<string, Set<number>>();
+      const expectedCornerCount = new Set(
+        value.structuralGeometry?.barrierSegments.flatMap((barrier) => [
+          `${barrier.start[0]},${barrier.start[1]}`,
+          `${barrier.end[0]},${barrier.end[1]}`,
+        ]) ?? [],
+      ).size;
+      const sidesByBarrier = new Map<string, Set<string>>();
       for (const probe of value.structuralValidation.boundaryProbes) {
-        const sides = sidesByBarrier.get(probe.barrierId) ?? new Set<number>();
-        sides.add(probe.side);
+        const sides = sidesByBarrier.get(probe.barrierId) ?? new Set<string>();
+        sides.add(`${probe.mode}:${probe.side}`);
         sidesByBarrier.set(probe.barrierId, sides);
       }
       if (
@@ -1158,7 +1248,9 @@ export const navigationArtifactSchema = z.object({
         sidesByBarrier.size !== expectedBarrierIds.size ||
         [...expectedBarrierIds].some((id) => {
           const sides = sidesByBarrier.get(id);
-          return !sides || !sides.has(-1) || !sides.has(1) || sides.size !== 2;
+          return !sides ||
+            !sides.has("walk:-1") || !sides.has("walk:1") ||
+            !sides.has("fly:-1") || !sides.has("fly:1") || sides.size !== 4;
         }) ||
         [...sidesByBarrier.keys()].some((id) => !expectedBarrierIds.has(id))
       ) {
@@ -1166,6 +1258,32 @@ export const navigationArtifactSchema = z.object({
           code: "custom",
           path: ["structuralValidation", "boundaryProbes"],
           message: "Structural boundary evidence must cover both sides of every frozen barrier",
+        });
+      }
+      if (value.structuralValidation.cornerCount !== expectedCornerCount) {
+        context.addIssue({
+          code: "custom",
+          path: ["structuralValidation", "cornerProbes"],
+          message: "Structural corner evidence must cover every unique frozen barrier endpoint",
+        });
+      }
+      const expectedDynamicBarrierIds = new Set(
+        value.dynamicBarriers?.map((barrier) => barrier.id) ?? [],
+      );
+      const probedDynamicBarrierIds = new Set(
+        value.structuralValidation.dynamicBarrierProbes.map((probe) => probe.barrierId),
+      );
+      if (
+        value.structuralValidation.dynamicBarrierCount !== expectedDynamicBarrierIds.size ||
+        probedDynamicBarrierIds.size !== expectedDynamicBarrierIds.size ||
+        [...expectedDynamicBarrierIds].some((id) => !probedDynamicBarrierIds.has(id)) ||
+        value.structuralValidation.boundaryTopology.dynamicClosureCount !==
+          expectedDynamicBarrierIds.size
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["structuralValidation", "dynamicBarrierProbes"],
+          message: "Dynamic barrier evidence must exactly cover every frozen barrier",
         });
       }
     }

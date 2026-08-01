@@ -145,7 +145,7 @@ describe("Unreal-equivalent navigation artifact", () => {
     );
   });
 
-  it("freezes structural collision semantics and dual movement profiles in v7", async () => {
+  it("freezes structural collision semantics and public plus operator movement profiles in v7", async () => {
     const positions = [];
     const indices = [];
     appendFloor(positions, indices, 0, 0, 6, 4);
@@ -190,7 +190,7 @@ describe("Unreal-equivalent navigation artifact", () => {
     assert.deepEqual(artifact.collisionSemantics.ignoredGroups, ["FURNITURE", "TRIGGER"]);
     assert.deepEqual(artifact.movementProfiles, {
       defaultMode: "walk",
-      supportedModes: ["walk", "fly"],
+      supportedModes: ["walk", "fly", "noclip"],
       walk: {
         shape: "capsule",
         gravity: true,
@@ -212,6 +212,25 @@ describe("Unreal-equivalent navigation artifact", () => {
         gravity: false,
         groundSnap: false,
         collisionGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        input: {
+          forward: ["KeyW", "ArrowUp"],
+          backward: ["KeyS", "ArrowDown"],
+          left: ["KeyA", "ArrowLeft"],
+          right: ["KeyD", "ArrowRight"],
+          boost: ["ShiftLeft", "ShiftRight"],
+          ascend: ["Space", "KeyE"],
+          descend: ["KeyC", "KeyQ"],
+        },
+        speedUnitsPerSecond: 1.6,
+        boostMultiplier: 3,
+        recoveryBounds: [[-0.22, -1.8, -0.22], [6.22, 1.8, 4.22]],
+      },
+      noclip: {
+        operatorOnly: true,
+        shape: "none",
+        gravity: false,
+        groundSnap: false,
+        collisionGroups: [],
         input: {
           forward: ["KeyW", "ArrowUp"],
           backward: ["KeyS", "ArrowDown"],

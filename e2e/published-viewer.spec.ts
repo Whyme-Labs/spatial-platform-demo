@@ -120,6 +120,15 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         eyeHeight: 1.6,
         maxStepMetres: 0.1,
       },
+      navigationArtifact: {
+        schemaVersion: "spatial-navigation-v7",
+        dynamicBarriers: [{
+          id: "door-main-west",
+          min: [-0.15, 0.15, -3.9],
+          max: [0.8, 3, -3.78],
+          defaultActive: false,
+        }],
+      },
     },
   }));
   await page.route("**/api/releases/loading-handoff/telemetry", (route) => json(route, {}));
@@ -231,6 +240,21 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
                   ...(window.movementMessages ?? []),
                   event.data
                 ];
+              }
+              if (event.data?.type === "set-dynamic-barrier-state") {
+                window.dynamicBarrierMessages = [
+                  ...(window.dynamicBarrierMessages ?? []),
+                  event.data
+                ];
+                parent.postMessage({
+                  source: "spatial-spark",
+                  type: "dynamic-barrier-state",
+                  requestId: event.data.requestId,
+                  barrierId: event.data.barrierId,
+                  active: event.data.active,
+                  accepted: true,
+                  message: event.data.barrierId + " is now " + (event.data.active ? "closed" : "open"),
+                }, location.origin);
               }
             });
             setTimeout(() => {
@@ -357,6 +381,20 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
     name: "1. Walk zone",
   }))
     .toBeVisible();
+  await expect(page.locator("#dynamicBarrierSection")).toBeVisible();
+  await expect(page.locator("#dynamicBarrierList")).toContainText("Open · route available");
+  const closeDoor = page.getByRole("button", { name: "Close Main West" });
+  await closeDoor.click();
+  await expect(page.locator("#dynamicBarrierList")).toContainText("Closed · route blocked");
+  await expect(page.getByRole("button", { name: "Open Main West" })).toBeVisible();
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => Reflect.get(window, "dynamicBarrierMessages") ?? [],
+  )).toEqual([expect.objectContaining({
+    source: "spatial-host",
+    type: "set-dynamic-barrier-state",
+    barrierId: "door-main-west",
+    active: true,
+  })]);
   await expect.poll(async () => {
     const [hudBox, viewportBox] = await Promise.all([
       viewerHud.boundingBox(),

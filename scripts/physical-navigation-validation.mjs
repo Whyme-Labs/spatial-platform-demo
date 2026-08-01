@@ -91,7 +91,7 @@ export async function validateStructuralNavigation({
   initialization ??= RAPIER.init();
   await initialization;
   const agent = physicalAgent(artifact);
-  const boundaryTopology = validateStructuralBoundaryTopology(artifact);
+  const boundaryTopologyResult = validateStructuralBoundaryTopology(artifact);
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   try {
     world.createCollider(RAPIER.ColliderDesc.trimesh(
@@ -185,45 +185,68 @@ export async function validateStructuralNavigation({
         (barrier.minY + barrier.maxY) / 2,
         (barrier.start[1] + barrier.end[1]) / 2,
       ];
-      const probeRadius = Math.max(0.004, Math.min(agent.radius * 0.2, length * 0.2, 0.04));
-      const originDistance = Math.max(agent.radius * 1.5, probeRadius * 3);
+      const probeRadius = agent.radius * 0.98;
+      const capsuleHalfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
+      const originDistance = Math.max(agent.radius * 2.25, 0.08);
       const travelDistance = originDistance * 2;
-      for (const side of [-1, 1]) {
-        const origin = midpoint.map((coordinate, axis) =>
-          coordinate + normal[axis] * originDistance * side);
-        const direction = normal.map((coordinate) => -coordinate * side);
-        const hit = world.castShape(
-          toVector(origin),
-          { x: 0, y: 0, z: 0, w: 1 },
-          toVector(direction),
-          new RAPIER.Ball(probeRadius),
-          0,
-          travelDistance,
-          true,
-          undefined,
-          undefined,
-          collider,
-          body,
-        );
-        if (!hit) {
-          throw structuralFailure(barrier.id, "Reviewed barrier failed its bidirectional sphere sweep", {
+      if (barrier.maxY - barrier.minY + 1e-6 < agent.height) {
+        throw structuralFailure(barrier.id, "Reviewed barrier is shorter than the production Walk capsule");
+      }
+      for (const [mode, shape, originY] of [
+        ["walk", new RAPIER.Capsule(capsuleHalfHeight, probeRadius), barrier.minY + agent.height / 2 + 0.002],
+        ["fly", new RAPIER.Ball(probeRadius), midpoint[1]],
+      ]) {
+        for (const side of [-1, 1]) {
+          const origin = midpoint.map((coordinate, axis) =>
+            axis === 1 ? originY : coordinate + normal[axis] * originDistance * side);
+          const direction = normal.map((coordinate) => -coordinate * side);
+          const hit = world.castShape(
+            toVector(origin),
+            { x: 0, y: 0, z: 0, w: 1 },
+            toVector(direction),
+            shape,
+            0,
+            travelDistance,
+            true,
+            undefined,
+            undefined,
+            collider,
+            body,
+          );
+          if (!hit) {
+            throw structuralFailure(barrier.id, `Reviewed barrier failed its ${mode} sweep`, {
+              mode,
+              side,
+              origin: roundedPoint(origin),
+              direction: roundedPoint(direction),
+              requestedDistance: round(travelDistance),
+            });
+          }
+          boundaryProbes.push({
+            barrierId: barrier.id,
+            mode,
+            shape: mode === "walk" ? "capsule" : "sphere",
             side,
             origin: roundedPoint(origin),
             direction: roundedPoint(direction),
             requestedDistance: round(travelDistance),
+            hitDistance: round(hit.time_of_impact),
+            blocked: true,
           });
         }
-        boundaryProbes.push({
-          barrierId: barrier.id,
-          side,
-          origin: roundedPoint(origin),
-          direction: roundedPoint(direction),
-          requestedDistance: round(travelDistance),
-          hitDistance: round(hit.time_of_impact),
-          blocked: true,
-        });
       }
     }
+    const cornerProbes = validateCornerSlides({
+      world,
+      artifact,
+      agent,
+      loops: boundaryTopologyResult.loops,
+    });
+    const dynamicBarrierProbes = await validateDynamicBarrierState({
+      world,
+      artifact,
+      agent,
+    });
     world.removeCharacterController(controller);
     return {
       passed: true,
@@ -239,7 +262,16 @@ export async function validateStructuralNavigation({
       boundaryCount: barriers.length,
       boundaryProbeCount: boundaryProbes.length,
       boundaryProbes,
-      boundaryTopology,
+      cornerCount: cornerProbes.length,
+      cornerProbeCount: cornerProbes.length,
+      cornerProbes,
+      dynamicBarrierCount: dynamicBarrierProbes.length,
+      dynamicBarrierProbeCount: dynamicBarrierProbes.length,
+      dynamicBarrierProbes,
+      boundaryTopology: {
+        ...boundaryTopologyResult.summary,
+        dynamicClosureCount: dynamicBarrierProbes.length,
+      },
     };
   } finally {
     world.free();
@@ -250,11 +282,14 @@ function validateStructuralBoundaryTopology(artifact) {
   const geometry = artifact?.structuralGeometry;
   if (!geometry) {
     return {
-      passed: true,
-      method: "registered-mesh-anchor-enclosure",
-      loopCount: 0,
-      floorComponentCount: 0,
-      dynamicClosureCount: 0,
+      summary: {
+        passed: true,
+        method: "registered-mesh-anchor-enclosure",
+        loopCount: 0,
+        floorComponentCount: 0,
+        dynamicClosureCount: 0,
+      },
+      loops: [],
     };
   }
   const nodes = new Map();
@@ -328,12 +363,290 @@ function validateStructuralBoundaryTopology(artifact) {
     }
   }
   return {
-    passed: true,
-    method: "explicit-closed-segment-loops-v1",
-    loopCount: loops.length,
-    floorComponentCount: floorComponents.length,
-    dynamicClosureCount: 0,
+    summary: {
+      passed: true,
+      method: "explicit-closed-segment-loops-v1",
+      loopCount: loops.length,
+      floorComponentCount: floorComponents.length,
+      dynamicClosureCount: 0,
+    },
+    loops,
   };
+}
+
+function validateCornerSlides({
+  world,
+  artifact,
+  agent,
+  loops,
+}) {
+  if (!loops.length) return [];
+  const halfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
+  const shape = new RAPIER.Capsule(halfHeight, agent.radius);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+  const collider = world.createCollider(RAPIER.ColliderDesc.capsule(halfHeight, agent.radius), body);
+  const controller = world.createCharacterController(
+    Math.max(0.002, Math.min(0.02, agent.radius * 0.05)),
+  );
+  controller.setSlideEnabled(true);
+  controller.enableAutostep(agent.maxClimb, Math.max(agent.radius * 0.5, 0.05), false);
+  controller.enableSnapToGround(Math.max(agent.maxClimb, 0.05));
+  controller.setMaxSlopeClimbAngle(degreesToRadians(agent.maxSlopeDegrees));
+  controller.setMinSlopeSlideAngle(degreesToRadians(Math.min(89, agent.maxSlopeDegrees + 5)));
+  const probes = [];
+  try {
+    for (const [loopIndex, loop] of loops.entries()) {
+      for (const [cornerIndex, corner] of loop.entries()) {
+        const cornerId = `loop-${loopIndex + 1}-corner-${cornerIndex + 1}`;
+        const offset = Math.max(agent.radius * 2.6, 0.35);
+        let selected = null;
+        for (let sample = 0; sample < 32; sample += 1) {
+          const angle = sample / 32 * Math.PI * 2;
+          const origin2 = [
+            corner[0] + Math.cos(angle) * offset,
+            corner[1] + Math.sin(angle) * offset,
+          ];
+          const requestedEnd2 = [
+            corner[0] - Math.cos(angle) * offset,
+            corner[1] - Math.sin(angle) * offset,
+          ];
+          if (!pointInPolygon2(origin2, loop) || pointInPolygon2(requestedEnd2, loop)) continue;
+          const floorElevation = floorElevationAt(
+            artifact.structuralGeometry?.floorRectangles ?? [],
+            origin2,
+          );
+          if (floorElevation === null) continue;
+          const center = [origin2[0], floorElevation + agent.height / 2 + 0.002, origin2[1]];
+          const overlap = world.intersectionWithShape(
+            toVector(center),
+            { x: 0, y: 0, z: 0, w: 1 },
+            shape,
+            undefined,
+            undefined,
+            collider,
+            body,
+          );
+          if (!overlap) {
+            selected = { origin2, requestedEnd2, floorElevation, center };
+            break;
+          }
+        }
+        if (!selected) {
+          throw structuralFailure(cornerId, "No player-sized interior origin could exercise this corner");
+        }
+        body.setTranslation(toVector(selected.center), true);
+        world.step();
+        const desired = [
+          selected.requestedEnd2[0] - selected.origin2[0],
+          0,
+          selected.requestedEnd2[1] - selected.origin2[1],
+        ];
+        controller.computeColliderMovement(collider, toVector(desired));
+        const corrected = controller.computedMovement();
+        const actualEnd = [
+          selected.origin2[0] + corrected.x,
+          selected.floorElevation,
+          selected.origin2[1] + corrected.z,
+        ];
+        const requestedDistance = Math.hypot(desired[0], desired[2]);
+        const actualDistance = Math.hypot(corrected.x, corrected.z);
+        const actualPoint2 = [actualEnd[0], actualEnd[2]];
+        const remainedInside = pointInPolygon2(actualPoint2, loop) ||
+          distanceToPolygon2(actualPoint2, loop) <= Math.max(0.01, agent.radius * 0.15);
+        const blocked = actualDistance < requestedDistance - Math.max(0.02, agent.radius * 0.2);
+        if (!blocked || !remainedInside) {
+          throw structuralFailure(cornerId, "Walk capsule tunneled through a reviewed structural corner", {
+            origin: roundedPoint([selected.origin2[0], selected.floorElevation, selected.origin2[1]]),
+            requestedEnd: roundedPoint([
+              selected.requestedEnd2[0],
+              selected.floorElevation,
+              selected.requestedEnd2[1],
+            ]),
+            actualEnd: roundedPoint(actualEnd),
+          });
+        }
+        probes.push({
+          cornerId,
+          origin: roundedPoint([selected.origin2[0], selected.floorElevation, selected.origin2[1]]),
+          requestedEnd: roundedPoint([
+            selected.requestedEnd2[0],
+            selected.floorElevation,
+            selected.requestedEnd2[1],
+          ]),
+          actualEnd: roundedPoint(actualEnd),
+          blocked: true,
+          remainedInside: true,
+        });
+      }
+    }
+  } finally {
+    world.removeCharacterController(controller);
+    world.removeCollider(collider, true);
+    world.removeRigidBody(body);
+  }
+  return probes;
+}
+
+async function validateDynamicBarrierState({
+  world,
+  artifact,
+  agent,
+}) {
+  const barriers = artifact.dynamicBarriers ?? [];
+  if (!barriers.length) return [];
+  const runtime = await importNavigationArtifact(artifact);
+  const probes = [];
+  try {
+    for (const barrier of barriers) {
+      const extentX = barrier.max[0] - barrier.min[0];
+      const extentZ = barrier.max[2] - barrier.min[2];
+      const axis = extentX <= extentZ ? "x" : "z";
+      const axisIndex = axis === "x" ? 0 : 2;
+      const center = barrier.min.map((coordinate, index) => (coordinate + barrier.max[index]) / 2);
+      const floorElevation = floorElevationAt(
+        artifact.structuralGeometry?.floorRectangles ?? [],
+        [center[0], center[2]],
+      );
+      if (floorElevation === null) {
+        throw structuralFailure(barrier.id, "Dynamic barrier has no reviewed floor beneath it");
+      }
+      const clearance = (barrier.max[axisIndex] - barrier.min[axisIndex]) / 2 +
+        agent.radius * 2 + Math.max(0.04, artifact.build.cellSize);
+      const start = [center[0], floorElevation, center[2]];
+      const end = [center[0], floorElevation, center[2]];
+      start[axisIndex] -= clearance;
+      end[axisIndex] += clearance;
+      const route = runtime.path(start, end);
+      if (!route || route.length < 2 || !pathIntersectsExpandedBox(route, barrier, agent.radius)) {
+        throw structuralFailure(
+          barrier.id,
+          "Dynamic barrier does not gate a complete Detour route in its open state",
+        );
+      }
+      const halfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
+      const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+      const collider = world.createCollider(
+        RAPIER.ColliderDesc.capsule(halfHeight, agent.radius),
+        body,
+      );
+      const controller = world.createCharacterController(
+        Math.max(0.002, Math.min(0.02, agent.radius * 0.05)),
+      );
+      controller.setSlideEnabled(true);
+      controller.enableAutostep(agent.maxClimb, Math.max(agent.radius * 0.5, 0.05), false);
+      controller.enableSnapToGround(Math.max(agent.maxClimb, 0.05));
+      const dynamicCollider = addBoxCollider(world, barrier.min, barrier.max);
+      const startCenter = feetToCenter(start, agent.height);
+      const desired = end.map((coordinate, index) => coordinate - start[index]);
+      const requestedDistance = Math.hypot(desired[0], desired[2]);
+      try {
+        dynamicCollider.setEnabled(false);
+        body.setTranslation(startCenter, true);
+        world.step();
+        controller.computeColliderMovement(collider, toVector(desired));
+        const openMovement = controller.computedMovement();
+        const openDistance = Math.hypot(openMovement.x, openMovement.z);
+        if (openDistance < requestedDistance - Math.max(0.04, artifact.build.cellSize)) {
+          throw structuralFailure(barrier.id, "Open dynamic barrier did not permit the production Walk capsule");
+        }
+        dynamicCollider.setEnabled(true);
+        body.setTranslation(startCenter, true);
+        world.step();
+        controller.computeColliderMovement(collider, toVector(desired));
+        const closedMovement = controller.computedMovement();
+        const closedDistance = Math.hypot(closedMovement.x, closedMovement.z);
+        if (closedDistance >= requestedDistance - Math.max(0.04, agent.radius * 0.2)) {
+          throw structuralFailure(barrier.id, "Closed dynamic barrier did not block the production Walk capsule");
+        }
+      } finally {
+        world.removeCharacterController(controller);
+        world.removeCollider(dynamicCollider, true);
+        world.removeCollider(collider, true);
+        world.removeRigidBody(body);
+      }
+      probes.push({
+        barrierId: barrier.id,
+        axis,
+        open: { physicsPassable: true, routePassable: true },
+        closed: { physicsBlocked: true, routeBlocked: true },
+      });
+    }
+  } finally {
+    runtime.destroy();
+  }
+  return probes;
+}
+
+function floorElevationAt(rectangles, point) {
+  const elevations = rectangles
+    .filter((rectangle) =>
+      point[0] >= rectangle.min[0] - 1e-6 && point[0] <= rectangle.max[0] + 1e-6 &&
+      point[1] >= rectangle.min[1] - 1e-6 && point[1] <= rectangle.max[1] + 1e-6)
+    .map((rectangle) => rectangle.elevation);
+  return elevations.length ? Math.max(...elevations) : null;
+}
+
+function pathIntersectsExpandedBox(path, barrier, radius) {
+  const min = [barrier.min[0] - radius, barrier.min[2] - radius];
+  const max = [barrier.max[0] + radius, barrier.max[2] + radius];
+  return path.slice(1).some((end, index) => segmentIntersectsBox2(
+    [path[index][0], path[index][2]],
+    [end[0], end[2]],
+    min,
+    max,
+  ));
+}
+
+function segmentIntersectsBox2(start, end, min, max) {
+  let entry = 0;
+  let exit = 1;
+  for (let axis = 0; axis < 2; axis += 1) {
+    const delta = end[axis] - start[axis];
+    if (Math.abs(delta) <= 1e-9) {
+      if (start[axis] < min[axis] || start[axis] > max[axis]) return false;
+      continue;
+    }
+    const first = (min[axis] - start[axis]) / delta;
+    const second = (max[axis] - start[axis]) / delta;
+    entry = Math.max(entry, Math.min(first, second));
+    exit = Math.min(exit, Math.max(first, second));
+    if (entry > exit) return false;
+  }
+  return true;
+}
+
+function distanceToPolygon2(point, polygon) {
+  let minimum = Infinity;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    minimum = Math.min(minimum, distanceToSegment2(point, start, end));
+  }
+  return minimum;
+}
+
+function distanceToSegment2(point, start, end) {
+  const deltaX = end[0] - start[0];
+  const deltaY = end[1] - start[1];
+  const denominator = deltaX * deltaX + deltaY * deltaY;
+  const amount = denominator
+    ? Math.max(0, Math.min(1, ((point[0] - start[0]) * deltaX + (point[1] - start[1]) * deltaY) / denominator))
+    : 0;
+  return Math.hypot(
+    point[0] - (start[0] + deltaX * amount),
+    point[1] - (start[1] + deltaY * amount),
+  );
+}
+
+function addBoxCollider(world, min, max) {
+  const half = min.map((coordinate, axis) => (max[axis] - coordinate) / 2);
+  return world.createCollider(
+    RAPIER.ColliderDesc.cuboid(half[0], half[1], half[2]).setTranslation(
+      (min[0] + max[0]) / 2,
+      (min[1] + max[1]) / 2,
+      (min[2] + max[2]) / 2,
+    ),
+  );
 }
 
 function addBoundaryNode(nodes, key, point, neighbour) {

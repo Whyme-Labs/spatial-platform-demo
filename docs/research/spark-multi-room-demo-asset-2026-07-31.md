@@ -220,7 +220,7 @@ version v3 bakes the same 180-degree correction into an immutable PLY and
 rebuilds RAD from that master. Navigation version v6 adds the reviewed
 provisional whole-home walking evidence.
 
-### Current production walkable release verification
+### Previous production v6 walkable release verification
 
 The corrected walkable release was published and independently re-opened from
 the public channel on 2026-08-01:
@@ -270,6 +270,53 @@ credential was revoked after the immutable PLY and derivatives were verified.
 
 Earlier visual-only and partially connected releases remain in immutable
 history, but they are no longer the active channel target.
+
+### Current production v7 Walk + Fly release verification
+
+The collision-driven v7 release replaced v6 on the same public channel on
+2026-08-01:
+
+- public viewer: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
+- project: `8575b01f-af96-401f-a245-3013fda91706`;
+- immutable visual version: `fcdbecb7-3042-40d1-a96b-1bbc4fc3913c`;
+- active release: `a47d8019-d735-4e55-8c61-63e807657478`;
+- structural collision asset: `b9a112b2-e094-4f67-9c6b-1697f97869ea`;
+- collision SHA-256:
+  `ba5cb1ef2e6606c5ecd9eb17ed979278d63a8da44838524638a7563b81d73be8`;
+- production navigation build: `90e34596-78f7-4a26-823e-35f61d6dc565`;
+- production navigation authoring hash:
+  `05e3aaa0567c5010f168d17a6a5bce71e07fa4fde9831dee6a565793dd8ab9da`;
+- immutable validation report asset:
+  `9fbfae7a-735d-4f94-8903-a9496f977c99`, 119,037 bytes, SHA-256
+  `a126db4404ac956a30560191ab1456cebf2b47da03fbbfbddc3997fcd5b08274`;
+- immutable Detour binary asset:
+  `b820b3d4-b1cf-4b6a-96bd-294fdc58dc24`, 6,536 bytes, SHA-256
+  `c82ec28567daa04d44b347e63f497ba65a34164ffae89744504088fc9e25ea2d`.
+
+The public manifest freezes `spatial-navigation-v7`, a 112-triangle,
+224-vertex operator-reviewed structural shell, explicit floor, ceiling, wall,
+and dynamic-door groups, ignored furniture, public Walk and Fly movement
+profiles, and two synchronized door barriers that default open. An additional
+Noclip profile is frozen as operator-only and is not exposed to public users.
+The v7 artifact reports one raw collision component, one Detour component,
+four reachable room destinations in both directions, eight passing Rapier
+capsule route replays, 30 passing six-direction shell probes across five
+anchors, 144 passing production-shape sweeps across all 36 reviewed walls, 36
+passing capsule corner-slide probes, and two door proofs that each establish
+open physics/route passability and closed physics/route blocking. The public
+connectivity verifier independently reported four primary regions, five
+connectors, and one component and rechecked both navigation derivative hashes.
+
+Production Chrome then loaded `Scene ready`; moved the floor-plan camera marker
+with real ArrowUp input; accepted Space/C ascent and descent in Fly mode;
+converged to an unchanged view after repeated ascent at the authored ceiling;
+changed the view again on descent; returned to Walk at the opening pose; and
+rendered the four-room floor plan, two door controls, release HUD, help panel,
+and toolbar without overlap. Closing and reopening Main West changed its UI
+between `Closed · route blocked` and `Open · route available`. The release
+retains the 4M desktop splat budget and opening camera
+`[3.433, 1.75, -2.433]` looking toward `[2.433, 1.75, -2.433]`. All coordinates
+remain provisional scene units, not metric or survey evidence.
 
 `@playcanvas/splat-transform` must remain an offline evaluation bridge only.
 The production FJD/XGRIDS path should accept a creator/vendor export in a

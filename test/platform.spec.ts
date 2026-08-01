@@ -2175,7 +2175,11 @@ describe("Spatial Studio Worker", () => {
     const collisionAssetId = crypto.randomUUID();
     const navigationJobId = crypto.randomUUID();
     const navigationBuildId = crypto.randomUUID();
+    const navigationReportAssetId = crypto.randomUUID();
+    const navigationDetourAssetId = crypto.randomUUID();
     const collisionSha256 = "d".repeat(64);
+    const navigationReportSha256 = "a".repeat(64);
+    const navigationDetourSha256 = "b".repeat(64);
     const navigationAuthoringHash = await sha256Hex(JSON.stringify({
       profile: {
         worldUnit: "metres",
@@ -2332,7 +2336,7 @@ describe("Spatial Studio Worker", () => {
       },
       movementProfiles: {
         defaultMode: "walk",
-        supportedModes: ["walk", "fly"],
+        supportedModes: ["walk", "fly", "noclip"],
         walk: {
           shape: "capsule",
           gravity: true,
@@ -2356,6 +2360,25 @@ describe("Spatial Studio Worker", () => {
             forward: ["KeyW", "ArrowUp"], backward: ["KeyS", "ArrowDown"],
             left: ["KeyA", "ArrowLeft"], right: ["KeyD", "ArrowRight"],
             boost: ["ShiftLeft", "ShiftRight"], ascend: ["Space", "KeyE"],
+            descend: ["KeyC", "KeyQ"],
+          },
+          speedUnitsPerSecond: 1.6,
+          boostMultiplier: 3,
+          recoveryBounds: [[-0.22, -1.8, -0.22], [4.22, 4.4, 4.22]],
+        },
+        noclip: {
+          operatorOnly: true,
+          shape: "none",
+          gravity: false,
+          groundSnap: false,
+          collisionGroups: [],
+          input: {
+            forward: ["KeyW", "ArrowUp"],
+            backward: ["KeyS", "ArrowDown"],
+            left: ["KeyA", "ArrowLeft"],
+            right: ["KeyD", "ArrowRight"],
+            boost: ["ShiftLeft", "ShiftRight"],
+            ascend: ["Space", "KeyE"],
             descend: ["KeyC", "KeyQ"],
           },
           speedUnitsPerSecond: 1.6,
@@ -2390,16 +2413,32 @@ describe("Spatial Studio Worker", () => {
           })),
         ],
         boundaryCount: 1,
-        boundaryProbeCount: 2,
-        boundaryProbes: [-1, 1].map((side) => ({
-          barrierId: "wall",
-          side,
-          origin: [0.3 * side, 1.3, 2],
-          direction: [-side, 0, 0],
-          requestedDistance: 0.6,
-          hitDistance: 0.3,
+        boundaryProbeCount: 4,
+        boundaryProbes: (["walk", "fly"] as const).flatMap((mode) =>
+          [-1, 1].map((side) => ({
+            barrierId: "wall",
+            mode,
+            shape: mode === "walk" ? "capsule" as const : "sphere" as const,
+            side,
+            origin: [0.3 * side, 1.3, 2],
+            direction: [-side, 0, 0],
+            requestedDistance: 0.6,
+            hitDistance: 0.3,
+            blocked: true,
+          }))),
+        cornerCount: 2,
+        cornerProbeCount: 2,
+        cornerProbes: [0, 4].map((z, index) => ({
+          cornerId: `wall-corner-${index + 1}`,
+          origin: [0.3, 0, z + (index ? -0.3 : 0.3)],
+          requestedEnd: [-0.3, 0, z + (index ? 0.3 : -0.3)],
+          actualEnd: [0.22, 0, z],
           blocked: true,
+          remainedInside: true,
         })),
+        dynamicBarrierCount: 0,
+        dynamicBarrierProbeCount: 0,
+        dynamicBarrierProbes: [],
         boundaryTopology: {
           passed: true,
           method: "explicit-closed-segment-loops-v1",
@@ -2440,11 +2479,40 @@ describe("Spatial Studio Worker", () => {
         `navigation-build-fixture:${navigationBuildId}`,
       ),
       env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, etag, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'report', 'json', ?, 'navigation.json',
+          'application/json', 2048, 'report-etag', ?, 'verified')
+      `).bind(
+        navigationReportAssetId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        `reports-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/navigation.json`,
+        navigationReportSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, etag, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'navmesh', 'bin', ?, 'navigation.bin',
+          'application/octet-stream', 64, 'detour-etag', ?, 'verified')
+      `).bind(
+        navigationDetourAssetId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        `delivery-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/navigation.bin`,
+        navigationDetourSha256,
+      ),
+      env.DB.prepare(`
         INSERT INTO scene_navigation_builds (
           id, organisation_id, project_id, version_id, collision_asset_id,
-          job_id, status, parameters_json, artifact_json, client_operation_id,
+          job_id, status, parameters_json, artifact_json, navmesh_asset_id,
+          report_asset_id, client_operation_id,
           request_hash, authoring_hash, created_by, reviewed_by, review_note, reviewed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', '{}', ?, ?, ?, ?, ?, ?,
+        ) VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', '{}', ?, ?, ?, ?, ?, ?, ?, ?,
           'Reviewed whole-scene reachability and capsule-collision evidence.', datetime('now'))
       `).bind(
         navigationBuildId,
@@ -2454,6 +2522,8 @@ describe("Spatial Studio Worker", () => {
         collisionAssetId,
         navigationJobId,
         JSON.stringify(navigationArtifact),
+        navigationDetourAssetId,
+        navigationReportAssetId,
         crypto.randomUUID(),
         "e".repeat(64),
         navigationAuthoringHash,
@@ -2572,6 +2642,12 @@ describe("Spatial Studio Worker", () => {
           source: { assetId: string };
           physicalValidation: { passed: boolean; routeCount: number };
         };
+        navigationAssets: {
+          buildId: string;
+          authoringHash: string;
+          artifact: { assetId: string; format: "json"; sha256: string; sizeBytes: number };
+          detour: { assetId: string; format: "bin"; sha256: string; sizeBytes: number };
+        };
       };
       viewer: {
         initialCamera: {
@@ -2609,6 +2685,22 @@ describe("Spatial Studio Worker", () => {
       source: { assetId: collisionAssetId },
       physicalValidation: { passed: true, routeCount: 2 },
     });
+    expect(manifest.spatial.navigationAssets).toEqual({
+      buildId: navigationBuildId,
+      authoringHash: navigationAuthoringHash,
+      artifact: {
+        assetId: navigationReportAssetId,
+        format: "json",
+        sha256: navigationReportSha256,
+        sizeBytes: 2048,
+      },
+      detour: {
+        assetId: navigationDetourAssetId,
+        format: "bin",
+        sha256: navigationDetourSha256,
+        sizeBytes: 64,
+      },
+    });
     expect(manifest.spatial.obstacleProxy).toEqual({
       version: "authored-obstacle-boxes-v1",
       boxes: [{
@@ -2630,6 +2722,18 @@ describe("Spatial Studio Worker", () => {
     });
     await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
       .bind(collisionSha256, collisionAssetId).run();
+
+    await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
+      .bind("f".repeat(64), navigationDetourAssetId).run();
+    const mismatchedNavigationManifest = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(mismatchedNavigationManifest.status).toBe(409);
+    await expect(mismatchedNavigationManifest.json()).resolves.toMatchObject({
+      error: expect.stringContaining("navigation derivative failed integrity verification"),
+    });
+    await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
+      .bind(navigationDetourSha256, navigationDetourAssetId).run();
 
     const archiveSnapshotEntity = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities/${snapshotEntity.entity.id}`,

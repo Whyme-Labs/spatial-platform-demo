@@ -139,6 +139,12 @@ type ReleaseManifest = {
       maxStepMetres: number;
     };
     navigationArtifact?: Record<string, unknown> | null;
+    navigationAssets?: {
+      buildId: string;
+      authoringHash: string;
+      artifact: { assetId: string; format: "json"; sha256: string; sizeBytes: number };
+      detour: { assetId: string; format: "bin"; sha256: string; sizeBytes: number };
+    } | null;
   };
   deliveryPolicy?: {
     adaptive_quality: number;
@@ -218,6 +224,15 @@ type SparkRendererMessage =
       type: "control-help";
       visible: boolean;
       height: number;
+    }
+  | {
+      source: "spatial-spark";
+      type: "dynamic-barrier-state";
+      requestId: string;
+      barrierId: string;
+      active: boolean;
+      accepted: boolean;
+      message: string;
     };
 type SpatialRendererMessage = SparkRendererMessage;
 
@@ -254,6 +269,12 @@ const cameraMoveRequests = new Map<string, {
   reject: (error: Error) => void;
   timeout: number;
 }>();
+const dynamicBarrierRequests = new Map<string, {
+  resolve: (state: { barrierId: string; active: boolean; message: string }) => void;
+  reject: (error: Error) => void;
+  timeout: number;
+}>();
+const activeDynamicBarriers = new Map<string, boolean>();
 const reviewMode = location.pathname.startsWith("/review/");
 
 if (activeReleaseSlug) {
@@ -296,6 +317,12 @@ async function loadPublishedRelease(): Promise<void> {
 async function loadPublishedReleaseOnce(): Promise<void> {
   const slug = releaseSlug();
   if (!slug) return;
+  for (const [requestId, pending] of dynamicBarrierRequests) {
+    window.clearTimeout(pending.timeout);
+    pending.reject(new Error("The scene reloaded before the door state was applied."));
+    dynamicBarrierRequests.delete(requestId);
+  }
+  activeDynamicBarriers.clear();
   setLoading(true, "Authorising scene release…");
   rendererReady = false;
   setNavigatorReady(false);
@@ -386,6 +413,23 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     }
     return;
   }
+  if (message.type === "dynamic-barrier-state") {
+    const pending = dynamicBarrierRequests.get(message.requestId);
+    if (!pending) return;
+    window.clearTimeout(pending.timeout);
+    dynamicBarrierRequests.delete(message.requestId);
+    if (!message.accepted) {
+      pending.reject(new Error(message.message));
+      return;
+    }
+    activeDynamicBarriers.set(message.barrierId, message.active);
+    pending.resolve({
+      barrierId: message.barrierId,
+      active: message.active,
+      message: message.message,
+    });
+    return;
+  }
   if (message.source === "spatial-spark" && message.type === "control-mode") {
     byId("viewport").classList.toggle("mobile-free-roam-active", message.mode === "free-roam");
     return;
@@ -453,7 +497,8 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
-      type === "control-onboarding" || type === "control-help");
+      type === "control-onboarding" || type === "control-help" ||
+      type === "dynamic-barrier-state");
 }
 
 function publishedRendererUrl(manifest: ReleaseManifest): URL {
@@ -596,6 +641,7 @@ function hasSpatialNavigation(
   return Boolean(
     floorPlans.length ||
     spatial?.routes.length ||
+    dynamicBarriersFromManifest(manifest).length ||
     spatial?.entities.some((entity) => entity.kind === "room" || entity.kind === "poi"),
   );
 }
@@ -614,6 +660,7 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   }
   renderFloorPlanSelector();
   renderActiveFloorPlan();
+  renderDynamicBarrierControls(manifest);
   const trigger = byId<HTMLButtonElement>("openNavigator");
   if (!hasSpatialNavigation(manifest, activeFloorPlans)) {
     trigger.hidden = true;
@@ -693,6 +740,111 @@ function renderSpatialNavigator(manifest: ReleaseManifest): void {
   }
 }
 
+type ViewerDynamicBarrier = {
+  id: string;
+  defaultActive: boolean;
+};
+
+function dynamicBarriersFromManifest(manifest: ReleaseManifest | null): ViewerDynamicBarrier[] {
+  const artifact = manifest?.spatial?.navigationArtifact;
+  if (!artifact || typeof artifact !== "object") return [];
+  const raw = Reflect.get(artifact, "dynamicBarriers");
+  if (!Array.isArray(raw)) return [];
+  const ids = new Set<string>();
+  return raw.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const id = typeof Reflect.get(value, "id") === "string"
+      ? String(Reflect.get(value, "id"))
+      : "";
+    const defaultActive = Reflect.get(value, "defaultActive");
+    if (!id || ids.has(id) || typeof defaultActive !== "boolean") return [];
+    ids.add(id);
+    return [{ id, defaultActive }];
+  });
+}
+
+function renderDynamicBarrierControls(manifest: ReleaseManifest): void {
+  const section = byId<HTMLElement>("dynamicBarrierSection");
+  const list = byId<HTMLElement>("dynamicBarrierList");
+  const barriers = dynamicBarriersFromManifest(manifest);
+  const currentIds = new Set(barriers.map((barrier) => barrier.id));
+  for (const id of activeDynamicBarriers.keys()) {
+    if (!currentIds.has(id)) activeDynamicBarriers.delete(id);
+  }
+  list.replaceChildren();
+  section.hidden = barriers.length === 0;
+  for (const barrier of barriers) {
+    if (!activeDynamicBarriers.has(barrier.id)) {
+      activeDynamicBarriers.set(barrier.id, barrier.defaultActive);
+    }
+    const row = document.createElement("div");
+    row.className = "dynamic-barrier-row";
+    const copy = document.createElement("div");
+    copy.className = "dynamic-barrier-copy";
+    const label = document.createElement("strong");
+    label.textContent = dynamicBarrierLabel(barrier.id);
+    const state = document.createElement("span");
+    const currentState = () => activeDynamicBarriers.get(barrier.id) === true;
+    state.textContent = currentState() ? "Closed · route blocked" : "Open · route available";
+    copy.append(label, state);
+    const button = document.createElement("button");
+    button.className = "dynamic-barrier-toggle";
+    button.type = "button";
+    button.disabled = !rendererReady;
+    const idleLabel = () => currentState() ? "Open" : "Close";
+    button.textContent = idleLabel();
+    button.setAttribute("aria-label", `${idleLabel()} ${dynamicBarrierLabel(barrier.id)}`);
+    button.addEventListener("click", () => {
+      const requestedActive = !currentState();
+      void runAction({
+        key: `dynamic-barrier:${barrier.id}`,
+        trigger: button,
+        pendingLabel: requestedActive ? "Closing…" : "Opening…",
+        idleLabel,
+        errorTarget: byId<HTMLElement>("navigatorError"),
+      }, async () => {
+        const result = await setDynamicBarrierState(barrier.id, requestedActive);
+        state.textContent = result.active ? "Closed · route blocked" : "Open · route available";
+        button.setAttribute("aria-label", `${idleLabel()} ${dynamicBarrierLabel(barrier.id)}`);
+        showToast(result.message);
+      });
+    });
+    row.append(copy, button);
+    list.append(row);
+  }
+}
+
+function dynamicBarrierLabel(id: string): string {
+  return id
+    .replace(/^door[-_]?/i, "")
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join(" ") || "Authored door";
+}
+
+function setDynamicBarrierState(
+  barrierId: string,
+  active: boolean,
+): Promise<{ barrierId: string; active: boolean; message: string }> {
+  if (!rendererReady) return Promise.reject(new Error("The scene is not ready yet."));
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      dynamicBarrierRequests.delete(requestId);
+      reject(new Error("The door did not respond. Retry after the scene is ready."));
+    }, 5_000);
+    dynamicBarrierRequests.set(requestId, { resolve, reject, timeout });
+    frame.contentWindow?.postMessage({
+      source: "spatial-host",
+      type: "set-dynamic-barrier-state",
+      requestId,
+      barrierId,
+      active,
+    }, location.origin);
+  });
+}
+
 function cameraFromEntity(entity: SpatialEntity): CameraPose | null {
   try {
     const metadata = JSON.parse(entity.metadata_json) as Record<string, unknown>;
@@ -733,7 +885,9 @@ function renderFloorPlanSelector(): void {
 }
 
 function setNavigatorReady(ready: boolean): void {
-  for (const button of document.querySelectorAll<HTMLButtonElement>(".navigator-item")) {
+  for (const button of document.querySelectorAll<HTMLButtonElement>(
+    ".navigator-item, .dynamic-barrier-toggle",
+  )) {
     button.disabled = !ready;
   }
   for (const target of document.querySelectorAll<SVGGElement>(".floor-plan-room-target")) {

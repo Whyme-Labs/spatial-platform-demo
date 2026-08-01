@@ -135,7 +135,10 @@ Implemented:
   ignoring Rapier Walk and Fly profiles, direct arrow/WASD motion, touch
   altitude controls, synchronized open/closed door barriers, Detour route
   topology, frozen six-direction shell probes at every published room anchor,
-  and bidirectional sphere sweeps across every reviewed wall
+  144 bidirectional Walk-capsule and Fly-sphere sweeps across all 36 reviewed
+  walls, 36 capsule corner-slide probes, and immutable JSON/Detour derivative
+  hashes; an operator-only Noclip profile is frozen for diagnostics but is not
+  exposed in the public viewer
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset
@@ -228,8 +231,12 @@ separate reviewed inputs, so the publisher cannot manufacture walls by
 extruding a floor edge. Primitives are classified as structural floor,
 structural barrier, dynamic barrier, or ignored furniture. The processor builds
 Detour topology, replays all room routes with a Rapier capsule, proves every
-room anchor is enclosed in all six directions, and sweeps both sides of every
-reviewed wall before publication. The example Home Scan authoring contract is
+room anchor is enclosed in all six directions, sweeps both sides of every
+reviewed wall with both the production Walk capsule and Fly sphere, probes
+capsule corner slides, and proves each dynamic door is passable/open and
+blocked/closed in both Rapier and Detour before publication. A release freezes
+the exact approved build ID, authoring hash, JSON report asset, Detour binary,
+SHA-256 hashes, and sizes. The example Home Scan authoring contract is
 [`assets/home-scan-structural-v7.json`](./assets/home-scan-structural-v7.json).
 
 The processor reads `WORKER_API_TOKEN` from the environment. Use

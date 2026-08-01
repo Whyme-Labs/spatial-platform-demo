@@ -783,7 +783,7 @@ function movementProfiles(collisionGroups, agent, bounds) {
   };
   return {
     defaultMode: "walk",
-    supportedModes: ["walk", "fly"],
+    supportedModes: ["walk", "fly", "noclip"],
     walk: {
       shape: "capsule",
       gravity: true,
@@ -799,6 +799,21 @@ function movementProfiles(collisionGroups, agent, bounds) {
       gravity: false,
       groundSnap: false,
       collisionGroups: [...collisionGroups],
+      input: {
+        ...planarInput,
+        ascend: ["Space", "KeyE"],
+        descend: ["KeyC", "KeyQ"],
+      },
+      speedUnitsPerSecond: agent.maxSpeed,
+      boostMultiplier: 3,
+      recoveryBounds,
+    },
+    noclip: {
+      operatorOnly: true,
+      shape: "none",
+      gravity: false,
+      groundSnap: false,
+      collisionGroups: [],
       input: {
         ...planarInput,
         ascend: ["Space", "KeyE"],

@@ -52,6 +52,7 @@ import {
   navigationBuildSchema,
   navigationBuildReviewSchema,
   navigationArtifactSchema,
+  navigationAssetsSchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
@@ -12064,6 +12065,9 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     Array.isArray(snapshotEntities) ? snapshotEntities : [],
   );
   const approvedNavigation = Reflect.get(spatialSnapshot, "navigationArtifact");
+  const approvedNavigationAssets = navigationAssetsSchema.safeParse(
+    Reflect.get(spatialSnapshot, "navigationAssets"),
+  );
   if (!approvedNavigation && walkableConnectivity.componentCount > 1) {
     const componentLabels = walkableConnectivity.components
       .map((component) => component.regionLabels.join(", "))
@@ -12077,6 +12081,12 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     return conflict(
       context,
       "Walkable publication blocked: build and approve a Recast + Rapier navigation artifact for this exact scene version",
+    );
+  }
+  if (approvedNavigation && !approvedNavigationAssets.success) {
+    return conflict(
+      context,
+      "Walkable publication blocked: the approved navigation build is missing immutable JSON and Detour derivative hashes",
     );
   }
   if (
@@ -12262,6 +12272,9 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
   const frozenArtifactResult = navigationArtifactSchema.safeParse(
     frozenSpatial ? Reflect.get(frozenSpatial, "navigationArtifact") : null,
   );
+  const frozenNavigationAssets = navigationAssetsSchema.safeParse(
+    frozenSpatial ? Reflect.get(frozenSpatial, "navigationAssets") : null,
+  );
   if (frozenConnectivity.componentCount > 0 && !frozenArtifactResult.success) {
     return conflict(
       context,
@@ -12269,6 +12282,12 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
     );
   }
   if (frozenArtifactResult.success) {
+    if (!frozenNavigationAssets.success) {
+      return conflict(
+        context,
+        "Rollback blocked: this historical walkable release lacks immutable navigation derivative hashes",
+      );
+    }
     const frozenSource = frozenArtifactResult.data.source;
     const frozenCollision = await context.env.DB.prepare(`
       SELECT id FROM assets
@@ -12419,13 +12438,23 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     ? parseSpatialSnapshot(release.spatial_snapshot_json) ?? liveSpatial
     : liveSpatial;
   const publishedNavigationArtifact = Reflect.get(publishedSpatial, "navigationArtifact");
+  const publishedNavigationAssetsValue = Reflect.get(publishedSpatial, "navigationAssets");
   const publishedNavigation = publishedNavigationArtifact
     ? navigationArtifactSchema.safeParse(publishedNavigationArtifact)
+    : null;
+  const publishedNavigationAssets = publishedNavigationAssetsValue
+    ? navigationAssetsSchema.safeParse(publishedNavigationAssetsValue)
     : null;
   if (publishedNavigation && !publishedNavigation.success) {
     return conflict(
       context,
       "This walkable release is unavailable because its frozen navigation artifact failed validation",
+    );
+  }
+  if (publishedNavigationAssets && !publishedNavigationAssets.success) {
+    return conflict(
+      context,
+      "This walkable release is unavailable because its frozen navigation derivative evidence failed validation",
     );
   }
   const collisionSource = publishedNavigation?.success
@@ -12450,6 +12479,42 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       context,
       "This walkable release is unavailable because its frozen collision asset failed integrity verification",
     );
+  }
+  if (publishedNavigationAssets?.success) {
+    const navigationDerivativeResults = await context.env.DB.batch([
+      context.env.DB.prepare(`
+        SELECT id FROM assets
+        WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+          AND kind = 'report' AND format = 'json' AND integrity_status = 'verified'
+          AND sha256 = ? AND size_bytes = ? AND deleted_at IS NULL
+      `).bind(
+        publishedNavigationAssets.data.artifact.assetId,
+        release.organisation_id,
+        release.project_id,
+        release.version_id,
+        publishedNavigationAssets.data.artifact.sha256,
+        publishedNavigationAssets.data.artifact.sizeBytes,
+      ),
+      context.env.DB.prepare(`
+        SELECT id FROM assets
+        WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+          AND kind = 'navmesh' AND format = 'bin' AND integrity_status = 'verified'
+          AND sha256 = ? AND size_bytes = ? AND deleted_at IS NULL
+      `).bind(
+        publishedNavigationAssets.data.detour.assetId,
+        release.organisation_id,
+        release.project_id,
+        release.version_id,
+        publishedNavigationAssets.data.detour.sha256,
+        publishedNavigationAssets.data.detour.sizeBytes,
+      ),
+    ]);
+    if (navigationDerivativeResults.some((result) => !result.results.length)) {
+      return conflict(
+        context,
+        "This walkable release is unavailable because a frozen navigation derivative failed integrity verification",
+      );
+    }
   }
   return context.json({
     schemaVersion: "1.0.0",
@@ -17303,11 +17368,25 @@ async function captureSpatialSnapshot(
       WHERE organisation_id = ? AND project_id = ? AND version_id = ?
     `).bind(organisationId, projectId, versionId),
     database.prepare(`
-      SELECT artifact_json, authoring_hash
-      FROM scene_navigation_builds
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND status = 'APPROVED' AND artifact_json IS NOT NULL
-      ORDER BY reviewed_at DESC, updated_at DESC LIMIT 25
+      SELECT nb.id, nb.artifact_json, nb.authoring_hash,
+        nav.id AS navmesh_asset_id, nav.format AS navmesh_format,
+        nav.sha256 AS navmesh_sha256, nav.size_bytes AS navmesh_size_bytes,
+        report.id AS report_asset_id, report.format AS report_format,
+        report.sha256 AS report_sha256, report.size_bytes AS report_size_bytes
+      FROM scene_navigation_builds nb
+      JOIN assets nav ON nav.id = nb.navmesh_asset_id
+        AND nav.organisation_id = nb.organisation_id
+        AND nav.project_id = nb.project_id AND nav.version_id = nb.version_id
+        AND nav.kind = 'navmesh' AND nav.format = 'bin'
+        AND nav.integrity_status = 'verified' AND nav.deleted_at IS NULL
+      JOIN assets report ON report.id = nb.report_asset_id
+        AND report.organisation_id = nb.organisation_id
+        AND report.project_id = nb.project_id AND report.version_id = nb.version_id
+        AND report.kind = 'report' AND report.format = 'json'
+        AND report.integrity_status = 'verified' AND report.deleted_at IS NULL
+      WHERE nb.organisation_id = ? AND nb.project_id = ? AND nb.version_id = ?
+        AND nb.status = 'APPROVED' AND nb.artifact_json IS NOT NULL
+      ORDER BY nb.reviewed_at DESC, nb.updated_at DESC LIMIT 25
     `).bind(organisationId, projectId, versionId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
@@ -17315,7 +17394,7 @@ async function captureSpatialSnapshot(
   const profile = requiredBatchResult(results, 4).results[0];
   const routeStops = requiredBatchResult(results, 2).results;
   const authoringHash = await navigationAuthoringHash(profile, entities, obstacles, routeStops);
-  const navigationArtifact = approvedNavigationArtifact(
+  const approvedNavigation = approvedNavigationBuild(
     requiredBatchResult(results, 5).results,
     authoringHash,
   );
@@ -17330,7 +17409,8 @@ async function captureSpatialSnapshot(
     navigationMesh: runtime.navigationMesh,
     obstacleProxy: runtime.obstacleProxy,
     navigationProfile: runtime.navigationProfile,
-    navigationArtifact,
+    navigationArtifact: approvedNavigation?.artifact ?? null,
+    navigationAssets: approvedNavigation?.assets ?? null,
   };
 }
 
@@ -17370,6 +17450,45 @@ function approvedNavigationArtifact(
       if (parsed.success) return parsed.data;
     } catch {
       // A malformed approved build must not enter a release or live runtime.
+    }
+  }
+  return null;
+}
+
+function approvedNavigationBuild(
+  rows: unknown[],
+  expectedAuthoringHash: string,
+): {
+  artifact: ReturnType<typeof navigationArtifactSchema.parse>;
+  assets: ReturnType<typeof navigationAssetsSchema.parse>;
+} | null {
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    if (Reflect.get(row, "authoring_hash") !== expectedAuthoringHash) continue;
+    const artifactJson = Reflect.get(row, "artifact_json");
+    if (typeof artifactJson !== "string") continue;
+    try {
+      const artifact = navigationArtifactSchema.safeParse(JSON.parse(artifactJson));
+      if (!artifact.success || artifact.data.source.authoringHash !== expectedAuthoringHash) continue;
+      const assets = navigationAssetsSchema.safeParse({
+        buildId: Reflect.get(row, "id"),
+        authoringHash: expectedAuthoringHash,
+        artifact: {
+          assetId: Reflect.get(row, "report_asset_id"),
+          format: Reflect.get(row, "report_format"),
+          sha256: Reflect.get(row, "report_sha256"),
+          sizeBytes: Reflect.get(row, "report_size_bytes"),
+        },
+        detour: {
+          assetId: Reflect.get(row, "navmesh_asset_id"),
+          format: Reflect.get(row, "navmesh_format"),
+          sha256: Reflect.get(row, "navmesh_sha256"),
+          sizeBytes: Reflect.get(row, "navmesh_size_bytes"),
+        },
+      });
+      if (assets.success) return { artifact: artifact.data, assets: assets.data };
+    } catch {
+      // Invalid derivative evidence cannot enter a release snapshot.
     }
   }
   return null;

@@ -250,7 +250,11 @@ movement profile records input, shape, gravity, filters, speed, and recovery
 bounds independently from the Detour topology.
 
 Every new release freezes the exact semantic entities, routes, stops, navigation
-mesh, obstacles, and navigation profile into an immutable spatial snapshot.
+mesh, obstacles, navigation profile, approved navigation build, authoring hash,
+and byte identity of both the JSON validation report and Detour binary into an
+immutable spatial snapshot. Publication, rollback, and public-manifest delivery
+fail closed when those navigation derivatives are missing or no longer match
+their verified asset rows.
 Legacy releases without a snapshot retain their historical live-query fallback.
 After Spark reports scene readiness, the host sends the frozen runtime to the
 renderer by same-origin message. Legacy v6 movement remains constrained by the
@@ -260,6 +264,14 @@ the structural shell; Detour remains authoritative for topology and guided
 routes. Room moves use a request/acknowledgement message so rejected cameras
 leave the host control recoverable. The Gaussian asset remains a visual layer;
 the platform does not infer collision or measurement accuracy from it.
+
+Before a v7 build can be reviewed, the processor proves all authored anchors
+are enclosed by floor, ceiling, and walls; runs both-direction Walk-capsule and
+Fly-sphere sweeps for every reviewed wall; runs capsule corner-slide probes;
+replays every room route in both directions; and validates every dynamic door
+as open/passable and closed/blocked in both Rapier and Detour. Walk and Fly are
+the only public modes. The frozen Noclip profile is explicitly operator-only,
+has no collision groups, and exists for diagnostics rather than visitor use.
 
 Point-cloud semantic extraction is a separate evidence-first processing lane.
 D1 binds one immutable version, one verified source/master/point-cloud PLY, an

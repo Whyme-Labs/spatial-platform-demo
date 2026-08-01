@@ -265,13 +265,17 @@ describe("authored walkable collision", () => {
     assert.equal(structural.anchorCount, 5);
     assert.equal(structural.probeCount, 30);
     assert.equal(structural.boundaryCount, 36);
-    assert.equal(structural.boundaryProbeCount, 72);
+    assert.equal(structural.boundaryProbeCount, 144);
+    assert.equal(structural.cornerCount, 36);
+    assert.equal(structural.cornerProbeCount, 36);
+    assert.equal(structural.dynamicBarrierCount, 2);
+    assert.equal(structural.dynamicBarrierProbeCount, 2);
     assert.deepEqual(structural.boundaryTopology, {
       passed: true,
       method: "explicit-closed-segment-loops-v1",
       loopCount: 1,
       floorComponentCount: 1,
-      dynamicClosureCount: 0,
+      dynamicClosureCount: 2,
     });
     assert.equal(structural.ignoredFurnitureMeshCount, 1);
     assert.deepEqual(
@@ -281,6 +285,18 @@ describe("authored walkable collision", () => {
     assert.ok(structural.probes.every((probe) => probe.blocked));
     assert.ok(structural.probes.every((probe) => Array.isArray(probe.origin)));
     assert.ok(structural.boundaryProbes.every((probe) => probe.blocked));
+    assert.deepEqual(
+      [...new Set(structural.boundaryProbes.map((probe) => `${probe.mode}:${probe.shape}`))].sort(),
+      ["fly:sphere", "walk:capsule"],
+    );
+    assert.ok(structural.cornerProbes.every((probe) => probe.blocked && probe.remainedInside));
+    assert.deepEqual(
+      structural.dynamicBarrierProbes.map((probe) => probe.barrierId).sort(),
+      ["door-far-room", "door-main-west"],
+    );
+    assert.ok(structural.dynamicBarrierProbes.every((probe) =>
+      probe.open.physicsPassable && probe.open.routePassable &&
+      probe.closed.physicsBlocked && probe.closed.routeBlocked));
   });
 });
 
