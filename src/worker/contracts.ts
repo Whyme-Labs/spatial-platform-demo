@@ -714,12 +714,250 @@ export const navigationProfileSchema = z.object({
   agentHeight: z.number().min(0.5).max(4),
   eyeHeight: z.number().min(0.3).max(3),
   maxStepMetres: z.number().min(0.01).max(0.5),
+  maxSlopeDegrees: z.number().min(0).max(89).default(45),
+  maxSpeed: z.number().min(0.1).max(20).default(1.6),
+  maxAcceleration: z.number().min(0.1).max(100).default(8),
 }).superRefine((value, context) => {
+  if (value.agentHeight <= value.agentRadius * 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["agentHeight"],
+      message: "Agent height must exceed the capsule diameter",
+    });
+  }
   if (value.eyeHeight >= value.agentHeight) {
     context.addIssue({
       code: "custom",
       path: ["eyeHeight"],
       message: "Eye height must be lower than total agent height",
+    });
+  }
+});
+
+export const navigationBuildSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  versionId: z.string().uuid(),
+  collisionAssetId: z.string().uuid(),
+  provisional: z.boolean().default(false),
+  bounds: z.tuple([point3Schema, point3Schema]),
+  spawn: z.object({
+    id: z.string().trim().min(1).max(120).default("opening"),
+    position: point3Schema,
+  }),
+  destinations: z.array(z.object({
+    id: z.string().trim().min(1).max(120),
+    position: point3Schema,
+  })).max(0, "Off-mesh traversal is not publishable until a browser traversal controller exists").default([]),
+  offMeshConnections: z.array(z.object({
+    id: z.string().trim().min(1).max(120),
+    startPosition: point3Schema,
+    endPosition: point3Schema,
+    radius: z.number().min(0.05).max(10),
+    bidirectional: z.boolean().default(true),
+    area: z.number().int().min(0).max(63).default(0),
+    flags: z.number().int().min(1).max(65535).default(1),
+    userId: z.number().int().min(0).max(0xffffffff).default(0),
+    reviewedPurpose: z.string().trim().min(10).max(1000),
+  })).max(500).default([]),
+  build: z.object({
+    cellSize: z.number().min(0.02).max(1).default(0.1),
+    cellHeight: z.number().min(0.01).max(0.5).default(0.05),
+    tileSize: z.number().int().min(16).max(1024).default(32),
+    maxEdgeLengthVoxels: z.number().int().min(1).max(10_000).default(12),
+    maxSimplificationError: z.number().min(0).max(100).default(1.3),
+    minimumRegionSizeVoxels: z.number().int().min(1).max(10_000).default(8),
+    mergeRegionSizeVoxels: z.number().int().min(1).max(10_000).default(20),
+  }).default({
+    cellSize: 0.1,
+    cellHeight: 0.05,
+    tileSize: 32,
+    maxEdgeLengthVoxels: 12,
+    maxSimplificationError: 1.3,
+    minimumRegionSizeVoxels: 8,
+    mergeRegionSizeVoxels: 20,
+  }),
+}).superRefine((value, context) => {
+  const [minimum, maximum] = value.bounds;
+  if (minimum.some((coordinate, axis) => coordinate >= maximum[axis]!)) {
+    context.addIssue({
+      code: "custom",
+      path: ["bounds"],
+      message: "Navigation bounds minimum must be below maximum on every axis",
+    });
+  }
+});
+
+export const navigationBuildReviewSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  note: z.string().trim().min(10).max(2000),
+});
+
+export const navigationArtifactSchema = z.object({
+  schemaVersion: z.literal("spatial-navigation-v6"),
+  generator: z.object({
+    name: z.literal("recast-navigation-js"),
+    version: z.literal("0.43.1"),
+    nativeRecastCommit: z.string().regex(/^[a-f0-9]{40}$/),
+    mode: z.literal("tiled"),
+  }),
+  coordinateSystem: z.object({
+    handedness: z.literal("right"),
+    upAxis: z.literal("Y"),
+    worldUnit: z.enum(["metres", "scene_units"]),
+    triangleWinding: z.literal("counter-clockwise"),
+  }),
+  source: z.object({
+    assetId: z.string().min(1).max(255),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    authoringHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    triangleCount: z.number().int().positive(),
+    vertexCount: z.number().int().positive(),
+  }).passthrough(),
+  agent: z.object({
+    radius: z.number().min(0.05).max(2),
+    height: z.number().min(0.5).max(4),
+    eyeHeight: z.number().min(0.3).max(3),
+    maxClimb: z.number().min(0.01).max(0.5),
+    maxSlopeDegrees: z.number().min(0).max(89),
+    maxSpeed: z.number().min(0.1).max(20),
+    maxAcceleration: z.number().min(0.1).max(100),
+  }).superRefine((value, context) => {
+    if (value.height <= value.radius * 2) {
+      context.addIssue({
+        code: "custom",
+        path: ["height"],
+        message: "Agent height must exceed the capsule diameter",
+      });
+    }
+    if (value.eyeHeight >= value.height) {
+      context.addIssue({
+        code: "custom",
+        path: ["eyeHeight"],
+        message: "Eye height must be lower than total agent height",
+      });
+    }
+  }),
+  build: z.object({
+    cellSize: z.number().min(0.02).max(1),
+    cellHeight: z.number().min(0.01).max(0.5),
+    tileSize: z.number().int().min(16).max(1024),
+    maxEdgeLengthVoxels: z.number().int().min(1).max(10_000),
+    maxSimplificationError: z.number().min(0).max(100),
+    minimumRegionSizeVoxels: z.number().int().min(1).max(10_000),
+    mergeRegionSizeVoxels: z.number().int().min(1).max(10_000),
+  }),
+  recastConfig: z.record(z.string(), z.unknown()),
+  bounds: z.tuple([point3Schema, point3Schema]),
+  spawn: z.object({
+    id: z.string().min(1).max(120),
+    requestedPosition: point3Schema,
+    projectedPosition: point3Schema,
+  }),
+  offMeshConnections: z.array(z.record(z.string(), z.unknown())).length(0),
+  navMesh: z.object({
+    clearanceApplied: z.literal(true),
+    vertices: z.array(point3Schema).min(3).max(2_000_000),
+    indices: z.array(z.number().int().nonnegative()).min(3).max(6_000_000),
+  }),
+  detour: z.object({
+    format: z.literal("recast-navigation-js-export-v1"),
+    byteLength: z.number().int().positive(),
+    bytesBase64: z.string().min(40).max(16_000_000),
+  }),
+  validation: z.object({
+    passed: z.literal(true),
+    componentCount: z.literal(1),
+    rawTriangleComponentCount: z.number().int().positive(),
+    spawnProjectedDistance: z.number().nonnegative(),
+    destinationCount: z.number().int().nonnegative(),
+    unreachableDestinationIds: z.array(z.string()).length(0),
+    destinations: z.array(z.object({
+      id: z.string().min(1).max(120),
+      requestedPosition: point3Schema,
+      projectedPosition: point3Schema,
+      reachable: z.literal(true),
+      outboundReachable: z.literal(true),
+      inboundReachable: z.literal(true),
+      outboundPathPointCount: z.number().int().positive(),
+      inboundPathPointCount: z.number().int().positive(),
+    })),
+  }),
+  physicalValidation: z.object({
+    passed: z.literal(true),
+    engine: z.literal("rapier3d"),
+    version: z.literal("0.19.3"),
+    controller: z.literal("kinematic-capsule"),
+    spawnOccupancyPassed: z.literal(true),
+    routeCount: z.number().int().nonnegative(),
+    failedDestinationIds: z.array(z.string()).length(0),
+    routes: z.array(z.object({
+      destinationId: z.string().min(1),
+      direction: z.enum(["outbound", "inbound"]),
+      passed: z.literal(true),
+      waypointCount: z.number().int().positive(),
+      simulatedSteps: z.number().int().nonnegative(),
+      pathLength: z.number().nonnegative(),
+      finalPosition: point3Schema,
+    })),
+  }).superRefine((value, context) => {
+    if (value.routeCount !== value.routes.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["routeCount"],
+        message: "Physical route count must match the evidence list",
+      });
+    }
+  }),
+}).superRefine((value, context) => {
+  if (value.navMesh.indices.length % 3 !== 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["navMesh", "indices"],
+      message: "Navigation debug indices must contain complete triangles",
+    });
+  }
+  if (value.navMesh.indices.some((index) => index >= value.navMesh.vertices.length)) {
+    context.addIssue({
+      code: "custom",
+      path: ["navMesh", "indices"],
+      message: "Navigation debug indices must reference an existing vertex",
+    });
+  }
+  try {
+    if (atob(value.detour.bytesBase64).length !== value.detour.byteLength) {
+      context.addIssue({
+        code: "custom",
+        path: ["detour", "byteLength"],
+        message: "Detour byte length must match its encoded immutable payload",
+      });
+    }
+  } catch {
+    context.addIssue({
+      code: "custom",
+      path: ["detour", "bytesBase64"],
+      message: "Detour payload must be valid base64",
+    });
+  }
+  if (value.physicalValidation.routeCount !== value.validation.destinationCount * 2) {
+    context.addIssue({
+      code: "custom",
+      path: ["physicalValidation", "routeCount"],
+      message: "Every Detour destination must have outbound and inbound physical capsule evidence",
+    });
+  }
+  const destinationRouteIds = value.validation.destinations
+    .map((destination) => Reflect.get(destination, "id"))
+    .filter((id): id is string => typeof id === "string")
+    .flatMap((id) => [`${id}:inbound`, `${id}:outbound`])
+    .sort();
+  const physicalRouteIds = value.physicalValidation.routes
+    .map((route) => `${route.destinationId}:${route.direction}`)
+    .sort();
+  if (JSON.stringify(destinationRouteIds) !== JSON.stringify(physicalRouteIds)) {
+    context.addIssue({
+      code: "custom",
+      path: ["physicalValidation", "routes"],
+      message: "Physical route evidence must identify both directions for every validated destination exactly once",
     });
   }
 });

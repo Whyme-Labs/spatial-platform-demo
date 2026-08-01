@@ -30,6 +30,9 @@ export type NavigationProfile = {
   agentHeight: number;
   eyeHeight: number;
   maxStepMetres: number;
+  maxSlopeDegrees?: number;
+  maxSpeed?: number;
+  maxAcceleration?: number;
 };
 
 export type NavigationRuntime = {
@@ -45,6 +48,9 @@ export const DEFAULT_NAVIGATION_PROFILE: NavigationProfile = {
   agentHeight: 1.8,
   eyeHeight: 1.6,
   maxStepMetres: 0.1,
+  maxSlopeDegrees: 45,
+  maxSpeed: 1.6,
+  maxAcceleration: 8,
 };
 
 const DOORWAY_STEERING_ANGLES_DEGREES = [
@@ -123,6 +129,24 @@ export function parseNavigationRuntimeMessage(
           DEFAULT_NAVIGATION_PROFILE.maxStepMetres,
           0.01,
           0.5,
+        ),
+        maxSlopeDegrees: boundedRuntimeNumber(
+          Reflect.get(rawProfile, "maxSlopeDegrees"),
+          DEFAULT_NAVIGATION_PROFILE.maxSlopeDegrees!,
+          0,
+          89,
+        ),
+        maxSpeed: boundedRuntimeNumber(
+          Reflect.get(rawProfile, "maxSpeed"),
+          DEFAULT_NAVIGATION_PROFILE.maxSpeed!,
+          0.1,
+          20,
+        ),
+        maxAcceleration: boundedRuntimeNumber(
+          Reflect.get(rawProfile, "maxAcceleration"),
+          DEFAULT_NAVIGATION_PROFILE.maxAcceleration!,
+          0.1,
+          100,
         ),
       }
     : { ...DEFAULT_NAVIGATION_PROFILE };

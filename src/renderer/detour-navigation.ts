@@ -1,0 +1,175 @@
+import {
+  NavMeshQuery,
+  importNavMesh,
+  init,
+  type NavMesh,
+} from "@recast-navigation/core";
+import type { Vector3Tuple } from "../shared/navigation-runtime";
+
+export type DetourNavigationArtifact = {
+  schemaVersion: "spatial-navigation-v6";
+  generator: { version: "0.43.1" };
+  agent: { radius: number; height: number; eyeHeight: number };
+  build: { cellSize: number; cellHeight: number };
+  spawn: { projectedPosition: Vector3Tuple };
+  detour: {
+    format: "recast-navigation-js-export-v1";
+    bytesBase64: string;
+  };
+};
+
+let initialization: Promise<void> | undefined;
+
+export class DetourNavigationRuntime {
+  readonly #navMesh: NavMesh;
+  readonly #query: NavMeshQuery;
+  readonly #artifact: DetourNavigationArtifact;
+  readonly #halfExtents: { x: number; y: number; z: number };
+
+  private constructor(navMesh: NavMesh, artifact: DetourNavigationArtifact) {
+    this.#navMesh = navMesh;
+    this.#query = new NavMeshQuery(navMesh, { maxNodes: 4096 });
+    this.#artifact = artifact;
+    this.#halfExtents = {
+      x: Math.max(artifact.agent.radius * 2, artifact.build.cellSize * 2),
+      y: Math.max(artifact.agent.height, artifact.build.cellHeight * 2),
+      z: Math.max(artifact.agent.radius * 2, artifact.build.cellSize * 2),
+    };
+  }
+
+  static async create(value: unknown): Promise<DetourNavigationRuntime> {
+    const artifact = parseArtifact(value);
+    initialization ??= init();
+    await initialization;
+    const bytes = decodeBase64(artifact.detour.bytesBase64);
+    const { navMesh } = importNavMesh(bytes);
+    return new DetourNavigationRuntime(navMesh, artifact);
+  }
+
+  projectCamera(position: Vector3Tuple): Vector3Tuple | null {
+    const feet = this.#cameraToFeet(position);
+    const projected = this.#query.findClosestPoint(toVector(feet), {
+      halfExtents: this.#halfExtents,
+    });
+    if (!projected.success) return null;
+    const maximumDistance = Math.max(
+      this.#artifact.agent.radius * 2,
+      this.#artifact.build.cellSize * 3,
+    );
+    if (distance(feet, projected.point) > maximumDistance) return null;
+    return [
+      projected.point.x,
+      projected.point.y + this.#artifact.agent.eyeHeight,
+      projected.point.z,
+    ];
+  }
+
+  openingCamera(): Vector3Tuple {
+    const [x, y, z] = this.#artifact.spawn.projectedPosition;
+    return [x, y + this.#artifact.agent.eyeHeight, z];
+  }
+
+  isCameraAllowed(position: Vector3Tuple): boolean {
+    const projected = this.projectCamera(position);
+    return Boolean(projected && distance(position, projected) <= this.#artifact.build.cellSize * 1.5);
+  }
+
+  moveCamera(from: Vector3Tuple, desired: Vector3Tuple): Vector3Tuple | null {
+    const startFeet = this.#cameraToFeet(from);
+    const desiredFeet = this.#cameraToFeet(desired);
+    const start = this.#query.findClosestPoint(toVector(startFeet), {
+      halfExtents: this.#halfExtents,
+    });
+    if (!start.success) return null;
+    const moved = this.#query.moveAlongSurface(
+      start.polyRef,
+      start.point,
+      toVector(desiredFeet),
+      { maxVisitedSize: 256 },
+    );
+    if (!moved.success) return null;
+    return [
+      moved.resultPosition.x,
+      moved.resultPosition.y + this.#artifact.agent.eyeHeight,
+      moved.resultPosition.z,
+    ];
+  }
+
+  hasCompletePath(from: Vector3Tuple, to: Vector3Tuple): boolean {
+    const start = this.projectCamera(from);
+    const end = this.projectCamera(to);
+    if (!start || !end) return false;
+    const startFeet = this.#cameraToFeet(start);
+    const endFeet = this.#cameraToFeet(end);
+    const result = this.#query.computePath(toVector(startFeet), toVector(endFeet), {
+      halfExtents: this.#halfExtents,
+      maxPathPolys: 4096,
+      maxStraightPathPoints: 4096,
+    });
+    const last = result.path.at(-1);
+    return Boolean(result.success && last && distance(endFeet, last) <= this.#artifact.build.cellSize * 2);
+  }
+
+  destroy(): void {
+    this.#query.destroy();
+    this.#navMesh.destroy();
+  }
+
+  #cameraToFeet(position: Vector3Tuple): Vector3Tuple {
+    return [position[0], position[1] - this.#artifact.agent.eyeHeight, position[2]];
+  }
+}
+
+function parseArtifact(value: unknown): DetourNavigationArtifact {
+  if (!value || typeof value !== "object") throw new Error("Navigation artifact is missing");
+  if (Reflect.get(value, "schemaVersion") !== "spatial-navigation-v6") {
+    throw new Error("Unsupported navigation artifact schema");
+  }
+  const generator = Reflect.get(value, "generator");
+  if (!generator || typeof generator !== "object" || Reflect.get(generator, "version") !== "0.43.1") {
+    throw new Error("Navigation artifact requires a different Detour binding");
+  }
+  const agent = Reflect.get(value, "agent");
+  const build = Reflect.get(value, "build");
+  const spawn = Reflect.get(value, "spawn");
+  const detour = Reflect.get(value, "detour");
+  if (!agent || typeof agent !== "object" || !build || typeof build !== "object" ||
+    !spawn || typeof spawn !== "object" || !finiteTuple(Reflect.get(spawn, "projectedPosition")) ||
+    !detour || typeof detour !== "object" ||
+    Reflect.get(detour, "format") !== "recast-navigation-js-export-v1" ||
+    typeof Reflect.get(detour, "bytesBase64") !== "string") {
+    throw new Error("Navigation artifact is incomplete");
+  }
+  for (const [record, names] of [
+    [agent, ["radius", "height", "eyeHeight"]],
+    [build, ["cellSize", "cellHeight"]],
+  ] as const) {
+    if (names.some((name) => !Number.isFinite(Number(Reflect.get(record, name))))) {
+      throw new Error("Navigation artifact contains invalid numeric parameters");
+    }
+  }
+  return value as DetourNavigationArtifact;
+}
+
+function finiteTuple(value: unknown): value is Vector3Tuple {
+  return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+}
+
+function decodeBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function toVector(value: Vector3Tuple): { x: number; y: number; z: number } {
+  return { x: value[0], y: value[1], z: value[2] };
+}
+
+function distance(
+  first: Vector3Tuple,
+  second: Vector3Tuple | { x: number; y: number; z: number },
+): number {
+  const values: Vector3Tuple = Array.isArray(second)
+    ? second
+    : [second.x, second.y, second.z];
+  return Math.hypot(first[0] - values[0], first[1] - values[1], first[2] - values[2]);
+}

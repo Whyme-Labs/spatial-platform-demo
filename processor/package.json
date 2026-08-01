@@ -1,13 +1,17 @@
 {
   "name": "spatial-processor-container",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "0.19.3",
     "@playcanvas/splat-transform": "3.1.7",
+    "@recast-navigation/core": "0.43.1",
+    "@recast-navigation/generators": "0.43.1",
+    "@recast-navigation/wasm": "0.43.1",
     "@sparkjsdev/spark": "2.1.0",
     "playwright": "1.62.0",
     "three": "0.180.0"

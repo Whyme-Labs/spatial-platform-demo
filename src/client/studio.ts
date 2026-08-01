@@ -980,7 +980,25 @@ type SpatialWorkspace = {
     agentHeight: number;
     eyeHeight: number;
     maxStepMetres: number;
+    maxSlopeDegrees: number;
+    maxSpeed: number;
+    maxAcceleration: number;
   };
+  navigationBuilds: Array<{
+    id: string;
+    collision_asset_id: string;
+    job_id: string;
+    status: "QUEUED" | "PROCESSING" | "READY_FOR_REVIEW" | "APPROVED" | "REJECTED" | "FAILED";
+    parameters_json: string;
+    artifact_json: string | null;
+    navmesh_asset_id: string | null;
+    report_asset_id: string | null;
+    review_note: string | null;
+    reviewed_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  navigationArtifact: Record<string, unknown> | null;
 };
 type MeasurementWorkspace = {
   briefs: Array<{
@@ -1192,6 +1210,7 @@ const deliveryDialog = byId<HTMLDialogElement>("deliveryDialog");
 const domainDialog = byId<HTMLDialogElement>("domainDialog");
 const entityDialog = byId<HTMLDialogElement>("entityDialog");
 const navigationProfileDialog = byId<HTMLDialogElement>("navigationProfileDialog");
+const navigationBuildDialog = byId<HTMLDialogElement>("navigationBuildDialog");
 const semanticExtractionDialog = byId<HTMLDialogElement>("semanticExtractionDialog");
 const semanticReviewDialog = byId<HTMLDialogElement>("semanticReviewDialog");
 const floorplanExtractionDialog = byId<HTMLDialogElement>("floorplanExtractionDialog");
@@ -1398,6 +1417,7 @@ function bindInterface(): void {
   const domainForm = byId<HTMLFormElement>("domainForm");
   const entityForm = byId<HTMLFormElement>("entityForm");
   const navigationProfileForm = byId<HTMLFormElement>("navigationProfileForm");
+  const navigationBuildForm = byId<HTMLFormElement>("navigationBuildForm");
   const semanticExtractionForm = byId<HTMLFormElement>("semanticExtractionForm");
   const semanticReviewForm = byId<HTMLFormElement>("semanticReviewForm");
   const floorplanExtractionForm = byId<HTMLFormElement>("floorplanExtractionForm");
@@ -1433,6 +1453,7 @@ function bindInterface(): void {
     domainForm,
     entityForm,
     navigationProfileForm,
+    navigationBuildForm,
     semanticExtractionForm,
     semanticReviewForm,
     routeForm,
@@ -2069,6 +2090,19 @@ function bindInterface(): void {
       pendingLabel: "Saving profile…",
       errorTarget: byId("navigationProfileError"),
     }, () => updateNavigationProfile(form));
+  });
+  const navigationBuildSubmit =
+    navigationBuildForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  navigationBuildForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(navigationBuildForm);
+    void runAction({
+      key: "queue-navigation-build",
+      trigger: navigationBuildSubmit,
+      form: navigationBuildForm,
+      pendingLabel: "Queueing verified build…",
+      errorTarget: byId("navigationBuildError"),
+    }, () => queueNavigationBuild(form));
   });
   const semanticExtractionSubmit =
     semanticExtractionForm.querySelector<HTMLButtonElement>("[type='submit']")!;
@@ -6329,7 +6363,79 @@ function renderSpatial(): void {
   addRoute.addEventListener("click", openRouteDialog);
   const tuneNavigation = element("button", "quiet-button wide", "Tune navigation agent");
   tuneNavigation.addEventListener("click", openNavigationProfileDialog);
-  routes.append(addRoute, tuneNavigation);
+  const buildNavigation = element("button", "primary-button wide", "Build verified walking map");
+  const collisionAssets = navigationCollisionAssets();
+  buildNavigation.disabled = collisionAssets.length === 0;
+  buildNavigation.title = collisionAssets.length
+    ? "Build Recast/Detour navigation and replay every route with a Rapier capsule."
+    : "Upload a verified collision GLB on this immutable version first.";
+  buildNavigation.addEventListener("click", openNavigationBuildDialog);
+  routes.append(addRoute, tuneNavigation, buildNavigation);
+
+  const navigationBuilds = spatial.navigationBuilds ?? [];
+  if (!navigationBuilds.length) {
+    routes.append(element(
+      "p",
+      "field-note",
+      "No v6 navigation artifact exists. A future walkable release will remain blocked until one passes processor validation and operator review.",
+    ));
+  }
+  for (const build of navigationBuilds.slice(0, 6)) {
+    const row = element("div", "semantic-row");
+    const label = element(
+      "span",
+      "",
+      `${humanStatus(build.status)} · ${parseTimestamp(build.created_at).toLocaleString()}`,
+    );
+    row.append(label);
+    if (build.status === "READY_FOR_REVIEW") {
+      const approve = element("button", "primary-button", "Approve walking map");
+      approve.addEventListener("click", () => {
+        const note = window.prompt(
+          "Record what you reviewed (minimum 10 characters).",
+          "Reviewed whole-scene reachability and capsule-collision evidence.",
+        );
+        if (note === null) return;
+        void runAction({
+          key: `approve-navigation-build:${build.id}`,
+          trigger: approve,
+          pendingLabel: "Approving…",
+        }, () => reviewNavigationBuild(build.id, "approve", note));
+      });
+      const reject = element("button", "danger-button", "Reject");
+      reject.addEventListener("click", () => {
+        const note = window.prompt("Explain the rejection (minimum 10 characters).", "Route evidence needs correction.");
+        if (note === null) return;
+        void runAction({
+          key: `reject-navigation-build:${build.id}`,
+          trigger: reject,
+          pendingLabel: "Rejecting…",
+        }, () => reviewNavigationBuild(build.id, "reject", note));
+      });
+      row.append(approve, reject);
+    } else if (["QUEUED", "PROCESSING"].includes(build.status)) {
+      const refresh = element("button", "quiet-button", "Refresh");
+      refresh.addEventListener("click", () => {
+        void runAction({
+          key: `refresh-navigation-build:${build.id}`,
+          trigger: refresh,
+          pendingLabel: "Refreshing…",
+        }, () => loadSpatialWorkspace(project.id));
+      });
+      row.append(refresh);
+    } else if (build.status === "FAILED") {
+      const retry = element("button", "quiet-button", "Retry");
+      retry.addEventListener("click", () => {
+        void runAction({
+          key: `retry-navigation-build:${build.id}`,
+          trigger: retry,
+          pendingLabel: "Queueing retry…",
+        }, () => retryNavigationBuild(build.job_id));
+      });
+      row.append(retry);
+    }
+    routes.append(row);
+  }
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7754,6 +7860,9 @@ function openNavigationProfileDialog(): void {
   setFormValue(form, "agentHeight", String(profile.agentHeight));
   setFormValue(form, "eyeHeight", String(profile.eyeHeight));
   setFormValue(form, "maxStepMetres", String(profile.maxStepMetres));
+  setFormValue(form, "maxSlopeDegrees", String(profile.maxSlopeDegrees ?? 45));
+  setFormValue(form, "maxSpeed", String(profile.maxSpeed ?? 1.6));
+  setFormValue(form, "maxAcceleration", String(profile.maxAcceleration ?? 8));
   byId("navigationProfileError").textContent = "";
   navigationProfileDialog.showModal();
 }
@@ -7771,11 +7880,142 @@ async function updateNavigationProfile(form: FormData): Promise<void> {
       agentHeight: Number(form.get("agentHeight")),
       eyeHeight: Number(form.get("eyeHeight")),
       maxStepMetres: Number(form.get("maxStepMetres")),
+      maxSlopeDegrees: Number(form.get("maxSlopeDegrees")),
+      maxSpeed: Number(form.get("maxSpeed")),
+      maxAcceleration: Number(form.get("maxAcceleration")),
     }),
   });
   navigationProfileDialog.close();
   showToast("Navigation profile updated");
   await loadSpatialWorkspace(project.id);
+}
+
+function navigationCollisionAssets(): Asset[] {
+  const versionId = state.spatial?.version?.id;
+  return (state.selected?.assets ?? []).filter((asset) =>
+    asset.version_id === versionId &&
+    asset.kind === "collision" &&
+    asset.format.toLowerCase() === "glb" &&
+    asset.integrity_status === "verified" &&
+    Boolean(asset.sha256)
+  );
+}
+
+function openNavigationBuildDialog(): void {
+  const spatial = state.spatial;
+  if (!spatial?.version) return;
+  const form = byId<HTMLFormElement>("navigationBuildForm");
+  form.reset();
+  const select = byId<HTMLSelectElement>("navigationCollisionAsset");
+  select.replaceChildren(...navigationCollisionAssets().map((asset) => {
+    const option = document.createElement("option");
+    option.value = asset.id;
+    option.textContent = `${asset.file_name} · ${formatBytes(asset.size_bytes)}`;
+    return option;
+  }));
+  const points = spatial.entities.flatMap((entity) => {
+    try {
+      const geometry = entity.geometry_json ? JSON.parse(entity.geometry_json) : null;
+      return Array.isArray(geometry?.points)
+        ? geometry.points.filter(validNumberTuple)
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  if (points.length) {
+    const minimum = [0, 1, 2].map((axis) => Math.min(...points.map((point) => point[axis]!)) - 0.5);
+    const maximum = [0, 1, 2].map((axis) => Math.max(...points.map((point) => point[axis]!)) + 0.5);
+    setFormValue(form, "bounds", `${minimum.join(", ")} → ${maximum.join(", ")}`);
+  }
+  const opening = spatial.entities.find((entity) => entity.kind === "room" || entity.kind === "floor");
+  if (opening) {
+    let position: [number, number, number] | null = null;
+    try {
+      position = opening.position_json ? finiteStudioPoint(JSON.parse(opening.position_json)) : null;
+      if (!position && opening.geometry_json) {
+        const geometry = JSON.parse(opening.geometry_json) as { points?: unknown[] };
+        const geometryPoints = Array.isArray(geometry.points)
+          ? geometry.points.map(finiteStudioPoint).filter((point): point is [number, number, number] => Boolean(point))
+          : [];
+        if (geometryPoints.length) {
+          position = [0, 1, 2].map((axis) =>
+            geometryPoints.reduce((sum, point) => sum + point[axis]!, 0) / geometryPoints.length
+          ) as [number, number, number];
+        }
+      }
+    } catch {
+      // Operator can author the required opening below.
+    }
+    if (position) setFormValue(form, "spawn", position.join(", "));
+  }
+  const provisional = form.elements.namedItem("provisional");
+  if (provisional instanceof HTMLInputElement) {
+    provisional.checked = spatial.navigationProfile.worldUnit === "scene_units";
+  }
+  byId("navigationBuildError").textContent = "";
+  navigationBuildDialog.showModal();
+}
+
+async function queueNavigationBuild(form: FormData): Promise<void> {
+  const project = state.selected?.project;
+  const spatial = state.spatial;
+  if (!project || !spatial?.version) throw new Error("Open an immutable scene version first.");
+  const bounds = parseWalkableBounds(String(form.get("bounds") ?? ""));
+  const spawn = parsePosition(String(form.get("spawn") ?? ""));
+  if (!bounds || !spawn) throw new Error("Build bounds and an opening spawn are required.");
+  await api(`/api/projects/${project.id}/spatial/navigation-builds`, {
+    method: "POST",
+    body: JSON.stringify({
+      clientOperationId: crypto.randomUUID(),
+      versionId: spatial.version.id,
+      collisionAssetId: String(form.get("collisionAssetId") ?? ""),
+      provisional: form.get("provisional") === "on",
+      bounds: bounds.points,
+      spawn: { id: "opening", position: spawn },
+      destinations: [],
+      offMeshConnections: [],
+      build: {
+        cellSize: Number(form.get("cellSize")),
+        cellHeight: Number(form.get("cellHeight")),
+        tileSize: Number(form.get("tileSize")),
+        maxEdgeLengthVoxels: 12,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 8,
+        mergeRegionSizeVoxels: 20,
+      },
+    }),
+  });
+  navigationBuildDialog.close();
+  showToast("Verified walking-map build queued");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function reviewNavigationBuild(
+  buildId: string,
+  decision: "approve" | "reject",
+  note: string,
+): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project first.");
+  await api(`/api/projects/${project.id}/spatial/navigation-builds/${buildId}/review`, {
+    method: "POST",
+    body: JSON.stringify({ decision, note }),
+  });
+  showToast(decision === "approve" ? "Walking map approved" : "Walking map rejected");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function retryNavigationBuild(jobId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project first.");
+  await api(`/api/jobs/${jobId}/retry`, { method: "POST" });
+  showToast("Walking-map retry queued");
+  await loadSpatialWorkspace(project.id);
+}
+
+function finiteStudioPoint(value: unknown): [number, number, number] | null {
+  return validNumberTuple(value) ? value : null;
 }
 
 async function archiveSpatialEntity(entityId: string): Promise<void> {

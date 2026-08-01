@@ -60,6 +60,7 @@ export default defineConfig({
       "**/node_modules/**",
       "**/.git/**",
       ".tools/**",
+      "node-test/**",
       "e2e/**",
       "playwright-report/**",
       "test-results/**",

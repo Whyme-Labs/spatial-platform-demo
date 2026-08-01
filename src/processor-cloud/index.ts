@@ -40,7 +40,7 @@ const worker = {
     return Response.json({
       service: "spatial-processor-cloud",
       status: "ok",
-      processor: "spatial-processor/0.7.0",
+      processor: "spatial-processor/0.8.0",
       renderer: "Spark 2.1.0",
       execution: "cloudflare-container",
     });

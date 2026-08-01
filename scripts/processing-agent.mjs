@@ -18,6 +18,12 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { posterSampleIsReady } from "./poster-quality.mjs";
 import {
+  buildRecastNavigationArtifact,
+  extractCollisionGeometryFromGlb,
+  NavigationBuildError,
+} from "./navigation-build-core.mjs";
+import { validatePhysicalNavigation } from "./physical-navigation-validation.mjs";
+import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
   ProcessingAgentError,
@@ -39,7 +45,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.7.0";
+const processorVersion = "spatial-processor/0.8.0";
 const sparkVersion = "2.1.0";
 const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
@@ -301,7 +307,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.7.0",
+              processor: "0.8.0",
               extractor: "metric-pointcloud-floorplan-v1",
               normalizer: normalized.tool,
             },
@@ -329,6 +335,124 @@ async function processNextJob() {
         jobId: job.id,
         state: "SUCCEEDED",
         floorplanExtractionId: job.floorplanExtractionId,
+      };
+    }
+
+    if (job.jobType === "navigation.build-v1") {
+      if (!job.navigationBuildId || !job.navigationBuildConfig) {
+        throw new ProcessingAgentError(
+          "NAVIGATION_JOB_INCOMPLETE",
+          "Navigation lease is missing its build identity or immutable parameters",
+          { failureClass: "configuration", retryable: false },
+        );
+      }
+      if (String(job.input.format).toLowerCase() !== "glb") {
+        throw new ProcessingAgentError(
+          "NAVIGATION_COLLISION_FORMAT_UNSUPPORTED",
+          "Offline Recast navigation requires a canonical collision GLB",
+          { failureClass: "input_validation", retryable: false },
+        );
+      }
+      await heartbeat(job.id, lease.leaseToken, 25, "Decoding canonical collision GLB");
+      const collisionBytes = await readFile(sourcePath);
+      let geometry;
+      let artifact;
+      try {
+        geometry = await extractCollisionGeometryFromGlb(collisionBytes);
+        await heartbeat(job.id, lease.leaseToken, 48, "Building radius-cleared tiled Recast mesh");
+        artifact = await buildRecastNavigationArtifact({
+          ...job.navigationBuildConfig,
+          positions: geometry.positions,
+          indices: geometry.indices,
+          source: {
+            ...job.navigationBuildConfig.source,
+            assetId: job.input.id,
+            sha256: download.sha256,
+          },
+        });
+        await heartbeat(job.id, lease.leaseToken, 65, "Replaying every route with a Rapier capsule");
+        artifact.physicalValidation = await validatePhysicalNavigation({
+          artifact,
+          positions: geometry.positions,
+          indices: geometry.indices,
+          obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
+        });
+      } catch (error) {
+        if (error instanceof NavigationBuildError) {
+          throw new ProcessingAgentError(error.code, error.message, {
+            failureClass: "input_validation",
+            retryable: false,
+            details: error.details,
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      const navmeshPath = join(workDirectory, `navigation-${job.navigationBuildId}.bin`);
+      const reportPath = join(workDirectory, `navigation-${job.navigationBuildId}.json`);
+      await writeFile(
+        navmeshPath,
+        Buffer.from(artifact.detour.bytesBase64, "base64"),
+        { mode: 0o600 },
+      );
+      await writeFile(reportPath, `${JSON.stringify(artifact, null, 2)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await heartbeat(job.id, lease.leaseToken, 82, "Uploading frozen Detour and reachability evidence");
+      const navmeshOutput = await uploadOutput(
+        job,
+        lease.leaseToken,
+        "navmesh",
+        navmeshPath,
+        "application/octet-stream",
+      );
+      const reportOutput = await uploadOutput(
+        job,
+        lease.leaseToken,
+        "report",
+        reportPath,
+        "application/json",
+      );
+      if (heartbeatFailure) throw heartbeatFailure;
+      const computeDurationMs = Math.round(performance.now() - jobStartedAt);
+      await fetchJson(`/api/worker/jobs/${job.id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Recast navigation is ready for operator review",
+          outputs: [navmeshOutput, reportOutput],
+          report: artifact,
+          evidence: {
+            processorVersion,
+            computeDurationMs,
+            activeHumanDurationMs: configuration.activeHumanDurationMs,
+            inputBytes: download.sizeBytes,
+            outputBytes: navmeshOutput.sizeBytes + reportOutput.sizeBytes,
+            toolVersions: {
+              node: process.version,
+              processor: "0.8.0",
+              recastNavigationJs: "0.43.1",
+              nativeRecast: artifact.generator.nativeRecastCommit,
+              rapier3d: artifact.physicalValidation.version,
+              collisionDecoder: `three/${THREE.REVISION}`,
+            },
+          },
+        }),
+      });
+      log("processor.navigation_build_succeeded", {
+        jobId: job.id,
+        navigationBuildId: job.navigationBuildId,
+        sourceTriangles: geometry.indices.length / 3,
+        navigationTriangles: artifact.navMesh.indices.length / 3,
+        destinationCount: artifact.validation.destinationCount,
+        computeDurationMs,
+      });
+      return {
+        claimed: true,
+        jobId: job.id,
+        state: "SUCCEEDED",
+        navigationBuildId: job.navigationBuildId,
       };
     }
 
@@ -402,7 +526,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.7.0",
+              processor: "0.8.0",
               extractor: sourceToWorld
                 ? "registered-ply-walkable-candidates-v2"
                 : "registered-ply-walkable-candidates-v1",
@@ -535,7 +659,7 @@ async function processNextJob() {
             outputBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.7.0",
+              processor: "0.8.0",
               validator: "bounded-file-signature-v1",
               ...(posterRenderer
                 ? {
@@ -662,7 +786,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.7.0",
+            processor: "0.8.0",
             posterCamera: posterCamera ? "authored" : "auto",
           },
         },
@@ -879,7 +1003,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.7.0",
+          processor: "0.8.0",
           method: "registered-ply-voxel-change-v1",
         },
       },

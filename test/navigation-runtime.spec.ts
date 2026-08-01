@@ -66,6 +66,9 @@ describe("v5 navigation enforcement", () => {
       agentHeight: 1.8,
       eyeHeight: 1.6,
       maxStepMetres: 0.1,
+      maxSlopeDegrees: 45,
+      maxSpeed: 1.6,
+      maxAcceleration: 8,
     },
   };
 

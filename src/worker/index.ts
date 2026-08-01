@@ -49,6 +49,9 @@ import {
   sceneEntityUpdateSchema,
   navigationObstacleSchema,
   navigationProfileSchema,
+  navigationBuildSchema,
+  navigationBuildReviewSchema,
+  navigationArtifactSchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
@@ -511,6 +514,8 @@ type JobLeaseRow = {
   semantic_config_json: string | null;
   floorplan_extraction_id: string | null;
   floorplan_config_json: string | null;
+  navigation_build_id: string | null;
+  navigation_build_config_json: string | null;
 };
 
 type SemanticExtractionRow = {
@@ -1410,6 +1415,12 @@ app.post("/api/auth/refresh", async (context) => {
     const response = unauthorized(context, "Refresh session is invalid or expired");
     appendExpiredAuthCookies(response.headers);
     return response;
+  }
+  if (result.status === "stale") {
+    return context.json({
+      error: "Refresh was already rotated; retry with the current browser cookie",
+      code: "stale_refresh",
+    }, 409);
   }
   const response = context.json({ user: result.auth, accessExpiresAt: result.tokens.accessExpiresAt });
   appendAuthCookies(response.headers, result.tokens);
@@ -6260,6 +6271,8 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     floorplanRevisions: [],
     floorplanExports: [],
     navigationObstacles: [],
+    navigationBuilds: [],
+    navigationArtifact: null,
     deliveryPolicy: null,
     collisionProxy: { version: "box-union-v1", boxes: [] },
     navigationMesh: { version: "room-box-triangles-v1", vertices: [], indices: [], sourceEntityIds: [] },
@@ -6374,14 +6387,31 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       ORDER BY label, created_at
     `).bind(access.project.id, version.id, access.auth.organisationId),
     context.env.DB.prepare(`
-      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres,
+        max_slope_degrees, max_speed, max_acceleration
       FROM scene_navigation_profiles
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+    `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT id, collision_asset_id, job_id, status, parameters_json, authoring_hash,
+        artifact_json, navmesh_asset_id, report_asset_id, review_note,
+        reviewed_at, created_at, updated_at
+      FROM scene_navigation_builds
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+      ORDER BY created_at DESC LIMIT 25
     `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
   const navigationProfile = requiredBatchResult(results, 16).results[0];
+  const navigationBuilds = requiredBatchResult(results, 17).results;
+  const authoringHash = await navigationAuthoringHash(
+    navigationProfile,
+    entities,
+    navigationObstacles,
+    requiredBatchResult(results, 2).results,
+  );
+  const navigationArtifact = approvedNavigationArtifact(navigationBuilds, authoringHash);
   const runtime = buildSpatialRuntime(entities, navigationObstacles, navigationProfile);
   return context.json({
     version,
@@ -6407,6 +6437,8 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
         `/api/projects/${access.project.id}/spatial/floorplan-exports/${String(row.id)}/download`,
     })),
     navigationObstacles,
+    navigationBuilds,
+    navigationArtifact,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
     obstacleProxy: runtime.obstacleProxy,
@@ -6654,9 +6686,10 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
   const updated = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_profiles (
       version_id, organisation_id, project_id, world_unit, agent_radius,
-      agent_height, eye_height, max_step_metres, updated_by
+      agent_height, eye_height, max_step_metres, max_slope_degrees,
+      max_speed, max_acceleration, updated_by
     )
-    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
     WHERE NOT EXISTS (
       SELECT 1 FROM scene_entities
       WHERE organisation_id = ? AND project_id = ? AND version_id = ?
@@ -6676,6 +6709,9 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
       agent_height = excluded.agent_height,
       eye_height = excluded.eye_height,
       max_step_metres = excluded.max_step_metres,
+      max_slope_degrees = excluded.max_slope_degrees,
+      max_speed = excluded.max_speed,
+      max_acceleration = excluded.max_acceleration,
       updated_by = excluded.updated_by,
       updated_at = datetime('now')
     WHERE scene_navigation_profiles.organisation_id = excluded.organisation_id
@@ -6703,6 +6739,9 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     parsed.data.agentHeight,
     parsed.data.eyeHeight,
     parsed.data.maxStepMetres,
+    parsed.data.maxSlopeDegrees,
+    parsed.data.maxSpeed,
+    parsed.data.maxAcceleration,
     auth.userId,
     auth.organisationId,
     project.id,
@@ -6741,6 +6780,9 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     agentHeight: parsed.data.agentHeight,
     eyeHeight: parsed.data.eyeHeight,
     maxStepMetres: parsed.data.maxStepMetres,
+    maxSlopeDegrees: parsed.data.maxSlopeDegrees,
+    maxSpeed: parsed.data.maxSpeed,
+    maxAcceleration: parsed.data.maxAcceleration,
   });
   return context.json({
     navigationProfile: {
@@ -6749,8 +6791,220 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
       agentHeight: parsed.data.agentHeight,
       eyeHeight: parsed.data.eyeHeight,
       maxStepMetres: parsed.data.maxStepMetres,
+      maxSlopeDegrees: parsed.data.maxSlopeDegrees,
+      maxSpeed: parsed.data.maxSpeed,
+      maxAcceleration: parsed.data.maxAcceleration,
     },
   });
+});
+
+app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationBuildSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+  );
+  if (!project) return notFound(context, "Project not found");
+  if (project.status === "ARCHIVED") return conflict(context, "Archived projects cannot build navigation");
+  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
+  const prior = await context.env.DB.prepare(`
+    SELECT id, status, request_hash, job_id FROM scene_navigation_builds
+    WHERE organisation_id = ? AND client_operation_id = ?
+  `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
+    id: string;
+    status: string;
+    request_hash: string;
+    job_id: string;
+  }>();
+  if (prior) {
+    if (prior.request_hash !== requestHash) {
+      return conflict(context, "Operation ID was already used for a different navigation build");
+    }
+    return context.json({ build: prior, idempotent: true });
+  }
+  const version = await context.env.DB.prepare(`
+    SELECT id FROM scene_versions WHERE id = ? AND project_id = ?
+  `).bind(parsed.data.versionId, project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Immutable scene version not found");
+  const results = await context.env.DB.batch([
+    context.env.DB.prepare(`
+      SELECT id, version_id, kind, format, integrity_status, sha256
+      FROM assets
+      WHERE id = ? AND project_id = ? AND organisation_id = ? AND deleted_at IS NULL
+    `).bind(parsed.data.collisionAssetId, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres,
+        max_slope_degrees, max_speed, max_acceleration
+      FROM scene_navigation_profiles
+      WHERE version_id = ? AND project_id = ? AND organisation_id = ?
+    `).bind(version.id, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT id, kind, label, position_json, geometry_json
+      FROM scene_entities
+      WHERE version_id = ? AND project_id = ? AND organisation_id = ?
+        AND status = 'active' AND kind IN ('room', 'floor', 'doorway')
+      ORDER BY kind DESC, sort_order, label
+    `).bind(version.id, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT id, label, bounds_json
+      FROM scene_navigation_obstacles
+      WHERE version_id = ? AND project_id = ? AND organisation_id = ?
+        AND status = 'active'
+      ORDER BY label, created_at
+    `).bind(version.id, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT rs.route_id, rs.entity_id, rs.sequence_number, rs.camera_pose_json,
+        e.kind, e.position_json, e.geometry_json
+      FROM scene_route_stops rs
+      JOIN scene_routes r ON r.id = rs.route_id
+      JOIN scene_entities e ON e.id = rs.entity_id
+      WHERE r.version_id = ? AND r.project_id = ? AND r.organisation_id = ?
+        AND r.status = 'active' AND e.status = 'active'
+      ORDER BY rs.route_id, rs.sequence_number
+    `).bind(version.id, project.id, auth.organisationId),
+  ]);
+  const asset = requiredBatchResult(results, 0).results[0] as Record<string, unknown> | undefined;
+  if (!asset) return notFound(context, "Collision GLB asset not found");
+  if (
+    asset.version_id !== version.id ||
+    asset.kind !== "collision" ||
+    String(asset.format).toLowerCase() !== "glb"
+  ) {
+    return unprocessable(context, {
+      collisionAssetId: ["Navigation requires a verified collision GLB from the selected version"],
+    });
+  }
+  if (asset.integrity_status !== "verified" || typeof asset.sha256 !== "string") {
+    return conflict(context, "Collision GLB has not passed immutable SHA-256 verification");
+  }
+  const profile = requiredBatchResult(results, 1).results[0] as Record<string, unknown> | undefined;
+  if (!profile) return conflict(context, "Author the version navigation profile before building navigation");
+  const worldUnit = parseWorldUnit(profile.world_unit);
+  if (worldUnit === "scene_units" && !parsed.data.provisional) {
+    return conflict(context, "Scene-unit navigation builds must be explicitly marked provisional");
+  }
+  const authoredDestinations = requiredBatchResult(results, 2).results
+    .flatMap(navigationDestinationFromEntity);
+  const routeStopRows = requiredBatchResult(results, 4).results;
+  const routeDestinations = routeStopRows.flatMap((row) =>
+    navigationDestinationFromRouteStop(row, Number(profile.eye_height))
+  );
+  const destinationMap = new Map(
+    [...authoredDestinations, ...routeDestinations, ...parsed.data.destinations]
+      .map((destination) => [destination.id, destination]),
+  );
+  const obstacleBoxes = requiredBatchResult(results, 3).results
+    .flatMap(navigationObstacleBoxFromRow);
+  const authoringHash = await navigationAuthoringHash(
+    profile,
+    requiredBatchResult(results, 2).results,
+    requiredBatchResult(results, 3).results,
+    routeStopRows,
+  );
+  const parameters = {
+    provisional: parsed.data.provisional,
+    bounds: parsed.data.bounds,
+    spawn: parsed.data.spawn,
+    destinations: [...destinationMap.values()],
+    offMeshConnections: parsed.data.offMeshConnections,
+    obstacleBoxes,
+    build: parsed.data.build,
+    source: {
+      assetId: String(asset.id),
+      sha256: String(asset.sha256),
+      authoringHash,
+      worldUnit,
+    },
+    agent: {
+      radius: Number(profile.agent_radius),
+      height: Number(profile.agent_height),
+      eyeHeight: Number(profile.eye_height),
+      maxClimb: Number(profile.max_step_metres),
+      maxSlopeDegrees: Number(profile.max_slope_degrees),
+      maxSpeed: Number(profile.max_speed),
+      maxAcceleration: Number(profile.max_acceleration),
+    },
+  };
+  const buildId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  await context.env.DB.batch([
+    context.env.DB.prepare(`
+      INSERT INTO processing_jobs (
+        id, organisation_id, project_id, version_id, input_asset_id, job_type,
+        processor_version, idempotency_key, state, priority, max_attempts,
+        progress_message
+      ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
+        'spatial-processor/0.8.0', ?, 'QUEUED', 65, 3,
+        'Waiting for an offline Recast navigation worker')
+    `).bind(
+      jobId,
+      auth.organisationId,
+      project.id,
+      version.id,
+      parsed.data.collisionAssetId,
+      `navigation-build:${auth.organisationId}:${parsed.data.clientOperationId}`,
+    ),
+    context.env.DB.prepare(`
+      INSERT INTO scene_navigation_builds (
+        id, organisation_id, project_id, version_id, collision_asset_id,
+        job_id, status, parameters_json, client_operation_id, request_hash,
+        authoring_hash, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?)
+    `).bind(
+      buildId,
+      auth.organisationId,
+      project.id,
+      version.id,
+      parsed.data.collisionAssetId,
+      jobId,
+      JSON.stringify(parameters),
+      parsed.data.clientOperationId,
+      requestHash,
+      authoringHash,
+      auth.userId,
+    ),
+  ]);
+  await audit(context, auth, "spatial.navigation_build.create", "scene_navigation_build", buildId, {
+    jobId,
+    collisionAssetId: parsed.data.collisionAssetId,
+    parameters,
+  });
+  dispatchProcessingJob(context, jobId);
+  return context.json({
+    build: { id: buildId, status: "QUEUED", jobId, parameters },
+  }, 202);
+});
+
+app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationBuildReviewSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
+  const build = await context.env.DB.prepare(`
+    UPDATE scene_navigation_builds
+    SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE id = ? AND project_id = ? AND organisation_id = ?
+      AND status = 'READY_FOR_REVIEW' AND artifact_json IS NOT NULL
+    RETURNING id, status, reviewed_at
+  `).bind(
+    status,
+    auth.userId,
+    parsed.data.note,
+    context.req.param("buildId"),
+    context.req.param("projectId"),
+    auth.organisationId,
+  ).first<{ id: string; status: string; reviewed_at: string }>();
+  if (!build) return conflict(context, "Only a completed navigation build can be reviewed");
+  await audit(context, auth, "spatial.navigation_build.review", "scene_navigation_build", build.id, parsed.data);
+  return context.json({ build });
 });
 
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
@@ -7458,7 +7712,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.7.0', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.8.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -7924,7 +8178,7 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.7.0', ?, 'QUEUED', 78, 3,
+        'spatial-processor/0.8.0', ?, 'QUEUED', 78, 3,
         'Waiting for a vendor-neutral floor-plan worker')
     `).bind(
       jobId,
@@ -9927,8 +10181,15 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
       SET status = 'QUEUED', error_json = NULL, updated_at = datetime('now')
       WHERE job_id = ? AND organisation_id = ?
     `).bind(job.id, auth.organisationId),
+    context.env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = 'QUEUED', artifact_json = NULL, navmesh_asset_id = NULL,
+        report_asset_id = NULL, reviewed_by = NULL, review_note = NULL,
+        reviewed_at = NULL, updated_at = datetime('now')
+      WHERE job_id = ? AND organisation_id = ?
+    `).bind(job.id, auth.organisationId),
   ];
-  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)) {
+  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1", "navigation.build-v1"].includes(job.job_type)) {
     retryStatements.push(context.env.DB.prepare(
       "UPDATE scene_versions SET status = 'PROCESSING', updated_at = datetime('now') WHERE id = ?",
     ).bind(job.version_id));
@@ -9970,6 +10231,8 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
     ? "Semantic extraction"
     : job.job_type === "registered-scene-change-v1"
     ? "Registered raw-scene comparison"
+    : job.job_type === "navigation.build-v1"
+    ? "Offline navigation build"
     : "Processing job";
   const cancelError = JSON.stringify({
     code: "OPERATOR_CANCELLED",
@@ -10001,8 +10264,13 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
       SET status = 'CANCELLED', error_json = ?, updated_at = datetime('now')
       WHERE job_id = ? AND organisation_id = ?
     `).bind(cancelError, job.id, auth.organisationId),
+    context.env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = 'FAILED', updated_at = datetime('now')
+      WHERE job_id = ? AND organisation_id = ?
+    `).bind(job.id, auth.organisationId),
   ];
-  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)) {
+  if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1", "navigation.build-v1"].includes(job.job_type)) {
     cancelStatements.push(context.env.DB.prepare(
       "UPDATE scene_versions SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ?",
     ).bind(job.version_id));
@@ -10031,8 +10299,8 @@ app.post("/api/jobs/:jobId/manual-complete", async (context) => {
     state: string;
   }>();
   if (!job) return notFound(context, "Job not found");
-  if (job.job_type === "registered-scene-change-v1") {
-    return conflict(context, "Registered raw-scene jobs require processor-generated evidence and cannot be completed manually");
+  if (["registered-scene-change-v1", "navigation.build-v1"].includes(job.job_type)) {
+    return conflict(context, "This job requires processor-generated acceptance evidence and cannot be completed manually");
   }
   if (["SUCCEEDED", "CANCELLED"].includes(job.state)) return context.json({ job: { id: job.id, state: job.state }, idempotent: true });
   const qaReportId = crypto.randomUUID();
@@ -10127,7 +10395,9 @@ app.post("/api/worker/jobs/lease", async (context) => {
       se.id AS semantic_extraction_id,
       se.parameters_json AS semantic_config_json,
       fe.id AS floorplan_extraction_id,
-      fe.parameters_json AS floorplan_config_json
+      fe.parameters_json AS floorplan_config_json,
+      nb.id AS navigation_build_id,
+      nb.parameters_json AS navigation_build_config_json
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
     JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
@@ -10137,6 +10407,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
       AND ca.organisation_id = j.organisation_id
     LEFT JOIN semantic_extraction_runs se ON se.job_id = j.id
     LEFT JOIN floorplan_extraction_runs fe ON fe.job_id = j.id
+    LEFT JOIN scene_navigation_builds nb ON nb.job_id = j.id
     WHERE j.id = ? AND j.lease_token_hash = ?
   `).bind(claimed.id, leaseTokenHash).first<JobLeaseRow>();
   if (!job) {
@@ -10197,6 +10468,13 @@ app.post("/api/worker/jobs/lease", async (context) => {
       WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
     `).bind(job.floorplan_extraction_id).run();
   }
+  if (job.navigation_build_id) {
+    await context.env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = 'PROCESSING', updated_at = datetime('now')
+      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
+    `).bind(job.navigation_build_id).run();
+  }
   const posterCamera = storedPosterCamera(job.version_provenance_json);
   return context.json({
     job: {
@@ -10245,6 +10523,12 @@ app.post("/api/worker/jobs/lease", async (context) => {
         ? {
           floorplanExtractionId: job.floorplan_extraction_id,
           floorplanConfig: parseStoredObject(job.floorplan_config_json ?? "{}"),
+        }
+        : {}),
+      ...(job.navigation_build_id
+        ? {
+          navigationBuildId: job.navigation_build_id,
+          navigationBuildConfig: parseStoredObject(job.navigation_build_config_json ?? "{}"),
         }
         : {}),
     },
@@ -10511,9 +10795,11 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
-      j.job_type, j.state, a.size_bytes AS input_size_bytes
+      j.job_type, j.state, a.size_bytes AS input_size_bytes, a.sha256 AS input_sha256,
+      nb.authoring_hash AS navigation_authoring_hash
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
+    LEFT JOIN scene_navigation_builds nb ON nb.job_id = j.id
     WHERE j.id = ? AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
       AND j.lease_expires_at > ?
   `).bind(context.req.param("jobId"), tokenHash, new Date().toISOString()).first<{
@@ -10525,6 +10811,8 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     job_type: string;
     state: string;
     input_size_bytes: number;
+    input_sha256: string | null;
+    navigation_authoring_hash: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
   if (job.job_type === "registered-scene-change-v1") {
@@ -10532,6 +10820,32 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   }
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
     return validationError(context, { evidence: ["Reported input bytes do not match the leased source asset"] });
+  }
+  let navigationArtifact: ReturnType<typeof navigationArtifactSchema.parse> | null = null;
+  if (job.job_type === "navigation.build-v1") {
+    const artifactResult = navigationArtifactSchema.safeParse(parsed.data.report);
+    if (!artifactResult.success) {
+      return validationError(context, { navigationArtifact: artifactResult.error.issues });
+    }
+    navigationArtifact = artifactResult.data;
+    if (
+      navigationArtifact.source.assetId !== job.input_asset_id ||
+      !job.input_sha256 ||
+      navigationArtifact.source.sha256.toLowerCase() !== job.input_sha256.toLowerCase() ||
+      !job.navigation_authoring_hash ||
+      navigationArtifact.source.authoringHash.toLowerCase() !==
+        job.navigation_authoring_hash.toLowerCase()
+    ) {
+      return validationError(context, {
+        navigationArtifact: ["Navigation artifact source identity does not match the leased collision GLB"],
+      });
+    }
+    const outputKinds = parsed.data.outputs.map((output) => `${output.kind}/${output.format}`).sort();
+    if (JSON.stringify(outputKinds) !== JSON.stringify(["navmesh/bin", "report/json"])) {
+      return validationError(context, {
+        outputs: ["Navigation builds must emit exactly one Detour BIN and one JSON report"],
+      });
+    }
   }
 
   const assetStatements: D1PreparedStatement[] = [];
@@ -10582,13 +10896,31 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     return validationError(context, { evidence: ["Reported output bytes do not match stored derivative assets"] });
   }
 
-  const qaReportId = crypto.randomUUID();
+  const navigationCompletion = job.job_type === "navigation.build-v1";
+  const qaReportId = navigationCompletion ? null : crypto.randomUUID();
   const executionEvidence = {
     ...parsed.data.evidence,
     completedAt: new Date().toISOString(),
   };
-  await context.env.DB.batch([
+  const navigationStatements: D1PreparedStatement[] = [];
+  if (navigationArtifact) {
+    const navmeshAsset = outputSummary.find((output) => output.kind === "navmesh");
+    const reportAsset = outputSummary.find((output) => output.kind === "report");
+    navigationStatements.push(context.env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = 'READY_FOR_REVIEW', artifact_json = ?, navmesh_asset_id = ?,
+        report_asset_id = ?, updated_at = datetime('now')
+      WHERE job_id = ? AND status IN ('QUEUED', 'PROCESSING')
+    `).bind(
+      JSON.stringify(navigationArtifact),
+      navmeshAsset?.id ?? null,
+      reportAsset?.id ?? null,
+      job.id,
+    ));
+  }
+  const completionStatements: D1PreparedStatement[] = [
     ...assetStatements,
+    ...navigationStatements,
     context.env.DB.prepare(
       "UPDATE assets SET integrity_status = 'verified' WHERE id = ? AND organisation_id = ?",
     ).bind(job.input_asset_id, job.organisation_id),
@@ -10612,23 +10944,28 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       job.id,
       tokenHash,
     ),
-    context.env.DB.prepare(`
+  ];
+  if (!navigationCompletion) {
+    completionStatements.push(context.env.DB.prepare(`
       INSERT INTO qa_reports (id, organisation_id, project_id, version_id, status, report_json)
       VALUES (?, ?, ?, ?, 'pending', ?)
     `).bind(
-      qaReportId,
+      qaReportId!,
       job.organisation_id,
       job.project_id,
       job.version_id,
       JSON.stringify(parsed.data.report),
-    ),
+    ));
+    completionStatements.push(
     context.env.DB.prepare(
       "UPDATE scene_versions SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ?",
     ).bind(job.version_id),
     context.env.DB.prepare(
       "UPDATE projects SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
     ).bind(job.project_id, job.organisation_id),
-  ]);
+    );
+  }
+  await context.env.DB.batch(completionStatements);
   return context.json({ job: { id: job.id, state: "SUCCEEDED" }, outputs: outputSummary, qaReportId });
 });
 
@@ -11398,10 +11735,24 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
       error,
       job.id,
     ),
+    context.env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = CASE WHEN ? = 'QUEUED' THEN 'QUEUED' ELSE 'FAILED' END,
+        updated_at = datetime('now')
+      WHERE job_id = ?
+    `).bind(
+      retry ? "QUEUED" : terminalState,
+      job.id,
+    ),
   ];
   if (
     !retry &&
-    !["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1"].includes(job.job_type)
+    ![
+      "registered-scene-change-v1",
+      "semantic.extract-v1",
+      "floorplan.extract-v1",
+      "navigation.build-v1",
+    ].includes(job.job_type)
   ) {
     statements.push(
       context.env.DB.prepare(
@@ -11628,7 +11979,8 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   const walkableConnectivity = inspectWalkableConnectivity(
     Array.isArray(snapshotEntities) ? snapshotEntities : [],
   );
-  if (walkableConnectivity.componentCount > 1) {
+  const approvedNavigation = Reflect.get(spatialSnapshot, "navigationArtifact");
+  if (!approvedNavigation && walkableConnectivity.componentCount > 1) {
     const componentLabels = walkableConnectivity.components
       .map((component) => component.regionLabels.join(", "))
       .join(" | ");
@@ -11636,6 +11988,41 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       context,
       `Walkable publication blocked: ${walkableConnectivity.componentCount} disconnected navigation components (${componentLabels}). Connect every advertised region with overlapping walkable or doorway geometry before publishing.`,
     );
+  }
+  if (walkableConnectivity.componentCount > 0 && !approvedNavigation) {
+    return conflict(
+      context,
+      "Walkable publication blocked: build and approve a v6 Recast + Rapier navigation artifact for this exact scene version",
+    );
+  }
+  if (approvedNavigation && typeof approvedNavigation === "object") {
+    const navigationSource = Reflect.get(approvedNavigation, "source");
+    const navigationCollisionAssetId = navigationSource && typeof navigationSource === "object"
+      ? readStringProperty(navigationSource, "assetId")
+      : null;
+    const navigationCollisionSha256 = navigationSource && typeof navigationSource === "object"
+      ? readStringProperty(navigationSource, "sha256")
+      : null;
+    const frozenCollision = navigationCollisionAssetId
+      ? await context.env.DB.prepare(`
+        SELECT id FROM assets
+        WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+          AND kind = 'collision' AND format = 'glb' AND integrity_status = 'verified'
+          AND sha256 = ? AND deleted_at IS NULL
+      `).bind(
+        navigationCollisionAssetId,
+        auth.organisationId,
+        project.id,
+        approved.id,
+        navigationCollisionSha256,
+      ).first<{ id: string }>()
+      : null;
+    if (!frozenCollision) {
+      return conflict(
+        context,
+        "Walkable publication blocked: the exact verified collision GLB used by the approved navigation build is unavailable",
+      );
+    }
   }
   if (
     hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees) &&
@@ -11761,11 +12148,53 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
   const releaseId = readStringProperty(input, "releaseId");
   if (!releaseId) return validationError(context, { releaseId: ["releaseId is required"] });
   const release = await context.env.DB.prepare(`
-    SELECT r.id, r.project_id FROM releases r
+    SELECT r.id, r.project_id, r.version_id, r.spatial_snapshot_json FROM releases r
     JOIN release_channels rc ON rc.project_id = r.project_id
     WHERE r.id = ? AND rc.slug = ? AND r.organisation_id = ? AND r.revoked_at IS NULL
-  `).bind(releaseId, context.req.param("slug"), auth.organisationId).first<{ id: string; project_id: string }>();
+  `).bind(releaseId, context.req.param("slug"), auth.organisationId).first<{
+    id: string;
+    project_id: string;
+    version_id: string;
+    spatial_snapshot_json: string | null;
+  }>();
   if (!release) return notFound(context, "Eligible release not found");
+  const frozenSpatial = release.spatial_snapshot_json
+    ? parseSpatialSnapshot(release.spatial_snapshot_json)
+    : null;
+  const frozenEntities = frozenSpatial ? Reflect.get(frozenSpatial, "entities") : null;
+  const frozenConnectivity = inspectWalkableConnectivity(
+    Array.isArray(frozenEntities) ? frozenEntities : [],
+  );
+  const frozenArtifactResult = navigationArtifactSchema.safeParse(
+    frozenSpatial ? Reflect.get(frozenSpatial, "navigationArtifact") : null,
+  );
+  if (frozenConnectivity.componentCount > 0 && !frozenArtifactResult.success) {
+    return conflict(
+      context,
+      "Rollback blocked: this historical walkable release predates certified v6 navigation; republish it through the current acceptance gate",
+    );
+  }
+  if (frozenArtifactResult.success) {
+    const frozenSource = frozenArtifactResult.data.source;
+    const frozenCollision = await context.env.DB.prepare(`
+      SELECT id FROM assets
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+        AND kind = 'collision' AND format = 'glb' AND integrity_status = 'verified'
+        AND sha256 = ? AND deleted_at IS NULL
+    `).bind(
+      frozenSource.assetId,
+      auth.organisationId,
+      release.project_id,
+      release.version_id,
+      frozenSource.sha256,
+    ).first<{ id: string }>();
+    if (!frozenCollision) {
+      return conflict(
+        context,
+        "Rollback blocked: the exact verified collision GLB for this frozen navigation build is unavailable",
+      );
+    }
+  }
   await context.env.DB.batch([
     context.env.DB.prepare(
       "UPDATE release_channels SET active_release_id = ?, updated_at = datetime('now') WHERE slug = ? AND organisation_id = ?",
@@ -11867,7 +12296,8 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       ORDER BY label, created_at
     `).bind(release.project_id, release.version_id, release.organisation_id),
     context.env.DB.prepare(`
-      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres,
+        max_slope_degrees, max_speed, max_acceleration
       FROM scene_navigation_profiles
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
     `).bind(release.project_id, release.version_id, release.organisation_id),
@@ -11894,6 +12324,39 @@ app.get("/api/releases/:slug/manifest", async (context) => {
   const publishedSpatial = release.spatial_snapshot_json
     ? parseSpatialSnapshot(release.spatial_snapshot_json) ?? liveSpatial
     : liveSpatial;
+  const publishedNavigationArtifact = Reflect.get(publishedSpatial, "navigationArtifact");
+  const publishedNavigation = publishedNavigationArtifact
+    ? navigationArtifactSchema.safeParse(publishedNavigationArtifact)
+    : null;
+  if (publishedNavigation && !publishedNavigation.success) {
+    return conflict(
+      context,
+      "This walkable release is unavailable because its frozen navigation artifact failed validation",
+    );
+  }
+  const collisionSource = publishedNavigation?.success
+    ? publishedNavigation.data.source
+    : null;
+  const collisionAsset = collisionSource
+    ? await context.env.DB.prepare(`
+      SELECT * FROM assets
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+        AND kind = 'collision' AND format = 'glb' AND integrity_status = 'verified'
+        AND sha256 = ? AND deleted_at IS NULL
+    `).bind(
+      collisionSource.assetId,
+      release.organisation_id,
+      release.project_id,
+      release.version_id,
+      collisionSource.sha256,
+    ).first<AssetRow>()
+    : null;
+  if (publishedNavigationArtifact && !collisionAsset) {
+    return conflict(
+      context,
+      "This walkable release is unavailable because its frozen collision asset failed integrity verification",
+    );
+  }
   return context.json({
     schemaVersion: "1.0.0",
     release: {
@@ -11915,6 +12378,9 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       contentUrl: `/asset/${release.id}/${webAsset.id}/${encodeURIComponent(webAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`,
       posterUrl: posterAsset
         ? `/asset/${release.id}/${posterAsset.id}/${encodeURIComponent(posterAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`
+        : null,
+      collisionUrl: collisionAsset
+        ? `/asset/${release.id}/${collisionAsset.id}/${encodeURIComponent(collisionAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`
         : null,
       sizeBytes: webAsset.size_bytes,
       etag: webAsset.etag,
@@ -11949,7 +12415,12 @@ app.get("/asset/:releaseId/:assetId/:fileName", async (context) => {
   if (!payload || payload.releaseId !== context.req.param("releaseId")) return unauthorized(context, "Invalid or expired scene token");
   const asset = await context.env.DB.prepare(`
     SELECT a.* FROM assets a
-    JOIN releases r ON (r.web_asset_id = a.id OR r.poster_asset_id = a.id)
+    JOIN releases r ON (
+      r.web_asset_id = a.id OR r.poster_asset_id = a.id OR (
+        a.kind = 'collision' AND
+        json_extract(r.spatial_snapshot_json, '$.navigationArtifact.source.assetId') = a.id
+      )
+    )
     WHERE r.id = ? AND a.id = ? AND r.revoked_at IS NULL AND a.deleted_at IS NULL
       AND (r.expires_at IS NULL OR r.expires_at > ?)
   `).bind(payload.releaseId, context.req.param("assetId"), new Date().toISOString()).first<AssetRow>();
@@ -16636,6 +17107,9 @@ const defaultNavigationProfile = {
   agentHeight: 1.8,
   eyeHeight: 1.6,
   maxStepMetres: 0.1,
+  maxSlopeDegrees: 45,
+  maxSpeed: 1.6,
+  maxAcceleration: 8,
 } as const;
 
 async function spatialVersionWorldUnit(
@@ -16729,25 +17203,40 @@ async function captureSpatialSnapshot(
       ORDER BY label, created_at
     `).bind(organisationId, projectId, versionId),
     database.prepare(`
-      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres,
+        max_slope_degrees, max_speed, max_acceleration
       FROM scene_navigation_profiles
       WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT artifact_json, authoring_hash
+      FROM scene_navigation_builds
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'APPROVED' AND artifact_json IS NOT NULL
+      ORDER BY reviewed_at DESC, updated_at DESC LIMIT 25
     `).bind(organisationId, projectId, versionId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const obstacles = requiredBatchResult(results, 3).results;
   const profile = requiredBatchResult(results, 4).results[0];
+  const routeStops = requiredBatchResult(results, 2).results;
+  const authoringHash = await navigationAuthoringHash(profile, entities, obstacles, routeStops);
+  const navigationArtifact = approvedNavigationArtifact(
+    requiredBatchResult(results, 5).results,
+    authoringHash,
+  );
   const runtime = buildSpatialRuntime(entities, obstacles, profile);
   return {
     schemaVersion: "spatial-runtime-v5",
     entities,
     routes: requiredBatchResult(results, 1).results,
-    routeStops: requiredBatchResult(results, 2).results,
+    routeStops,
     navigationObstacles: obstacles,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
     obstacleProxy: runtime.obstacleProxy,
     navigationProfile: runtime.navigationProfile,
+    navigationArtifact,
   };
 }
 
@@ -16767,6 +17256,56 @@ function parseSpatialSnapshot(value: string): Record<string, unknown> | null {
     !Reflect.get(parsed, "navigationMesh")
   ) return null;
   return parsed as Record<string, unknown>;
+}
+
+function approvedNavigationArtifact(
+  rows: unknown[],
+  expectedAuthoringHash?: string,
+): Record<string, unknown> | null {
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    if (Reflect.has(row, "status") && Reflect.get(row, "status") !== "APPROVED") continue;
+    if (
+      expectedAuthoringHash &&
+      Reflect.get(row, "authoring_hash") !== expectedAuthoringHash
+    ) continue;
+    const artifactJson = Reflect.get(row, "artifact_json");
+    if (typeof artifactJson !== "string") continue;
+    try {
+      const parsed = navigationArtifactSchema.safeParse(JSON.parse(artifactJson));
+      if (parsed.success) return parsed.data;
+    } catch {
+      // A malformed approved build must not enter a release or live runtime.
+    }
+  }
+  return null;
+}
+
+async function navigationAuthoringHash(
+  profileRow: unknown,
+  entityRows: unknown[],
+  obstacleRows: unknown[],
+  routeStopRows: unknown[] = [],
+): Promise<string> {
+  const destinations = entityRows
+    .flatMap(navigationDestinationFromEntity)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const obstacles = obstacleRows
+    .flatMap(navigationObstacleBoxFromRow)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const walkableGeometry = entityRows
+    .flatMap(canonicalWalkableAuthoringEntity)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const routeStops = routeStopRows
+    .flatMap(canonicalNavigationRouteStop)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return sha256Hex(JSON.stringify({
+    profile: navigationProfileFromRow(profileRow),
+    destinations,
+    obstacles,
+    walkableGeometry,
+    routeStops,
+  }));
 }
 
 function buildSpatialRuntime(
@@ -16791,6 +17330,9 @@ function buildSpatialRuntime(
     agentHeight: number;
     eyeHeight: number;
     maxStepMetres: number;
+    maxSlopeDegrees: number;
+    maxSpeed: number;
+    maxAcceleration: number;
   };
 } {
   const regions: Array<{
@@ -16950,6 +17492,9 @@ function navigationProfileFromRow(
   agentHeight: number;
   eyeHeight: number;
   maxStepMetres: number;
+  maxSlopeDegrees: number;
+  maxSpeed: number;
+  maxAcceleration: number;
 } {
   if (!row || typeof row !== "object") return defaultNavigationProfile;
   const worldUnit = parseWorldUnit(Reflect.get(row, "world_unit"));
@@ -16957,13 +17502,28 @@ function navigationProfileFromRow(
   const agentHeight = Number(Reflect.get(row, "agent_height"));
   const eyeHeight = Number(Reflect.get(row, "eye_height"));
   const maxStepMetres = Number(Reflect.get(row, "max_step_metres"));
+  const maxSlopeDegrees = Number(Reflect.get(row, "max_slope_degrees"));
+  const maxSpeed = Number(Reflect.get(row, "max_speed"));
+  const maxAcceleration = Number(Reflect.get(row, "max_acceleration"));
   if (
     !Number.isFinite(agentRadius) ||
     !Number.isFinite(agentHeight) ||
     !Number.isFinite(eyeHeight) ||
-    !Number.isFinite(maxStepMetres)
+    !Number.isFinite(maxStepMetres) ||
+    !Number.isFinite(maxSlopeDegrees) ||
+    !Number.isFinite(maxSpeed) ||
+    !Number.isFinite(maxAcceleration)
   ) return defaultNavigationProfile;
-  return { worldUnit, agentRadius, agentHeight, eyeHeight, maxStepMetres };
+  return {
+    worldUnit,
+    agentRadius,
+    agentHeight,
+    eyeHeight,
+    maxStepMetres,
+    maxSlopeDegrees,
+    maxSpeed,
+    maxAcceleration,
+  };
 }
 
 export function triangulateWalkablePolygon(points: Array<[number, number, number]>): number[] {
@@ -17082,6 +17642,153 @@ function finitePoint3(value: unknown): [number, number, number] | null {
   const point = value.map(Number);
   if (point.some((coordinate) => !Number.isFinite(coordinate))) return null;
   return point as [number, number, number];
+}
+
+function navigationDestinationFromEntity(row: unknown): Array<{
+  id: string;
+  position: [number, number, number];
+}> {
+  if (!row || typeof row !== "object") return [];
+  const kind = Reflect.get(row, "kind");
+  if (typeof kind === "string" && kind !== "room" && kind !== "floor") return [];
+  const id = String(Reflect.get(row, "id") ?? "");
+  if (!id) return [];
+  const position = navigationPositionFromRow(row);
+  return position ? [{ id, position }] : [];
+}
+
+function navigationDestinationFromRouteStop(row: unknown, eyeHeight: number): Array<{
+  id: string;
+  position: [number, number, number];
+}> {
+  if (!row || typeof row !== "object") return [];
+  const routeId = String(Reflect.get(row, "route_id") ?? "");
+  const entityId = String(Reflect.get(row, "entity_id") ?? "");
+  const sequence = Number(Reflect.get(row, "sequence_number"));
+  if (!routeId || !entityId || !Number.isSafeInteger(sequence) || sequence < 0) return [];
+  const cameraPoseJson = Reflect.get(row, "camera_pose_json");
+  if (typeof cameraPoseJson === "string") {
+    try {
+      const cameraPosition = finitePoint3(Reflect.get(JSON.parse(cameraPoseJson), "position"));
+      if (cameraPosition) {
+        return [{
+          id: `route:${routeId}:${sequence}:${entityId}`,
+          position: [cameraPosition[0], cameraPosition[1] - eyeHeight, cameraPosition[2]],
+        }];
+      }
+    } catch {
+      // Fall back to the referenced entity position.
+    }
+  }
+  const position = navigationPositionFromRow(row);
+  return position ? [{ id: `route:${routeId}:${sequence}:${entityId}`, position }] : [];
+}
+
+function navigationPositionFromRow(row: object): [number, number, number] | null {
+  const positionJson = Reflect.get(row, "position_json");
+  if (typeof positionJson === "string") {
+    try {
+      const position = finitePoint3(JSON.parse(positionJson));
+      if (position) return position;
+    } catch {
+      // Fall through to the geometry centroid.
+    }
+  }
+  const geometryJson = Reflect.get(row, "geometry_json");
+  if (typeof geometryJson !== "string") return null;
+  try {
+    const geometry = JSON.parse(geometryJson) as { points?: unknown[] };
+    const points = Array.isArray(geometry.points)
+      ? geometry.points.map(finitePoint3).filter((point): point is [number, number, number] => Boolean(point))
+      : [];
+    if (!points.length) return null;
+    return [0, 1, 2].map((axis) =>
+        points.reduce((sum, point) => sum + point[axis]!, 0) / points.length
+      ) as [number, number, number];
+  } catch {
+    return null;
+  }
+}
+
+function canonicalWalkableAuthoringEntity(row: unknown): Array<{
+  id: string;
+  kind: string;
+  position: unknown;
+  geometry: unknown;
+}> {
+  if (!row || typeof row !== "object") return [];
+  const kind = String(Reflect.get(row, "kind") ?? "");
+  if (!["floor", "room", "doorway"].includes(kind)) return [];
+  const id = String(Reflect.get(row, "id") ?? "");
+  if (!id) return [];
+  return [{
+    id,
+    kind,
+    position: parseStoredJsonValue(Reflect.get(row, "position_json")),
+    geometry: parseStoredJsonValue(Reflect.get(row, "geometry_json")),
+  }];
+}
+
+function canonicalNavigationRouteStop(row: unknown): Array<{
+  id: string;
+  entityId: string;
+  cameraPose: unknown;
+}> {
+  if (!row || typeof row !== "object") return [];
+  const routeId = String(Reflect.get(row, "route_id") ?? "");
+  const entityId = String(Reflect.get(row, "entity_id") ?? "");
+  const sequence = Number(Reflect.get(row, "sequence_number"));
+  if (!routeId || !entityId || !Number.isSafeInteger(sequence) || sequence < 0) return [];
+  return [{
+    id: `${routeId}:${sequence}`,
+    entityId,
+    cameraPose: parseStoredJsonValue(Reflect.get(row, "camera_pose_json")),
+  }];
+}
+
+function parseStoredJsonValue(value: unknown): unknown {
+  if (typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function navigationObstacleBoxFromRow(row: unknown): Array<{
+  id: string;
+  label: string;
+  min: [number, number, number];
+  max: [number, number, number];
+}> {
+  if (!row || typeof row !== "object") return [];
+  const boundsJson = Reflect.get(row, "bounds_json");
+  if (typeof boundsJson !== "string") return [];
+  try {
+    const geometry = JSON.parse(boundsJson) as { type?: unknown; points?: unknown[] };
+    if (geometry.type !== "box" || !Array.isArray(geometry.points) || geometry.points.length !== 2) {
+      return [];
+    }
+    const first = finitePoint3(geometry.points[0]);
+    const second = finitePoint3(geometry.points[1]);
+    if (!first || !second) return [];
+    return [{
+      id: String(Reflect.get(row, "id") ?? ""),
+      label: String(Reflect.get(row, "label") ?? "Obstacle"),
+      min: [
+        Math.min(first[0], second[0]),
+        Math.min(first[1], second[1]),
+        Math.min(first[2], second[2]),
+      ],
+      max: [
+        Math.max(first[0], second[0]),
+        Math.max(first[1], second[1]),
+        Math.max(first[2], second[2]),
+      ],
+    }];
+  } catch {
+    return [];
+  }
 }
 
 function readStringProperty(value: unknown, property: string): string | null {

@@ -50,6 +50,7 @@ type ReleaseManifest = {
     format: string;
     contentUrl: string;
     posterUrl: string | null;
+    collisionUrl?: string | null;
     sizeBytes: number;
     etag: string | null;
   };
@@ -131,6 +132,7 @@ type ReleaseManifest = {
       eyeHeight: number;
       maxStepMetres: number;
     };
+    navigationArtifact?: Record<string, unknown> | null;
   };
   deliveryPolicy?: {
     adaptive_quality: number;
@@ -912,6 +914,17 @@ function setRendererCamera(cameraPose: CameraPose): Promise<CameraPose> {
 function sendSpatialRuntime(): void {
   const spatial = activeManifest?.spatial;
   if (!spatial) return;
+  const artifactNavMesh = spatial.navigationArtifact
+    ? Reflect.get(spatial.navigationArtifact, "navMesh")
+    : null;
+  const navigationMesh = artifactNavMesh && typeof artifactNavMesh === "object"
+    ? {
+        version: "recast-debug-triangles-v6",
+        vertices: Reflect.get(artifactNavMesh, "vertices"),
+        indices: Reflect.get(artifactNavMesh, "indices"),
+        sourceEntityIds: [],
+      }
+    : spatial.navigationMesh;
   const doorwayEntityIds = new Set(
     spatial.entities
       .filter((entity) => entity.kind === "doorway")
@@ -921,12 +934,14 @@ function sendSpatialRuntime(): void {
     source: "spatial-host",
     type: "set-spatial-runtime",
     collisionBoxes: spatial.collisionProxy.boxes,
-    navigationMesh: spatial.navigationMesh,
+    navigationMesh,
     obstacleBoxes: spatial.obstacleProxy?.boxes ?? [],
     doorwayBoxes: spatial.collisionProxy.boxes.filter((box) =>
       doorwayEntityIds.has(box.entityId)
     ),
     navigationProfile: spatial.navigationProfile,
+    navigationArtifact: spatial.navigationArtifact ?? null,
+    collisionUrl: activeManifest?.scene.collisionUrl ?? null,
   }, location.origin);
 }
 

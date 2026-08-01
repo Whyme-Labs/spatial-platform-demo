@@ -292,7 +292,7 @@ describe("Spatial Studio Worker", () => {
     expect(replay.status).toBe(401);
   });
 
-  it("rotates refresh tokens and revokes the session when an old token is reused", async () => {
+  it("rejects stale refreshes without returning current bearers or revoking the session", async () => {
     const session = await loginSession();
     const refresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
       method: "POST",
@@ -305,6 +305,17 @@ describe("Spatial Studio Worker", () => {
     expect(newAccess).toBeTruthy();
     expect(newRefresh).toBeTruthy();
 
+    // A browser may retry after rotation committed. The stale request receives
+    // no current bearer and cannot revoke the winning session.
+    const replay = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: session.refreshCookie },
+    });
+    expect(replay.status).toBe(409);
+    const replayedCookies = replay.headers.get("set-cookie") ?? "";
+    expect(replayedCookies).not.toContain("spatial_refresh=");
+    expect(replayedCookies).not.toContain("spatial_access=");
+
     const secondRefresh = await exports.default.fetch(`${origin}/api/auth/refresh`, {
       method: "POST",
       headers: { cookie: `spatial_refresh=${newRefresh}` },
@@ -314,16 +325,61 @@ describe("Spatial Studio Worker", () => {
     const latestAccess = secondCookies.match(/spatial_access=([^;,]+)/)?.[1];
     expect(latestAccess).toBeTruthy();
 
-    const reuse = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+    const historicalReplay = await exports.default.fetch(`${origin}/api/auth/refresh`, {
       method: "POST",
       headers: { cookie: session.refreshCookie },
     });
-    expect(reuse.status).toBe(401);
+    expect(historicalReplay.status).toBe(409);
+    expect(historicalReplay.headers.get("set-cookie") ?? "").not.toContain("spatial_refresh=");
 
-    const revokedAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
+    const survivingAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
       headers: { cookie: `spatial_access=${latestAccess}` },
     });
-    expect(revokedAccess.status).toBe(401);
+    expect(survivingAccess.status).toBe(200);
+  });
+
+  it("does not let a stolen rotated refresh token recover the current bearer", async () => {
+    const session = await loginSession();
+    const first = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: session.refreshCookie },
+    });
+    expect(first.status).toBe(200);
+    const cookies = first.headers.get("set-cookie") ?? "";
+    const currentRefresh = cookies.match(/spatial_refresh=([^;,]+)/)?.[1];
+    expect(currentRefresh).toBeTruthy();
+
+    const stolenReplay = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: session.refreshCookie.split("; ")[0] },
+    });
+    expect(stolenReplay.status).toBe(409);
+    expect(stolenReplay.headers.get("set-cookie") ?? "").not.toContain("spatial_refresh=");
+
+    const legitimate = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { cookie: `spatial_refresh=${currentRefresh}` },
+    });
+    expect(legitimate.status).toBe(200);
+  });
+
+  it("keeps one browser session alive when two tabs refresh concurrently", async () => {
+    const session = await loginSession();
+    const [first, second] = await Promise.all([
+      exports.default.fetch(`${origin}/api/auth/refresh`, {
+        method: "POST",
+        headers: { cookie: session.refreshCookie },
+      }),
+      exports.default.fetch(`${origin}/api/auth/refresh`, {
+        method: "POST",
+        headers: { cookie: session.refreshCookie },
+      }),
+    ]);
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    const winning = first.status === 200 ? first : second;
+    const stale = first.status === 409 ? first : second;
+    expect(winning.headers.get("set-cookie") ?? "").toContain("spatial_refresh=");
+    expect(stale.headers.get("set-cookie") ?? "").not.toContain("spatial_refresh=");
   });
 
   it("manages organisation invitations and invalidates access across role lifecycle changes", async () => {
@@ -2095,6 +2151,211 @@ describe("Spatial Studio Worker", () => {
     );
     expect(misalignedRotationResponse.status).toBe(409);
 
+    const missingVerifiedNavigation = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "missing-verified-navigation",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Missing verified navigation",
+            measurementDisclaimer: "Visual experience only.",
+          },
+        }),
+      },
+    );
+    expect(missingVerifiedNavigation.status).toBe(409);
+    await expect(missingVerifiedNavigation.json()).resolves.toMatchObject({
+      error: expect.stringContaining("build and approve a v6 Recast + Rapier navigation artifact"),
+    });
+
+    const collisionAssetId = crypto.randomUUID();
+    const navigationJobId = crypto.randomUUID();
+    const navigationBuildId = crypto.randomUUID();
+    const collisionSha256 = "d".repeat(64);
+    const navigationAuthoringHash = await sha256Hex(JSON.stringify({
+      profile: {
+        worldUnit: "metres",
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      destinations: [{
+        id: snapshotEntity.entity.id,
+        position: [5 / 3, 0, 5 / 3],
+      }],
+      obstacles: [{
+        id: snapshotObstacle.obstacle.id,
+        label: "Published table",
+        min: [1.5, 0, 0.2],
+        max: [2.5, 0.9, 0.8],
+      }],
+      walkableGeometry: [{
+        id: snapshotEntity.entity.id,
+        kind: "room",
+        position: null,
+        geometry: {
+          type: "polygon",
+          points: [[0, 0, 0], [4, 0, 0], [4, 0, 1], [1, 0, 1], [1, 0, 4], [0, 0, 4]],
+        },
+      }],
+      routeStops: [],
+    }));
+    const collisionObjectKey =
+      `masters-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/fixture.collision.glb`;
+    await env.SPATIAL_ASSETS.put(collisionObjectKey, new Uint8Array([1, 2, 3, 4]));
+    const navigationArtifact = {
+      schemaVersion: "spatial-navigation-v6",
+      generator: {
+        name: "recast-navigation-js",
+        version: "0.43.1",
+        nativeRecastCommit: "599fd0f023181c0a484df2a18cf1d75a3553852e",
+        mode: "tiled",
+      },
+      coordinateSystem: {
+        handedness: "right",
+        upAxis: "Y",
+        worldUnit: "metres",
+        triangleWinding: "counter-clockwise",
+      },
+      source: {
+        assetId: collisionAssetId,
+        sha256: collisionSha256,
+        authoringHash: navigationAuthoringHash,
+        triangleCount: 2,
+        vertexCount: 4,
+      },
+      agent: {
+        radius: 0.22,
+        height: 1.8,
+        eyeHeight: 1.6,
+        maxClimb: 0.1,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        maxEdgeLengthVoxels: 12,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 8,
+        mergeRegionSizeVoxels: 20,
+      },
+      recastConfig: { walkableRadius: 3, walkableHeight: 36, walkableClimb: 2 },
+      bounds: [[0, 0, 0], [4, 2.6, 4]],
+      spawn: {
+        id: "opening",
+        requestedPosition: [0.5, 0, 0.5],
+        projectedPosition: [0.5, 0, 0.5],
+      },
+      offMeshConnections: [],
+      navMesh: {
+        clearanceApplied: true,
+        vertices: [[0.22, 0, 0.22], [3.78, 0, 0.22], [0.22, 0, 3.78]],
+        indices: [0, 1, 2],
+      },
+      detour: {
+        format: "recast-navigation-js-export-v1",
+        byteLength: 64,
+        bytesBase64: btoa("x".repeat(64)),
+      },
+      validation: {
+        passed: true,
+        componentCount: 1,
+        rawTriangleComponentCount: 1,
+        spawnProjectedDistance: 0,
+        destinationCount: 1,
+        unreachableDestinationIds: [],
+        destinations: [{
+          id: snapshotEntity.entity.id,
+          requestedPosition: [0.7, 0, 0.7],
+          projectedPosition: [0.7, 0, 0.7],
+          reachable: true,
+          outboundReachable: true,
+          inboundReachable: true,
+          outboundPathPointCount: 2,
+          inboundPathPointCount: 2,
+        }],
+      },
+      physicalValidation: {
+        passed: true,
+        engine: "rapier3d",
+        version: "0.19.3",
+        controller: "kinematic-capsule",
+        spawnOccupancyPassed: true,
+        routeCount: 2,
+        failedDestinationIds: [],
+        routes: ["outbound", "inbound"].map((direction) => ({
+          destinationId: snapshotEntity.entity.id,
+          direction,
+          passed: true,
+          waypointCount: 2,
+          simulatedSteps: 8,
+          pathLength: 0.3,
+          finalPosition: [0.7, 0, 0.7],
+        })),
+      },
+    };
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, etag, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'collision', 'glb', ?, 'fixture.collision.glb',
+          'model/gltf-binary', 4, 'fixture-etag', ?, 'verified')
+      `).bind(
+        collisionAssetId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        collisionObjectKey,
+        collisionSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO processing_jobs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_type,
+          processor_version, idempotency_key, state, progress, progress_message
+        ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.8.0',
+          ?, 'SUCCEEDED', 100, 'Fixture Recast and Rapier evidence accepted')
+      `).bind(
+        navigationJobId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        collisionAssetId,
+        `navigation-build-fixture:${navigationBuildId}`,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_navigation_builds (
+          id, organisation_id, project_id, version_id, collision_asset_id,
+          job_id, status, parameters_json, artifact_json, client_operation_id,
+          request_hash, authoring_hash, created_by, reviewed_by, review_note, reviewed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', '{}', ?, ?, ?, ?, ?, ?,
+          'Reviewed whole-scene reachability and capsule-collision evidence.', datetime('now'))
+      `).bind(
+        navigationBuildId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        collisionAssetId,
+        navigationJobId,
+        JSON.stringify(navigationArtifact),
+        crypto.randomUUID(),
+        "e".repeat(64),
+        navigationAuthoringHash,
+        provisionalEvidenceOwner!.created_by,
+        provisionalEvidenceOwner!.created_by,
+      ),
+    ]);
+
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -2168,7 +2429,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(manifestResponse.status).toBe(200);
     const manifest = await manifestResponse.json<{
-      scene: { contentUrl: string; posterUrl: string | null };
+      scene: { contentUrl: string; posterUrl: string | null; collisionUrl: string | null };
       spatial: {
         entities: Array<{ id: string; label: string }>;
         navigationMesh: { indices: number[]; sourceEntityIds: string[] };
@@ -2178,6 +2439,11 @@ describe("Spatial Studio Worker", () => {
             min: [number, number, number];
             max: [number, number, number];
           }>;
+        };
+        navigationArtifact: {
+          schemaVersion: string;
+          source: { assetId: string };
+          physicalValidation: { passed: boolean; routeCount: number };
         };
       };
       viewer: {
@@ -2193,6 +2459,16 @@ describe("Spatial Studio Worker", () => {
     expect(manifest.scene.posterUrl).toContain(
       `/${generatedPosterAssetId}/poster.png?token=`,
     );
+    expect(manifest.scene.collisionUrl).toContain(
+      `/${collisionAssetId}/fixture.collision.glb?token=`,
+    );
+    const collisionResponse = await exports.default.fetch(
+      new URL(manifest.scene.collisionUrl!, origin),
+    );
+    expect(collisionResponse.status).toBe(200);
+    expect(new Uint8Array(await collisionResponse.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
+    );
     expect(manifest.viewer.initialCamera.up).toEqual([-0.01, -0.87, -0.49]);
     expect(manifest.spatial).toMatchObject({
       entities: [{ id: snapshotEntity.entity.id, label: "Published walkable room" }],
@@ -2201,6 +2477,11 @@ describe("Spatial Studio Worker", () => {
       },
     });
     expect(manifest.spatial.navigationMesh.indices).toHaveLength(12);
+    expect(manifest.spatial.navigationArtifact).toMatchObject({
+      schemaVersion: "spatial-navigation-v6",
+      source: { assetId: collisionAssetId },
+      physicalValidation: { passed: true, routeCount: 2 },
+    });
     expect(manifest.spatial.obstacleProxy).toEqual({
       version: "authored-obstacle-boxes-v1",
       boxes: [{
@@ -2210,6 +2491,18 @@ describe("Spatial Studio Worker", () => {
         max: [2.5, 0.9, 0.8],
       }],
     });
+
+    await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
+      .bind("e".repeat(64), collisionAssetId).run();
+    const mismatchedCollisionManifest = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(mismatchedCollisionManifest.status).toBe(409);
+    await expect(mismatchedCollisionManifest.json()).resolves.toMatchObject({
+      error: expect.stringContaining("frozen collision asset failed integrity verification"),
+    });
+    await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
+      .bind(collisionSha256, collisionAssetId).run();
 
     const archiveSnapshotEntity = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities/${snapshotEntity.entity.id}`,

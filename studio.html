@@ -704,11 +704,35 @@
         <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" required /></label>
         <label><span>Agent height</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" required /></label>
         <label><span>Eye height</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" required /></label>
-        <label><span>Maximum sampled step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" required /></label>
+        <label><span>Maximum climb / step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" required /></label>
+        <label><span>Maximum slope (degrees)</span><input name="maxSlopeDegrees" type="number" min="0" max="89" step="1" required /></label>
+        <label><span>Maximum speed</span><input name="maxSpeed" type="number" min="0.1" max="20" step="0.1" required /></label>
+        <label><span>Maximum acceleration</span><input name="maxAcceleration" type="number" min="0.1" max="100" step="0.1" required /></label>
       </div>
-      <p class="field-note">Radius is a navigation collision buffer around furniture and polygon edges. In SU it is only a relative gameplay value, not a real-world clearance claim. Eye height must remain below total agent height. Smaller sampled steps improve anti-tunnelling checks at higher runtime cost.</p>
+      <p class="field-note">This immutable profile drives Recast radius erosion, ledge and slope filtering, Detour queries, and the physical character controller. In SU it is only a relative gameplay value, not a real-world clearance claim.</p>
       <button class="primary-button wide" type="submit">Save navigation profile</button>
       <p id="navigationProfileError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="navigationBuildDialog" class="dialog-card wide-dialog">
+    <form id="navigationBuildForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">VERIFIED WALKING MAP</span>
+      <h2>Build the Unreal-equivalent navigation artifact.</h2>
+      <p>Recast generates radius-cleared topology, Detour proves every authored room route, and Rapier replays those routes with the production capsule before human review.</p>
+      <div class="mock-form-grid">
+        <label class="full"><span>Verified collision GLB</span><select id="navigationCollisionAsset" name="collisionAssetId" required></select></label>
+        <label class="full"><span>Complete build bounds (min x, y, z → max x, y, z)</span><input name="bounds" required placeholder="-5, -0.5, -5 → 5, 3, 5" /></label>
+        <label class="full"><span>Opening spawn at floor level (x, y, z)</span><input name="spawn" required placeholder="0, 0, 0" /></label>
+        <label><span>Recast cell size</span><input name="cellSize" type="number" min="0.02" max="1" step="0.01" value="0.1" required /></label>
+        <label><span>Recast cell height</span><input name="cellHeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05" required /></label>
+        <label><span>Tile size (voxels)</span><input name="tileSize" type="number" min="16" max="1024" step="1" value="32" required /></label>
+        <label class="checkbox-row"><input name="provisional" type="checkbox" /><span>Explicit provisional scene-unit build</span></label>
+      </div>
+      <p class="field-note">The GLB, profile, entities, obstacle boxes, bounds, and spawn are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
+      <button class="primary-button wide" type="submit">Queue verified build</button>
+      <p id="navigationBuildError" class="form-error" role="alert"></p>
     </form>
   </dialog>
 

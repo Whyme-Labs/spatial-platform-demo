@@ -389,6 +389,39 @@ test.describe("studio authentication lifecycle", () => {
     await expect(page.locator("#loginDialog")).not.toBeVisible();
   });
 
+  test("retries a non-destructive stale refresh without signing the browser out", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let organisationRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/auth/organisations") {
+        organisationRequests += 1;
+        if (organisationRequests === 2) {
+          return json(route, 401, { error: "Access token expired" });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        return refreshRequests === 1
+          ? json(route, 409, { code: "stale_refresh" })
+          : json(route, 200, { refreshed: true });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+    await page.locator("#refreshButton").click();
+    await expect.poll(() => refreshRequests).toBe(2);
+    await expect.poll(() => organisationRequests).toBe(3);
+    await expect(page.locator("#loginDialog")).not.toBeVisible();
+  });
+
   test("returns to sign-in when an expired access token cannot be refreshed", async ({
     page,
   }) => {

@@ -270,6 +270,22 @@ async function coordinateRefresh(
         markAuthenticationEstablished();
         return "refreshed";
       }
+      if (response.status === 409) {
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        const retry = await timedFetch(
+          "/api/auth/refresh",
+          { method: "POST", timeoutMs: 15_000 },
+          "POST",
+        );
+        if (retry.status === 200) {
+          markAuthenticationEstablished();
+          return "refreshed";
+        }
+        if (retry.status === 204 || retry.status === 401 || retry.status === 403) {
+          return "expired";
+        }
+        return "unavailable";
+      }
       if (response.status === 204 || response.status === 401 || response.status === 403) {
         return "expired";
       }

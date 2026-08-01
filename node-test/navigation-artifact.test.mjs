@@ -1,0 +1,241 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  buildRecastNavigationArtifact,
+  extractCollisionGeometryFromGlb,
+  importNavigationArtifact,
+} from "../scripts/navigation-build-core.mjs";
+import { validatePhysicalNavigation } from "../scripts/physical-navigation-validation.mjs";
+
+function appendFloor(positions, indices, minX, minZ, maxX, maxZ) {
+  const offset = positions.length / 3;
+  positions.push(
+    minX, 0, minZ,
+    minX, 0, maxZ,
+    maxX, 0, maxZ,
+    maxX, 0, minZ,
+  );
+  indices.push(offset, offset + 1, offset + 2, offset, offset + 2, offset + 3);
+}
+
+const profile = {
+  radius: 0.22,
+  height: 1.8,
+  eyeHeight: 1.6,
+  maxClimb: 0.1,
+  maxSlopeDegrees: 45,
+  maxSpeed: 1.6,
+  maxAcceleration: 8,
+};
+const build = { cellSize: 0.1, cellHeight: 0.05, tileSize: 32 };
+
+function externalResourceGlb() {
+  const source = JSON.stringify({
+    asset: { version: "2.0" },
+    buffers: [{ byteLength: 0, uri: "https://attacker.invalid/collision.bin" }],
+    scenes: [{}],
+    scene: 0,
+  });
+  const padded = source.padEnd(Math.ceil(source.length / 4) * 4, " ");
+  const bytes = new Uint8Array(20 + padded.length);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, bytes.byteLength, true);
+  view.setUint32(12, padded.length, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  bytes.set(new TextEncoder().encode(padded), 20);
+  return bytes;
+}
+
+describe("Unreal-equivalent navigation artifact", () => {
+  it("rejects collision GLBs that can fetch external resources", async () => {
+    await assert.rejects(
+      extractCollisionGeometryFromGlb(externalResourceGlb()),
+      (error) => error?.code === "EXTERNAL_COLLISION_RESOURCE",
+    );
+  });
+
+  it("rejects off-mesh links until runtime traversal is implemented", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    await assert.rejects(
+      buildRecastNavigationArtifact({
+        positions,
+        indices,
+        source: {
+          assetId: "link-collision",
+          sha256: "f".repeat(64),
+          authoringHash: "4".repeat(64),
+          worldUnit: "metres",
+        },
+        agent: profile,
+        build,
+        spawn: { id: "opening", position: [1, 0, 1] },
+        destinations: [],
+        offMeshConnections: [{
+          startPosition: [1, 0, 1],
+          endPosition: [3, 0, 3],
+          radius: 0.22,
+          bidirectional: true,
+        }],
+      }),
+      (error) => error?.code === "OFF_MESH_CONNECTIONS_UNSUPPORTED",
+    );
+  });
+
+  it("builds one radius-cleared Detour mesh and proves a two-room route", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    appendFloor(positions, indices, 4, 1.4, 5.5, 2.6);
+    appendFloor(positions, indices, 5.5, 0, 9.5, 4);
+
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      source: {
+        assetId: "collision-asset",
+        sha256: "a".repeat(64),
+        authoringHash: "1".repeat(64),
+      },
+      agent: profile,
+      build,
+      spawn: { id: "opening", position: [1, 0, 2] },
+      destinations: [{ id: "far-room", position: [8.5, 0, 2] }],
+    });
+
+    assert.equal(artifact.schemaVersion, "spatial-navigation-v6");
+    assert.equal(artifact.source.authoringHash, "1".repeat(64));
+    assert.deepEqual(artifact.generator, {
+      name: "recast-navigation-js",
+      version: "0.43.1",
+      nativeRecastCommit: "599fd0f023181c0a484df2a18cf1d75a3553852e",
+      mode: "tiled",
+    });
+    assert.equal(artifact.recastConfig.walkableRadius, 3);
+    assert.equal(artifact.recastConfig.walkableHeight, 36);
+    assert.equal(artifact.recastConfig.walkableClimb, 2);
+    assert.equal(artifact.recastConfig.borderSize, 6);
+    assert.equal(artifact.recastConfig.minRegionArea, 64);
+    assert.equal(artifact.recastConfig.mergeRegionArea, 400);
+    assert.equal(artifact.validation.passed, true);
+    assert.equal(artifact.validation.componentCount, 1);
+    assert.deepEqual(artifact.validation.unreachableDestinationIds, []);
+    assert.ok(artifact.navMesh.vertices.length > 3);
+    assert.ok(artifact.navMesh.indices.length > 3);
+    assert.ok(artifact.detour.bytesBase64.length > 40);
+
+    const runtime = await importNavigationArtifact(artifact);
+    const moved = runtime.moveAlongSurface([1, 0, 2], [1.2, 0, 2]);
+    assert.ok(moved);
+    assert.ok(Math.abs(moved[0] - 1.2) < 0.11);
+    assert.ok(runtime.path([1, 0, 2], [8.5, 0, 2])?.length > 1);
+    runtime.destroy();
+
+    const physical = await validatePhysicalNavigation({ artifact, positions, indices });
+    assert.equal(physical.passed, true);
+    assert.equal(physical.engine, "rapier3d");
+    assert.equal(physical.routeCount, 2);
+    assert.deepEqual(physical.failedDestinationIds, []);
+    assert.deepEqual(
+      physical.routes.map((route) => `${route.destinationId}:${route.direction}`).sort(),
+      ["far-room:inbound", "far-room:outbound"],
+    );
+  });
+
+  it("fails closed when collision blocks a Detour-approved doorway", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    appendFloor(positions, indices, 4, 1.4, 5.5, 2.6);
+    appendFloor(positions, indices, 5.5, 0, 9.5, 4);
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      source: {
+        assetId: "collision-asset",
+        sha256: "c".repeat(64),
+        authoringHash: "2".repeat(64),
+      },
+      agent: profile,
+      build,
+      spawn: { id: "opening", position: [1, 0, 2] },
+      destinations: [{ id: "far-room", position: [8.5, 0, 2] }],
+    });
+
+    await assert.rejects(
+      validatePhysicalNavigation({
+        artifact,
+        positions,
+        indices,
+        obstacleBoxes: [{ min: [4.5, 0, 1.35], max: [5, 2.2, 2.65] }],
+      }),
+      (error) => {
+        assert.equal(error.code, "PHYSICAL_NAVIGATION_ACCEPTANCE_FAILED");
+        assert.equal(error.details.destinationId, "far-room");
+        return true;
+      },
+    );
+  });
+
+  it("fails closed when the projected opening spawn overlaps collision", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      source: {
+        assetId: "spawn-collision",
+        sha256: "c".repeat(64),
+        authoringHash: "3".repeat(64),
+        worldUnit: "metres",
+      },
+      agent: profile,
+      build,
+      spawn: { id: "blocked-opening", position: [1, 0, 1] },
+      destinations: [{ id: "room", position: [3, 0, 3] }],
+    });
+    await assert.rejects(
+      validatePhysicalNavigation({
+        artifact,
+        positions,
+        indices,
+        obstacleBoxes: [{ min: [0.5, 0, 0.5], max: [1.5, 2, 1.5] }],
+      }),
+      (error) => error?.code === "PHYSICAL_NAVIGATION_ACCEPTANCE_FAILED" &&
+        error?.details?.destinationId === "blocked-opening",
+    );
+  });
+
+  it("fails closed when advertised rooms remain disconnected", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    appendFloor(positions, indices, 7, 0, 11, 4);
+
+    await assert.rejects(
+      buildRecastNavigationArtifact({
+        positions,
+        indices,
+        source: {
+          assetId: "collision-asset",
+          sha256: "b".repeat(64),
+          authoringHash: "3".repeat(64),
+        },
+        agent: profile,
+        build,
+        spawn: { id: "opening", position: [1, 0, 2] },
+        destinations: [{ id: "far-room", position: [9, 0, 2] }],
+      }),
+      (error) => {
+        assert.equal(error.code, "NAVIGATION_ACCEPTANCE_FAILED");
+        assert.equal(error.details.componentCount, 2);
+        assert.deepEqual(error.details.unreachableDestinationIds, ["far-room"]);
+        return true;
+      },
+    );
+  });
+});

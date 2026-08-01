@@ -64,6 +64,10 @@ export type AuthTokens = {
   refreshExpiresAt: string;
 };
 
+export type RefreshSessionResult =
+  | { status: "rotated"; auth: AuthContext; tokens: AuthTokens }
+  | { status: "stale" };
+
 export function appendAuthCookies(headers: Headers, tokens: AuthTokens): void {
   headers.append("Set-Cookie", accessTokenCookie(tokens.accessToken, tokens.accessTtlSeconds));
   headers.append("Set-Cookie", refreshTokenCookie(tokens.refreshToken, tokens.refreshTtlSeconds));
@@ -256,7 +260,7 @@ export async function createAuthSession(
 export async function rotateRefreshSession(
   env: Env,
   request: Request,
-): Promise<{ auth: AuthContext; tokens: AuthTokens } | null> {
+): Promise<RefreshSessionResult | null> {
   const raw = extractRefreshToken(request);
   if (!raw) return null;
   const separator = raw.indexOf(".");
@@ -265,16 +269,10 @@ export async function rotateRefreshSession(
   const suppliedSecret = raw.slice(separator + 1);
   if (suppliedSecret.length < 40 || sessionId.length > 80) return null;
   const suppliedHash = await hashRefreshToken(suppliedSecret, env.REFRESH_TOKEN_PEPPER);
-  const previouslyUsed = await env.DB.prepare(
-    "SELECT session_id FROM auth_refresh_token_history WHERE token_hash = ?",
-  ).bind(suppliedHash).first<{ session_id: string }>();
-  if (previouslyUsed) {
-    await revokeSession(env.DB, previouslyUsed.session_id, "refresh_reuse");
-    return null;
-  }
   const row = await env.DB.prepare(`
     SELECT s.id, s.user_id, s.organisation_id, s.refresh_token_hash,
-      s.previous_refresh_token_hash, s.expires_at, s.revoked_at,
+      s.previous_refresh_token_hash, s.refresh_generation,
+      s.expires_at, s.revoked_at,
       u.email, u.display_name, m.role
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
@@ -286,6 +284,7 @@ export async function rotateRefreshSession(
     organisation_id: string;
     refresh_token_hash: string;
     previous_refresh_token_hash: string | null;
+    refresh_generation: number;
     expires_at: string;
     revoked_at: string | null;
     email: string;
@@ -293,11 +292,6 @@ export async function rotateRefreshSession(
     role: AuthContext["role"];
   }>();
   if (!row || row.revoked_at || Date.parse(row.expires_at) <= Date.now()) return null;
-  if (row.previous_refresh_token_hash && await timingSafeStringEqual(suppliedHash, row.previous_refresh_token_hash)) {
-    await revokeSession(env.DB, sessionId, "refresh_reuse");
-    return null;
-  }
-  if (!(await timingSafeStringEqual(suppliedHash, row.refresh_token_hash))) return null;
 
   const auth: AuthContext = {
     userId: row.user_id,
@@ -306,6 +300,22 @@ export async function rotateRefreshSession(
     displayName: row.display_name,
     role: row.role,
   };
+  if (row.previous_refresh_token_hash && await timingSafeStringEqual(suppliedHash, row.previous_refresh_token_hash)) {
+    // Another tab or a network retry may arrive after rotation committed.
+    // Never return the current bearer and never revoke the legitimate session;
+    // the browser retries under its cross-tab refresh lock.
+    return { status: "stale" };
+  }
+  if (!(await timingSafeStringEqual(suppliedHash, row.refresh_token_hash))) {
+    const knownRotation = await env.DB.prepare(`
+      SELECT 1 AS found FROM auth_refresh_token_history
+      WHERE token_hash = ? AND session_id = ?
+    `).bind(suppliedHash, sessionId).first<{ found: number }>();
+    if (knownRotation) return { status: "stale" };
+    return null;
+  }
+
+  const nextGeneration = row.refresh_generation + 1;
   const nextSecret = secureToken(48);
   const nextHash = await hashRefreshToken(nextSecret, env.REFRESH_TOKEN_PEPPER);
   const tokens = await issueAuthTokens(env, auth, sessionId, nextSecret);
@@ -313,20 +323,28 @@ export async function rotateRefreshSession(
     env.DB.prepare(`
       UPDATE auth_sessions
       SET previous_refresh_token_hash = refresh_token_hash,
-        refresh_token_hash = ?, rotated_at = datetime('now'),
+        refresh_token_hash = ?, refresh_generation = ?, rotated_at = datetime('now'),
         last_seen_at = datetime('now'), expires_at = ?
-      WHERE id = ? AND refresh_token_hash = ? AND revoked_at IS NULL
-    `).bind(nextHash, tokens.refreshExpiresAt, sessionId, suppliedHash),
+      WHERE id = ? AND refresh_token_hash = ? AND refresh_generation = ? AND revoked_at IS NULL
+    `).bind(
+      nextHash,
+      nextGeneration,
+      tokens.refreshExpiresAt,
+      sessionId,
+      suppliedHash,
+      row.refresh_generation,
+    ),
     env.DB.prepare(`
       INSERT OR IGNORE INTO auth_refresh_token_history (token_hash, session_id)
       VALUES (?, ?)
     `).bind(suppliedHash, sessionId),
   ]);
   if ((results[0]?.meta.changes ?? 0) !== 1) {
-    await revokeSession(env.DB, sessionId, "refresh_race");
-    return null;
+    // Another request may have committed this exact rotation. Re-entering the
+    // function converts that race into the non-destructive stale result above.
+    return rotateRefreshSession(env, request);
   }
-  return { auth, tokens };
+  return { status: "rotated", auth, tokens };
 }
 
 export async function revokeSession(database: D1Database, sessionId: string, reason: string): Promise<void> {
@@ -397,7 +415,6 @@ function parseKeyRing(value: string): KeyRing {
 async function hashRefreshToken(token: string, pepper: string): Promise<string> {
   return sha256Hex(`${token}:${pepper}`);
 }
-
 function positiveInteger(value: string, fallback: number): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;

@@ -23,6 +23,8 @@ import {
   type Vector3Tuple,
 } from "../shared/navigation-runtime";
 import { parseWorldUnit } from "../shared/world-units";
+import type { DetourNavigationRuntime } from "./detour-navigation";
+import type { PhysicalNavigationRuntime } from "./physical-navigation";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -185,7 +187,11 @@ let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | nul
 let readySent = false;
 let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
 let navigationRuntime: NavigationRuntime | null = null;
+let detourNavigationRuntime: DetourNavigationRuntime | null = null;
+let physicalNavigationRuntime: PhysicalNavigationRuntime | null = null;
+let navigationRuntimeGeneration = 0;
 let walkableBoundarySource: WalkableBoundarySource = "none";
+let movementRuntimeReady = false;
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
@@ -252,6 +258,12 @@ async function start(): Promise<void> {
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
     if (Reflect.get(event.data, "type") === "set-spatial-runtime") {
+      const runtimeGeneration = ++navigationRuntimeGeneration;
+      detourNavigationRuntime?.destroy();
+      detourNavigationRuntime = null;
+      physicalNavigationRuntime?.destroy();
+      physicalNavigationRuntime = null;
+      movementRuntimeReady = false;
       const boxes = Reflect.get(event.data, "collisionBoxes");
       const authoredBoxes = Array.isArray(boxes)
         ? boxes.flatMap((box) => {
@@ -271,12 +283,15 @@ async function start(): Promise<void> {
       if (authoredRuntime) {
         navigationRuntime = authoredRuntime;
         walkableBoxes = authoredBoxes;
+        const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
+        if (navigationArtifact) walkableBoxes = [];
         if (!walkableBoxes.length) {
           const bounds = navigationMeshBounds(authoredRuntime);
           if (bounds) walkableBoxes = [bounds];
         }
         walkableBoundarySource = "authored";
-        setMovementAvailability(controls, true);
+        movementRuntimeReady = !navigationArtifact;
+        setMovementAvailability(controls, movementRuntimeReady);
         anchorCameraToWalkable(camera);
         const obstacleCount = authoredRuntime.obstacleBoxes.length;
         setControlStatus(
@@ -285,10 +300,73 @@ async function start(): Promise<void> {
             : "clear route map"}`,
           "ready",
         );
+        if (navigationArtifact) {
+          setMovementAvailability(controls, false);
+          setControlStatus("Preparing certified walking map");
+          const collisionUrl = Reflect.get(event.data, "collisionUrl");
+          if (typeof collisionUrl !== "string" || !collisionUrl) {
+            setControlStatus("Look around only · certified collision proxy is unavailable");
+            return;
+          }
+          void Promise.all([
+            import("./detour-navigation"),
+            import("./physical-navigation"),
+          ]).then(async ([detourModule, physicalModule]) => {
+            const results = await Promise.allSettled([
+              detourModule.DetourNavigationRuntime.create(navigationArtifact),
+              physicalModule.PhysicalNavigationRuntime.create(
+                collisionUrl,
+                navigationArtifact,
+                authoredRuntime.obstacleBoxes,
+              ),
+            ]);
+            const detourResult = results[0];
+            const physicalResult = results[1];
+            if (detourResult.status === "rejected") {
+              if (physicalResult.status === "fulfilled") physicalResult.value.destroy();
+              throw detourResult.reason;
+            }
+            if (physicalResult.status === "rejected") {
+              if (detourResult.status === "fulfilled") detourResult.value.destroy();
+              throw physicalResult.reason;
+            }
+            return [detourResult.value, physicalResult.value] as const;
+          }).then(([runtime, physicalRuntime]) => {
+            if (runtimeGeneration !== navigationRuntimeGeneration) {
+              runtime.destroy();
+              physicalRuntime.destroy();
+              return;
+            }
+            const projected = runtime.projectCamera(camera.position.toArray() as Vector3Tuple) ??
+              runtime.openingCamera();
+            camera.position.fromArray(projected);
+            if (!physicalRuntime.placeCamera(projected)) {
+              runtime.destroy();
+              physicalRuntime.destroy();
+              throw new Error("Opening camera overlaps certified collision geometry");
+            }
+            detourNavigationRuntime = runtime;
+            physicalNavigationRuntime = physicalRuntime;
+            lastWalkablePosition = camera.position.clone();
+            controls.align(camera);
+            movementRuntimeReady = true;
+            setMovementAvailability(controls, true);
+            setControlStatus("Walking enabled · Detour + capsule collision verified", "ready");
+          }).catch((error) => {
+            if (runtimeGeneration !== navigationRuntimeGeneration) return;
+            detourNavigationRuntime = null;
+            movementRuntimeReady = false;
+            setMovementAvailability(controls, false);
+            setControlStatus(
+              `Look around only · navigation artifact failed (${error instanceof Error ? error.message : "unknown error"})`,
+            );
+          });
+        }
       } else {
         navigationRuntime = null;
         walkableBoxes = [];
         walkableBoundarySource = "none";
+        movementRuntimeReady = false;
         setMovementAvailability(controls, false);
         setControlStatus("Look around only · no walking map");
       }
@@ -352,7 +430,31 @@ async function start(): Promise<void> {
         return;
       }
       const requestedPosition = new THREE.Vector3().fromArray(pose.position);
-      if (navigationRuntime && !isCameraPositionAllowed(requestedPosition)) {
+      let acceptedPosition = requestedPosition;
+      if (detourNavigationRuntime) {
+        const projectedPosition = detourNavigationRuntime.projectCamera(
+          requestedPosition.toArray() as Vector3Tuple,
+        );
+        const currentPosition = camera.position.toArray() as Vector3Tuple;
+        if (
+          !projectedPosition ||
+          !detourNavigationRuntime.hasCompletePath(currentPosition, projectedPosition) ||
+          !physicalNavigationRuntime?.canPlaceCamera(projectedPosition)
+        ) {
+          if (requestId) {
+            post({
+              source: "spatial-spark",
+              type: "camera-set",
+              requestId,
+              accepted: false,
+              message: "The requested room is not reachable by the certified walking map.",
+              cameraPose: cameraPose(camera),
+            });
+          }
+          return;
+        }
+        acceptedPosition = new THREE.Vector3().fromArray(projectedPosition);
+      } else if (navigationRuntime && !isCameraPositionAllowed(requestedPosition)) {
         if (requestId) {
           post({
             source: "spatial-spark",
@@ -365,7 +467,7 @@ async function start(): Promise<void> {
         }
         return;
       }
-      camera.position.fromArray(pose.position);
+      camera.position.copy(acceptedPosition);
       camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
       camera.lookAt(new THREE.Vector3().fromArray(pose.target));
       controls.align(camera);
@@ -373,6 +475,22 @@ async function start(): Promise<void> {
       camera.updateProjectionMatrix();
       if (navigationRuntime && isCameraPositionAllowed(camera.position)) {
         lastWalkablePosition = camera.position.clone();
+      }
+      if (
+        physicalNavigationRuntime &&
+        !physicalNavigationRuntime.placeCamera(camera.position.toArray() as Vector3Tuple)
+      ) {
+        if (requestId) {
+          post({
+            source: "spatial-spark",
+            type: "camera-set",
+            requestId,
+            accepted: false,
+            message: "The requested room camera overlaps certified collision geometry.",
+            cameraPose: cameraPose(camera),
+          });
+        }
+        return;
       }
       if (requestId) {
         post({
@@ -461,7 +579,7 @@ async function start(): Promise<void> {
   } else {
     frameScene(mesh, camera);
   }
-  setMovementAvailability(controls, walkableBoundarySource === "authored");
+  setMovementAvailability(controls, movementRuntimeReady);
   if (walkableBoundarySource === "none") {
     setControlStatus("Look around only · no walking map");
   }
@@ -478,7 +596,20 @@ async function start(): Promise<void> {
     lastFrameAt = now;
     const movementStart = lastWalkablePosition?.clone() ?? camera.position.clone();
     controls.update(camera, deltaSeconds, mobileControls.movement);
-    if (navigationRuntime) {
+    if (detourNavigationRuntime) {
+      const destination = camera.position.toArray() as Vector3Tuple;
+      const origin = movementStart.toArray() as Vector3Tuple;
+      const detourResolved = detourNavigationRuntime.moveCamera(origin, destination);
+      const resolved = detourResolved && physicalNavigationRuntime
+        ? physicalNavigationRuntime.moveCamera(origin, detourResolved)
+        : null;
+      if (resolved) {
+        camera.position.fromArray(resolved);
+        lastWalkablePosition = camera.position.clone();
+      } else if (lastWalkablePosition) {
+        camera.position.copy(lastWalkablePosition);
+      }
+    } else if (navigationRuntime) {
       const destination = camera.position.toArray() as Vector3Tuple;
       const origin = movementStart.toArray() as Vector3Tuple;
       const resolved = resolveNavigationMovement(origin, destination, navigationRuntime);
@@ -496,7 +627,7 @@ async function start(): Promise<void> {
     if (!readySent) {
       readySent = true;
       resetButton.disabled = false;
-      setMovementAvailability(controls, walkableBoundarySource === "authored");
+      setMovementAvailability(controls, movementRuntimeReady);
       const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
       loading.classList.add("is-complete");
@@ -668,6 +799,9 @@ function finiteTuple(value: unknown): Vector3Tuple | null {
 }
 
 function isCameraPositionAllowed(position: THREE.Vector3): boolean {
+  if (detourNavigationRuntime) {
+    return detourNavigationRuntime.isCameraAllowed(position.toArray() as Vector3Tuple);
+  }
   return navigationRuntime
     ? isNavigationPointAllowed(position.toArray() as Vector3Tuple, navigationRuntime)
     : false;
@@ -697,6 +831,20 @@ function navigationMeshBounds(
 }
 
 function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
+  if (detourNavigationRuntime) {
+    const nearest = detourNavigationRuntime.projectCamera(
+      camera.position.toArray() as Vector3Tuple,
+    );
+    if (!nearest) {
+      lastWalkablePosition = null;
+      return false;
+    }
+    const target = new THREE.Vector3().fromArray(nearest);
+    const adjusted = camera.position.distanceToSquared(target) > 1e-12;
+    camera.position.copy(target);
+    lastWalkablePosition = camera.position.clone();
+    return adjusted;
+  }
   if (navigationRuntime) {
     const nearest = nearestNavigationPoint(
       camera.position.toArray() as Vector3Tuple,
@@ -917,6 +1065,10 @@ function dispose(): void {
   fullscreenButton.removeEventListener("click", requestFullscreen);
   mobileControls.dispose();
   rendererControls?.dispose();
+  detourNavigationRuntime?.destroy();
+  detourNavigationRuntime = null;
+  physicalNavigationRuntime?.destroy();
+  physicalNavigationRuntime = null;
   resizeObserver?.disconnect();
   webglRenderer?.setAnimationLoop(null);
   splatMesh?.dispose();
