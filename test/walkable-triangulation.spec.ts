@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { triangulateWalkablePolygon } from "../src/worker";
+import {
+  interiorPointForWalkablePolygon,
+  triangulateWalkablePolygon,
+} from "../src/worker";
 
 function triangleArea(
   points: Array<[number, number, number]>,
@@ -17,6 +20,20 @@ function triangleArea(
 }
 
 describe("authored walkable polygon triangulation", () => {
+  it("chooses an interior navigation destination for a concave room", () => {
+    const position = interiorPointForWalkablePolygon([
+      [0, 0, 0],
+      [4, 0, 0],
+      [4, 0, 1],
+      [1, 0, 1],
+      [1, 0, 4],
+      [0, 0, 4],
+    ]);
+
+    expect(position).not.toBeNull();
+    expect(position![0] <= 1 || position![2] <= 1).toBe(true);
+  });
+
   it("triangulates a valid occupancy outline with a repeated pinch-point vertex", () => {
     const points: Array<[number, number, number]> = [
       [0, 0, 0],

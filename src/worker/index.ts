@@ -17697,17 +17697,44 @@ function navigationPositionFromRow(row: object): [number, number, number] | null
   const geometryJson = Reflect.get(row, "geometry_json");
   if (typeof geometryJson !== "string") return null;
   try {
-    const geometry = JSON.parse(geometryJson) as { points?: unknown[] };
+    const geometry = JSON.parse(geometryJson) as { type?: unknown; points?: unknown[] };
     const points = Array.isArray(geometry.points)
       ? geometry.points.map(finitePoint3).filter((point): point is [number, number, number] => Boolean(point))
       : [];
     if (!points.length) return null;
+    if (geometry.type === "polygon" && points.length >= 3) {
+      const interior = interiorPointForWalkablePolygon(points);
+      if (interior) return interior;
+    }
     return [0, 1, 2].map((axis) =>
         points.reduce((sum, point) => sum + point[axis]!, 0) / points.length
       ) as [number, number, number];
   } catch {
     return null;
   }
+}
+
+export function interiorPointForWalkablePolygon(
+  points: Array<[number, number, number]>,
+): [number, number, number] | null {
+  const indices = triangulateWalkablePolygon(points);
+  let largestTriangle: [number, number, number] | null = null;
+  let largestArea = 0;
+  for (let index = 0; index < indices.length; index += 3) {
+    const first = points[indices[index]!]!;
+    const second = points[indices[index + 1]!]!;
+    const third = points[indices[index + 2]!]!;
+    const area = Math.abs(
+      (second[0] - first[0]) * (third[2] - first[2]) -
+      (second[2] - first[2]) * (third[0] - first[0]),
+    ) / 2;
+    if (area <= largestArea) continue;
+    largestArea = area;
+    largestTriangle = [0, 1, 2].map((axis) =>
+      (first[axis]! + second[axis]! + third[axis]!) / 3
+    ) as [number, number, number];
+  }
+  return largestTriangle;
 }
 
 function canonicalWalkableAuthoringEntity(row: unknown): Array<{

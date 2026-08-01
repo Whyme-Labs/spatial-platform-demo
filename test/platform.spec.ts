@@ -2188,7 +2188,7 @@ describe("Spatial Studio Worker", () => {
       },
       destinations: [{
         id: snapshotEntity.entity.id,
-        position: [5 / 3, 0, 5 / 3],
+        position: [1 / 3, 0, 8 / 3],
       }],
       obstacles: [{
         id: snapshotObstacle.obstacle.id,
