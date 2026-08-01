@@ -822,6 +822,7 @@ function readConfig(): {
   if (
     contentUrl.origin !== location.origin ||
     (!contentUrl.pathname.startsWith("/asset/") &&
+      !contentUrl.pathname.startsWith("/public-asset/") &&
       !contentUrl.pathname.startsWith("/comparison-asset/"))
   ) {
     throw new Error("The scene asset URL is outside the trusted release boundary.");

@@ -187,6 +187,29 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
   await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 });
 
+test("accepts the release-scoped public asset route before Spark decoding", async ({ page }) => {
+  let requested = false;
+  await page.route("**/public-asset/release-id/asset-id/test-scene.spz", (route) => {
+    requested = true;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/octet-stream",
+      body: "invalid-spz-fixture",
+    });
+  });
+
+  await page.goto(
+    "/renderer/index.html?content=/public-asset/release-id/asset-id/test-scene.spz&format=spz",
+  );
+  await expect(page.getByText("The spatial scene could not be rendered.", { exact: true }))
+    .toBeVisible();
+  expect(requested).toBe(true);
+  await expect(page.getByText(
+    "The scene asset URL is outside the trusted release boundary.",
+    { exact: true },
+  )).toHaveCount(0);
+});
+
 test("hides the diagnostic runtime badge when the renderer is embedded", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
