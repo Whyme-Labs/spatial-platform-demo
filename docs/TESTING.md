@@ -10,7 +10,8 @@ only when the public behavior at its relevant seam is covered and the complete
 | --- | --- | --- | --- |
 | Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, navigation triangles/obstacles/transitions, coordinate transforms, OIDC helpers, processor validation, privacy detection, Turnstile verification |
 | Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
-| End to end | Production browser bundle | `npm run test:e2e` | Landing, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls and dropdowns, Spark renderer chrome, and the host-to-renderer navigation snapshot handoff |
+| Navigation contracts | Offline build and movement evidence | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, and deterministic physical-runtime probes |
+| End to end | Production browser bundle | `npm run test:e2e` | Landing and live-demo messaging, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls, navigation authoring/review spacing, Spark renderer chrome, Walk/Fly input, floor plan, and the host-to-renderer navigation snapshot handoff |
 | Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`
@@ -59,9 +60,15 @@ viewports. It fails when:
 3. action-state and control-wiring audits;
 4. production configuration audit;
 5. production build;
-6. instrumented unit/integration tests with coverage thresholds;
-7. Playwright E2E;
-8. Cloudflare production deployment dry run.
+6. deterministic Node navigation contracts;
+7. instrumented unit/integration tests with coverage thresholds;
+8. Playwright E2E;
+9. Cloudflare production deployment dry run.
+
+The v7 release gate treats navigation as immutable production evidence. A build
+must prove room-anchor enclosure, both-direction Walk/Fly wall sweeps, capsule
+corner sliding, room-route replay, and open/closed door parity before Studio can
+approve it or a movement-enabled release can be published.
 
 Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
 All API responses used by UI-layout tests are explicit fixtures. Worker routing

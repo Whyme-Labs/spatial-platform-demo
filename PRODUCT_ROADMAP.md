@@ -16,7 +16,7 @@ observability, tests, and deployment path work together.
 
 | Product surface | Status | What works now | Completion boundary |
 |---|---|---|---|
-| Marketing site | `LIVE` | Product story, storage boundaries, capture CTA | Replace conceptual claims with linked production case studies |
+| Marketing site | `LIVE` | Current Walk/Fly product story, linked Home Scan multi-room demo, capture CTA, and explicit visual/structure/navigation/evidence boundaries | Replace the licensed third-party technical demo with signed company-owned client case studies |
 | Sign-in | `LIVE` | Email OTP, resend cooldown, ES256 access JWT, refresh rotation, logout, expiring team invitations, tenant-scoped OIDC discovery and PKCE callback | Activate and accept one real enterprise IdP |
 | Team access | `LIVE` | Admin-only member inventory, expiring email invitations, OTP acceptance, role changes, resend, revoke/reinvite, immediate session invalidation, explicit multi-organisation workspace switching, OIDC provider lifecycle | Activate and accept one real enterprise IdP |
 | Projects | `LIVE` | Create, search/filter/sort, personal saved views, reusable organisation templates, organisation-defined typed fields, schema-versioned previewed metadata export/import, metadata-only handoff, queued asset-bearing cross-organisation copy, open workspace, edit metadata, guarded individual and bulk archive/restore, retention policy | Asset copy is deliberately bounded to one project, 10 versions, 50 verified assets, and 100 GiB; move, disaster recovery, and transfer of releases/jobs/reviews/auth/billing remain separate products |
@@ -24,9 +24,9 @@ observability, tests, and deployment path work together.
 | Processing jobs | `LIVE` | Executable local/external Spark worker plus Queue-dispatched Cloudflare Container lane, exact-job lease/heartbeat, multipart outputs, bounded capture-evidence validation, evidence, retry/cancel, and minute reconciliation | Native vendor reconstruction adapters and hosted GPU reconstruction workers |
 | QA | `LIVE` | Technical validation, automated privacy evidence, authored-geometry evidence, registered PLY occupancy/centroid/colour evidence, pose-path room coverage, and audited publication approval | Scanner-native live coverage and threshold validation on licensed K1/P2 pairs |
 | Releases | `LIVE` | Global inventory, publish, open, revoke, rollback, signed side-by-side Spark comparison | Production acceptance of registered raw-scene evidence on licensed scanner pairs |
-| Spark viewer | `LIVE` | RAD/SPZ/SOG, private range delivery, adaptive budgets, first-frame/error telemetry, guided navigation, authored-geometry floor plan with live camera marker | Broader measured phone matrix and richer multi-level circulation |
+| Spark viewer | `LIVE` | RAD/SPZ/SOG, private range delivery, adaptive budgets, first-frame/error telemetry, guided navigation, live floor plan, collision-driven Rapier Walk/Fly movement, and touch altitude controls | Broader measured phone matrix and richer multi-level circulation |
 | Customer review | `LIVE` | Expiring email invitations, least-privilege review, camera-anchored comments/redactions, approval history, synchronized rendered comparison | Enterprise IdP onboarding |
-| Semantics | `LIVE` | Floors, rooms, doorways, POIs, routes, accessibility, collision boxes, box/polygon navigation triangles, and human-reviewed walkable-region candidates from verified registered PLY | Licensed K1/P2 validation plus automatic multi-level circulation and doorway/stair inference |
+| Semantics | `LIVE` | Floors, rooms, doorways, POIs, routes, provisional/metric units, v7 reviewed structural shells, Recast/Detour artifacts, dynamic doors, and human-reviewed walkable-region candidates from verified registered PLY | Licensed K1/P2 validation plus automatic multi-level circulation and doorway/stair inference |
 | Measurement/CAD | `PARTIAL` | Briefs, tolerance classes, independent checks, residual QA, evidence-gated draft DXF, private delivery, cost evidence, sign-off boundary | Three paid briefs and partner evidence before commercial accuracy/CAD production claims |
 | Billing/hosting lifecycle | `LIVE` for merchant billing; `PARTIAL` for self-service/custom domains | Admin-only manual invoice issuance, payment-reference-required reconciliation, guarded subscription transitions, idempotent audit ledger, fail-closed entitlement, plans, themes, quotas, retention, expiry enforcement, restore retrieval drill, dormant Stripe adapter, and an honest Cloudflare for SaaS hostname state machine | Operate one real manual billing cycle; Stripe is deferred. Cloudflare for SaaS still requires one live customer hostname |
 
@@ -1462,6 +1462,48 @@ Boundary:
 - larger portfolios, resumable cross-account/object-store migration, disaster
   recovery, and destructive source retirement require separately designed
   products
+
+## Milestone 25 — Verified structural Walk + Fly navigation
+
+Status: `LIVE` in the public Home Scan multi-room release.
+
+Outcome: a Gaussian splat can be explored like a game scene without pretending
+that splat density is collision geometry or flattening movement into a 2D
+furniture-obstacle problem.
+
+Implemented controls:
+
+- an `authored-structural-collision-v2` contract keeps reviewed floors, walls,
+  ceilings, dynamic doors, furniture groups, and triggers distinct
+- the processor builds Recast/Detour topology from the reviewed shell and emits
+  content-addressed JSON validation plus Detour binary derivatives
+- the release freezes its authoring hash, agent profile, artifact IDs, hashes,
+  byte sizes, validation evidence, and operator approval
+- the browser loads the same shell into Rapier and drives a grounded capsule in
+  Walk mode or a no-gravity collision sphere in Fly mode
+- furniture can be excluded from the public movement profiles while walls,
+  ceilings, floors, and closed doors remain blocking
+- desktop arrow/WASD controls, Shift speed boost, Fly altitude keys, and mobile
+  movement/altitude controls share one collision runtime
+- the floor plan, room routes, runtime topology, and published scene all bind to
+  the same immutable navigation build
+
+Acceptance evidence:
+
+- every published room anchor is enclosed in six directions by the reviewed
+  shell
+- both-direction Walk-capsule and Fly-sphere sweeps cover every reviewed wall
+- capsule corner-slide probes reject penetration while preserving traversal
+- every room route replays in both directions, and every dynamic door is proven
+  open/passable and closed/blocked in both Rapier and Detour
+- stale, missing, disconnected, or hash-mismatched navigation evidence blocks
+  movement-enabled publication
+- the public Home Scan release exposes four connected rooms, reviewed collision,
+  Walk/Fly modes, a live floor plan, and no public Noclip mode
+
+Boundary: the Home Scan visual and shell use provisional scene units. They are
+interaction evidence, not survey, clearance, accessibility, or construction
+measurements. Metric claims still require a separately measured scene version.
 
 ## Delivery discipline
 

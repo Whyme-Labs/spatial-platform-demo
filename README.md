@@ -6,7 +6,7 @@ access-controlled browser release without exposing raw capture files.
 
 - Production: <https://spatial.whymelabs.com>
 - Studio: <https://spatial.whymelabs.com/studio.html>
-- Public indoor release: <https://spatial.whymelabs.com/s/playroom>
+- Public Walk + Fly multi-room release: <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>
 - Staging: <https://spatial-studio-staging.swmengappdev.workers.dev>
 
 ## Implemented production path
@@ -339,6 +339,11 @@ rollback procedures.
   hardening decisions
 - [docs/verification/open-corpus-e2e.md](./docs/verification/open-corpus-e2e.md)
   — reproducible open-data end-to-end proof and explicit evidence boundaries
+- [docs/V7_NAVIGATION_PIPELINE.md](./docs/V7_NAVIGATION_PIPELINE.md) — current
+  structural collision, Rapier Walk/Fly, Detour build, validation, and immutable
+  publication contract
+- [docs/V5_NAVIGATION_PIPELINE.md](./docs/V5_NAVIGATION_PIPELINE.md) — legacy
+  authored-floor compatibility path and provisional-unit boundary
 - [docs/research/floorplan-and-scene-editing.md](./docs/research/floorplan-and-scene-editing.md)
   — verified floor-plan and furniture-editing capability boundaries and
   implementation sequence

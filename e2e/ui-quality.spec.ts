@@ -25,6 +25,18 @@ test.describe("responsive public surfaces", () => {
       await page.evaluate(() => document.fonts.ready);
 
       await expect(page.getByRole("heading", { name: /Places, made explorable/i })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Explore multi-room demo", exact: true })).toHaveAttribute(
+        "href",
+        "/s/home-scan-spark-multi-room-demo",
+      );
+      await expect(page.getByRole("heading", {
+        name: "The splat is the view. The scene graph makes it playable.",
+        exact: true,
+      })).toBeAttached();
+      await expect(page.getByRole("link", { name: "Home Scan by Isaiah Sweeney", exact: true })).toHaveAttribute(
+        "href",
+        "https://superspl.at/scene/3f89bbd3",
+      );
       await expectResponsiveSurface(page, "body");
     }
   });

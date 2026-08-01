@@ -402,11 +402,12 @@ The shipped agent pins the official Spark 2.1.0 `build-lod` implementation and
 uses its quality LoD method for production RAD derivatives. It also renders a
 real Spark poster and emits a machine-readable QA report. SplatTransform remains
 the compatible interchange path, while PDAL/Open3D remain candidates for future
-metric derivatives. The v5 navigation runtime deliberately separates visual
-reconstruction from authored game-space geometry: reviewed room/floor
-polygons, doorway connectors, obstacle proxies, and an agent profile compile to
-an immutable release snapshot. Rich automatic wall/object geometry extraction
-remains behind the adapter boundary.
+metric derivatives. The legacy v5 compatibility path separates visual
+reconstruction from authored floor polygons, doorway connectors, obstacle
+proxies, and an agent profile. The current v7 path binds a reviewed structural
+shell, Rapier collision profiles, Detour topology, validation probes, and exact
+derivative hashes to the immutable release snapshot. Rich automatic wall/object
+geometry extraction remains behind the adapter boundary.
 
 ## Renderer and formats
 
@@ -502,7 +503,7 @@ The deployed platform is a secure ingest-to-release, review, spatial authoring,
 privacy-evidence, measurement-evidence, and hosting-lifecycle product. Remaining
 roadmap work requires either external evidence or deeper specialist processing:
 scanner-native adapters and live coverage validation, multi-level circulation
-and doorway/stair inference, point-cloud-derived floor plans, paid DXF/CAD validation, enterprise
+and doorway/stair inference, licensed scanner floor-plan validation, paid DXF/CAD validation, enterprise
 IdP onboarding, Stripe account/live-lifecycle activation, and production Cloudflare for SaaS account
 activation with a live customer hostname.
 

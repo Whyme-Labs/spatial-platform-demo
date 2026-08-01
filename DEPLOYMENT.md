@@ -479,6 +479,11 @@ curl --fail https://spatial.whymelabs.com/api/health
 
 Apply database migrations before code that depends on them. D1 migrations are
 append-only after production deployment; do not edit an already applied file.
+The current release requires `0037_refresh_rotation_replay.sql` and
+`0038_recast_navigation_builds.sql` in both environments before deploying the
+Worker. Migration `0037` preserves refresh-token replay evidence; `0038` stores
+the exact v7 navigation build state, tuning, authoring hashes, approved
+report/Detour assets, and review evidence used by the publication gate.
 `wrangler deploy` publishes both the Worker and its declared
 domain and schedule; verify both the `workers.dev` and branded JWKS after a
 signing-key secret change.
@@ -594,6 +599,14 @@ unique run ID and is deleted before the command succeeds.
     and a pending human-review report. Repeat with an E57 metric point cloud and
     confirm it is classified as `pointcloud`, never invokes Spark, and makes no
     semantic, calibration, or survey-accuracy claim.
+23. On an immutable version with a reviewed `authored-structural-collision-v2`
+    shell, tune the Walk/Fly agents and build verified navigation. Confirm the
+    processor emits hash-bound validation JSON and Detour assets; review and
+    approve the build; then publish. In the public viewer, prove arrow/WASD and
+    touch movement, Shift boost, Fly rise/lower, collision against every wall,
+    furniture-ignoring traversal, live floor-plan position, room reachability,
+    and open/closed door parity. Tamper one artifact hash and confirm publication
+    and manifest delivery fail closed.
 
 The automated test suite runs the same release lifecycle locally in workerd.
 

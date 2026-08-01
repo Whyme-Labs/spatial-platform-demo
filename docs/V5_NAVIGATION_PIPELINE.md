@@ -1,5 +1,10 @@
 # V5 authored navigation pipeline
 
+> Legacy compatibility path. New movement-enabled releases should use the
+> [V7 structural navigation pipeline](./V7_NAVIGATION_PIPELINE.md). V5 remains
+> documented because historical releases and provisional authored-floor
+> workflows still use this snapshot contract.
+
 V5 turns a visual Gaussian reconstruction into an explicitly authored,
 release-safe navigation scene. It does not claim that a Gaussian splat is
 collision geometry, infer real-world scale, or automatically reconstruct every

@@ -54,3 +54,13 @@ Every demonstration scene should record:
 2. **Open 3DGS Study** — hot-linked SparkJS documentation asset; technical preview only until scene-level permission is confirmed.
 3. **K1 vs P2 benchmark** — replace the hot-linked sample with same-scene vendor captures as soon as they are obtained.
 4. **First owned property/venue pilot** — become the primary client-facing case study after signed location permission and privacy review.
+
+## Current public technical demonstration
+
+**Home Scan — Walk + Fly Multi-room Demo** uses Isaiah Sweeney's Home Scan
+scene from SuperSplat under CC BY 4.0. The source, attribution, conversion
+evidence, and scene-level limitations are recorded in
+[`docs/research/spark-multi-room-demo-asset-2026-07-31.md`](./docs/research/spark-multi-room-demo-asset-2026-07-31.md).
+The release is suitable for a clearly attributed product-capability demo. It is
+not a company-owned case study and must be replaced by signed owned/client
+capture evidence before marketing customer outcomes as field-proven.

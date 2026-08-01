@@ -6,7 +6,7 @@ queue.
 
 ## Current execution state
 
-The internally implementable roadmap through Milestone 24 is production
+The internally implementable roadmap through Milestone 25 is production
 deployed. Every remaining unchecked item below is an external activation or
 real-world evidence gate, not a known dead control or missing application
 handler. The closure matrix is recorded in
@@ -121,6 +121,15 @@ handler. The closure matrix is recorded in
       acceptance/rejection, editable room seeds, and polygonal navmesh
 - [x] responsive box/polygon floor-plan overlay with live camera marker,
       keyboard room controls, and acknowledged click-to-teleport
+- [x] v7 reviewed structural shell with separately classified floors, walls,
+      ceilings, dynamic doors, ignored furniture, and trigger volumes
+- [x] offline Recast/Detour build with frozen binary/JSON hashes, reviewed agent
+      tuning, connectivity gates, and publication blocking on stale evidence
+- [x] collision-driven Rapier Walk capsule and Fly sphere with arrow/WASD,
+      keyboard altitude, touch movement, speed boost, wall sliding, and recovery
+- [x] deterministic v7 acceptance covering room-anchor enclosure, both-direction
+      Walk/Fly wall sweeps, capsule corner slides, room-route replay, and open/
+      closed door parity in both collision and navigation runtimes
 - [x] review/operator privacy regions with human approval
 - [x] automated private-frame privacy detection through Workers AI/Queues,
       human candidate disposition, evidence retention, bounded retries, and QA

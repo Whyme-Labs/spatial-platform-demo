@@ -1,9 +1,9 @@
 # Production-readiness closure
 
-Last reviewed: 2026-07-29
+Last reviewed: 2026-08-02
 
 The original 2026-07-26 audit assessed the repository as a static prototype.
-Milestones 1–24 replaced that prototype boundary with a deployed Cloudflare
+Milestones 1–25 replaced that prototype boundary with a deployed Cloudflare
 Workers product. This matrix prevents a completed implementation from being
 confused with an external activation or real-data validation gate.
 
@@ -18,17 +18,18 @@ confused with an external activation or real-data validation gate.
 | Processing orchestration | `LIVE` | Idempotent jobs, leases, heartbeat, progress, cancellation, retry, dead-letter states, Queue dispatch, reconciliation, and pinned Container processor | Vendor-native licensed reconstruction automation and elastic GPU provider |
 | Format pipeline | `LIVE` | Evidence validation plus Spark RAD/SPZ/SOG paths, malformed-input tests, posters, reports, purpose/format separation, and vendor-neutral metric PLY/E57/LAS/LAZ/PTS normalisation through pinned PDAL | Licensed K1/P2 export and quality comparison |
 | Indicative floorplans | `LIVE` | Checksum-bound metric input, canonical Y-up normalisation, bounded extraction, immutable proposal evidence, operator review, versioned revisions, and hash-verified SVG/PDF/DXF exports | Real indoor scanner corpus, paid measurement briefs, and qualified sign-off before measured/certified claims |
-| Production viewer | `LIVE` | Bundled Spark 2.1, private range delivery, adaptive budgets, progress/error/retry telemetry, guided navigation, collision, floor plan, and public production scene | Broader physical phone matrix |
+| Production viewer | `LIVE` | Bundled Spark 2.1, private range delivery, adaptive budgets, progress/error/retry telemetry, guided rooms, live floor plan, v7 reviewed structural collision, Rapier Walk/Fly movement, and public multi-room production scene | Broader measured physical phone matrix and multi-level circulation |
 | Publication and access | `LIVE` | Immutable public/unlisted/token/customer releases, short-lived scene sessions, private R2 range access, revoke, rollback, review links, and approval history | Real customer hostname activation |
 | Security and privacy | `LIVE` | CSP and security headers, same-origin mutation checks, Turnstile-protected OTP requests/resends, output escaping, quotas, tenant isolation, secrets/key rotation, audit records, private raw assets, automated privacy evidence, and human-only disposition | Customer security review for sensitive deployments |
 | Reliability and observability | `LIVE` application controls; `VALIDATE` provider operations | Request IDs, structured logs, operations inventory, queue/dead-letter evidence, bounded auth-state cleanup, lifecycle enforcement, retained-object retrieval drill, recovery runbooks, and Worker health endpoint | External uptime alert route and provider-level restore exercise before paid customer data |
 | Source release gate | `LIVE` checks; `VALIDATE` policy enforcement | Private GitHub repository plus least-privilege, SHA-pinned CI for locked install, dependency audit, application release gate, and processor dry-run | Branch protection requires an upgraded GitHub plan or a public repository |
-| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 115 Worker/domain tests across 26 files; hermetic Worker runtime with remote bindings disabled; action-state and control-wiring audits; build and production dry-run; final 15-lane/28-assertion pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering; live staging and production Worker/container health | Maintain licensed K1/P2 compact/large/edge-case corpus |
+| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 176 Worker/domain tests across 35 files, 15 deterministic navigation contracts, and 50 Playwright tests; hermetic Worker runtime with remote bindings disabled; action/control/config audits; responsive browser coverage from 1440×1000 through 320×568; build and production dry-run; pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering | Maintain licensed K1/P2 compact/large/edge-case corpus |
 
 ## Roadmap state
 
-The internally implementable roadmap through Milestone 24, plus the
-vendor-neutral floorplan milestone, is complete and deployed. There is no
+The internally implementable roadmap through Milestone 25, including the
+vendor-neutral floor-plan and v7 structural-navigation milestones, is complete
+and deployed. There is no
 known rendered dead control and no unimplemented application action in the
 current product surface.
 
@@ -46,15 +47,17 @@ The remaining queue contains external evidence or account activation:
 9. Revisit Stripe only when self-service card billing becomes a product
    priority; it is not a production-readiness dependency for manual billing.
 
-Current production release evidence:
+Current production evidence is verified at the stable endpoints rather than
+copied here as immediately stale deployment UUIDs:
 
-- application Worker: staging `c70c026c-3221-4593-b489-a811e09edeae`,
-  production `112c472e-b721-465c-8583-2323504438c4`;
-- processor Worker/container: staging
-  `117312e4-f252-4128-b8e3-98d07b743b19`, production
-  `0e7d2031-9e2c-4600-9d76-2e82fc7d9240`;
-- processor health: `spatial-processor/0.7.0`, Spark 2.1.0,
-  `cloudflare-container`.
+- application health: <https://spatial.whymelabs.com/api/health>;
+- processor health:
+  <https://spatial-processor-cloud-production.swmengappdev.workers.dev>;
+- public v7 Walk + Fly proof:
+  <https://spatial.whymelabs.com/s/home-scan-spark-multi-room-demo>;
+- exact Worker version IDs and immutable acceptance artifacts are retained in
+  the GitHub `Release gate` / `Deploy and accept staging` runs and Wrangler
+  deployment history for the deployed commit.
 
 These are not represented as fake controls. A gate moves back into development
 only when its external input exists and the resulting evidence identifies a

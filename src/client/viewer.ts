@@ -1352,15 +1352,15 @@ const workflowStages: WorkflowStage[] = [
   },
   {
     kicker: "Spatial semantics",
-    title: "Give the place structure.",
-    body: "Define floors, rooms, doors, routes, collision, points of interest, privacy regions, and measurement status.",
-    output: "Scene manifest, collision mesh, navigation, room graph",
+    title: "Give the place physical rules.",
+    body: "Review floors, walls, ceilings, doors, furniture groups, room anchors, privacy regions, and movement profiles independently from the splat.",
+    output: "Structural shell, Rapier collision, Detour navmesh, room graph",
   },
   {
     kicker: "Delivery lifecycle",
     title: "Publish the right derivative.",
-    body: "Generate device-aware web assets, approve an immutable release, control access, observe performance, and keep version history.",
-    output: "Spark RAD, SPZ or SOG, public or private release",
+    body: "Validate Walk and Fly paths, freeze the approved navigation evidence, generate device-aware web assets, control access, and keep version history.",
+    output: "Spark RAD, SPZ or SOG plus an immutable movement package",
   },
 ];
 

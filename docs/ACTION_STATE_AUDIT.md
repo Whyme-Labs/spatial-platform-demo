@@ -1,6 +1,6 @@
 # Action-state audit
 
-Last reviewed: 2026-07-28
+Last reviewed: 2026-08-02
 
 ## Contract
 
@@ -57,6 +57,7 @@ refresh-token rotation.
 | Studio | Review comment/redaction/decision | Form or decision control pending | In-scene error with request reference | Form data captured before disable; deliberate retry |
 | Studio | Compare immutable versions | Comparison form pending, signed-session status announced, each Spark frame reports progress independently | API errors stay beside the form; frame failure/timeout identifies the affected side and exposes Retry | Safe comparison GET retries twice; Retry refreshes both short-lived signed sessions before reloading |
 | Studio | Spatial entity/route/privacy/policy | Form or row control pending | Dialog/global error and retryable control | Form data captured before disable; create uses a client operation ID |
+| Studio | Tune/build/refresh/retry/review navigation | Profile/build dialog or exact history-row control enters `Saving profile…`, `Queueing verified build…`, `Refreshing…`, `Queueing retry…`, `Approving…`, or `Rejecting…`; the initiating form/row and conflicting controls disable with `aria-busy` | Exact dialog/global error retains tuning and source selection or restores the history action; terminal failures expose deliberate retry; review requires a human note | Build uses a stable operation ID and immutable source/authoring hash; GET refresh is safe; retry reuses the failed job; approve/reject is guarded against stale build state |
 | Studio | Automated privacy scan/retry | Queue control enters `Queueing…`; active scan disables duplicate runs; bounded polling announces retained long-running work | Failed/dead-letter evidence exposes an explicit retry; transport failure refreshes authoritative state | Stable scan operation ID survives transport failure; D1 request hash prevents duplicate scans; retry reuses the persisted scan |
 | Studio | Privacy evidence preview/decision | Private image reports loading; decision dialog enters `Recording decision…` | Image exposes Retry without hiding the candidate; form retains values and inline error | Image requests are safe tenant-scoped GETs; decisions update one persisted candidate and retain audit history |
 | Studio | QA privacy preflight | QA opener enters `Checking evidence…`; submit and confirmation stay disabled when blocked | Exact missing/running/unresolved evidence is shown with a route back to Spatial authoring | Worker repeats the complete latest-scan and zero-blocker checks authoritatively |
