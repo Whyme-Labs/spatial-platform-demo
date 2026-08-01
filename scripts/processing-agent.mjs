@@ -16,6 +16,7 @@ import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { REVISION as threeRevision } from "three";
 import { posterSampleIsReady } from "./poster-quality.mjs";
 import {
   buildRecastNavigationArtifact,
@@ -435,7 +436,7 @@ async function processNextJob() {
               recastNavigationJs: "0.43.1",
               nativeRecast: artifact.generator.nativeRecastCommit,
               rapier3d: artifact.physicalValidation.version,
-              collisionDecoder: `three/${THREE.REVISION}`,
+              collisionDecoder: `three/${threeRevision}`,
             },
           },
         }),
