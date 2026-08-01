@@ -728,9 +728,13 @@
         <label><span>Recast cell size</span><input name="cellSize" type="number" min="0.02" max="1" step="0.01" value="0.1" required /></label>
         <label><span>Recast cell height</span><input name="cellHeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05" required /></label>
         <label><span>Tile size (voxels)</span><input name="tileSize" type="number" min="16" max="1024" step="1" value="32" required /></label>
+        <label><span>Maximum contour edge (voxels)</span><input name="maxEdgeLengthVoxels" type="number" min="1" max="10000" step="1" value="12" required /></label>
+        <label><span>Contour simplification error</span><input name="maxSimplificationError" type="number" min="0.1" max="10" step="0.1" value="1.3" required /></label>
+        <label><span>Minimum region (voxels)</span><input name="minimumRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="8" required /></label>
+        <label><span>Merge region (voxels)</span><input name="mergeRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="20" required /></label>
         <label class="checkbox-row"><input name="provisional" type="checkbox" /><span>Explicit provisional scene-unit build</span></label>
       </div>
-      <p class="field-note">The GLB, profile, entities, obstacle boxes, bounds, and spawn are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
+      <p class="field-note">The GLB, profile, entities, obstacle boxes, bounds, spawn, and explicit Recast settings are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
       <button class="primary-button wide" type="submit">Queue verified build</button>
       <p id="navigationBuildError" class="form-error" role="alert"></p>
     </form>
