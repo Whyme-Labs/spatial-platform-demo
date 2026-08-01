@@ -356,6 +356,42 @@ test.describe("studio authentication lifecycle", () => {
     await expect(page.locator("#loginDialog")).not.toBeVisible();
   });
 
+  test("waits for an in-flight refresh from the previous page before showing sign-in", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    let sessionRequests = 0;
+    let refreshRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/auth/session") {
+        sessionRequests += 1;
+        if (sessionRequests < 4) {
+          return json(route, 200, { authenticated: false });
+        }
+        return route.fallback();
+      }
+      if (path === "/api/auth/refresh") {
+        refreshRequests += 1;
+        if (refreshRequests < 3) {
+          return json(route, 409, { code: "stale_refresh" });
+        }
+        return json(route, 200, { refreshed: true });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+
+    await expect(page.getByRole("heading", {
+      name: "From immutable source to approved spatial release.",
+    })).toBeVisible();
+    await expect.poll(() => refreshRequests).toBe(3);
+    await expect(page.locator("#loginDialog")).not.toBeVisible();
+    await expect(page.locator("#workspaceName")).toHaveText("UI QA");
+  });
+
   test("refreshes once and retries a protected request after access expiry", async ({
     page,
   }) => {
@@ -398,6 +434,9 @@ test.describe("studio authentication lifecycle", () => {
     let refreshRequests = 0;
     await page.route("**/api/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
+      if (path === "/api/auth/session" && refreshRequests === 1) {
+        return json(route, 200, { authenticated: false });
+      }
       if (path === "/api/auth/organisations") {
         organisationRequests += 1;
         if (organisationRequests === 2) {

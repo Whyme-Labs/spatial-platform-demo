@@ -21,6 +21,7 @@ export const AUTH_SESSION_EXPIRED_EVENT = "spatial-auth-session-expired";
 
 const AUTH_SESSION_STORAGE_KEY = "spatial.auth.session-state.v1";
 const AUTH_REFRESH_LOCK = "spatial.auth.refresh.v1";
+const STALE_REFRESH_RECONCILIATION_DELAYS_MS = [100, 250, 500, 1_000] as const;
 const UNAUTHENTICATED_API_PATHS = new Set([
   "/api/auth/config",
   "/api/auth/refresh",
@@ -271,20 +272,7 @@ async function coordinateRefresh(
         return "refreshed";
       }
       if (response.status === 409) {
-        await new Promise((resolve) => window.setTimeout(resolve, 100));
-        const retry = await timedFetch(
-          "/api/auth/refresh",
-          { method: "POST", timeoutMs: 15_000 },
-          "POST",
-        );
-        if (retry.status === 200) {
-          markAuthenticationEstablished();
-          return "refreshed";
-        }
-        if (retry.status === 204 || retry.status === 401 || retry.status === 403) {
-          return "expired";
-        }
-        return "unavailable";
+        return reconcileStaleRefresh();
       }
       if (response.status === 204 || response.status === 401 || response.status === 403) {
         return "expired";
@@ -299,6 +287,49 @@ async function coordinateRefresh(
     return navigator.locks.request(AUTH_REFRESH_LOCK, { mode: "exclusive" }, refresh);
   }
   return refresh();
+}
+
+async function reconcileStaleRefresh(): Promise<RefreshOutcome> {
+  for (const waitMs of STALE_REFRESH_RECONCILIATION_DELAYS_MS) {
+    await delay(waitMs);
+
+    // A refresh started by the previous document can finish after navigation
+    // has released its Web Lock. Prefer its newly issued access cookie instead
+    // of rotating the session again when that response has now settled.
+    const session = await timedFetch(
+      "/api/auth/session",
+      { method: "GET", timeoutMs: 5_000 },
+      "GET",
+    );
+    if (session.status === 200) {
+      const payload = await session.json().catch(() => null) as {
+        authenticated?: unknown;
+      } | null;
+      if (payload?.authenticated === true) {
+        markAuthenticationEstablished();
+        return "refreshed";
+      }
+    }
+
+    const retry = await timedFetch(
+      "/api/auth/refresh",
+      { method: "POST", timeoutMs: 15_000 },
+      "POST",
+    );
+    if (retry.status === 200) {
+      markAuthenticationEstablished();
+      return "refreshed";
+    }
+    if (retry.status === 204 || retry.status === 401 || retry.status === 403) {
+      return "expired";
+    }
+    if (retry.status !== 409) return "unavailable";
+  }
+
+  // A stale response proves that another refresh won, not that the session is
+  // expired. Keep the browser session intact so a delayed winning response can
+  // still recover it on retry.
+  return "unavailable";
 }
 
 function isProtectedApiPath(path: string): boolean {
