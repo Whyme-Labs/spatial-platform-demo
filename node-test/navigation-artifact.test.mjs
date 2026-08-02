@@ -5,7 +5,22 @@ import {
   extractCollisionGeometryFromGlb,
   importNavigationArtifact,
 } from "../scripts/navigation-build-core.mjs";
-import { validatePhysicalNavigation } from "../scripts/physical-navigation-validation.mjs";
+import {
+  controlledMovementReachedTarget,
+  validateAuthoredTraversals,
+  validatePhysicalNavigation,
+} from "../scripts/physical-navigation-validation.mjs";
+
+it("rejects same-length Rapier slides away from an authored traversal segment", () => {
+  assert.equal(controlledMovementReachedTarget(
+    [1, 0, 0],
+    { x: 0, y: 0, z: 1 },
+  ), false);
+  assert.equal(controlledMovementReachedTarget(
+    [1 / 3, 0, 0],
+    { x: Math.fround(1 / 3), y: 0, z: 0 },
+  ), true);
+});
 
 function appendFloor(positions, indices, minX, minZ, maxX, maxZ) {
   const offset = positions.length / 3;
@@ -56,33 +71,96 @@ describe("Unreal-equivalent navigation artifact", () => {
     );
   });
 
-  it("rejects off-mesh links until runtime traversal is implemented", async () => {
+  it("builds a reviewed elevator link between disconnected floors", async () => {
     const positions = [];
     const indices = [];
-    appendFloor(positions, indices, 0, 0, 4, 4);
+    appendFloor(positions, indices, 0, 0, 2, 4);
+    const upperOffset = positions.length / 3;
+    positions.push(3, 3, 0, 3, 3, 4, 5, 3, 4, 5, 3, 0);
+    indices.push(
+      upperOffset,
+      upperOffset + 1,
+      upperOffset + 2,
+      upperOffset,
+      upperOffset + 2,
+      upperOffset + 3,
+    );
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      collisionSemantics: {
+        schemaVersion: "spatial-structural-collision-v1",
+        provenance: "registered_metric_mesh",
+        structuralShellComplete: true,
+        includedGroups: ["STRUCTURAL_FLOOR", "STRUCTURAL_BARRIER"],
+        ignoredGroups: ["FURNITURE", "TRIGGER"],
+      },
+      source: {
+        assetId: "link-collision",
+        sha256: "f".repeat(64),
+        authoringHash: "4".repeat(64),
+        worldUnit: "metres",
+      },
+      agent: profile,
+      build,
+      spawn: { id: "opening", position: [1, 0, 1] },
+      destinations: [{ id: "upper-floor", position: [4, 3, 3] }],
+      offMeshConnections: [{
+        id: "east-lift",
+        traversalKind: "elevator",
+        startPosition: [1.3, 0.05, 2],
+        endPosition: [3.7, 3.05, 2],
+        controlPoints: [[1.75, 0.05, 2], [1.75, 3.05, 2], [3.3, 3.05, 2]],
+        radius: 0.22,
+        bidirectional: true,
+        speedUnitsPerSecond: 1.6,
+        area: 0,
+        flags: 1,
+        userId: 1,
+        reviewedPurpose: "Reviewed elevator connecting the two captured floors.",
+        evidenceReceipt: {
+          assetId: "11111111-1111-4111-8111-111111111111",
+          sha256: "a".repeat(64),
+        },
+      }],
+    });
+
+    assert.equal(artifact.schemaVersion, "spatial-navigation-v8");
+    assert.equal(artifact.offMeshConnections[0].id, "east-lift");
+    assert.equal(artifact.validation.componentCount, 1);
+    assert.equal(artifact.validation.destinations[0].reachable, true);
+    const traversalValidation = await validateAuthoredTraversals({
+      artifact,
+      positions,
+      indices,
+    });
+    assert.equal(traversalValidation.connectionCount, 1);
+    assert.equal(traversalValidation.directionCount, 2);
     await assert.rejects(
-      buildRecastNavigationArtifact({
+      validateAuthoredTraversals({
+        artifact: {
+          ...artifact,
+          dynamicBarriers: [{
+            id: "lift-shaft-blocked",
+            defaultActive: true,
+            min: [1.5, 1, 1.5],
+            max: [2, 2, 2.5],
+          }],
+        },
         positions,
         indices,
-        source: {
-          assetId: "link-collision",
-          sha256: "f".repeat(64),
-          authoringHash: "4".repeat(64),
-          worldUnit: "metres",
-        },
-        agent: profile,
-        build,
-        spawn: { id: "opening", position: [1, 0, 1] },
-        destinations: [],
-        offMeshConnections: [{
-          startPosition: [1, 0, 1],
-          endPosition: [3, 0, 3],
-          radius: 0.22,
-          bidirectional: true,
-        }],
       }),
-      (error) => error?.code === "OFF_MESH_CONNECTIONS_UNSUPPORTED",
+      (error) => error?.code === "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED" &&
+        /deviated/.test(error.message),
     );
+    const runtime = await importNavigationArtifact(artifact);
+    try {
+      const path = runtime.path([1, 0, 1], [4, 3, 3]);
+      assert.ok(path && path.length >= 2);
+      assert.ok(Math.abs(path.at(-1)[1] - 3.05) < 0.1);
+    } finally {
+      runtime.destroy();
+    }
   });
 
   it("builds one radius-cleared Detour mesh and proves a two-room route", async () => {

@@ -70,6 +70,88 @@ export async function validatePhysicalNavigation({
 }
 
 /**
+ * Replays each reviewed discontinuity in every allowed direction. These paths
+ * intentionally bypass gravity, matching the browser's controlled elevator,
+ * ladder, and moving-platform interval, while retaining capsule sweeps against
+ * the exact structural collision proxy.
+ */
+export async function validateAuthoredTraversals({
+  artifact,
+  positions,
+  indices,
+}) {
+  if (artifact?.schemaVersion !== "spatial-navigation-v8" ||
+    !Array.isArray(artifact.offMeshConnections) || !artifact.offMeshConnections.length) {
+    throw new NavigationBuildError(
+      "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED",
+      "Controlled-path validation requires a v8 artifact with authored traversal links",
+    );
+  }
+  initialization ??= RAPIER.init();
+  await initialization;
+  const agent = physicalAgent(artifact);
+  const activeDynamicBarriers = Array.isArray(artifact.dynamicBarriers)
+    ? artifact.dynamicBarriers.filter((barrier) => barrier?.defaultActive === true)
+    : [];
+  const traversals = [];
+  for (const connection of artifact.offMeshConnections) {
+    const forward = [
+      connection.startPosition,
+      ...connection.controlPoints,
+      connection.endPosition,
+    ];
+    for (const [direction, route] of [
+      ["forward", forward],
+      ...(connection.bidirectional
+        ? [["reverse", [...forward].reverse()]]
+        : []),
+    ]) {
+      let evidence;
+      try {
+        evidence = replayControlledRoute({
+          route,
+          direction,
+          destinationId: connection.id,
+          agent,
+          positions,
+          indices,
+          obstacleBoxes: activeDynamicBarriers,
+        });
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new NavigationBuildError(
+          "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED",
+          `Authored ${connection.traversalKind} ${connection.id} is blocked in the ${direction} direction: ${cause}`,
+          {
+            connectionId: connection.id,
+            direction,
+            cause,
+          },
+        );
+      }
+      traversals.push({
+        connectionId: connection.id,
+        traversalKind: connection.traversalKind,
+        direction,
+        waypointCount: evidence.waypointCount,
+        simulatedSteps: evidence.simulatedSteps,
+        pathLength: evidence.pathLength,
+        finalPosition: evidence.finalPosition,
+      });
+    }
+  }
+  return {
+    passed: true,
+    engine: "rapier3d",
+    version: "0.19.3",
+    controller: "kinematic-capsule-controlled-path",
+    connectionCount: artifact.offMeshConnections.length,
+    directionCount: traversals.length,
+    traversals,
+  };
+}
+
+/**
  * Proves that every published navigation anchor is enclosed by the same
  * structural collision used by Fly mode. Each Rapier sphere sweep must hit a
  * floor, ceiling, or exterior wall in all six cardinal directions. Furniture
@@ -82,7 +164,7 @@ export async function validateStructuralNavigation({
   indices,
   ignoredMeshCount = 0,
 }) {
-  if (artifact?.schemaVersion !== "spatial-navigation-v7") {
+  if (!["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact?.schemaVersion)) {
     throw new NavigationBuildError(
       "STRUCTURAL_NAVIGATION_UNSUPPORTED",
       "Structural shell validation requires a v7 navigation artifact",
@@ -884,6 +966,93 @@ function replayRoute({
   }
 }
 
+function replayControlledRoute({
+  route,
+  direction,
+  destinationId,
+  agent,
+  positions,
+  indices,
+  obstacleBoxes,
+}) {
+  const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+  try {
+    world.createCollider(RAPIER.ColliderDesc.trimesh(
+      new Float32Array(positions),
+      new Uint32Array(indices),
+    ));
+    for (const box of obstacleBoxes) addObstacleBox(world, box);
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+    const halfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
+    const collider = world.createCollider(
+      RAPIER.ColliderDesc.capsule(halfHeight, agent.radius),
+      body,
+    );
+    const controller = world.createCharacterController(
+      Math.max(0.002, Math.min(0.02, agent.radius * 0.05)),
+    );
+    controller.setSlideEnabled(false);
+
+    let center = floatPoint(feetToCenter(route[0], agent.height));
+    body.setTranslation(toVector(center), true);
+    let simulatedSteps = 0;
+    let pathLength = 0;
+
+    for (const waypoint of route.slice(1)) {
+      const target = floatPoint(feetToCenter(waypoint, agent.height));
+      const desired = [
+        target[0] - center[0],
+        target[1] - center[1],
+        target[2] - center[2],
+      ];
+      pathLength += distance(center, target);
+      controller.computeColliderMovement(collider, toVector(desired));
+      const corrected = controller.computedMovement();
+      if (!controlledMovementReachedTarget(desired, corrected)) {
+        const requestedMovement = roundedPoint(desired);
+        const correctedMovement = roundedPoint([corrected.x, corrected.y, corrected.z]);
+        throw physicalFailure(
+          destinationId,
+          `Rapier collision response deviated from the authored controlled path: requested=${JSON.stringify(desired)}, corrected=${JSON.stringify([corrected.x, corrected.y, corrected.z])}`,
+          { requestedMovement, correctedMovement },
+        );
+      }
+      body.setNextKinematicTranslation(toVector(target));
+      world.step();
+      const actual = body.translation();
+      center = [actual.x, actual.y, actual.z];
+      simulatedSteps += 1;
+      if (distance(center, target) !== 0) {
+        throw physicalFailure(
+          destinationId,
+          `Rapier capsule did not reach the authored controlled waypoint exactly: requested_target=${JSON.stringify(roundedPoint(target))}, actual=${JSON.stringify(roundedPoint(center))}`,
+        );
+      }
+    }
+    return {
+      destinationId,
+      direction,
+      passed: true,
+      waypointCount: route.length,
+      simulatedSteps,
+      pathLength: round(pathLength),
+      finalPosition: roundedPoint([
+        center[0],
+        center[1] - agent.height / 2,
+        center[2],
+      ]),
+    };
+  } finally {
+    world.free();
+  }
+}
+
+export function controlledMovementReachedTarget(requested, corrected) {
+  return corrected.x === Math.fround(requested[0]) &&
+    corrected.y === Math.fround(requested[1]) &&
+    corrected.z === Math.fround(requested[2]);
+}
+
 function physicalAgent(artifact) {
   const agent = artifact?.agent;
   if (!agent || ["radius", "height", "maxClimb", "maxSlopeDegrees"].some(
@@ -945,6 +1114,11 @@ function finitePoint(value) {
 
 function feetToCenter(feet, height) {
   return { x: feet[0], y: feet[1] + height / 2, z: feet[2] };
+}
+
+function floatPoint(value) {
+  const point = Array.isArray(value) ? value : [value.x, value.y, value.z];
+  return point.map(Math.fround);
 }
 
 function scaledDirection(from, to, length) {

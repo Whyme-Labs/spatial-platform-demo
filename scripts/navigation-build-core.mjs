@@ -11,6 +11,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const LEGACY_SCHEMA_VERSION = "spatial-navigation-v6";
 const STRUCTURAL_SCHEMA_VERSION = "spatial-navigation-v7";
+const AUTHORED_TRAVERSAL_SCHEMA_VERSION = "spatial-navigation-v8";
 const GENERATOR_VERSION = "0.43.1";
 const NATIVE_RECAST_COMMIT = "599fd0f023181c0a484df2a18cf1d75a3553852e";
 const MAX_COLLISION_GLB_BYTES = 256 * 1024 * 1024;
@@ -336,11 +337,15 @@ export async function buildRecastNavigationArtifact(input) {
   await ensureInitialized();
   const artifactBounds = boundsOf(input.positions);
   const recastConfig = recastConfigFor(input.agent, input.build);
+  const authoredTraversals = canonicalOffMeshConnections(
+    input.offMeshConnections ?? [],
+    input.agent,
+  );
   const generated = generateTiledNavMesh(input.positions, input.indices, {
     ...recastConfig,
     ...(input.bounds ? { bounds: input.bounds } : {}),
-    ...(input.offMeshConnections?.length
-      ? { offMeshConnections: input.offMeshConnections.map(toOffMeshConnection) }
+    ...(authoredTraversals.length
+      ? { offMeshConnections: authoredTraversals.map(toOffMeshConnection) }
       : {}),
   });
   if (!generated.success) {
@@ -372,6 +377,23 @@ export async function buildRecastNavigationArtifact(input) {
       input.agent.radius * 2,
       input.build.cellSize * 3,
     );
+    const frozenTraversals = authoredTraversals.map((connection) => ({
+      ...connection,
+      startPosition: vectorTuple(projectRequired(
+        query,
+        connection.startPosition,
+        queryHalfExtents,
+        Math.max(maximumProjectionDistance, connection.radius),
+        `${connection.id}:start`,
+      ).point),
+      endPosition: vectorTuple(projectRequired(
+        query,
+        connection.endPosition,
+        queryHalfExtents,
+        Math.max(maximumProjectionDistance, connection.radius),
+        `${connection.id}:end`,
+      ).point),
+    }));
     const projectedSpawn = projectRequired(
       query,
       input.spawn.position,
@@ -492,7 +514,9 @@ export async function buildRecastNavigationArtifact(input) {
     }
     return {
       schemaVersion: collisionSemantics
-        ? STRUCTURAL_SCHEMA_VERSION
+        ? frozenTraversals.length
+          ? AUTHORED_TRAVERSAL_SCHEMA_VERSION
+          : STRUCTURAL_SCHEMA_VERSION
         : LEGACY_SCHEMA_VERSION,
       generator: {
         name: "recast-navigation-js",
@@ -534,7 +558,7 @@ export async function buildRecastNavigationArtifact(input) {
         requestedPosition: [...input.spawn.position],
         projectedPosition: vectorTuple(projectedSpawn.point),
       },
-      offMeshConnections: input.offMeshConnections?.map((connection) => ({ ...connection })) ?? [],
+      offMeshConnections: frozenTraversals,
       navMesh: {
         clearanceApplied: true,
         vertices,
@@ -554,7 +578,11 @@ export async function buildRecastNavigationArtifact(input) {
 }
 
 export async function importNavigationArtifact(artifact) {
-  if (!artifact || ![LEGACY_SCHEMA_VERSION, STRUCTURAL_SCHEMA_VERSION].includes(
+  if (!artifact || ![
+    LEGACY_SCHEMA_VERSION,
+    STRUCTURAL_SCHEMA_VERSION,
+    AUTHORED_TRAVERSAL_SCHEMA_VERSION,
+  ].includes(
     artifact.schemaVersion,
   )) {
     throw new NavigationBuildError(
@@ -677,10 +705,11 @@ function validateBuildInput(input) {
     !value || typeof value.id !== "string" || !point3(value.position))) {
     throw new NavigationBuildError("INVALID_NAVIGATION_CONFIG", "Every destination needs an id and finite position");
   }
-  if (input.offMeshConnections?.length) {
+  canonicalOffMeshConnections(input.offMeshConnections ?? [], input.agent);
+  if (input.offMeshConnections?.length && !input.collisionSemantics) {
     throw new NavigationBuildError(
-      "OFF_MESH_CONNECTIONS_UNSUPPORTED",
-      "Off-mesh connections require an explicit runtime traversal controller and are not publishable in v6",
+      "AUTHORED_TRAVERSAL_REQUIRES_STRUCTURAL_COLLISION",
+      "Elevators, ladders, and moving platforms require a reviewed structural collision shell",
     );
   }
   if (input.source?.sha256 && !/^[a-f0-9]{64}$/i.test(input.source.sha256)) {
@@ -870,6 +899,117 @@ function toOffMeshConnection(connection) {
     flags: connection.flags ?? 1,
     userId: connection.userId ?? 0,
   };
+}
+
+function canonicalOffMeshConnections(values, agent) {
+  if (!Array.isArray(values)) {
+    throw new NavigationBuildError(
+      "INVALID_AUTHORED_TRAVERSAL",
+      "Authored traversal links must be an array",
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const traversalKind = value?.traversalKind;
+    const startPosition = point3(value?.startPosition) ? [...value.startPosition] : null;
+    const endPosition = point3(value?.endPosition) ? [...value.endPosition] : null;
+    const controlPoints = Array.isArray(value?.controlPoints) &&
+      value.controlPoints.every(point3)
+      ? value.controlPoints.map((point) => [...point])
+      : null;
+    const radius = Number(value?.radius);
+    const speedUnitsPerSecond = Number(value?.speedUnitsPerSecond);
+    const reviewedPurpose = typeof value?.reviewedPurpose === "string"
+      ? value.reviewedPurpose.trim()
+      : "";
+    const evidenceAssetId = typeof value?.evidenceReceipt?.assetId === "string"
+      ? value.evidenceReceipt.assetId.trim()
+      : "";
+    const evidenceSha256 = typeof value?.evidenceReceipt?.sha256 === "string"
+      ? value.evidenceReceipt.sha256.trim().toLowerCase()
+      : "";
+    if (!id || ids.has(id)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal id ${id || "unknown"} is missing or duplicated`,
+      );
+    }
+    if (!["elevator", "ladder", "moving_platform"].includes(traversalKind)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} has an unsupported traversal kind`,
+      );
+    }
+    if (!startPosition || !endPosition || !controlPoints) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} requires finite start, control, and end points`,
+      );
+    }
+    const path = [startPosition, ...controlPoints, endPosition];
+    if (path.some((point, index) => index > 0 && distance3(point, path[index - 1]) <= 0)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} contains a zero-length path segment`,
+      );
+    }
+    if (!Number.isFinite(radius) || radius < Number(agent?.radius)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} radius is below the navigation agent radius: limit=${agent?.radius}, asked=${value?.radius}`,
+      );
+    }
+    if (!Number.isFinite(speedUnitsPerSecond) || speedUnitsPerSecond <= 0) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} speedUnitsPerSecond must be positive: asked=${value?.speedUnitsPerSecond}`,
+      );
+    }
+    if (typeof value?.bidirectional !== "boolean" || !reviewedPurpose) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} requires directionality and a reviewed purpose`,
+      );
+    }
+    if (!evidenceAssetId || !/^[a-f0-9]{64}$/i.test(evidenceSha256)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} requires an immutable evidence asset id and SHA-256 receipt`,
+      );
+    }
+    for (const [name, raw, minimum, maximum] of [
+      ["area", value?.area ?? 0, 0, 63],
+      ["flags", value?.flags ?? 1, 1, 65535],
+      ["userId", value?.userId ?? 0, 0, 0xffffffff],
+    ]) {
+      if (!Number.isSafeInteger(raw) || raw < minimum || raw > maximum) {
+        throw new NavigationBuildError(
+          "INVALID_AUTHORED_TRAVERSAL",
+          `Authored traversal ${id} ${name} must be an integer between ${minimum} and ${maximum}: asked=${raw}`,
+        );
+      }
+    }
+    ids.add(id);
+    return {
+      id,
+      traversalKind,
+      startPosition,
+      endPosition,
+      controlPoints,
+      radius,
+      bidirectional: value.bidirectional,
+      speedUnitsPerSecond,
+      area: value.area ?? 0,
+      flags: value.flags ?? 1,
+      userId: value.userId ?? 0,
+      reviewedPurpose,
+      evidenceReceipt: {
+        assetId: evidenceAssetId,
+        sha256: evidenceSha256,
+      },
+    };
+  });
 }
 
 function projectRequired(query, position, halfExtents, maximumDistance, id) {

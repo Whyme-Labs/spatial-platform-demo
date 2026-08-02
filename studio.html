@@ -753,9 +753,30 @@
         <label><span>Merge region (voxels)</span><input name="mergeRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="20" required /></label>
         <label class="checkbox-row"><input name="provisional" type="checkbox" /><span>Explicit provisional scene-unit build</span></label>
       </div>
-      <p class="field-note">The GLB, profile, entities, obstacle boxes, bounds, spawn, and explicit Recast settings are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
+      <p class="field-note">The GLB, profile, entities, obstacle boxes, authored traversals, bounds, spawn, and explicit Recast settings are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
       <button class="primary-button wide" type="submit">Queue verified build</button>
       <p id="navigationBuildError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="navigationTraversalDialog" class="dialog-card wide-dialog">
+    <form id="navigationTraversalForm">
+      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+      <span class="eyebrow">AUTHORED TRAVERSAL</span>
+      <h2>Connect a real discontinuity.</h2>
+      <p>Use this only when the registered capture proves an elevator, ladder, or moving platform that continuous floor geometry cannot represent.</p>
+      <div class="mock-form-grid">
+        <label><span>Traversal type</span><select name="traversalKind" required><option value="elevator">Elevator</option><option value="ladder">Ladder</option><option value="moving_platform">Moving platform</option></select></label>
+        <label><span>Label</span><input name="label" required placeholder="East lift" /></label>
+        <label class="full"><span>Immutable evidence asset</span><select id="navigationTraversalEvidenceAsset" name="evidenceAssetId" required></select></label>
+        <label class="full"><span>Controlled path (x, y, z; one feet-level point per line)</span><textarea name="path" required placeholder="1.5, 0, 2&#10;1.5, 3, 2&#10;3, 3, 2"></textarea></label>
+        <label><span>Travel speed (<span id="navigationTraversalUnit">metres</span>/second)</span><input name="speedUnitsPerSecond" type="number" min="0" step="any" required /></label>
+        <label class="checkbox-row"><input name="bidirectional" type="checkbox" checked /><span>Allow both directions</span></label>
+        <label class="full"><span>Review receipt</span><textarea name="reviewedPurpose" required placeholder="Explain what the selected immutable asset proves and why this path is safe to traverse."></textarea></label>
+      </div>
+      <p class="field-note">The processor projects both landings onto Recast, proves route topology, then sweeps the production Rapier capsule through every path segment and allowed direction. A blocked path cannot reach review or publication.</p>
+      <button class="primary-button wide" type="submit">Author traversal</button>
+      <p id="navigationTraversalError" class="form-error" role="alert"></p>
     </form>
   </dialog>
 

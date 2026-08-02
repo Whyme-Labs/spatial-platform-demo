@@ -24,6 +24,7 @@ import {
   NavigationBuildError,
 } from "./navigation-build-core.mjs";
 import {
+  validateAuthoredTraversals,
   validatePhysicalNavigation,
   validateStructuralNavigation,
 } from "./physical-navigation-validation.mjs";
@@ -54,7 +55,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.10.0";
+const processorVersion = "spatial-processor/0.11.0";
 const sparkVersion = "2.1.0";
 const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
@@ -351,7 +352,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes + (collisionOutput?.sizeBytes ?? 0),
             toolVersions: {
               node: process.version,
-              processor: "0.10.0",
+              processor: "0.11.0",
               extractor: "metric-pointcloud-floorplan-v2",
               normalizer: normalized.tool,
               ...(collisionOutput
@@ -436,7 +437,15 @@ async function processNextJob() {
           indices: geometry.indices,
           obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
         });
-        if (artifact.schemaVersion === "spatial-navigation-v7") {
+        if (artifact.schemaVersion === "spatial-navigation-v8") {
+          artifact.authoredTraversalValidation = await validateAuthoredTraversals({
+            artifact,
+            positions: geometry.positions,
+            indices: geometry.indices,
+            obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
+          });
+        }
+        if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact.schemaVersion)) {
           artifact.structuralValidation = await validateStructuralNavigation({
             artifact,
             positions: geometry.positions,
@@ -498,7 +507,7 @@ async function processNextJob() {
             outputBytes: navmeshOutput.sizeBytes + reportOutput.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.10.0",
+              processor: "0.11.0",
               recastNavigationJs: "0.43.1",
               nativeRecast: artifact.generator.nativeRecastCommit,
               rapier3d: artifact.physicalValidation.version,
@@ -593,7 +602,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.10.0",
+              processor: "0.11.0",
               extractor: sourceToWorld
                 ? "registered-ply-walkable-candidates-v2"
                 : "registered-ply-walkable-candidates-v1",
@@ -726,7 +735,7 @@ async function processNextJob() {
             outputBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.10.0",
+              processor: "0.11.0",
               validator: "bounded-file-signature-v1",
               ...(posterRenderer
                 ? {
@@ -853,7 +862,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.10.0",
+            processor: "0.11.0",
             posterCamera: posterCamera ? "authored" : "auto",
           },
         },
@@ -1070,7 +1079,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.10.0",
+          processor: "0.11.0",
           method: "registered-ply-voxel-change-v1",
         },
       },

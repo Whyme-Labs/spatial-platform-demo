@@ -749,17 +749,10 @@ export const navigationBuildSchema = z.object({
     id: z.string().trim().min(1).max(120),
     position: point3Schema,
   })).max(0, "Off-mesh traversal is not publishable until a browser traversal controller exists").default([]),
-  offMeshConnections: z.array(z.object({
-    id: z.string().trim().min(1).max(120),
-    startPosition: point3Schema,
-    endPosition: point3Schema,
-    radius: z.number().min(0.05).max(10),
-    bidirectional: z.boolean().default(true),
-    area: z.number().int().min(0).max(63).default(0),
-    flags: z.number().int().min(1).max(65535).default(1),
-    userId: z.number().int().min(0).max(0xffffffff).default(0),
-    reviewedPurpose: z.string().trim().min(10).max(1000),
-  })).max(500).default([]),
+  offMeshConnections: z.array(z.never()).length(
+    0,
+    "Author traversal links on the immutable scene version; builds freeze the stored records",
+  ).default([]),
   build: z.object({
     cellSize: z.number().min(0.02).max(1).default(0.1),
     cellHeight: z.number().min(0.01).max(0.5).default(0.05),
@@ -808,8 +801,74 @@ export const navigationAssetsSchema = z.object({
   detour: frozenNavigationAssetSchema("bin"),
 });
 
+const authoredTraversalConnectionSchema = z.object({
+  id: z.string().trim().min(1),
+  traversalKind: z.enum(["elevator", "ladder", "moving_platform"]),
+  startPosition: point3Schema,
+  controlPoints: z.array(point3Schema),
+  endPosition: point3Schema,
+  radius: z.number().positive(),
+  bidirectional: z.boolean(),
+  speedUnitsPerSecond: z.number().positive(),
+  area: z.number().int().min(0).max(63),
+  flags: z.number().int().min(1).max(65535),
+  userId: z.number().int().min(0).max(0xffffffff),
+  reviewedPurpose: z.string().trim().min(1),
+  evidenceReceipt: z.object({
+    assetId: z.string().uuid(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  }),
+});
+
+export const navigationTraversalCreateSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  versionId: z.string().uuid(),
+  traversalKind: z.enum(["elevator", "ladder", "moving_platform"]),
+  label: z.string().trim().min(1),
+  path: z.array(point3Schema).min(2),
+  bidirectional: z.boolean().default(true),
+  speedUnitsPerSecond: z.number().positive(),
+  reviewedPurpose: z.string().trim().min(1),
+  evidenceAssetId: z.string().uuid(),
+}).superRefine((value, context) => {
+  if (value.path.some((point, index) => index > 0 &&
+    point.every((coordinate, axis) => coordinate === value.path[index - 1]![axis]))) {
+    context.addIssue({
+      code: "custom",
+      path: ["path"],
+      message: "A traversal path cannot contain a zero-length segment",
+    });
+  }
+});
+
+export const navigationTraversalUpdateSchema = z.object({
+  traversalKind: z.enum(["elevator", "ladder", "moving_platform"]).optional(),
+  label: z.string().trim().min(1).optional(),
+  path: z.array(point3Schema).min(2).optional(),
+  bidirectional: z.boolean().optional(),
+  speedUnitsPerSecond: z.number().positive().optional(),
+  reviewedPurpose: z.string().trim().min(1).optional(),
+  evidenceAssetId: z.string().uuid().optional(),
+}).superRefine((value, context) => {
+  if (!Object.keys(value).length) {
+    context.addIssue({ code: "custom", message: "At least one traversal field must be updated" });
+  }
+  if (value.path?.some((point, index) => index > 0 &&
+    point.every((coordinate, axis) => coordinate === value.path![index - 1]![axis]))) {
+    context.addIssue({
+      code: "custom",
+      path: ["path"],
+      message: "A traversal path cannot contain a zero-length segment",
+    });
+  }
+});
+
 export const navigationArtifactSchema = z.object({
-  schemaVersion: z.enum(["spatial-navigation-v6", "spatial-navigation-v7"]),
+  schemaVersion: z.enum([
+    "spatial-navigation-v6",
+    "spatial-navigation-v7",
+    "spatial-navigation-v8",
+  ]),
   generator: z.object({
     name: z.literal("recast-navigation-js"),
     version: z.literal("0.43.1"),
@@ -978,7 +1037,7 @@ export const navigationArtifactSchema = z.object({
     requestedPosition: point3Schema,
     projectedPosition: point3Schema,
   }),
-  offMeshConnections: z.array(z.record(z.string(), z.unknown())).length(0),
+  offMeshConnections: z.array(authoredTraversalConnectionSchema),
   navMesh: z.object({
     clearanceApplied: z.literal(true),
     vertices: z.array(point3Schema).min(3).max(2_000_000),
@@ -1033,6 +1092,31 @@ export const navigationArtifactSchema = z.object({
       });
     }
   }),
+  authoredTraversalValidation: z.object({
+    passed: z.literal(true),
+    engine: z.literal("rapier3d"),
+    version: z.literal("0.19.3"),
+    controller: z.literal("kinematic-capsule-controlled-path"),
+    connectionCount: z.number().int().positive(),
+    directionCount: z.number().int().positive(),
+    traversals: z.array(z.object({
+      connectionId: z.string().min(1),
+      traversalKind: z.enum(["elevator", "ladder", "moving_platform"]),
+      direction: z.enum(["forward", "reverse"]),
+      waypointCount: z.number().int().min(2),
+      simulatedSteps: z.number().int().positive(),
+      pathLength: z.number().positive(),
+      finalPosition: point3Schema,
+    })).min(1),
+  }).superRefine((value, context) => {
+    if (value.directionCount !== value.traversals.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["directionCount"],
+        message: "Traversal direction count must match the controlled-path evidence list",
+      });
+    }
+  }).optional(),
   structuralValidation: z.object({
     passed: z.literal(true),
     engine: z.literal("rapier3d"),
@@ -1153,7 +1237,7 @@ export const navigationArtifactSchema = z.object({
     }
   }).optional(),
 }).superRefine((value, context) => {
-  if (value.schemaVersion === "spatial-navigation-v7") {
+  if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(value.schemaVersion)) {
     if (!value.collisionSemantics) {
       context.addIssue({
         code: "custom",
@@ -1297,6 +1381,71 @@ export const navigationArtifactSchema = z.object({
         message: "Operator-reviewed v7 collision requires explicit v2 floor, ceiling, and barrier metadata",
       });
     }
+  }
+  if (value.schemaVersion === "spatial-navigation-v8") {
+    const connectionIds = new Set(value.offMeshConnections.map((connection) => connection.id));
+    if (
+      connectionIds.size !== value.offMeshConnections.length ||
+      value.offMeshConnections.some((connection) => {
+        const path = [
+          connection.startPosition,
+          ...connection.controlPoints,
+          connection.endPosition,
+        ];
+        return connection.radius < value.agent.radius || path.some((point, index) =>
+          index > 0 && point.every((coordinate, axis) =>
+            coordinate === path[index - 1]![axis]));
+      })
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["offMeshConnections"],
+        message: "V8 traversal links require unique ids, agent clearance, and non-zero path segments",
+      });
+    }
+    if (!value.offMeshConnections.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["offMeshConnections"],
+        message: "V8 requires at least one authored traversal link",
+      });
+    }
+    if (!value.authoredTraversalValidation) {
+      context.addIssue({
+        code: "custom",
+        path: ["authoredTraversalValidation"],
+        message: "V8 requires Rapier controlled-path evidence for every traversal direction",
+      });
+    } else {
+      const expectedDirections = new Map(value.offMeshConnections.flatMap((connection) => [
+        [`${connection.id}:forward`, connection.traversalKind],
+        ...(connection.bidirectional
+          ? [[`${connection.id}:reverse`, connection.traversalKind] as const]
+          : []),
+      ] as Array<readonly [string, typeof connection.traversalKind]>));
+      const actualDirections = new Map(value.authoredTraversalValidation.traversals.map((entry) => [
+        `${entry.connectionId}:${entry.direction}`,
+        entry.traversalKind,
+      ]));
+      if (
+        value.authoredTraversalValidation.connectionCount !== value.offMeshConnections.length ||
+        value.authoredTraversalValidation.directionCount !== expectedDirections.size ||
+        actualDirections.size !== expectedDirections.size ||
+        [...expectedDirections].some(([key, kind]) => actualDirections.get(key) !== kind)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["authoredTraversalValidation"],
+          message: "Traversal evidence must exactly cover every frozen connection and direction",
+        });
+      }
+    }
+  } else if (value.offMeshConnections.length || value.authoredTraversalValidation) {
+    context.addIssue({
+      code: "custom",
+      path: ["offMeshConnections"],
+      message: "Authored traversal links require a v8 navigation artifact",
+    });
   }
   if (value.collisionSemantics && (
     !value.collisionSemantics.includedGroups.includes("STRUCTURAL_FLOOR") ||

@@ -176,6 +176,11 @@ Implemented:
   walls, 36 capsule corner-slide probes, and immutable JSON/Detour derivative
   hashes; an operator-only Noclip profile is frozen for diagnostics but is not
   exposed in the public viewer
+- v8 authored discontinuities for elevators, ladders, and moving platforms:
+  immutable-asset-bound version-scoped paths, Detour topology links,
+  bidirectional Rapier capsule replay, and controlled non-teleport viewer
+  movement; the source path is complete and awaits registered-device evidence
+  acceptance before production activation
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset
@@ -220,9 +225,10 @@ Intentionally outside the current production boundary:
   height. Proposal-derived navigation is preview-only; approval recooks a new
   build bound to the corrected revision and plan hash. Every level and
   connector remains an indicative proposal requiring operator correction.
-  Elevators, ladders,
-  moving platforms, or stairs absent from the registered geometry must be
-  authored explicitly
+  Elevators, ladders, moving platforms, or stairs absent from registered
+  geometry are never inferred. V8 supports them only as explicit reviewed 3D
+  paths whose landings project onto Recast and whose allowed directions pass
+  the production Rapier capsule replay
 - arbitrary capture editing, furniture asset placement, or generative
   background reconstruction after deleting captured objects
 - activation and acceptance of a real customer enterprise identity provider
@@ -391,6 +397,8 @@ rollback procedures.
 - [docs/V7_NAVIGATION_PIPELINE.md](./docs/V7_NAVIGATION_PIPELINE.md) — current
   structural collision, Rapier Walk/Fly, Detour build, validation, and immutable
   publication contract
+- [docs/V8_AUTHORED_TRAVERSAL_PIPELINE.md](./docs/V8_AUTHORED_TRAVERSAL_PIPELINE.md)
+  — elevators, ladders, moving platforms, and controlled-path acceptance
 - [docs/V5_NAVIGATION_PIPELINE.md](./docs/V5_NAVIGATION_PIPELINE.md) — legacy
   authored-floor compatibility path and provisional-unit boundary
 - [docs/research/floorplan-and-scene-editing.md](./docs/research/floorplan-and-scene-editing.md)

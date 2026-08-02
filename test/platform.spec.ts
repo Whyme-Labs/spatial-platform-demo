@@ -3,6 +3,10 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { navigationArtifactSchema } from "../src/worker/contracts";
+import {
+  currentNavigationAuthoringState,
+  navigationAuthoringHash,
+} from "../src/worker/index";
 import { sha256Hex } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
@@ -124,6 +128,56 @@ async function recordCompletedPrivacyScan(
 }
 
 describe("Spatial Studio Worker", () => {
+  it("keeps an archived last traversal hash-bound instead of resurrecting an old approval", async () => {
+    const profile = {
+      world_unit: "metres",
+      agent_radius: 0.25,
+      agent_height: 1.7,
+      eye_height: 1.6,
+      max_step_metres: 0.2,
+      max_slope_degrees: 45,
+      max_speed: 1.6,
+      max_acceleration: 8,
+    };
+    const traversal = {
+      id: crypto.randomUUID(),
+      traversal_kind: "elevator",
+      label: "East lift",
+      path_json: JSON.stringify([[0, 0, 0], [0, 3, 0]]),
+      bidirectional: 1,
+      speed_units_per_second: 1,
+      reviewed_purpose: "Visible in the registered capture.",
+      evidence_asset_id: crypto.randomUUID(),
+      evidence_sha256: "a".repeat(64),
+      status: "active",
+    };
+    const neverAuthored = await navigationAuthoringHash(profile, [], [], [], []);
+    const active = await navigationAuthoringHash(profile, [], [], [], [traversal]);
+    const archived = await navigationAuthoringHash(
+      profile,
+      [],
+      [],
+      [],
+      [{ ...traversal, status: "archived" }],
+    );
+    expect(new Set([neverAuthored, active, archived]).size).toBe(3);
+    const firstFloorplan = await navigationAuthoringHash(profile, [], [], [], [], {
+      schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
+      floorplanRevisionId: "revision-1",
+      planHash: "b".repeat(64),
+      collisionAssetId: "collision-1",
+      collisionSha256: "c".repeat(64),
+    });
+    const secondFloorplan = await navigationAuthoringHash(profile, [], [], [], [], {
+      schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
+      floorplanRevisionId: "revision-2",
+      planHash: "d".repeat(64),
+      collisionAssetId: "collision-2",
+      collisionSha256: "e".repeat(64),
+    });
+    expect(firstFloorplan).not.toBe(secondFloorplan);
+    expect(firstFloorplan).not.toBe(neverAuthored);
+  });
   it("reports binding health without exposing secrets", async () => {
     const response = await exports.default.fetch(`${origin}/api/health`);
     const body = await response.json<Record<string, unknown>>();
@@ -2473,6 +2527,51 @@ describe("Spatial Studio Worker", () => {
       planarBoundaryArtifact.structuralValidation!.boundaryTopology.method =
         "explicit-planar-boundary-faces-v2";
       expect(navigationArtifactSchema.safeParse(planarBoundaryArtifact).success).toBe(true);
+      const v8Artifact = {
+        ...structuredClone(planarBoundaryArtifact),
+        schemaVersion: "spatial-navigation-v8",
+        offMeshConnections: [{
+          id: "gallery-lift",
+          traversalKind: "elevator",
+          startPosition: [0.5, 0, 0.5],
+          controlPoints: [[0.5, 2.6, 0.5]],
+          endPosition: [0.7, 2.6, 0.7],
+          radius: 0.22,
+          bidirectional: true,
+          speedUnitsPerSecond: 1.2,
+          area: 0,
+          flags: 1,
+          userId: 1,
+          reviewedPurpose: "Reviewed gallery lift path from registered evidence.",
+          evidenceReceipt: {
+            assetId: "11111111-1111-4111-8111-111111111111",
+            sha256: "a".repeat(64),
+          },
+        }],
+        authoredTraversalValidation: {
+          passed: true,
+          engine: "rapier3d",
+          version: "0.19.3",
+          controller: "kinematic-capsule-controlled-path",
+          connectionCount: 1,
+          directionCount: 2,
+          traversals: ["forward", "reverse"].map((direction) => ({
+            connectionId: "gallery-lift",
+            traversalKind: "elevator",
+            direction,
+            waypointCount: 3,
+            simulatedSteps: 64,
+            pathLength: 2.9,
+            finalPosition: direction === "forward" ? [0.7, 2.6, 0.7] : [0.5, 0, 0.5],
+          })),
+        },
+      };
+      const missingTraversalEvidence = structuredClone(v8Artifact);
+      delete (missingTraversalEvidence.offMeshConnections[0] as {
+        evidenceReceipt?: unknown;
+      }).evidenceReceipt;
+      expect(navigationArtifactSchema.safeParse(missingTraversalEvidence).success).toBe(false);
+      expect(navigationArtifactSchema.safeParse(v8Artifact).success).toBe(true);
     }
     await env.DB.batch([
       env.DB.prepare(`
@@ -3380,6 +3479,8 @@ describe("Spatial Studio Worker", () => {
     `).first<{ organisationId: string; userId: string }>();
     const projectId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
+    const traversalEvidenceAssetId = crypto.randomUUID();
+    const traversalEvidenceSha256 = "c".repeat(64);
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO projects
@@ -3390,6 +3491,20 @@ describe("Spatial Studio Worker", () => {
         INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
         VALUES (?, ?, 1, 'QA_REQUIRED', ?)
       `).bind(versionId, projectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'master', 'ply', ?, 'gallery-capture.ply',
+          'application/octet-stream', 4, ?, 'verified')
+      `).bind(
+        traversalEvidenceAssetId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        `masters-private/${member!.organisationId}/${projectId}/${versionId}/gallery-capture.ply`,
+        traversalEvidenceSha256,
+      ),
     ]);
 
     const navigationProfileResponse = await exports.default.fetch(
@@ -3475,6 +3590,52 @@ describe("Spatial Studio Worker", () => {
     );
     expect(obstacleResponse.status).toBe(201);
     const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
+
+    const traversalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId,
+          traversalKind: "elevator",
+          label: "Gallery lift",
+          path: [[-1, 0, 0], [-1, 2.8, 0], [1, 2.8, 0]],
+          bidirectional: true,
+          speedUnitsPerSecond: 1.2,
+          reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
+          evidenceAssetId: traversalEvidenceAssetId,
+        }),
+      },
+    );
+    expect(traversalResponse.status).toBe(201);
+    const traversal = await traversalResponse.json<{ traversal: { id: string } }>();
+    const updateTraversalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ speedUnitsPerSecond: 1.4 }),
+      },
+    );
+    expect(updateTraversalResponse.status).toBe(200);
+    const automaticNavigation = await currentNavigationAuthoringState(
+      env.DB,
+      member!.organisationId,
+      projectId,
+      versionId,
+    );
+    expect(automaticNavigation.offMeshConnections).toEqual([
+      expect.objectContaining({
+        id: traversal.traversal.id,
+        traversalKind: "elevator",
+        evidenceReceipt: {
+          assetId: traversalEvidenceAssetId,
+          sha256: traversalEvidenceSha256,
+        },
+      }),
+    ]);
 
     const unsafeUnitRelabel = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
@@ -3572,6 +3733,14 @@ describe("Spatial Studio Worker", () => {
       navigationObstacles: [{
         id: obstacle.obstacle.id,
         label: "Display plinth",
+      }],
+      navigationTraversals: [{
+        id: traversal.traversal.id,
+        traversal_kind: "elevator",
+        label: "Gallery lift",
+        speed_units_per_second: 1.4,
+        evidence_asset_id: traversalEvidenceAssetId,
+        evidence_sha256: traversalEvidenceSha256,
       }],
       obstacleProxy: {
         version: "authored-obstacle-boxes-v1",

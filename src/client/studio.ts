@@ -974,6 +974,19 @@ type SpatialWorkspace = {
     metadata_json: string;
     world_unit: WorldUnit;
   }>;
+  navigationTraversals: Array<{
+    id: string;
+    traversal_kind: "elevator" | "ladder" | "moving_platform";
+    label: string;
+    path_json: string;
+    bidirectional: number;
+    speed_units_per_second: number;
+    reviewed_purpose: string;
+    evidence_asset_id: string;
+    evidence_sha256: string;
+    created_at: string;
+    updated_at: string;
+  }>;
   obstacleProxy: {
     version: string;
     boxes: Array<{ entityId: string; label: string; min: number[]; max: number[] }>;
@@ -1218,6 +1231,7 @@ const deliveryDialog = byId<HTMLDialogElement>("deliveryDialog");
 const domainDialog = byId<HTMLDialogElement>("domainDialog");
 const entityDialog = byId<HTMLDialogElement>("entityDialog");
 const navigationProfileDialog = byId<HTMLDialogElement>("navigationProfileDialog");
+const navigationTraversalDialog = byId<HTMLDialogElement>("navigationTraversalDialog");
 const navigationBuildDialog = byId<HTMLDialogElement>("navigationBuildDialog");
 const semanticExtractionDialog = byId<HTMLDialogElement>("semanticExtractionDialog");
 const semanticReviewDialog = byId<HTMLDialogElement>("semanticReviewDialog");
@@ -1268,6 +1282,7 @@ let assetHandoffCancelOperationId: string | null = null;
 let assetHandoffPollTimer: number | null = null;
 let projectViewsInitialised = false;
 let editingSpatialEntity: SpatialEntity | null = null;
+let editingNavigationTraversal: SpatialWorkspace["navigationTraversals"][number] | null = null;
 let releaseOperationId: string | null = null;
 let reviewerOperationId: string | null = null;
 let teamInvitationOperationId: string | null = null;
@@ -1433,6 +1448,7 @@ function bindInterface(): void {
   const domainForm = byId<HTMLFormElement>("domainForm");
   const entityForm = byId<HTMLFormElement>("entityForm");
   const navigationProfileForm = byId<HTMLFormElement>("navigationProfileForm");
+  const navigationTraversalForm = byId<HTMLFormElement>("navigationTraversalForm");
   const navigationBuildForm = byId<HTMLFormElement>("navigationBuildForm");
   const semanticExtractionForm = byId<HTMLFormElement>("semanticExtractionForm");
   const semanticReviewForm = byId<HTMLFormElement>("semanticReviewForm");
@@ -1469,6 +1485,7 @@ function bindInterface(): void {
     domainForm,
     entityForm,
     navigationProfileForm,
+    navigationTraversalForm,
     navigationBuildForm,
     semanticExtractionForm,
     semanticReviewForm,
@@ -2123,6 +2140,19 @@ function bindInterface(): void {
       pendingLabel: "Queueing verified build…",
       errorTarget: byId("navigationBuildError"),
     }, () => queueNavigationBuild(form));
+  });
+  const navigationTraversalSubmit =
+    navigationTraversalForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  navigationTraversalForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const form = new FormData(navigationTraversalForm);
+    void runAction({
+      key: "create-navigation-traversal",
+      trigger: navigationTraversalSubmit,
+      form: navigationTraversalForm,
+      pendingLabel: "Authoring traversal…",
+      errorTarget: byId("navigationTraversalError"),
+    }, () => createNavigationTraversal(form));
   });
   const semanticExtractionSubmit =
     semanticExtractionForm.querySelector<HTMLButtonElement>("[type='submit']")!;
@@ -6551,6 +6581,8 @@ function renderSpatial(): void {
   addRoute.addEventListener("click", openRouteDialog);
   const tuneNavigation = element("button", "quiet-button wide", "Tune navigation agent");
   tuneNavigation.addEventListener("click", openNavigationProfileDialog);
+  const authorTraversal = element("button", "quiet-button wide", "Author vertical traversal");
+  authorTraversal.addEventListener("click", () => openNavigationTraversalDialog());
   const buildNavigation = element("button", "primary-button wide", "Build verified navigation");
   const collisionAssets = navigationCollisionAssets();
   buildNavigation.disabled = collisionAssets.length === 0;
@@ -6559,8 +6591,66 @@ function renderSpatial(): void {
     : "Upload a verified collision GLB on this immutable version first.";
   buildNavigation.addEventListener("click", openNavigationBuildDialog);
   const navigationActions = element("div", "navigation-authoring-actions");
-  navigationActions.append(addRoute, tuneNavigation, buildNavigation);
+  navigationActions.append(addRoute, tuneNavigation, authorTraversal, buildNavigation);
   routes.append(navigationActions);
+
+  const navigationTraversals = spatial.navigationTraversals ?? [];
+  if (navigationTraversals.length) {
+    const traversalList = element("div", "navigation-build-history");
+    traversalList.append(element(
+      "p",
+      "field-note",
+      `${navigationTraversals.length} reviewed discontinuity ${
+        navigationTraversals.length === 1 ? "is" : "are"
+      } frozen into the next verified build.`,
+    ));
+    for (const traversal of navigationTraversals) {
+      const row = element("div", "semantic-row navigation-build-row");
+      row.append(element(
+        "span",
+        "",
+        `${humanStatus(traversal.traversal_kind)} · ${traversal.label}`,
+      ));
+      const actions = element("div", "navigation-build-actions");
+      const edit = element("button", "quiet-button", "Edit");
+      edit.addEventListener("click", () => openNavigationTraversalDialog(traversal));
+      const archive = element("button", "danger-button", "Archive");
+      archive.addEventListener("click", () => {
+        void runAction({
+          key: `archive-navigation-traversal:${traversal.id}`,
+          trigger: archive,
+          pendingLabel: "Archiving…",
+        }, () => archiveNavigationTraversal(traversal.id));
+      });
+      actions.append(edit, archive);
+      row.append(actions);
+      const evidence = document.createElement("details");
+      evidence.className = "navigation-evidence-details";
+      evidence.append(element("summary", "", "Inspect path and immutable receipt"));
+      try {
+        const path = JSON.parse(traversal.path_json) as unknown;
+        evidence.append(element("pre", "navigation-evidence-json", JSON.stringify({
+          path,
+          speedUnitsPerSecond: traversal.speed_units_per_second,
+          bidirectional: traversal.bidirectional === 1,
+          reviewedPurpose: traversal.reviewed_purpose,
+          evidence: {
+            assetId: traversal.evidence_asset_id,
+            sha256: traversal.evidence_sha256,
+          },
+        }, null, 2)));
+      } catch (error) {
+        evidence.append(element(
+          "p",
+          "form-error",
+          `Stored path JSON is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        ));
+      }
+      row.append(evidence);
+      traversalList.append(row);
+    }
+    routes.append(traversalList);
+  }
 
   const navigationBuilds = spatial.navigationBuilds ?? [];
   const navigationBuildHistory = element("div", "navigation-build-history");
@@ -6579,9 +6669,44 @@ function renderSpatial(): void {
       `${humanStatus(build.status)} · ${parseTimestamp(build.created_at).toLocaleString()}`,
     );
     const actions = element("div", "navigation-build-actions");
+    let evidenceDetails: HTMLDetailsElement | null = null;
     row.append(label);
+    if (build.artifact_json) {
+      const evidence = document.createElement("details");
+      evidenceDetails = evidence;
+      evidence.className = "navigation-evidence-details";
+      evidence.append(element("summary", "", "Inspect build evidence"));
+      try {
+        const artifact = JSON.parse(build.artifact_json) as Record<string, unknown>;
+        evidence.append(element("pre", "navigation-evidence-json", JSON.stringify({
+          schemaVersion: artifact.schemaVersion,
+          source: artifact.source,
+          validation: artifact.validation,
+          physicalValidation: artifact.physicalValidation,
+          structuralValidation: artifact.structuralValidation,
+          offMeshConnections: artifact.offMeshConnections,
+          authoredTraversalValidation: artifact.authoredTraversalValidation,
+          reportAssetId: build.report_asset_id,
+          navmeshAssetId: build.navmesh_asset_id,
+        }, null, 2)));
+      } catch (error) {
+        evidence.append(element(
+          "p",
+          "form-error",
+          `Stored build evidence is invalid: ${error instanceof Error ? error.message : String(error)}`,
+        ));
+      }
+      row.append(evidence);
+    }
     if (build.status === "READY_FOR_REVIEW") {
       const approve = element("button", "primary-button", "Approve navigation");
+      approve.disabled = !evidenceDetails?.open;
+      approve.title = evidenceDetails
+        ? "Open and inspect the frozen build evidence before approval."
+        : "This build has no inspectable artifact and cannot be approved.";
+      evidenceDetails?.addEventListener("toggle", () => {
+        approve.disabled = !evidenceDetails?.open;
+      });
       approve.addEventListener("click", () => {
         const note = window.prompt(
           "Record what you reviewed (minimum 10 characters).",
@@ -8248,12 +8373,135 @@ async function updateNavigationProfile(form: FormData): Promise<void> {
   await loadSpatialWorkspace(project.id);
 }
 
+function openNavigationTraversalDialog(
+  traversal: SpatialWorkspace["navigationTraversals"][number] | null = null,
+): void {
+  const spatial = state.spatial;
+  if (!spatial?.version) return;
+  const form = byId<HTMLFormElement>("navigationTraversalForm");
+  form.reset();
+  editingNavigationTraversal = traversal;
+  const evidenceAssets = navigationEvidenceAssets();
+  if (!evidenceAssets.length) {
+    showNotice(
+      "Upload and verify an immutable asset on this scene version before authoring a traversal.",
+      "error",
+    );
+    return;
+  }
+  const evidenceSelect = byId<HTMLSelectElement>("navigationTraversalEvidenceAsset");
+  evidenceSelect.replaceChildren(...evidenceAssets.map((asset) => new Option(
+    `${asset.file_name} · ${humanStatus(asset.kind)} · ${asset.sha256!.slice(0, 12)}…`,
+    asset.id,
+  )));
+  if (traversal) {
+    setFormValue(form, "traversalKind", traversal.traversal_kind);
+    setFormValue(form, "label", traversal.label);
+    try {
+      const path = JSON.parse(traversal.path_json) as unknown;
+      if (Array.isArray(path)) {
+        setFormValue(form, "path", path.map((point) => String(point)).join("\n"));
+      }
+    } catch (error) {
+      showNotice(
+        `Stored traversal ${traversal.id} has invalid path JSON and cannot be edited: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "error",
+      );
+      return;
+    }
+    const bidirectional = form.elements.namedItem("bidirectional");
+    if (bidirectional instanceof HTMLInputElement) {
+      bidirectional.checked = traversal.bidirectional === 1;
+    }
+    setFormValue(form, "speedUnitsPerSecond", String(traversal.speed_units_per_second));
+    setFormValue(form, "reviewedPurpose", traversal.reviewed_purpose);
+    setFormValue(form, "evidenceAssetId", traversal.evidence_asset_id);
+  } else {
+    setFormValue(form, "speedUnitsPerSecond", String(spatial.navigationProfile.maxSpeed));
+  }
+  const submit = form.querySelector<HTMLButtonElement>("[type='submit']")!;
+  submit.textContent = traversal ? "Save traversal" : "Author traversal";
+  byId("navigationTraversalUnit").textContent =
+    spatial.navigationProfile.worldUnit === "scene_units"
+      ? "provisional scene units"
+      : "metres";
+  byId("navigationTraversalError").textContent = "";
+  navigationTraversalDialog.showModal();
+}
+
+async function createNavigationTraversal(form: FormData): Promise<void> {
+  const project = state.selected?.project;
+  const version = state.spatial?.version;
+  if (!project || !version) throw new Error("Open an immutable scene version first.");
+  const path = parseTraversalPath(String(form.get("path") ?? ""));
+  const body = {
+    traversalKind: String(form.get("traversalKind") ?? "elevator"),
+    label: String(form.get("label") ?? ""),
+    path,
+    bidirectional: form.get("bidirectional") === "on",
+    speedUnitsPerSecond: Number(form.get("speedUnitsPerSecond")),
+    reviewedPurpose: String(form.get("reviewedPurpose") ?? ""),
+    evidenceAssetId: String(form.get("evidenceAssetId") ?? ""),
+  };
+  await api(editingNavigationTraversal
+    ? `/api/projects/${project.id}/spatial/navigation-traversals/${editingNavigationTraversal.id}`
+    : `/api/projects/${project.id}/spatial/navigation-traversals`, {
+    method: editingNavigationTraversal ? "PATCH" : "POST",
+    body: JSON.stringify({
+      ...(!editingNavigationTraversal
+        ? { clientOperationId: crypto.randomUUID(), versionId: version.id }
+        : {}),
+      ...body,
+    }),
+  });
+  const updated = Boolean(editingNavigationTraversal);
+  editingNavigationTraversal = null;
+  navigationTraversalDialog.close();
+  showToast(updated
+    ? "Reviewed traversal updated; rebuild navigation to freeze it"
+    : "Reviewed traversal authored; rebuild navigation to freeze it");
+  await loadSpatialWorkspace(project.id);
+}
+
+async function archiveNavigationTraversal(traversalId: string): Promise<void> {
+  const project = state.selected?.project;
+  if (!project) return;
+  await api(
+    `/api/projects/${project.id}/spatial/navigation-traversals/${traversalId}`,
+    { method: "DELETE" },
+  );
+  showToast("Authored traversal archived");
+  await loadSpatialWorkspace(project.id);
+}
+
+function parseTraversalPath(value: string): Array<[number, number, number]> {
+  const points = value.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => parsePosition(line));
+  if (points.length < 2 || points.some((point) => !point)) {
+    throw new Error("Traversal path requires at least two x, y, z points, one per line.");
+  }
+  return points as Array<[number, number, number]>;
+}
+
 function navigationCollisionAssets(): Asset[] {
   const versionId = state.spatial?.version?.id;
   return (state.selected?.assets ?? []).filter((asset) =>
     asset.version_id === versionId &&
     asset.kind === "collision" &&
     asset.format.toLowerCase() === "glb" &&
+    asset.integrity_status === "verified" &&
+    Boolean(asset.sha256)
+  );
+}
+
+function navigationEvidenceAssets(): Asset[] {
+  const versionId = state.spatial?.version?.id;
+  return (state.selected?.assets ?? []).filter((asset) =>
+    asset.version_id === versionId &&
     asset.integrity_status === "verified" &&
     Boolean(asset.sha256)
   );

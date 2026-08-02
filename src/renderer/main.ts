@@ -316,7 +316,9 @@ async function start(): Promise<void> {
         walkableBoxes = authoredBoxes;
         const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
         const structuralV7 = navigationArtifact && typeof navigationArtifact === "object" &&
-          Reflect.get(navigationArtifact, "schemaVersion") === "spatial-navigation-v7";
+          ["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+            String(Reflect.get(navigationArtifact, "schemaVersion")),
+          );
         const requestedMode = Reflect.get(runtimeMessage, "defaultMovementMode");
         const preserveAuthoredFlyOpening = structuralV7 && requestedMode === "fly";
         if (navigationArtifact) walkableBoxes = [];
@@ -393,8 +395,9 @@ async function start(): Promise<void> {
             }
             detourNavigationRuntime = runtime;
             physicalNavigationRuntime = physicalRuntime;
-            collisionDrivenMovement = Reflect.get(navigationArtifact as object, "schemaVersion") ===
-              "spatial-navigation-v7";
+            collisionDrivenMovement = ["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+              String(Reflect.get(navigationArtifact as object, "schemaVersion")),
+            );
             movementMode = physicalRuntime.mode;
             controls.configureMovementProfiles(navigationArtifact);
             controls.setMovementMode(movementMode);
@@ -697,12 +700,40 @@ async function start(): Promise<void> {
       ...mobileControls.movement,
       y: mobileVerticalMovement,
     });
-    if (collisionDrivenMovement && physicalNavigationRuntime) {
-      const destination = camera.position.toArray() as Vector3Tuple;
-      const origin = movementStart.toArray() as Vector3Tuple;
+    const desired = camera.position.toArray() as Vector3Tuple;
+    const origin = movementStart.toArray() as Vector3Tuple;
+    const authoredTraversal = collisionDrivenMovement && movementMode === "walk"
+      ? detourNavigationRuntime?.resolveAuthoredTraversal(origin, desired, deltaSeconds) ?? null
+      : null;
+    if (authoredTraversal && physicalNavigationRuntime) {
+      const controlledPosition = physicalNavigationRuntime.moveControlledCamera(
+        origin,
+        authoredTraversal.position,
+      );
+      if (controlledPosition) {
+        camera.position.fromArray(controlledPosition);
+        lastWalkablePosition = camera.position.clone();
+        if (authoredTraversal.phase === "started") {
+          setControlStatus(
+            `${traversalKindLabel(authoredTraversal.traversalKind)} traversal in progress`,
+            "ready",
+          );
+        } else if (authoredTraversal.phase === "completed") {
+          setControlStatus(movementStatusText(), "ready");
+        }
+      } else {
+        detourNavigationRuntime?.cancelAuthoredTraversal();
+        if (lastWalkablePosition) camera.position.copy(lastWalkablePosition);
+        setControlStatus(
+          `${traversalKindLabel(authoredTraversal.traversalKind)} traversal blocked: ${
+            physicalNavigationRuntime.controlledFailure ?? "structural collision"
+          }`,
+        );
+      }
+    } else if (collisionDrivenMovement && physicalNavigationRuntime) {
       const resolved = physicalNavigationRuntime.moveCamera(
         origin,
-        destination,
+        desired,
         deltaSeconds,
       );
       if (resolved) {
@@ -712,9 +743,7 @@ async function start(): Promise<void> {
         camera.position.copy(lastWalkablePosition);
       }
     } else if (detourNavigationRuntime) {
-      const destination = camera.position.toArray() as Vector3Tuple;
-      const origin = movementStart.toArray() as Vector3Tuple;
-      const detourResolved = detourNavigationRuntime.moveCamera(origin, destination);
+      const detourResolved = detourNavigationRuntime.moveCamera(origin, desired);
       const resolved = detourResolved && physicalNavigationRuntime
         ? physicalNavigationRuntime.moveCamera(origin, detourResolved)
         : null;
@@ -725,9 +754,7 @@ async function start(): Promise<void> {
         camera.position.copy(lastWalkablePosition);
       }
     } else if (navigationRuntime) {
-      const destination = camera.position.toArray() as Vector3Tuple;
-      const origin = movementStart.toArray() as Vector3Tuple;
-      const resolved = resolveNavigationMovement(origin, destination, navigationRuntime);
+      const resolved = resolveNavigationMovement(origin, desired, navigationRuntime);
       if (resolved) {
         camera.position.fromArray(resolved);
         lastWalkablePosition = camera.position.clone();
@@ -762,6 +789,11 @@ async function start(): Promise<void> {
   });
 
   window.addEventListener("pagehide", dispose, { once: true });
+}
+
+function traversalKindLabel(kind: "elevator" | "ladder" | "moving_platform"): string {
+  if (kind === "moving_platform") return "Moving platform";
+  return kind === "elevator" ? "Elevator" : "Ladder";
 }
 
 function cameraPose(camera: THREE.PerspectiveCamera): {

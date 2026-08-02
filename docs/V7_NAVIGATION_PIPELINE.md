@@ -1,5 +1,9 @@
 # V7 structural navigation pipeline
 
+> V7 remains the structural-shell foundation. Explicit elevators, ladders, and
+> moving platforms extend it through the
+> [V8 authored traversal pipeline](./V8_AUTHORED_TRAVERSAL_PIPELINE.md).
+
 V7 is the current production contract for making a Gaussian scene physically
 explorable. The Gaussian splat remains the visual layer. Collision, movement,
 route topology, room reachability, and the floor plan come from separate,
@@ -155,8 +159,8 @@ now infer multiple captured levels and continuous stair/ramp candidates from a
 registered metric point cloud, cook bounded Recast treads and landings, and
 fail the build when any inferred level is unreachable. It requires captured or
 operator-reviewed ceiling support and does not manufacture ceilings from wall
-height. It does not infer
-unobserved circulation, elevators, ladders, or moving platforms, and it does not
+height. It does not infer unobserved circulation, elevators, ladders, or moving
+platforms. Those discontinuities require explicit reviewed V8 paths. V7 does not
 provide moving-furniture physics, survey accuracy, clearance certification,
 accessibility certification, or native XGRIDS/FJD reconstruction.
 

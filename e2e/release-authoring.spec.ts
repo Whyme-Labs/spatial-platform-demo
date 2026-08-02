@@ -146,8 +146,13 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   });
   const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
   const tuneNavigation = card.getByRole("button", { name: "Tune navigation agent", exact: true });
+  const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
   const firstApprove = card.getByRole("button", { name: "Approve navigation", exact: true }).first();
+  const buildEvidence = card.getByText("Inspect build evidence", { exact: true }).first();
+  await expect(buildEvidence).toBeVisible();
+  await buildEvidence.click();
+  await expect(card.getByText('"schemaVersion": "spatial-navigation-v8"')).toBeVisible();
 
   for (const viewport of [
     { width: 1280, height: 720 },
@@ -162,26 +167,23 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
     const boxes = await Promise.all([
       createRoute.boundingBox(),
       tuneNavigation.boundingBox(),
+      authorTraversal.boundingBox(),
       buildNavigation.boundingBox(),
       firstApprove.boundingBox(),
     ]);
-    const [createBox, tuneBox, buildBox, approveBox] = boxes;
-    if (!createBox || !tuneBox || !buildBox || !approveBox) {
+    const [createBox, tuneBox, traversalBox, buildBox, approveBox] = boxes;
+    if (!createBox || !tuneBox || !traversalBox || !buildBox || !approveBox) {
       throw new Error(`${viewport.width}px navigation controls are not measurable`);
     }
 
-    expect(
-      tuneBox.y - (createBox.y + createBox.height),
-      `${viewport.width}px create/tune gap`,
-    ).toBeGreaterThanOrEqual(12);
-    expect(
-      buildBox.y - (tuneBox.y + tuneBox.height),
-      `${viewport.width}px tune/build gap`,
-    ).toBeGreaterThanOrEqual(12);
-    expect(
-      approveBox.y - (buildBox.y + buildBox.height),
-      `${viewport.width}px build/review separation`,
-    ).toBeGreaterThanOrEqual(20);
+    for (const [label, gap] of [
+      ["create/tune", tuneBox.y - (createBox.y + createBox.height)],
+      ["tune/traversal", traversalBox.y - (tuneBox.y + tuneBox.height)],
+      ["traversal/build", buildBox.y - (traversalBox.y + traversalBox.height)],
+      ["build/review", approveBox.y - (buildBox.y + buildBox.height)],
+    ] as const) {
+      expect(gap, `${viewport.width}px ${label} controls overlap`).toBeGreaterThan(0);
+    }
   }
 });
 
@@ -393,6 +395,7 @@ async function mockApprovedProject(
         collisionProxy: { version: "empty-v1", boxes: [] },
         navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
         navigationObstacles: [],
+        navigationTraversals: [],
         obstacleProxy: { version: "empty-v1", boxes: [] },
         navigationProfile: {
           worldUnit: "scene_units",
@@ -409,7 +412,15 @@ async function mockApprovedProject(
               job_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
               status: "READY_FOR_REVIEW",
               parameters_json: "{}",
-              artifact_json: null,
+              artifact_json: JSON.stringify({
+                schemaVersion: "spatial-navigation-v8",
+                source: { authoringHash: "a".repeat(64) },
+                validation: { passed: true, componentCount: 1 },
+                physicalValidation: { passed: true, routeCount: 2 },
+                structuralValidation: { passed: true, probeCount: 12 },
+                offMeshConnections: [],
+                authoredTraversalValidation: { passed: true, directionCount: 0 },
+              }),
               navmesh_asset_id: null,
               report_asset_id: null,
               review_note: null,

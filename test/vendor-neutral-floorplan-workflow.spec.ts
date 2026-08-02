@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
+import { currentNavigationAuthoringState } from "../src/worker/index";
 import { sha256Hex } from "../src/worker/security";
 import { buildAuthoredStructuralCollisionGlb } from "../scripts/authored-collision.mjs";
 
@@ -650,6 +651,53 @@ describe("vendor-neutral floor-plan workflow", () => {
       world_unit: "metres",
       agent_radius: 0.25,
       agent_height: 1.7,
+    });
+    const revisionReceipt = await env.DB.prepare(`
+      SELECT collision_asset_id, collision_sha256, navigation_receipt_version
+      FROM floorplan_revisions WHERE id = ?
+    `).bind(reviewed.revision.id).first<{
+      collision_asset_id: string;
+      collision_sha256: string;
+      navigation_receipt_version: string;
+    }>();
+    expect(revisionReceipt).toEqual({
+      collision_asset_id: reviewed.collisionAssetId,
+      collision_sha256: correctedBuild!.collision_sha256,
+      navigation_receipt_version: "floorplan-navigation-receipt-v1",
+    });
+    const currentNavigation = await currentNavigationAuthoringState(
+      env.DB,
+      storedProject!.organisation_id,
+      project.id,
+      versionId,
+    );
+    expect(currentNavigation.authoringHash).toBe(correctedBuild!.authoring_hash);
+
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE scene_navigation_builds
+        SET status = 'READY_FOR_REVIEW', artifact_json = '{}'
+        WHERE id = ?
+      `).bind(reviewed.automaticNavigation.id),
+      env.DB.prepare(`
+        UPDATE scene_navigation_profiles SET max_speed = 1.7 WHERE version_id = ?
+      `).bind(versionId),
+    ]);
+    const staleNavigationReview = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-builds/` +
+        `${reviewed.automaticNavigation.id}/review`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "approve",
+          note: "This build predates the navigation profile edit.",
+        }),
+      },
+    );
+    expect(staleNavigationReview.status).toBe(409);
+    await expect(staleNavigationReview.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Navigation authoring changed after this build"),
     });
     const approvedRevisionCount = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM floorplan_revisions

@@ -57,6 +57,8 @@ import {
   navigationProfileSchema,
   navigationBuildSchema,
   navigationBuildReviewSchema,
+  navigationTraversalCreateSchema,
+  navigationTraversalUpdateSchema,
   navigationArtifactSchema,
   navigationAssetsSchema,
   semanticExtractionSchema,
@@ -6369,6 +6371,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     floorplanRevisions: [],
     floorplanExports: [],
     navigationObstacles: [],
+    navigationTraversals: [],
     navigationBuilds: [],
     navigationArtifact: null,
     deliveryPolicy: null,
@@ -6498,16 +6501,33 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
       ORDER BY created_at DESC LIMIT 25
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
+        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
+        t.evidence_sha256, t.status, t.created_at, t.updated_at,
+        evidence.sha256 AS current_evidence_sha256,
+        evidence.integrity_status AS evidence_integrity_status,
+        evidence.deleted_at AS evidence_deleted_at
+      FROM scene_navigation_traversals t
+      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+      WHERE t.project_id = ? AND t.version_id = ? AND t.organisation_id = ?
+      ORDER BY t.label, t.created_at
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
   const navigationProfile = requiredBatchResult(results, 16).results[0];
   const navigationBuilds = requiredBatchResult(results, 17).results;
+  const navigationTraversalRows = requiredBatchResult(results, 18).results;
+  const navigationTraversals = navigationTraversalRows.filter(
+    (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
+  );
   const authoringHash = await navigationAuthoringHash(
     navigationProfile,
     entities,
     navigationObstacles,
     requiredBatchResult(results, 2).results,
+    navigationTraversalRows,
   );
   const navigationArtifact = approvedNavigationArtifact(navigationBuilds, authoringHash);
   const runtime = buildSpatialRuntime(entities, navigationObstacles, navigationProfile);
@@ -6535,6 +6555,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
         `/api/projects/${access.project.id}/spatial/floorplan-exports/${String(row.id)}/download`,
     })),
     navigationObstacles,
+    navigationTraversals,
     navigationBuilds,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
@@ -6765,6 +6786,199 @@ app.delete("/api/projects/:projectId/spatial/navigation-obstacles/:obstacleId", 
   return context.body(null, 204);
 });
 
+async function verifiedTraversalEvidence(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+  assetId: string,
+): Promise<{ id: string; sha256: string } | null> {
+  return database.prepare(`
+    SELECT id, sha256 FROM assets
+    WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+      AND integrity_status = 'verified' AND deleted_at IS NULL
+      AND sha256 IS NOT NULL
+  `).bind(assetId, organisationId, projectId, versionId)
+    .first<{ id: string; sha256: string }>();
+}
+
+app.post("/api/projects/:projectId/spatial/navigation-traversals", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationTraversalCreateSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(
+    context.env.DB,
+    auth.organisationId,
+    context.req.param("projectId"),
+  );
+  if (!project) return notFound(context, "Project not found");
+  const version = await context.env.DB.prepare(
+    "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
+  ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Scene version not found");
+  const existing = await context.env.DB.prepare(`
+    SELECT * FROM scene_navigation_traversals
+    WHERE organisation_id = ? AND client_operation_id = ?
+  `).bind(auth.organisationId, parsed.data.clientOperationId).first();
+  if (existing) return context.json({ traversal: existing, idempotent: true });
+  const evidence = await verifiedTraversalEvidence(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.evidenceAssetId,
+  );
+  if (!evidence) {
+    return unprocessable(context, {
+      evidenceAssetId: ["Choose an immutable verified asset from this scene version"],
+    });
+  }
+  const id = crypto.randomUUID();
+  const traversal = await context.env.DB.prepare(`
+    INSERT INTO scene_navigation_traversals (
+      id, organisation_id, project_id, version_id, traversal_kind, label,
+      path_json, bidirectional, speed_units_per_second, reviewed_purpose,
+      evidence_asset_id, evidence_sha256, client_operation_id, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    RETURNING *
+  `).bind(
+    id,
+    auth.organisationId,
+    project.id,
+    version.id,
+    parsed.data.traversalKind,
+    parsed.data.label,
+    JSON.stringify(parsed.data.path),
+    parsed.data.bidirectional ? 1 : 0,
+    parsed.data.speedUnitsPerSecond,
+    parsed.data.reviewedPurpose,
+    evidence.id,
+    evidence.sha256,
+    parsed.data.clientOperationId,
+    auth.userId,
+  ).first();
+  if (!traversal) throw new Error("Authored navigation traversal was not persisted");
+  await audit(
+    context,
+    auth,
+    "spatial.navigation_traversal.create",
+    "scene_navigation_traversal",
+    id,
+    {
+      versionId: version.id,
+      traversalKind: parsed.data.traversalKind,
+      bidirectional: parsed.data.bidirectional,
+    },
+  );
+  return context.json({ traversal }, 201);
+});
+
+app.patch(
+  "/api/projects/:projectId/spatial/navigation-traversals/:traversalId",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    const parsed = navigationTraversalUpdateSchema.safeParse(await readJson(context));
+    if (!parsed.success) return validationError(context, parsed.error.flatten());
+    const existing = await context.env.DB.prepare(`
+      SELECT id, version_id, traversal_kind, label, path_json, bidirectional,
+        speed_units_per_second, reviewed_purpose, evidence_asset_id, evidence_sha256
+      FROM scene_navigation_traversals
+      WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
+    `).bind(
+      context.req.param("traversalId"),
+      context.req.param("projectId"),
+      auth.organisationId,
+    ).first<{
+      id: string;
+      version_id: string;
+      traversal_kind: string;
+      label: string;
+      path_json: string;
+      bidirectional: number;
+      speed_units_per_second: number;
+      reviewed_purpose: string;
+      evidence_asset_id: string;
+      evidence_sha256: string;
+    }>();
+    if (!existing) return notFound(context, "Authored navigation traversal not found");
+    const evidence = parsed.data.evidenceAssetId
+      ? await verifiedTraversalEvidence(
+          context.env.DB,
+          auth.organisationId,
+          context.req.param("projectId"),
+          existing.version_id,
+          parsed.data.evidenceAssetId,
+        )
+      : { id: existing.evidence_asset_id, sha256: existing.evidence_sha256 };
+    if (!evidence?.id || !evidence.sha256) {
+      return unprocessable(context, {
+        evidenceAssetId: ["Choose an immutable verified asset from this scene version"],
+      });
+    }
+    const traversal = await context.env.DB.prepare(`
+      UPDATE scene_navigation_traversals
+      SET traversal_kind = ?, label = ?, path_json = ?, bidirectional = ?,
+        speed_units_per_second = ?, reviewed_purpose = ?, evidence_asset_id = ?,
+        evidence_sha256 = ?, updated_at = datetime('now')
+      WHERE id = ?
+      RETURNING *
+    `).bind(
+      parsed.data.traversalKind ?? existing.traversal_kind,
+      parsed.data.label ?? existing.label,
+      parsed.data.path ? JSON.stringify(parsed.data.path) : existing.path_json,
+      parsed.data.bidirectional === undefined
+        ? existing.bidirectional
+        : parsed.data.bidirectional ? 1 : 0,
+      parsed.data.speedUnitsPerSecond ?? existing.speed_units_per_second,
+      parsed.data.reviewedPurpose ?? existing.reviewed_purpose,
+      evidence.id,
+      evidence.sha256,
+      existing.id,
+    ).first();
+    await audit(
+      context,
+      auth,
+      "spatial.navigation_traversal.update",
+      "scene_navigation_traversal",
+      existing.id,
+      { fields: Object.keys(parsed.data).sort() },
+    );
+    return context.json({ traversal });
+  },
+);
+
+app.delete(
+  "/api/projects/:projectId/spatial/navigation-traversals/:traversalId",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    const result = await context.env.DB.prepare(`
+      UPDATE scene_navigation_traversals
+      SET status = 'archived', updated_at = datetime('now')
+      WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
+      RETURNING id
+    `).bind(
+      context.req.param("traversalId"),
+      context.req.param("projectId"),
+      auth.organisationId,
+    ).first();
+    if (!result) return notFound(context, "Authored navigation traversal not found");
+    await audit(
+      context,
+      auth,
+      "spatial.navigation_traversal.archive",
+      "scene_navigation_traversal",
+      context.req.param("traversalId"),
+    );
+    return context.body(null, 204);
+  },
+);
+
 app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
@@ -6781,6 +6995,30 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
   if (!version) return notFound(context, "Scene version not found");
+  const currentProfileAndTraversal = await context.env.DB.batch([
+    context.env.DB.prepare(`
+      SELECT world_unit FROM scene_navigation_profiles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(auth.organisationId, project.id, version.id),
+    context.env.DB.prepare(`
+      SELECT id FROM scene_navigation_traversals
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ? AND status = 'active'
+      LIMIT 1
+    `).bind(auth.organisationId, project.id, version.id),
+  ]);
+  const currentProfile = requiredBatchResult(currentProfileAndTraversal, 0).results[0] as
+    | { world_unit?: string }
+    | undefined;
+  const currentWorldUnit = currentProfile?.world_unit;
+  if (
+    currentWorldUnit && currentWorldUnit !== parsed.data.worldUnit &&
+    requiredBatchResult(currentProfileAndTraversal, 1).results.length
+  ) {
+    return conflict(
+      context,
+      "Authored traversal coordinates fix this version's world unit. Create a new version instead of relabelling them.",
+    );
+  }
   const updated = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_profiles (
       version_id, organisation_id, project_id, world_unit, agent_radius,
@@ -6965,6 +7203,29 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
         AND r.status = 'active' AND e.status = 'active'
       ORDER BY rs.route_id, rs.sequence_number
     `).bind(version.id, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
+        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
+        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
+        evidence.integrity_status AS evidence_integrity_status,
+        evidence.deleted_at AS evidence_deleted_at
+      FROM scene_navigation_traversals t
+      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+      WHERE t.version_id = ? AND t.project_id = ? AND t.organisation_id = ?
+      ORDER BY t.id
+    `).bind(version.id, project.id, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
+        revision.collision_sha256, revision.navigation_receipt_version,
+        collision.sha256 AS current_collision_sha256,
+        collision.integrity_status AS collision_integrity_status,
+        collision.deleted_at AS collision_deleted_at
+      FROM floorplan_revisions revision
+      LEFT JOIN assets collision ON collision.id = revision.collision_asset_id
+      WHERE revision.version_id = ? AND revision.project_id = ?
+        AND revision.organisation_id = ? AND revision.status = 'approved'
+      ORDER BY revision.revision_number DESC, revision.created_at DESC LIMIT 1
+    `).bind(version.id, project.id, auth.organisationId),
   ]);
   const asset = requiredBatchResult(results, 0).results[0] as Record<string, unknown> | undefined;
   if (!asset) return notFound(context, "Collision GLB asset not found");
@@ -6989,6 +7250,10 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
   const authoredDestinations = requiredBatchResult(results, 2).results
     .flatMap(navigationDestinationFromEntity);
   const routeStopRows = requiredBatchResult(results, 4).results;
+  const traversalRows = requiredBatchResult(results, 5).results;
+  const activeTraversalRows = traversalRows.filter(
+    (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
+  );
   const routeDestinations = routeStopRows.flatMap((row) =>
     navigationDestinationFromRouteStop(row, Number(profile.eye_height))
   );
@@ -6998,18 +7263,50 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
   );
   const obstacleBoxes = requiredBatchResult(results, 3).results
     .flatMap(navigationObstacleBoxFromRow);
+  const floorplanReceipt = floorplanNavigationReceipt(
+    requiredBatchResult(results, 6).results[0],
+  );
+  if (isInvalidFloorplanNavigationReceipt(floorplanReceipt)) {
+    return conflict(
+      context,
+      "The approved floor-plan collision receipt is missing or no longer matches its verified immutable asset.",
+    );
+  }
+  if (
+    floorplanReceipt?.schemaVersion === "reviewed-floorplan-navigation-receipt-v1" &&
+    (
+      floorplanReceipt.collisionAssetId !== asset.id ||
+      floorplanReceipt.collisionSha256 !== String(asset.sha256).toLowerCase()
+    )
+  ) {
+    return conflict(
+      context,
+      "Navigation must use the verified collision asset bound to the current approved floor-plan revision.",
+    );
+  }
   const authoringHash = await navigationAuthoringHash(
     profile,
     requiredBatchResult(results, 2).results,
     requiredBatchResult(results, 3).results,
     routeStopRows,
+    traversalRows,
+    floorplanReceipt,
   );
+  const offMeshConnections = traversalRows.flatMap((row, index) =>
+    navigationTraversalConnectionFromRow(row, Number(profile.agent_radius), index)
+  );
+  if (offMeshConnections.length !== activeTraversalRows.length) {
+    return conflict(
+      context,
+      `Active authored traversal records are invalid: stored=${activeTraversalRows.length}, usable=${offMeshConnections.length}. Archive or correct the invalid records before building.`,
+    );
+  }
   const parameters = {
     provisional: parsed.data.provisional,
     bounds: parsed.data.bounds,
     spawn: parsed.data.spawn,
     destinations: [...destinationMap.values()],
-    offMeshConnections: parsed.data.offMeshConnections,
+    offMeshConnections,
     obstacleBoxes,
     build: parsed.data.build,
     source: {
@@ -7037,7 +7334,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-        'spatial-processor/0.10.0', ?, 'QUEUED', 65, 3,
+        'spatial-processor/0.11.0', ?, 'QUEUED', 65, 3,
         'Waiting for an offline Recast navigation worker')
     `).bind(
       jobId,
@@ -7085,7 +7382,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   const parsed = navigationBuildReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const reviewable = await context.env.DB.prepare(`
-    SELECT id, status, artifact_json, parameters_json
+    SELECT id, version_id, status, artifact_json, parameters_json, authoring_hash
     FROM scene_navigation_builds
     WHERE id = ? AND project_id = ? AND organisation_id = ?
   `).bind(
@@ -7094,9 +7391,11 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
     auth.organisationId,
   ).first<{
     id: string;
+    version_id: string;
     status: string;
     artifact_json: string | null;
     parameters_json: string;
+    authoring_hash: string;
   }>();
   if (!reviewable || reviewable.status !== "READY_FOR_REVIEW" || !reviewable.artifact_json) {
     return conflict(context, "Only a completed navigation build can be reviewed");
@@ -7109,13 +7408,36 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
     if (automaticLayout && typeof automaticLayout === "object") {
       const extractionId = Reflect.get(automaticLayout, "floorplanExtractionId");
       const revisionId = Reflect.get(automaticLayout, "floorplanRevisionId");
-      const planHash = Reflect.get(automaticLayout, "planHash");
       if (typeof extractionId === "string" && typeof revisionId !== "string") {
         return conflict(
           context,
           "This navigation build is a proposal preview. Approve the corrected floor plan to create an approvable build.",
         );
       }
+    }
+    let currentState: Awaited<ReturnType<typeof currentNavigationAuthoringState>>;
+    try {
+      currentState = await currentNavigationAuthoringState(
+        context.env.DB,
+        auth.organisationId,
+        context.req.param("projectId"),
+        reviewable.version_id,
+      );
+    } catch (error) {
+      return conflict(
+        context,
+        `Current navigation authoring is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (currentState.authoringHash !== reviewable.authoring_hash) {
+      return conflict(
+        context,
+        `Navigation authoring changed after this build: expected_authoring_hash=${reviewable.authoring_hash}, asked_authoring_hash=${currentState.authoringHash}. Rebuild navigation before approval.`,
+      );
+    }
+    if (automaticLayout && typeof automaticLayout === "object") {
+      const revisionId = Reflect.get(automaticLayout, "floorplanRevisionId");
+      const planHash = Reflect.get(automaticLayout, "planHash");
       if (typeof revisionId === "string") {
         const revision = await context.env.DB.prepare(`
           SELECT status, plan_hash FROM floorplan_revisions
@@ -7860,7 +8182,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.10.0', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.11.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -8326,7 +8648,7 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.10.0', ?, 'QUEUED', 78, 3,
+        'spatial-processor/0.11.0', ?, 'QUEUED', 78, 3,
         'Waiting for a vendor-neutral floor-plan worker')
     `).bind(
       jobId,
@@ -8450,6 +8772,25 @@ app.post(
         }) as Uint8Array;
         const collisionSha256 = await sha256Hex(bytes);
         const collisionAssetId = crypto.randomUUID();
+        const automaticState = await currentNavigationAuthoringState(
+          context.env.DB,
+          auth.organisationId,
+          project.id,
+          extraction.version_id,
+          {
+            schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
+            floorplanRevisionId: revisionId,
+            planHash,
+            collisionAssetId,
+            collisionSha256,
+          },
+        );
+        if (automaticState.profile.worldUnit !== "metres") {
+          return conflict(
+            context,
+            "Automatic metric floor-plan navigation cannot reuse a provisional scene-unit profile. Create a metric version first.",
+          );
+        }
         const objectKey = `delivery-private/${auth.organisationId}/${project.id}` +
           `/${extraction.version_id}/floorplan-revisions/${revisionId}` +
           `/collision-${planHash.slice(0, 16)}.glb`;
@@ -8460,6 +8801,8 @@ app.post(
             floorplanExtractionId: extraction.id,
             floorplanRevisionId: revisionId,
             planHash,
+            collisionAssetId,
+            collisionSha256,
             provenance: "operator_reviewed",
           },
         });
@@ -8475,14 +8818,7 @@ app.post(
         const navigationId = crypto.randomUUID();
         const navigationJobId = crypto.randomUUID();
         const navigationClientOperationId = crypto.randomUUID();
-        const navigationAuthoringHash = await sha256Hex(JSON.stringify({
-          schemaVersion: "automatic-floorplan-navigation-v2",
-          floorplanExtractionId: extraction.id,
-          floorplanRevisionId: revisionId,
-          planHash,
-          collisionAssetId,
-          collisionSha256,
-        }));
+        const navigationAuthoringHash = automaticState.authoringHash;
         const navigationParameters = {
           provisional: false,
           automaticLayout: {
@@ -8494,7 +8830,7 @@ app.post(
           bounds: null,
           spawn: null,
           destinations: [],
-          offMeshConnections: [],
+          offMeshConnections: automaticState.offMeshConnections,
           obstacleBoxes: [],
           build: {
             cellSize: 0.1,
@@ -8512,13 +8848,13 @@ app.post(
             worldUnit: "metres",
           },
           agent: {
-            radius: 0.25,
-            height: 1.7,
-            eyeHeight: 1.6,
-            maxClimb: 0.2,
-            maxSlopeDegrees: 45,
-            maxSpeed: 1.6,
-            maxAcceleration: 8,
+            radius: automaticState.profile.agentRadius,
+            height: automaticState.profile.agentHeight,
+            eyeHeight: automaticState.profile.eyeHeight,
+            maxClimb: automaticState.profile.maxStepMetres,
+            maxSlopeDegrees: automaticState.profile.maxSlopeDegrees,
+            maxSpeed: automaticState.profile.maxSpeed,
+            maxAcceleration: automaticState.profile.maxAcceleration,
           },
         };
         correctedNavigation = {
@@ -8624,9 +8960,10 @@ app.post(
             INSERT INTO floorplan_revisions (
               id, organisation_id, project_id, version_id, extraction_id,
               revision_number, plan_json, plan_hash, source_proposal_hash,
-              review_note, created_by
+              review_note, created_by, navigation_receipt_version
             )
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              'floorplan-navigation-receipt-v1'
             WHERE EXISTS (
               SELECT 1 FROM floorplan_extraction_runs
               WHERE id = ? AND review_client_operation_id = ?
@@ -8682,6 +9019,18 @@ app.post(
             serializedResponse,
           ),
           context.env.DB.prepare(`
+            UPDATE floorplan_revisions
+            SET collision_asset_id = ?, collision_sha256 = ?
+            WHERE id = ? AND project_id = ? AND organisation_id = ?
+              AND collision_asset_id IS NULL AND collision_sha256 IS NULL
+          `).bind(
+            correctedCollision.assetId,
+            correctedCollision.sha256,
+            revisionId,
+            project.id,
+            auth.organisationId,
+          ),
+          context.env.DB.prepare(`
             INSERT INTO scene_navigation_profiles (
               version_id, organisation_id, project_id, world_unit, agent_radius,
               agent_height, eye_height, max_step_metres, max_slope_degrees,
@@ -8710,7 +9059,7 @@ app.post(
               processor_version, idempotency_key, state, priority, max_attempts,
               progress_message
             )
-            SELECT ?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.10.0',
+            SELECT ?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.11.0',
               ?, 'QUEUED', 74, 3,
               'Waiting to verify navigation from the approved floor-plan revision'
             WHERE EXISTS (
@@ -12183,15 +12532,40 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   const navigationBuildId = automaticPipeline && collisionAssetId ? crypto.randomUUID() : null;
   const navigationJobId = navigationBuildId ? crypto.randomUUID() : null;
   const navigationClientOperationId = navigationBuildId ? crypto.randomUUID() : null;
-  const navigationAuthoringHash = collisionAssetId && storedCollisionHash
-    ? await sha256Hex(JSON.stringify({
-      schemaVersion: "automatic-floorplan-navigation-v2",
-      floorplanExtractionId: job.extraction_id,
-      proposalHash,
-      collisionAssetId,
-      collisionSha256: storedCollisionHash,
-    }))
-    : null;
+  let automaticNavigationState: Awaited<ReturnType<
+    typeof currentNavigationAuthoringState
+  >> | null = null;
+  if (collisionAssetId && storedCollisionHash) {
+    try {
+      automaticNavigationState = await currentNavigationAuthoringState(
+        context.env.DB,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+        {
+          schemaVersion: "floorplan-proposal-navigation-receipt-v1",
+          floorplanExtractionId: job.extraction_id,
+          proposalHash,
+          collisionAssetId,
+          collisionSha256: storedCollisionHash,
+        },
+      );
+    } catch (error) {
+      return unprocessable(context, {
+        navigationTraversals: [
+          error instanceof Error ? error.message : String(error),
+        ],
+      });
+    }
+    if (automaticNavigationState.profile.worldUnit !== "metres") {
+      return unprocessable(context, {
+        navigationProfile: [
+          "Automatic metric floor-plan navigation cannot reuse a provisional scene-unit profile. Create a metric version first.",
+        ],
+      });
+    }
+  }
+  const navigationAuthoringHash = automaticNavigationState?.authoringHash ?? null;
   const navigationParameters = navigationBuildId && collisionAssetId &&
       storedCollisionHash && navigationAuthoringHash
     ? {
@@ -12204,7 +12578,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       bounds: null,
       spawn: null,
       destinations: [],
-      offMeshConnections: [],
+      offMeshConnections: automaticNavigationState?.offMeshConnections ?? [],
       obstacleBoxes: [],
       build: {
         cellSize: 0.1,
@@ -12222,13 +12596,13 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
         worldUnit: "metres",
       },
       agent: {
-        radius: 0.25,
-        height: 1.7,
-        eyeHeight: 1.6,
-        maxClimb: 0.2,
-        maxSlopeDegrees: 45,
-        maxSpeed: 1.6,
-        maxAcceleration: 8,
+        radius: automaticNavigationState!.profile.agentRadius,
+        height: automaticNavigationState!.profile.agentHeight,
+        eyeHeight: automaticNavigationState!.profile.eyeHeight,
+        maxClimb: automaticNavigationState!.profile.maxStepMetres,
+        maxSlopeDegrees: automaticNavigationState!.profile.maxSlopeDegrees,
+        maxSpeed: automaticNavigationState!.profile.maxSpeed,
+        maxAcceleration: automaticNavigationState!.profile.maxAcceleration,
       },
     }
     : null;
@@ -12346,7 +12720,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
           processor_version, idempotency_key, state, priority, max_attempts,
           progress_message
         ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-          'spatial-processor/0.10.0', ?, 'QUEUED', 72, 3,
+          'spatial-processor/0.11.0', ?, 'QUEUED', 72, 3,
           'Automatically queued from the generated floor-plan collision draft')
       `).bind(
         navigationJobId,
@@ -12780,7 +13154,9 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (
     parsed.data.viewerConfig.defaultMovementMode === "fly" &&
     (!approvedNavigation || typeof approvedNavigation !== "object" ||
-      Reflect.get(approvedNavigation, "schemaVersion") !== "spatial-navigation-v7")
+      !["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+        String(Reflect.get(approvedNavigation, "schemaVersion")),
+      ))
   ) {
     return conflict(
       context,
@@ -13861,7 +14237,7 @@ async function queueAutomaticFloorplanExtraction(
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.10.0', ?, 'QUEUED', 70, 3,
+        'spatial-processor/0.11.0', ?, 'QUEUED', 70, 3,
         'Automatically queued from verified capture geometry')
     `).bind(
       jobId,
@@ -18383,12 +18759,46 @@ async function captureSpatialSnapshot(
         AND nb.status = 'APPROVED' AND nb.artifact_json IS NOT NULL
       ORDER BY nb.reviewed_at DESC, nb.updated_at DESC LIMIT 25
     `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
+        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
+        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
+        evidence.integrity_status AS evidence_integrity_status,
+        evidence.deleted_at AS evidence_deleted_at
+      FROM scene_navigation_traversals t
+      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+      WHERE t.organisation_id = ? AND t.project_id = ? AND t.version_id = ?
+      ORDER BY t.label, t.created_at
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
+        revision.collision_sha256, revision.navigation_receipt_version,
+        collision.sha256 AS current_collision_sha256,
+        collision.integrity_status AS collision_integrity_status,
+        collision.deleted_at AS collision_deleted_at
+      FROM floorplan_revisions revision
+      LEFT JOIN assets collision ON collision.id = revision.collision_asset_id
+      WHERE revision.organisation_id = ? AND revision.project_id = ?
+        AND revision.version_id = ? AND revision.status = 'approved'
+      ORDER BY revision.revision_number DESC, revision.created_at DESC LIMIT 1
+    `).bind(organisationId, projectId, versionId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const obstacles = requiredBatchResult(results, 3).results;
   const profile = requiredBatchResult(results, 4).results[0];
   const routeStops = requiredBatchResult(results, 2).results;
-  const authoringHash = await navigationAuthoringHash(profile, entities, obstacles, routeStops);
+  const navigationTraversalRows = requiredBatchResult(results, 6).results;
+  const navigationTraversals = navigationTraversalRows.filter(
+    (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
+  );
+  const authoringHash = await navigationAuthoringHash(
+    profile,
+    entities,
+    obstacles,
+    routeStops,
+    navigationTraversalRows,
+    floorplanNavigationReceipt(requiredBatchResult(results, 7).results[0]),
+  );
   const approvedNavigation = approvedNavigationBuild(
     requiredBatchResult(results, 5).results,
     authoringHash,
@@ -18400,6 +18810,7 @@ async function captureSpatialSnapshot(
     routes: requiredBatchResult(results, 1).results,
     routeStops,
     navigationObstacles: obstacles,
+    navigationTraversals,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
     obstacleProxy: runtime.obstacleProxy,
@@ -18489,11 +18900,13 @@ function approvedNavigationBuild(
   return null;
 }
 
-async function navigationAuthoringHash(
+export async function navigationAuthoringHash(
   profileRow: unknown,
   entityRows: unknown[],
   obstacleRows: unknown[],
   routeStopRows: unknown[] = [],
+  traversalRows: unknown[] = [],
+  floorplanReceipt: Record<string, unknown> | null = null,
 ): Promise<string> {
   const destinations = entityRows
     .flatMap(navigationDestinationFromEntity)
@@ -18507,13 +18920,289 @@ async function navigationAuthoringHash(
   const routeStops = routeStopRows
     .flatMap(canonicalNavigationRouteStop)
     .sort((left, right) => left.id.localeCompare(right.id));
-  return sha256Hex(JSON.stringify({
+  const traversals = traversalRows
+    .flatMap(canonicalNavigationTraversal)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const authoring: Record<string, unknown> = {
     profile: navigationProfileFromRow(profileRow),
     destinations,
     obstacles,
     walkableGeometry,
     routeStops,
-  }));
+  };
+  // A never-used registry preserves established v7 hashes. Once any traversal
+  // record exists, including an archived one, its state remains hash-bound so
+  // archiving the last link cannot resurrect an older approval.
+  if (traversalRows.length) {
+    authoring.traversalRegistry = {
+      schemaVersion: "authored-traversal-registry-v1",
+      records: traversals,
+    };
+  }
+  if (traversals.length !== traversalRows.length) {
+    authoring.invalidTraversals = traversalRows.map((row) => ({
+      id: row && typeof row === "object" ? Reflect.get(row, "id") ?? null : null,
+      invalid: true,
+    }));
+  }
+  if (floorplanReceipt) {
+    authoring.floorplanReceipt = floorplanReceipt;
+  }
+  return sha256Hex(JSON.stringify(authoring));
+}
+
+export async function currentNavigationAuthoringState(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+  floorplanReceiptOverride: Record<string, unknown> | null = null,
+): Promise<{
+  authoringHash: string;
+  offMeshConnections: ReturnType<typeof navigationTraversalConnectionFromRow>;
+  profile: ReturnType<typeof navigationProfileFromRow>;
+}> {
+  const results = await database.batch([
+    database.prepare(`
+      SELECT world_unit, agent_radius, agent_height, eye_height, max_step_metres,
+        max_slope_degrees, max_speed, max_acceleration
+      FROM scene_navigation_profiles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT id, kind, position_json, geometry_json
+      FROM scene_entities
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active' AND kind IN ('room', 'floor', 'doorway')
+      ORDER BY kind DESC, sort_order, label
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT id, label, bounds_json
+      FROM scene_navigation_obstacles
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND status = 'active'
+      ORDER BY label, created_at
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT rs.route_id, rs.entity_id, rs.sequence_number, rs.camera_pose_json
+      FROM scene_route_stops rs
+      JOIN scene_routes r ON r.id = rs.route_id
+      WHERE r.organisation_id = ? AND r.project_id = ? AND r.version_id = ?
+        AND r.status = 'active'
+      ORDER BY rs.route_id, rs.sequence_number
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
+        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
+        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
+        evidence.integrity_status AS evidence_integrity_status,
+        evidence.deleted_at AS evidence_deleted_at
+      FROM scene_navigation_traversals t
+      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+      WHERE t.organisation_id = ? AND t.project_id = ? AND t.version_id = ?
+      ORDER BY t.id
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
+        revision.collision_sha256, revision.navigation_receipt_version,
+        collision.sha256 AS current_collision_sha256,
+        collision.integrity_status AS collision_integrity_status,
+        collision.deleted_at AS collision_deleted_at
+      FROM floorplan_revisions revision
+      LEFT JOIN assets collision ON collision.id = revision.collision_asset_id
+      WHERE revision.organisation_id = ? AND revision.project_id = ?
+        AND revision.version_id = ? AND revision.status = 'approved'
+      ORDER BY revision.revision_number DESC, revision.created_at DESC LIMIT 1
+    `).bind(organisationId, projectId, versionId),
+  ]);
+  const profileRow = requiredBatchResult(results, 0).results[0] ?? {
+    world_unit: "metres",
+    agent_radius: 0.25,
+    agent_height: 1.7,
+    eye_height: 1.6,
+    max_step_metres: 0.2,
+    max_slope_degrees: 45,
+    max_speed: 1.6,
+    max_acceleration: 8,
+  };
+  const traversalRows = requiredBatchResult(results, 4).results;
+  const activeTraversalRows = traversalRows.filter(
+    (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
+  );
+  const profile = navigationProfileFromRow(profileRow);
+  const offMeshConnections = traversalRows.flatMap((row, index) =>
+    navigationTraversalConnectionFromRow(row, profile.agentRadius, index)
+  );
+  if (offMeshConnections.length !== activeTraversalRows.length) {
+    throw new Error(
+      `Active authored traversal records are invalid: stored=${activeTraversalRows.length}, usable=${offMeshConnections.length}`,
+    );
+  }
+  const floorplanReceipt = floorplanReceiptOverride ??
+    floorplanNavigationReceipt(requiredBatchResult(results, 5).results[0]);
+  if (isInvalidFloorplanNavigationReceipt(floorplanReceipt)) {
+    throw new Error(
+      "The approved floor-plan collision receipt is missing or no longer matches its verified immutable asset",
+    );
+  }
+  return {
+    authoringHash: await navigationAuthoringHash(
+      profileRow,
+      requiredBatchResult(results, 1).results,
+      requiredBatchResult(results, 2).results,
+      requiredBatchResult(results, 3).results,
+      traversalRows,
+      floorplanReceipt,
+    ),
+    offMeshConnections,
+    profile,
+  };
+}
+
+function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | null {
+  if (!row || typeof row !== "object") return null;
+  const floorplanRevisionId = readStringProperty(row, "id");
+  const planHash = readStringProperty(row, "plan_hash")?.toLowerCase();
+  const collisionAssetId = readStringProperty(row, "collision_asset_id");
+  const collisionSha256 = readStringProperty(row, "collision_sha256")?.toLowerCase();
+  const receiptVersion = readStringProperty(row, "navigation_receipt_version");
+  if (!receiptVersion && !collisionAssetId && !collisionSha256) return null;
+  const currentCollisionSha256 = readStringProperty(row, "current_collision_sha256")
+    ?.toLowerCase();
+  const collisionIntegrityStatus = readStringProperty(row, "collision_integrity_status");
+  const collisionDeletedAt = Reflect.get(row, "collision_deleted_at");
+  if (
+    receiptVersion === "floorplan-navigation-receipt-v1" &&
+    floorplanRevisionId && planHash && /^[a-f0-9]{64}$/.test(planHash) &&
+    collisionAssetId && collisionSha256 && /^[a-f0-9]{64}$/.test(collisionSha256) &&
+    currentCollisionSha256 === collisionSha256 &&
+    collisionIntegrityStatus === "verified" && collisionDeletedAt === null
+  ) {
+    return {
+      schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
+      floorplanRevisionId,
+      planHash,
+      collisionAssetId,
+      collisionSha256,
+    };
+  }
+  return {
+    schemaVersion: "invalid-reviewed-floorplan-navigation-receipt-v1",
+    receiptVersion: receiptVersion ?? null,
+    floorplanRevisionId: floorplanRevisionId ?? null,
+    planHash: planHash ?? null,
+    collisionAssetId: collisionAssetId ?? null,
+    collisionSha256: collisionSha256 ?? null,
+    currentCollisionSha256: currentCollisionSha256 ?? null,
+    collisionIntegrityStatus: collisionIntegrityStatus ?? null,
+    collisionDeleted: collisionDeletedAt !== null,
+  };
+}
+
+function isInvalidFloorplanNavigationReceipt(
+  receipt: Record<string, unknown> | null,
+): boolean {
+  return receipt?.schemaVersion === "invalid-reviewed-floorplan-navigation-receipt-v1";
+}
+
+function canonicalNavigationTraversal(row: unknown): Array<{
+  id: string;
+  traversalKind: "elevator" | "ladder" | "moving_platform";
+  label: string;
+  path: Array<[number, number, number]>;
+  bidirectional: boolean;
+  speedUnitsPerSecond: number;
+  reviewedPurpose: string;
+  evidenceAssetId: string;
+  evidenceSha256: string;
+  status: "active" | "archived";
+}> {
+  if (!row || typeof row !== "object") return [];
+  const id = readStringProperty(row, "id");
+  const traversalKind = readStringProperty(row, "traversal_kind");
+  const label = readStringProperty(row, "label");
+  const reviewedPurpose = readStringProperty(row, "reviewed_purpose");
+  const evidenceAssetId = readStringProperty(row, "evidence_asset_id");
+  const evidenceSha256 = readStringProperty(row, "evidence_sha256")?.toLowerCase();
+  const status = readStringProperty(row, "status");
+  const evidenceJoined = Reflect.has(row, "current_evidence_sha256");
+  const currentEvidenceSha256 = readStringProperty(row, "current_evidence_sha256")
+    ?.toLowerCase();
+  const evidenceIntegrityStatus = readStringProperty(row, "evidence_integrity_status");
+  const evidenceDeletedAt = Reflect.get(row, "evidence_deleted_at");
+  const speedUnitsPerSecond = Number(Reflect.get(row, "speed_units_per_second"));
+  let path: unknown;
+  try {
+    path = JSON.parse(String(Reflect.get(row, "path_json") ?? ""));
+  } catch {
+    return [];
+  }
+  if (
+    !id || !label || !reviewedPurpose || !evidenceAssetId ||
+    !evidenceSha256 || !/^[a-f0-9]{64}$/i.test(evidenceSha256) ||
+    (evidenceJoined && (
+      currentEvidenceSha256 !== evidenceSha256 ||
+      evidenceIntegrityStatus !== "verified" ||
+      evidenceDeletedAt !== null
+    )) ||
+    !["active", "archived"].includes(status ?? "") ||
+    !["elevator", "ladder", "moving_platform"].includes(traversalKind ?? "") ||
+    !Array.isArray(path) || path.length < 2 || !path.every(finitePoint3) ||
+    !Number.isFinite(speedUnitsPerSecond) || speedUnitsPerSecond <= 0
+  ) return [];
+  return [{
+    id,
+    traversalKind: traversalKind as "elevator" | "ladder" | "moving_platform",
+    label,
+    path: path as Array<[number, number, number]>,
+    bidirectional: Number(Reflect.get(row, "bidirectional")) === 1,
+    speedUnitsPerSecond,
+    reviewedPurpose,
+    evidenceAssetId,
+    evidenceSha256,
+    status: status as "active" | "archived",
+  }];
+}
+
+function navigationTraversalConnectionFromRow(
+  row: unknown,
+  agentRadius: number,
+  index: number,
+): Array<{
+  id: string;
+  traversalKind: "elevator" | "ladder" | "moving_platform";
+  startPosition: [number, number, number];
+  controlPoints: Array<[number, number, number]>;
+  endPosition: [number, number, number];
+  radius: number;
+  bidirectional: boolean;
+  speedUnitsPerSecond: number;
+  area: number;
+  flags: number;
+  userId: number;
+  reviewedPurpose: string;
+  evidenceReceipt: { assetId: string; sha256: string };
+}> {
+  const parsed = canonicalNavigationTraversal(row)[0];
+  if (!parsed || parsed.status !== "active") return [];
+  return [{
+    id: parsed.id,
+    traversalKind: parsed.traversalKind,
+    startPosition: parsed.path[0]!,
+    controlPoints: parsed.path.slice(1, -1),
+    endPosition: parsed.path.at(-1)!,
+    radius: agentRadius,
+    bidirectional: parsed.bidirectional,
+    speedUnitsPerSecond: parsed.speedUnitsPerSecond,
+    area: 0,
+    flags: 1,
+    userId: index + 1,
+    reviewedPurpose: parsed.reviewedPurpose,
+    evidenceReceipt: {
+      assetId: parsed.evidenceAssetId,
+      sha256: parsed.evidenceSha256,
+    },
+  }];
 }
 
 function buildSpatialRuntime(

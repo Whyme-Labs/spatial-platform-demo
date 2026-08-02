@@ -76,6 +76,11 @@ must prove room-anchor enclosure, both-direction Walk/Fly wall sweeps, capsule
 corner sliding, room-route replay, and open/closed door parity before Studio can
 approve it or a movement-enabled release can be published.
 
+The v8 extension additionally builds disconnected floors through a reviewed
+Detour link, replays every allowed 3D path direction with the production Rapier
+capsule, unit-tests non-teleport controller timing and one-way behavior, and
+drives an Arrow-key browser traversal from the lower to the upper landing.
+
 Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
 All API responses used by UI-layout tests are explicit fixtures. Worker routing
 and binding behavior remains the responsibility of the integration suite.

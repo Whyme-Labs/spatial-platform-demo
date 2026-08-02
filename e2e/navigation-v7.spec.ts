@@ -112,6 +112,31 @@ test("v7 preserves an authored elevated opening camera in default Fly mode", asy
   expect(opening.position[1]).toBeCloseTo(2.4, 1);
 });
 
+test("v8 carries Walk mode through a reviewed multi-floor elevator path", async ({ page }) => {
+  const fixture = await buildV8Fixture();
+  await mountV7Fixture(page, fixture, {
+    cameraPosition: [1, 1.6, 2],
+  });
+  const renderer = page.frameLocator("#renderer");
+  await expect(renderer.locator("#controlStatus")).toHaveText(
+    "Walk enabled · structural shell collision · furniture ignored",
+  );
+  await renderer.locator("#sparkCanvas").focus();
+  await page.keyboard.down("ArrowUp");
+  try {
+    await expect.poll(async () => {
+      const position = (await captureCamera(page)).position;
+	      return position[0] > 3.65 && position[1] > 4.5;
+    }).toBe(true);
+  } finally {
+    await page.keyboard.up("ArrowUp");
+  }
+  const upperFloor = await captureCamera(page);
+  expect(upperFloor.position[0]).toBeGreaterThan(3.65);
+  expect(upperFloor.position[1]).toBeGreaterThan(4.5);
+  expect(upperFloor.position[1]).toBeLessThan(4.75);
+});
+
 test.describe("v7 touch flight controls", () => {
   test.use({
     hasTouch: true,
@@ -294,6 +319,75 @@ async function buildV7Fixture(): Promise<{
     build: { cellSize: 0.1, cellHeight: 0.05, tileSize: 32 },
     spawn: { id: "opening", position: [1, 0, 2] },
     destinations: [{ id: "far-side", position: [7, 0, 2] }],
+  });
+  return { collision, navigationArtifact, scene: await minimalSpz() };
+}
+
+async function buildV8Fixture(): Promise<Awaited<ReturnType<typeof buildV7Fixture>>> {
+  const collision = buildAuthoredStructuralCollisionGlb({
+    schemaVersion: "authored-structural-collision-v2",
+    provenance: "operator_reviewed",
+    floorRectangles: [
+      { id: "lower-floor", min: [0, 0], max: [2, 4], elevation: 0 },
+      { id: "upper-floor", min: [3, 0], max: [5, 4], elevation: 3 },
+    ],
+    ceilingRectangles: [
+      { id: "lower-ceiling-clear-of-lift-shaft", min: [0, 0], max: [1.2, 4], elevation: 3 },
+      { id: "upper-ceiling", min: [3, 0], max: [5, 4], elevation: 6 },
+    ],
+    barrierSegments: [
+      { id: "lower-west", start: [0, 0], end: [0, 4], minY: 0, maxY: 3 },
+      { id: "lower-north", start: [0, 0], end: [2, 0], minY: 0, maxY: 3 },
+      { id: "lower-south", start: [0, 4], end: [2, 4], minY: 0, maxY: 3 },
+      { id: "upper-east", start: [5, 0], end: [5, 4], minY: 3, maxY: 6 },
+      { id: "upper-north", start: [3, 0], end: [5, 0], minY: 3, maxY: 6 },
+      { id: "upper-south", start: [3, 4], end: [5, 4], minY: 3, maxY: 6 },
+    ],
+    furnitureBoxes: [],
+  });
+  const geometry = await extractCollisionGeometryFromGlb(collision);
+  const navigationArtifact = await buildRecastNavigationArtifact({
+    positions: geometry.positions,
+    indices: geometry.indices,
+    collisionSemantics: geometry.collisionSemantics,
+    dynamicBarriers: geometry.dynamicBarriers,
+    structuralGeometry: geometry.structuralGeometry,
+    source: {
+      assetId: "fixture-structural-v8",
+      sha256: "c".repeat(64),
+      authoringHash: "d".repeat(64),
+      worldUnit: "metres",
+    },
+    agent: {
+      radius: 0.22,
+      height: 1.8,
+      eyeHeight: 1.6,
+      maxClimb: 0.1,
+      maxSlopeDegrees: 45,
+      maxSpeed: 1.6,
+      maxAcceleration: 8,
+    },
+    build: { cellSize: 0.1, cellHeight: 0.05, tileSize: 32 },
+    spawn: { id: "opening", position: [1, 0, 2] },
+    destinations: [{ id: "upper-room", position: [4, 3, 2] }],
+    offMeshConnections: [{
+      id: "east-lift",
+      traversalKind: "elevator",
+      startPosition: [1.3, 0.05, 2],
+      controlPoints: [[1.75, 0.05, 2], [1.75, 3.05, 2], [3.3, 3.05, 2]],
+      endPosition: [3.7, 3.05, 2],
+      radius: 0.25,
+      bidirectional: true,
+      speedUnitsPerSecond: 2,
+      area: 0,
+      flags: 1,
+      userId: 1,
+      reviewedPurpose: "Reviewed elevator path between the lower and upper captured rooms.",
+      evidenceReceipt: {
+        assetId: "11111111-1111-4111-8111-111111111111",
+        sha256: "a".repeat(64),
+      },
+    }],
   });
   return { collision, navigationArtifact, scene: await minimalSpz() };
 }

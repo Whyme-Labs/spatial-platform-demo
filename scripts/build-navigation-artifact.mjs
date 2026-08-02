@@ -7,6 +7,7 @@ import {
   extractCollisionGeometryFromGlb,
 } from "./navigation-build-core.mjs";
 import {
+  validateAuthoredTraversals,
   validatePhysicalNavigation,
   validateStructuralNavigation,
 } from "./physical-navigation-validation.mjs";
@@ -30,6 +31,7 @@ const authoringHash = config.source?.authoringHash ?? createHash("sha256")
     authoring: config.authoring ?? null,
     agent: config.agent,
     destinations: config.destinations ?? [],
+    offMeshConnections: config.offMeshConnections ?? [],
     obstacles: config.obstacleBoxes ?? [],
     structuralGeometry: geometry.structuralGeometry ?? null,
     dynamicBarriers: geometry.dynamicBarriers ?? [],
@@ -61,7 +63,15 @@ artifact.physicalValidation = await validatePhysicalNavigation({
   indices: geometry.indices,
   obstacleBoxes: config.obstacleBoxes ?? [],
 });
-if (artifact.schemaVersion === "spatial-navigation-v7") {
+if (artifact.schemaVersion === "spatial-navigation-v8") {
+  artifact.authoredTraversalValidation = await validateAuthoredTraversals({
+    artifact,
+    positions: geometry.positions,
+    indices: geometry.indices,
+    obstacleBoxes: config.obstacleBoxes ?? [],
+  });
+}
+if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact.schemaVersion)) {
   artifact.structuralValidation = await validateStructuralNavigation({
     artifact,
     positions: geometry.positions,

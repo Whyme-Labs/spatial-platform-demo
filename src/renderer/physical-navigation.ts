@@ -19,6 +19,8 @@ type DynamicBarrier = {
   defaultActive: boolean;
 };
 
+type MovementVector = { x: number; y: number; z: number };
+
 export type PhysicalMovementMode = "walk" | "fly";
 
 let initialization: Promise<void> | undefined;
@@ -31,17 +33,20 @@ export class PhysicalNavigationRuntime {
   readonly #body: RAPIER.RigidBody;
   #collider: RAPIER.Collider;
   #controller: RAPIER.KinematicCharacterController;
+  readonly #controlledController: RAPIER.KinematicCharacterController;
   readonly #agent: PhysicalAgentProfile;
   readonly #recoveryBounds: Record<PhysicalMovementMode, RecoveryBounds>;
   readonly #dynamicBarrierColliders: Map<string, RAPIER.Collider>;
   #mode: PhysicalMovementMode;
   #verticalVelocity = 0;
+  #controlledFailure: string | null = null;
 
   private constructor(
     world: RAPIER.World,
     body: RAPIER.RigidBody,
     collider: RAPIER.Collider,
     controller: RAPIER.KinematicCharacterController,
+    controlledController: RAPIER.KinematicCharacterController,
     agent: PhysicalAgentProfile,
     mode: PhysicalMovementMode,
     recoveryBounds: Record<PhysicalMovementMode, RecoveryBounds>,
@@ -51,6 +56,7 @@ export class PhysicalNavigationRuntime {
     this.#body = body;
     this.#collider = collider;
     this.#controller = controller;
+    this.#controlledController = controlledController;
     this.#agent = agent;
     this.#mode = mode;
     this.#recoveryBounds = recoveryBounds;
@@ -73,11 +79,15 @@ export class PhysicalNavigationRuntime {
     if (!response.ok) throw new Error(`Collision proxy download failed (${response.status})`);
     const contentLength = Number(response.headers.get("Content-Length"));
     if (Number.isFinite(contentLength) && contentLength > MAX_COLLISION_GLB_BYTES) {
-      throw new Error("Collision proxy exceeds the browser safety limit");
+      throw new Error(
+        `collision_glb_bytes limit=${MAX_COLLISION_GLB_BYTES}, asked=${contentLength}`,
+      );
     }
     const collisionBytes = await response.arrayBuffer();
     if (collisionBytes.byteLength > MAX_COLLISION_GLB_BYTES) {
-      throw new Error("Collision proxy exceeds the browser safety limit");
+      throw new Error(
+        `collision_glb_bytes limit=${MAX_COLLISION_GLB_BYTES}, asked=${collisionBytes.byteLength}`,
+      );
     }
     const geometry = await collisionGeometry(collisionBytes, artifact);
     const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -98,12 +108,14 @@ export class PhysicalNavigationRuntime {
     const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
     const mode = supportsMode(artifact, initialMode) ? initialMode : "walk";
     const { collider, controller } = createPlayer(world, body, agent, mode);
+    const controlledController = createControlledPlayerController(world, agent);
     world.step();
     return new PhysicalNavigationRuntime(
       world,
       body,
       collider,
       controller,
+      controlledController,
       agent,
       mode,
       recoveryBounds,
@@ -113,6 +125,10 @@ export class PhysicalNavigationRuntime {
 
   get mode(): PhysicalMovementMode {
     return this.#mode;
+  }
+
+  get controlledFailure(): string | null {
+    return this.#controlledFailure;
   }
 
   hasDynamicBarrier(id: string): boolean {
@@ -241,8 +257,57 @@ export class PhysicalNavigationRuntime {
     return this.#centerToCamera([actual.x, actual.y, actual.z], this.#mode);
   }
 
+  moveControlledCamera(from: Vector3Tuple, desired: Vector3Tuple): Vector3Tuple | null {
+    this.#controlledFailure = null;
+    if (this.#mode !== "walk") {
+      this.#controlledFailure = `controlled_traversal_mode required=walk, asked=${this.#mode}`;
+      return null;
+    }
+    const currentCenter = this.#cameraToCenter(from, "walk");
+    this.#body.setTranslation(toRapierVector(currentCenter), true);
+    const desiredCenter = this.#cameraToCenter(desired, "walk");
+    const translation = {
+      x: desiredCenter[0] - currentCenter[0],
+      y: desiredCenter[1] - currentCenter[1],
+      z: desiredCenter[2] - currentCenter[2],
+    };
+    this.#controlledController.computeColliderMovement(this.#collider, translation);
+    const corrected = this.#controlledController.computedMovement();
+    if (!controlledMovementReachedTarget(translation, corrected)) {
+      this.#controlledFailure = `controlled_traversal_path requested=${JSON.stringify([
+        translation.x,
+        translation.y,
+        translation.z,
+      ])}, corrected=${JSON.stringify([corrected.x, corrected.y, corrected.z])}`;
+      this.#body.setTranslation(toRapierVector(currentCenter), true);
+      return null;
+    }
+    // The sweep proves that the complete requested displacement is clear. Use
+    // the authored destination itself so float32 accumulation cannot leave a
+    // tiny tail that offline acceptance would correctly reject.
+    const nextCenter = {
+      x: desiredCenter[0],
+      y: desiredCenter[1],
+      z: desiredCenter[2],
+    };
+    const nextCamera = this.#centerToCamera(
+      [nextCenter.x, nextCenter.y, nextCenter.z],
+      "walk",
+    );
+    if (!insideBounds(nextCamera, this.#recoveryBounds.walk)) {
+      this.#controlledFailure = `controlled_traversal_bounds asked=${JSON.stringify(nextCamera)}`;
+      return null;
+    }
+    this.#body.setNextKinematicTranslation(nextCenter);
+    this.#world.step();
+    const actual = this.#body.translation();
+    this.#verticalVelocity = 0;
+    return this.#centerToCamera([actual.x, actual.y, actual.z], "walk");
+  }
+
   destroy(): void {
     this.#world.removeCharacterController(this.#controller);
+    this.#world.removeCharacterController(this.#controlledController);
     this.#world.free();
   }
 
@@ -260,6 +325,15 @@ export class PhysicalNavigationRuntime {
       position[2],
     ];
   }
+}
+
+export function controlledMovementReachedTarget(
+  requested: MovementVector,
+  corrected: MovementVector,
+): boolean {
+  return corrected.x === Math.fround(requested.x) &&
+    corrected.y === Math.fround(requested.y) &&
+    corrected.z === Math.fround(requested.z);
 }
 
 function parseRecoveryBounds(artifact: unknown): Record<PhysicalMovementMode, RecoveryBounds> {
@@ -365,6 +439,17 @@ function createPlayer(
   return { collider, controller };
 }
 
+function createControlledPlayerController(
+  world: RAPIER.World,
+  agent: PhysicalAgentProfile,
+): RAPIER.KinematicCharacterController {
+  const controller = world.createCharacterController(
+    Math.max(0.002, Math.min(0.02, agent.radius * 0.05)),
+  );
+  controller.setSlideEnabled(false);
+  return controller;
+}
+
 function supportsMode(artifact: unknown, mode: PhysicalMovementMode): boolean {
   if (mode === "walk") return true;
   if (!artifact || typeof artifact !== "object") return false;
@@ -421,7 +506,9 @@ async function collisionGeometry(buffer: ArrayBuffer, artifact: unknown): Promis
     const position = object.geometry.attributes.position;
     const offset = positions.length / 3;
     if (offset + position.count > MAX_COLLISION_VERTICES) {
-      throw new Error("Collision proxy exceeds the browser vertex limit");
+      throw new Error(
+        `collision_vertices limit=${MAX_COLLISION_VERTICES}, asked=${offset + position.count}`,
+      );
     }
     for (let index = 0; index < position.count; index += 1) {
       point.fromBufferAttribute(position, index).applyMatrix4(object.matrixWorld);
@@ -432,7 +519,9 @@ async function collisionGeometry(buffer: ArrayBuffer, artifact: unknown): Promis
       : Array.from({ length: position.count }, (_, index) => index);
     if (source.length % 3 !== 0) throw new Error("Collision proxy is not a triangle list");
     if (indices.length / 3 + source.length / 3 > MAX_COLLISION_TRIANGLES) {
-      throw new Error("Collision proxy exceeds the browser triangle limit");
+      throw new Error(
+        `collision_triangles limit=${MAX_COLLISION_TRIANGLES}, asked=${indices.length / 3 + source.length / 3}`,
+      );
     }
     const mirrored = object.matrixWorld.determinant() < 0;
     for (let index = 0; index < source.length; index += 3) {
@@ -453,7 +542,9 @@ function validateDynamicBarrierBinding(
   artifact: unknown,
 ): void {
   if (!artifact || typeof artifact !== "object" ||
-    Reflect.get(artifact, "schemaVersion") !== "spatial-navigation-v7") return;
+    !["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+      String(Reflect.get(artifact, "schemaVersion")),
+    )) return;
   const asset = Reflect.get(document, "asset");
   const extras = asset && typeof asset === "object" ? Reflect.get(asset, "extras") : null;
   const embeddedRaw = extras && typeof extras === "object"
@@ -474,7 +565,9 @@ function validateDynamicBarrierBinding(
 
 function preflightCollisionGlb(buffer: ArrayBuffer): Record<string, unknown> {
   if (buffer.byteLength < 20 || buffer.byteLength > MAX_COLLISION_GLB_BYTES) {
-    throw new Error("Collision proxy has an invalid byte length");
+    throw new Error(
+      `collision_glb_bytes limit=${MAX_COLLISION_GLB_BYTES}, asked=${buffer.byteLength}`,
+    );
   }
   const view = new DataView(buffer);
   if (
@@ -510,7 +603,9 @@ function collisionSemantics(
   const schemaVersion = artifact && typeof artifact === "object"
     ? Reflect.get(artifact, "schemaVersion")
     : null;
-  if (schemaVersion !== "spatial-navigation-v7") return null;
+  if (!["spatial-navigation-v7", "spatial-navigation-v8"].includes(String(schemaVersion))) {
+    return null;
+  }
   const artifactSemantics = Reflect.get(artifact as object, "collisionSemantics");
   const asset = Reflect.get(document, "asset");
   const extras = asset && typeof asset === "object" ? Reflect.get(asset, "extras") : null;

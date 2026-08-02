@@ -5,9 +5,14 @@ import {
   type NavMesh,
 } from "@recast-navigation/core";
 import type { Vector3Tuple } from "../shared/navigation-runtime";
+import {
+  AuthoredTraversalController,
+  type AuthoredTraversalFrame,
+  type AuthoredTraversalLink,
+} from "./authored-traversal";
 
 export type DetourNavigationArtifact = {
-  schemaVersion: "spatial-navigation-v6" | "spatial-navigation-v7";
+  schemaVersion: "spatial-navigation-v6" | "spatial-navigation-v7" | "spatial-navigation-v8";
   generator: { version: "0.43.1" };
   agent: { radius: number; height: number; eyeHeight: number };
   build: { cellSize: number; cellHeight: number };
@@ -19,6 +24,7 @@ export type DetourNavigationArtifact = {
     defaultActive: boolean;
   }>;
   spawn: { projectedPosition: Vector3Tuple };
+  offMeshConnections: AuthoredTraversalLink[];
   detour: {
     format: "recast-navigation-js-export-v1";
     bytesBase64: string;
@@ -31,6 +37,7 @@ export class DetourNavigationRuntime {
   readonly #navMesh: NavMesh;
   readonly #query: NavMeshQuery;
   readonly #artifact: DetourNavigationArtifact;
+  readonly #authoredTraversal: AuthoredTraversalController;
   readonly #halfExtents: { x: number; y: number; z: number };
   readonly #dynamicBarriers = new Map<string, {
     min: Vector3Tuple;
@@ -42,6 +49,10 @@ export class DetourNavigationRuntime {
     this.#navMesh = navMesh;
     this.#query = new NavMeshQuery(navMesh, { maxNodes: 4096 });
     this.#artifact = artifact;
+    this.#authoredTraversal = new AuthoredTraversalController(
+      artifact.offMeshConnections,
+      artifact.agent.eyeHeight,
+    );
     this.#halfExtents = {
       x: Math.max(artifact.agent.radius * 2, artifact.build.cellSize * 2),
       y: Math.max(artifact.agent.height, artifact.build.cellHeight * 2),
@@ -123,6 +134,18 @@ export class DetourNavigationRuntime {
       moved.resultPosition.y + this.#artifact.agent.eyeHeight,
       moved.resultPosition.z,
     ];
+  }
+
+  resolveAuthoredTraversal(
+    from: Vector3Tuple,
+    desired: Vector3Tuple,
+    deltaSeconds: number,
+  ): AuthoredTraversalFrame | null {
+    return this.#authoredTraversal.resolveMovement(from, desired, deltaSeconds);
+  }
+
+  cancelAuthoredTraversal(): void {
+    this.#authoredTraversal.cancel();
   }
 
   hasCompletePath(from: Vector3Tuple, to: Vector3Tuple): boolean {
@@ -213,7 +236,7 @@ export class DetourNavigationRuntime {
 
 function parseArtifact(value: unknown): DetourNavigationArtifact {
   if (!value || typeof value !== "object") throw new Error("Navigation artifact is missing");
-  if (!["spatial-navigation-v6", "spatial-navigation-v7"].includes(
+  if (!["spatial-navigation-v6", "spatial-navigation-v7", "spatial-navigation-v8"].includes(
     String(Reflect.get(value, "schemaVersion")),
   )) {
     throw new Error("Unsupported navigation artifact schema");
@@ -228,13 +251,15 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
   const detour = Reflect.get(value, "detour");
   const bounds = Reflect.get(value, "bounds");
   const dynamicBarriers = Reflect.get(value, "dynamicBarriers");
+  const offMeshConnections = Reflect.get(value, "offMeshConnections");
   if (!agent || typeof agent !== "object" || !build || typeof build !== "object" ||
     !spawn || typeof spawn !== "object" || !finiteTuple(Reflect.get(spawn, "projectedPosition")) ||
     !Array.isArray(bounds) || bounds.length !== 2 || !bounds.every(finiteTuple) ||
     !detour || typeof detour !== "object" ||
     Reflect.get(detour, "format") !== "recast-navigation-js-export-v1" ||
     typeof Reflect.get(detour, "bytesBase64") !== "string" ||
-    !validDynamicBarriers(dynamicBarriers)) {
+    !validDynamicBarriers(dynamicBarriers) ||
+    !validAuthoredTraversals(offMeshConnections)) {
     throw new Error("Navigation artifact is incomplete");
   }
   for (const [record, names] of [
@@ -246,6 +271,35 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
     }
   }
   return value as DetourNavigationArtifact;
+}
+
+function validAuthoredTraversals(value: unknown): value is AuthoredTraversalLink[] {
+  if (!Array.isArray(value)) return false;
+  const ids = new Set<string>();
+  return value.every((connection) => {
+    if (!connection || typeof connection !== "object") return false;
+    const id = Reflect.get(connection, "id");
+    const kind = Reflect.get(connection, "traversalKind");
+    const controlPoints = Reflect.get(connection, "controlPoints");
+    const radius = Number(Reflect.get(connection, "radius"));
+    const speed = Number(Reflect.get(connection, "speedUnitsPerSecond"));
+    const reviewedPurpose = Reflect.get(connection, "reviewedPurpose");
+    const evidenceReceipt = Reflect.get(connection, "evidenceReceipt");
+    if (typeof id !== "string" || !id || ids.has(id) ||
+      !["elevator", "ladder", "moving_platform"].includes(String(kind)) ||
+      !finiteTuple(Reflect.get(connection, "startPosition")) ||
+      !finiteTuple(Reflect.get(connection, "endPosition")) ||
+      !Array.isArray(controlPoints) || !controlPoints.every(finiteTuple) ||
+      !Number.isFinite(radius) || radius <= 0 ||
+      !Number.isFinite(speed) || speed <= 0 ||
+      typeof Reflect.get(connection, "bidirectional") !== "boolean" ||
+      typeof reviewedPurpose !== "string" || !reviewedPurpose.trim() ||
+      !evidenceReceipt || typeof evidenceReceipt !== "object" ||
+      typeof Reflect.get(evidenceReceipt, "assetId") !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(String(Reflect.get(evidenceReceipt, "sha256")))) return false;
+    ids.add(id);
+    return true;
+  });
 }
 
 function validDynamicBarriers(value: unknown): boolean {
