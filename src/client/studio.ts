@@ -18,6 +18,7 @@ import {
 } from "../shared/scene-rotation";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
+  captureAdapterDisplayLabel,
   captureAdapterProfiles,
   captureFormatsForPurpose,
   type CaptureAssetFormat,
@@ -268,6 +269,7 @@ type CaptureBundle = {
   validation_json: string;
   review_decision: "accepted" | "needs_vendor_evidence" | "rejected" | null;
   review_note: string | null;
+  review_generation: number;
   reviewed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -984,8 +986,22 @@ type SpatialWorkspace = {
     reviewed_purpose: string;
     evidence_asset_id: string;
     evidence_sha256: string;
+    evidence_manifest_id: string;
+    evidence_manifest_sha256: string;
+    evidence_adapter: string;
+    evidence_manifest_review_generation: number;
     created_at: string;
     updated_at: string;
+  }>;
+  traversalEvidenceOptions: Array<{
+    assetId: string;
+    fileName: string;
+    kind: string;
+    sha256: string;
+    manifestId: string;
+    manifestSha256: string;
+    adapter: string;
+    reviewGeneration: number;
   }>;
   obstacleProxy: {
     version: string;
@@ -6637,6 +6653,10 @@ function renderSpatial(): void {
           evidence: {
             assetId: traversal.evidence_asset_id,
             sha256: traversal.evidence_sha256,
+            manifestId: traversal.evidence_manifest_id,
+            manifestSha256: traversal.evidence_manifest_sha256,
+            adapter: traversal.evidence_adapter,
+            reviewGeneration: traversal.evidence_manifest_review_generation,
           },
         }, null, 2)));
       } catch (error) {
@@ -8381,18 +8401,18 @@ function openNavigationTraversalDialog(
   const form = byId<HTMLFormElement>("navigationTraversalForm");
   form.reset();
   editingNavigationTraversal = traversal;
-  const evidenceAssets = navigationEvidenceAssets();
-  if (!evidenceAssets.length) {
+  const evidenceOptions = navigationEvidenceOptions();
+  if (!evidenceOptions.length) {
     showNotice(
-      "Upload and verify an immutable asset on this scene version before authoring a traversal.",
+      "Accept a non-blocked capture contract that declares an immutable asset as traversal evidence before authoring a traversal.",
       "error",
     );
     return;
   }
   const evidenceSelect = byId<HTMLSelectElement>("navigationTraversalEvidenceAsset");
-  evidenceSelect.replaceChildren(...evidenceAssets.map((asset) => new Option(
-    `${asset.file_name} · ${humanStatus(asset.kind)} · ${asset.sha256!.slice(0, 12)}…`,
-    asset.id,
+  evidenceSelect.replaceChildren(...evidenceOptions.map((option) => new Option(
+    `${option.fileName} · ${captureAdapterDisplayLabel(option.adapter)} capture · ${option.sha256.slice(0, 12)}…`,
+    `${option.manifestId}|${option.assetId}`,
   )));
   if (traversal) {
     setFormValue(form, "traversalKind", traversal.traversal_kind);
@@ -8417,7 +8437,11 @@ function openNavigationTraversalDialog(
     }
     setFormValue(form, "speedUnitsPerSecond", String(traversal.speed_units_per_second));
     setFormValue(form, "reviewedPurpose", traversal.reviewed_purpose);
-    setFormValue(form, "evidenceAssetId", traversal.evidence_asset_id);
+    setFormValue(
+      form,
+      "evidenceReceipt",
+      `${traversal.evidence_manifest_id}|${traversal.evidence_asset_id}`,
+    );
   } else {
     setFormValue(form, "speedUnitsPerSecond", String(spatial.navigationProfile.maxSpeed));
   }
@@ -8436,6 +8460,12 @@ async function createNavigationTraversal(form: FormData): Promise<void> {
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
   const path = parseTraversalPath(String(form.get("path") ?? ""));
+  const [evidenceManifestId, evidenceAssetId] = String(
+    form.get("evidenceReceipt") ?? "",
+  ).split("|");
+  if (!evidenceManifestId || !evidenceAssetId) {
+    throw new Error("Choose a qualified capture-manifest traversal receipt.");
+  }
   const body = {
     traversalKind: String(form.get("traversalKind") ?? "elevator"),
     label: String(form.get("label") ?? ""),
@@ -8443,7 +8473,8 @@ async function createNavigationTraversal(form: FormData): Promise<void> {
     bidirectional: form.get("bidirectional") === "on",
     speedUnitsPerSecond: Number(form.get("speedUnitsPerSecond")),
     reviewedPurpose: String(form.get("reviewedPurpose") ?? ""),
-    evidenceAssetId: String(form.get("evidenceAssetId") ?? ""),
+    evidenceAssetId,
+    evidenceManifestId,
   };
   await api(editingNavigationTraversal
     ? `/api/projects/${project.id}/spatial/navigation-traversals/${editingNavigationTraversal.id}`
@@ -8498,13 +8529,8 @@ function navigationCollisionAssets(): Asset[] {
   );
 }
 
-function navigationEvidenceAssets(): Asset[] {
-  const versionId = state.spatial?.version?.id;
-  return (state.selected?.assets ?? []).filter((asset) =>
-    asset.version_id === versionId &&
-    asset.integrity_status === "verified" &&
-    Boolean(asset.sha256)
-  );
+function navigationEvidenceOptions(): SpatialWorkspace["traversalEvidenceOptions"] {
+  return state.spatial?.traversalEvidenceOptions ?? [];
 }
 
 function openNavigationBuildDialog(): void {
@@ -10489,6 +10515,7 @@ const captureBundleRoleLabels: Record<string, string> = {
   metric_point_cloud: "Metric point cloud",
   gaussian_splat: "Gaussian splat",
   collision_mesh: "Collision mesh",
+  traversal_evidence: "Traversal evidence",
 };
 
 function openCaptureBundleDialog(): void {
@@ -10591,6 +10618,9 @@ function captureBundleEligibleRoles(asset: Asset): string[] {
     ["glb", "gltf", "obj", "ply"].includes(format)
   ) {
     roles.push("collision_mesh");
+  }
+  if (["source", "master", "pointcloud", "collision", "report"].includes(asset.kind)) {
+    roles.push("traversal_evidence");
   }
   return [...new Set(roles)];
 }

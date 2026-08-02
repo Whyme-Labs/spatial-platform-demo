@@ -23,9 +23,15 @@ import {
   type Vector3Tuple,
 } from "../shared/navigation-runtime";
 import { parseWorldUnit } from "../shared/world-units";
+import { captureAdapterDisplayLabel } from "../shared/capture-adapters";
+import { isCaptureQualifiedTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import type { DetourNavigationRuntime } from "./detour-navigation";
 import type { PhysicalNavigationRuntime } from "./physical-navigation";
 import type { PhysicalMovementMode } from "./physical-navigation";
+import {
+  AuthoredTraversalOverlay,
+} from "./authored-traversal-overlay";
+import type { AuthoredTraversalFrame } from "./authored-traversal";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -105,6 +111,20 @@ type RendererMessage =
       source: "spatial-spark";
       type: "movement-mode";
       mode: PhysicalMovementMode;
+    }
+  | {
+      source: "spatial-spark";
+      type: "authored-traversal-state";
+      connectionId: string;
+      traversalKind: "elevator" | "ladder" | "moving_platform";
+      label: string;
+      phase: "started" | "completed" | "blocked";
+      qualification: {
+        adapter: string;
+        manifestSha256: string;
+        reviewGeneration: number;
+      } | null;
+      message?: string;
     }
   | {
       source: "spatial-spark";
@@ -210,6 +230,7 @@ let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
 let navigationRuntime: NavigationRuntime | null = null;
 let detourNavigationRuntime: DetourNavigationRuntime | null = null;
 let physicalNavigationRuntime: PhysicalNavigationRuntime | null = null;
+let authoredTraversalOverlay: AuthoredTraversalOverlay | null = null;
 let collisionDrivenMovement = false;
 let movementMode: PhysicalMovementMode = "walk";
 let mobileVerticalMovement = 0;
@@ -287,6 +308,8 @@ async function start(): Promise<void> {
       detourNavigationRuntime = null;
       physicalNavigationRuntime?.destroy();
       physicalNavigationRuntime = null;
+      authoredTraversalOverlay?.destroy();
+      authoredTraversalOverlay = null;
       collisionDrivenMovement = false;
       movementMode = "walk";
       stopMobileVerticalMovement();
@@ -316,7 +339,7 @@ async function start(): Promise<void> {
         walkableBoxes = authoredBoxes;
         const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
         const structuralV7 = navigationArtifact && typeof navigationArtifact === "object" &&
-          ["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+          ["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
             String(Reflect.get(navigationArtifact, "schemaVersion")),
           );
         const requestedMode = Reflect.get(runtimeMessage, "defaultMovementMode");
@@ -395,7 +418,12 @@ async function start(): Promise<void> {
             }
             detourNavigationRuntime = runtime;
             physicalNavigationRuntime = physicalRuntime;
-            collisionDrivenMovement = ["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+            authoredTraversalOverlay = new AuthoredTraversalOverlay(
+              scene,
+              runtime.authoredTraversalLinks,
+              runtime.eyeHeight,
+            );
+            collisionDrivenMovement = ["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
               String(Reflect.get(navigationArtifact as object, "schemaVersion")),
             );
             movementMode = physicalRuntime.mode;
@@ -713,24 +741,34 @@ async function start(): Promise<void> {
       if (controlledPosition) {
         camera.position.fromArray(controlledPosition);
         lastWalkablePosition = camera.position.clone();
-        if (authoredTraversal.phase === "started") {
+        const overlayState = authoredTraversalOverlay?.update(authoredTraversal) ?? null;
+        if (authoredTraversal.started) {
           setControlStatus(
-            `${traversalKindLabel(authoredTraversal.traversalKind)} traversal in progress`,
+            overlayState
+              ? `${overlayState.label} · evidence-linked ${captureAdapterDisplayLabel(overlayState.adapter)} path in progress`
+              : `${traversalKindLabel(authoredTraversal.traversalKind)} traversal in progress`,
             "ready",
           );
-        } else if (authoredTraversal.phase === "completed") {
+          post(authoredTraversalMessage(authoredTraversal, "started"));
+        }
+        if (authoredTraversal.phase === "completed") {
           setControlStatus(movementStatusText(), "ready");
+          post(authoredTraversalMessage(authoredTraversal, "completed"));
         }
       } else {
         detourNavigationRuntime?.cancelAuthoredTraversal();
+        authoredTraversalOverlay?.update(null);
         if (lastWalkablePosition) camera.position.copy(lastWalkablePosition);
+        const message = physicalNavigationRuntime.controlledFailure ?? "structural collision";
         setControlStatus(
           `${traversalKindLabel(authoredTraversal.traversalKind)} traversal blocked: ${
-            physicalNavigationRuntime.controlledFailure ?? "structural collision"
+            message
           }`,
         );
+        post(authoredTraversalMessage(authoredTraversal, "blocked", message));
       }
     } else if (collisionDrivenMovement && physicalNavigationRuntime) {
+      authoredTraversalOverlay?.update(null);
       const resolved = physicalNavigationRuntime.moveCamera(
         origin,
         desired,
@@ -794,6 +832,30 @@ async function start(): Promise<void> {
 function traversalKindLabel(kind: "elevator" | "ladder" | "moving_platform"): string {
   if (kind === "moving_platform") return "Moving platform";
   return kind === "elevator" ? "Elevator" : "Ladder";
+}
+
+function authoredTraversalMessage(
+  frame: AuthoredTraversalFrame,
+  phase: "started" | "completed" | "blocked",
+  message?: string,
+): RendererMessage {
+  const receipt = frame.evidenceReceipt;
+  return {
+    source: "spatial-spark",
+    type: "authored-traversal-state",
+    connectionId: frame.connectionId,
+    traversalKind: frame.traversalKind,
+    label: frame.label,
+    phase,
+    qualification: isCaptureQualifiedTraversalEvidenceReceipt(receipt)
+      ? {
+        adapter: receipt.adapter,
+        manifestSha256: receipt.manifestSha256,
+        reviewGeneration: receipt.reviewGeneration,
+      }
+      : null,
+    ...(message ? { message } : {}),
+  };
 }
 
 function cameraPose(camera: THREE.PerspectiveCamera): {
@@ -1169,6 +1231,8 @@ function toggleMovementMode(): void {
     return;
   }
   movementMode = nextMode;
+  detourNavigationRuntime?.cancelAuthoredTraversal();
+  authoredTraversalOverlay?.update(null);
   stopMobileVerticalMovement();
   rendererControls?.setMovementMode(nextMode);
   lastWalkablePosition = camera.position.clone();

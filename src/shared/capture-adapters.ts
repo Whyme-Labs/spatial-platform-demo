@@ -162,6 +162,14 @@ export const captureAdapterProfiles: CaptureAdapterProfile[] = [
   },
 ];
 
+export function captureAdapterDisplayLabel(adapter: string): string {
+  const profile = captureAdapterProfiles.find((candidate) => candidate.id === adapter);
+  if (profile) return profile.label;
+  return adapter.split("-").map((part) =>
+    part ? `${part[0]!.toUpperCase()}${part.slice(1)}` : ""
+  ).join(" ");
+}
+
 export type CaptureAssetImportPlan =
   | {
     accepted: true;

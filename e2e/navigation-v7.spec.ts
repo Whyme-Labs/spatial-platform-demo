@@ -112,7 +112,7 @@ test("v7 preserves an authored elevated opening camera in default Fly mode", asy
   expect(opening.position[1]).toBeCloseTo(2.4, 1);
 });
 
-test("v8 carries Walk mode through a reviewed multi-floor elevator path", async ({ page }) => {
+test("v9 carries Walk mode through an evidence-linked multi-floor elevator path", async ({ page }) => {
   const fixture = await buildV8Fixture();
   await mountV7Fixture(page, fixture, {
     cameraPosition: [1, 1.6, 2],
@@ -121,9 +121,27 @@ test("v8 carries Walk mode through a reviewed multi-floor elevator path", async 
   await expect(renderer.locator("#controlStatus")).toHaveText(
     "Walk enabled · structural shell collision · furniture ignored",
   );
+  await page.evaluate(() => {
+    const events: unknown[] = [];
+    Reflect.set(window, "__authoredTraversalEvents", events);
+    window.addEventListener("message", (event) => {
+      if (event.data?.source === "spatial-spark" &&
+        event.data?.type === "authored-traversal-state") events.push(event.data);
+    });
+  });
+  const idleLimePixels = await countTraversalOverlayPixels(
+    page,
+    await renderer.locator("#sparkCanvas").screenshot(),
+  );
   await renderer.locator("#sparkCanvas").focus();
   await page.keyboard.down("ArrowUp");
   try {
+    await expect(renderer.locator("#controlStatus")).toContainText("evidence-linked");
+    const activeLimePixels = await countTraversalOverlayPixels(
+      page,
+      await renderer.locator("#sparkCanvas").screenshot(),
+    );
+    expect(activeLimePixels).toBeGreaterThan(idleLimePixels);
     await expect.poll(async () => {
       const position = (await captureCamera(page)).position;
 	      return position[0] > 3.65 && position[1] > 4.5;
@@ -135,7 +153,61 @@ test("v8 carries Walk mode through a reviewed multi-floor elevator path", async 
   expect(upperFloor.position[0]).toBeGreaterThan(3.65);
   expect(upperFloor.position[1]).toBeGreaterThan(4.5);
   expect(upperFloor.position[1]).toBeLessThan(4.75);
+  const traversalEvents = await page.evaluate(() =>
+    Reflect.get(window, "__authoredTraversalEvents") as Array<Record<string, unknown>>
+  );
+  expect(traversalEvents).toEqual([
+    expect.objectContaining({
+      connectionId: "east-lift",
+      label: "East lift",
+      phase: "started",
+      qualification: {
+        adapter: "xgrids-lcc",
+        manifestSha256: "b".repeat(64),
+        reviewGeneration: 1,
+      },
+    }),
+    expect.objectContaining({
+      connectionId: "east-lift",
+      label: "East lift",
+      phase: "completed",
+      qualification: {
+        adapter: "xgrids-lcc",
+        manifestSha256: "b".repeat(64),
+        reviewGeneration: 1,
+      },
+    }),
+  ]);
 });
+
+async function countTraversalOverlayPixels(
+  page: import("@playwright/test").Page,
+  screenshot: Buffer,
+): Promise<number> {
+  return page.evaluate(async (encoded) => {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Browser could not inspect the rendered traversal overlay");
+    context.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let matches = 0;
+    for (let index = 0; index < pixels.length; index += 4) {
+      const red = pixels[index]!;
+      const green = pixels[index + 1]!;
+      const blue = pixels[index + 2]!;
+      // The relation comes from the authored overlay colour 0xcaff3f and is
+      // stable through antialiasing because blending scales all three channels.
+      if (green > red && red > blue * 2) matches += 1;
+    }
+    return matches;
+  }, screenshot.toString("base64"));
+}
 
 test.describe("v7 touch flight controls", () => {
   test.use({
@@ -373,6 +445,7 @@ async function buildV8Fixture(): Promise<Awaited<ReturnType<typeof buildV7Fixtur
     offMeshConnections: [{
       id: "east-lift",
       traversalKind: "elevator",
+      label: "East lift",
       startPosition: [1.3, 0.05, 2],
       controlPoints: [[1.75, 0.05, 2], [1.75, 3.05, 2], [3.3, 3.05, 2]],
       endPosition: [3.7, 3.05, 2],
@@ -386,6 +459,10 @@ async function buildV8Fixture(): Promise<Awaited<ReturnType<typeof buildV7Fixtur
       evidenceReceipt: {
         assetId: "11111111-1111-4111-8111-111111111111",
         sha256: "a".repeat(64),
+        manifestId: "22222222-2222-4222-8222-222222222222",
+        manifestSha256: "b".repeat(64),
+        adapter: "xgrids-lcc",
+        reviewGeneration: 1,
       },
     }],
   });

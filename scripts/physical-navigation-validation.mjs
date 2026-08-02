@@ -80,11 +80,11 @@ export async function validateAuthoredTraversals({
   positions,
   indices,
 }) {
-  if (artifact?.schemaVersion !== "spatial-navigation-v8" ||
+  if (!["spatial-navigation-v8", "spatial-navigation-v9"].includes(artifact?.schemaVersion) ||
     !Array.isArray(artifact.offMeshConnections) || !artifact.offMeshConnections.length) {
     throw new NavigationBuildError(
       "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED",
-      "Controlled-path validation requires a v8 artifact with authored traversal links",
+      "Controlled-path validation requires a v8 or v9 artifact with authored traversal links",
     );
   }
   initialization ??= RAPIER.init();
@@ -164,10 +164,10 @@ export async function validateStructuralNavigation({
   indices,
   ignoredMeshCount = 0,
 }) {
-  if (!["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact?.schemaVersion)) {
+  if (!["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(artifact?.schemaVersion)) {
     throw new NavigationBuildError(
       "STRUCTURAL_NAVIGATION_UNSUPPORTED",
-      "Structural shell validation requires a v7 navigation artifact",
+      "Structural shell validation requires a v7, v8, or v9 navigation artifact",
     );
   }
   initialization ??= RAPIER.init();

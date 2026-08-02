@@ -42,7 +42,7 @@ describe("vendor-neutral capture bundle", () => {
       assets: [
         {
           id: crypto.randomUUID(),
-          roles: ["raw_capture", "metric_point_cloud"],
+          roles: ["raw_capture", "metric_point_cloud", "traversal_evidence"],
           kind: "source",
           format: "ply",
           fileName: "capture.ply",
@@ -96,6 +96,9 @@ describe("vendor-neutral capture bundle", () => {
     expect(validation.issues).toContainEqual(expect.objectContaining({
       code: "reconstruction_inputs_incomplete",
       severity: "warning",
+    }));
+    expect(validation.issues).not.toContainEqual(expect.objectContaining({
+      code: "asset_role_mismatch",
     }));
   });
 

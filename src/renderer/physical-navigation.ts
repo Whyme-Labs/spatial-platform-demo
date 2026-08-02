@@ -542,7 +542,7 @@ function validateDynamicBarrierBinding(
   artifact: unknown,
 ): void {
   if (!artifact || typeof artifact !== "object" ||
-    !["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+    !["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
       String(Reflect.get(artifact, "schemaVersion")),
     )) return;
   const asset = Reflect.get(document, "asset");
@@ -603,7 +603,7 @@ function collisionSemantics(
   const schemaVersion = artifact && typeof artifact === "object"
     ? Reflect.get(artifact, "schemaVersion")
     : null;
-  if (!["spatial-navigation-v7", "spatial-navigation-v8"].includes(String(schemaVersion))) {
+  if (!["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(String(schemaVersion))) {
     return null;
   }
   const artifactSemantics = Reflect.get(artifact as object, "collisionSemantics");

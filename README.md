@@ -176,11 +176,12 @@ Implemented:
   walls, 36 capsule corner-slide probes, and immutable JSON/Detour derivative
   hashes; an operator-only Noclip profile is frozen for diagnostics but is not
   exposed in the public viewer
-- v8 authored discontinuities for elevators, ladders, and moving platforms:
-  immutable-asset-bound version-scoped paths, Detour topology links,
-  bidirectional Rapier capsule replay, and controlled non-teleport viewer
-  movement; the source path is complete and awaits registered-device evidence
-  acceptance before production activation
+- v9 capture-contract-qualified discontinuities for elevators, ladders, and
+  moving platforms: immutable-asset-bound version-scoped paths, monotonic
+  evidence-review receipts, Detour topology links, bidirectional Rapier capsule
+  replay, controlled non-teleport viewer movement, and an evidence-linked
+  runtime overlay/event; legacy v8 artifacts remain readable, while registered
+  device evidence and coordinate-registration proof remain production gates
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset

@@ -9,6 +9,7 @@ export const captureBundleRoles = [
   "metric_point_cloud",
   "gaussian_splat",
   "collision_mesh",
+  "traversal_evidence",
 ] as const;
 
 export type CaptureBundleRole = typeof captureBundleRoles[number];
@@ -108,6 +109,9 @@ const roleCompatibility: Record<CaptureBundleRole, {
   collision_mesh: {
     kinds: ["source", "master", "collision"],
     formats: ["glb", "gltf", "obj", "ply"],
+  },
+  traversal_evidence: {
+    kinds: ["source", "master", "pointcloud", "collision", "report"],
   },
 };
 

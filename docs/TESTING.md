@@ -8,9 +8,9 @@ only when the public behavior at its relevant seam is covered and the complete
 
 | Layer | Public seam | Command | Current scope |
 | --- | --- | --- | --- |
-| Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, navigation triangles/obstacles/transitions, coordinate transforms, OIDC helpers, processor validation, privacy detection, Turnstile verification |
+| Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, geometry and floor-plan logic, navigation triangles/obstacles/transitions, evidence-linked traversal overlays, coordinate transforms, OIDC helpers, processor validation, privacy detection, Turnstile verification |
 | Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
-| Navigation contracts | Offline build and movement evidence | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, and deterministic physical-runtime probes |
+| Navigation contracts | Offline build, movement evidence, and receipt migration | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, deterministic physical-runtime probes, and legacy receipt backfill/atomicity |
 | End to end | Production browser bundle | `npm run test:e2e` | Landing and live-demo messaging, OTP pending/error/retry behavior, responsive sign-in and Turnstile, authenticated project controls, navigation authoring/review spacing, Spark renderer chrome, Walk/Fly input, floor plan, and the host-to-renderer navigation snapshot handoff |
 | Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
@@ -76,10 +76,19 @@ must prove room-anchor enclosure, both-direction Walk/Fly wall sweeps, capsule
 corner sliding, room-route replay, and open/closed door parity before Studio can
 approve it or a movement-enabled release can be published.
 
-The v8 extension additionally builds disconnected floors through a reviewed
-Detour link, replays every allowed 3D path direction with the production Rapier
-capsule, unit-tests non-teleport controller timing and one-way behavior, and
-drives an Arrow-key browser traversal from the lower to the upper landing.
+The v9 extension additionally requires an accepted capture contract whose
+immutable asset is explicitly marked `traversal_evidence`, builds disconnected
+floors through a reviewed Detour link, replays every allowed 3D path direction
+with the production Rapier capsule, unit-tests non-teleport controller timing
+and one-way behavior, and drives an Arrow-key browser traversal from the lower
+to the upper landing. The browser proof also asserts the start/completion host
+events and their frozen capture-adapter, manifest-hash, and monotonic
+review-generation receipt. It decodes a real canvas screenshot and verifies
+that enabling the authored route adds visible route-overlay pixels. Negative
+contracts substitute a path, manifest identity, or review generation while
+retaining the expected authoring hash and prove that the Worker rejects the
+processor payload. Legacy v8 artifact parsing remains a compatibility contract
+and does not grant the v9 qualification claim.
 
 Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
 All API responses used by UI-layout tests are explicit fixtures. Worker routing

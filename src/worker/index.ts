@@ -61,6 +61,7 @@ import {
   navigationTraversalUpdateSchema,
   navigationArtifactSchema,
   navigationAssetsSchema,
+  authoredTraversalConnectionsSchema,
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
@@ -679,6 +680,7 @@ type CaptureBundleRow = {
   canonical_manifest_json: string;
   validation_json: string;
   review_decision: "accepted" | "needs_vendor_evidence" | "rejected" | null;
+  review_generation: number;
   review_note: string | null;
   reviewed_at: string | null;
   created_at: string;
@@ -823,6 +825,27 @@ type EnterpriseIdentityProviderRow = {
   created_at: string;
   updated_at: string;
 };
+
+const NAVIGATION_TRAVERSAL_EVIDENCE_SELECT = `
+  SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
+    t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
+    t.evidence_sha256, t.evidence_manifest_id,
+    t.evidence_manifest_sha256, t.evidence_adapter,
+    t.evidence_manifest_review_generation,
+    t.status, t.created_at, t.updated_at,
+    evidence.sha256 AS current_evidence_sha256,
+    evidence.integrity_status AS evidence_integrity_status,
+    evidence.deleted_at AS evidence_deleted_at,
+    manifest.manifest_hash AS current_evidence_manifest_sha256,
+    COALESCE(manifest.adapter_v2, manifest.adapter) AS current_evidence_adapter,
+    manifest.status AS evidence_manifest_status,
+    manifest.result AS evidence_manifest_result,
+    manifest.review_decision AS evidence_manifest_review_decision,
+    manifest.review_generation AS current_evidence_manifest_review_generation
+  FROM scene_navigation_traversals t
+  LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+  LEFT JOIN capture_bundle_manifests manifest ON manifest.id = t.evidence_manifest_id
+`;
 
 const app = new Hono<AppEnvironment>();
 const maximumPartBytes = 95 * 1024 * 1024;
@@ -4261,8 +4284,9 @@ app.get("/api/projects/:projectId", async (context) => {
       ORDER BY r.published_at DESC
     `).bind(projectId, auth.organisationId),
     context.env.DB.prepare(`
-      SELECT id, version_id, adapter, schema_version, status, result,
-        manifest_asset_id, manifest_hash, validation_json, review_decision,
+      SELECT id, version_id, COALESCE(adapter_v2, adapter) AS adapter,
+        schema_version, status, result, manifest_asset_id, manifest_hash,
+        validation_json, review_decision, review_generation,
         review_note, reviewed_at, created_at, updated_at
       FROM capture_bundle_manifests
       WHERE project_id = ? AND organisation_id = ?
@@ -4522,7 +4546,8 @@ app.patch("/api/projects/:projectId/capture-bundles/:manifestId", async (context
   const reviewed = await context.env.DB.prepare(`
     UPDATE capture_bundle_manifests
     SET status = 'reviewed', review_decision = ?, review_note = ?,
-      reviewed_by = ?, reviewed_at = datetime('now'), updated_at = datetime('now')
+      reviewed_by = ?, reviewed_at = datetime('now'),
+      review_generation = review_generation + 1, updated_at = datetime('now')
     WHERE id = ? AND project_id = ? AND organisation_id = ?
     RETURNING *
   `).bind(
@@ -6372,6 +6397,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     floorplanExports: [],
     navigationObstacles: [],
     navigationTraversals: [],
+    traversalEvidenceOptions: [],
     navigationBuilds: [],
     navigationArtifact: null,
     deliveryPolicy: null,
@@ -6501,15 +6527,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE project_id = ? AND version_id = ? AND organisation_id = ?
       ORDER BY created_at DESC LIMIT 25
     `).bind(access.project.id, version.id, access.auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
-        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
-        t.evidence_sha256, t.status, t.created_at, t.updated_at,
-        evidence.sha256 AS current_evidence_sha256,
-        evidence.integrity_status AS evidence_integrity_status,
-        evidence.deleted_at AS evidence_deleted_at
-      FROM scene_navigation_traversals t
-      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+    context.env.DB.prepare(`${NAVIGATION_TRAVERSAL_EVIDENCE_SELECT}
       WHERE t.project_id = ? AND t.version_id = ? AND t.organisation_id = ?
       ORDER BY t.label, t.created_at
     `).bind(access.project.id, version.id, access.auth.organisationId),
@@ -6531,6 +6549,12 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
   );
   const navigationArtifact = approvedNavigationArtifact(navigationBuilds, authoringHash);
   const runtime = buildSpatialRuntime(entities, navigationObstacles, navigationProfile);
+  const traversalEvidenceOptions = await qualifiedTraversalEvidenceOptions(
+    context.env.DB,
+    access.auth.organisationId,
+    access.project.id,
+    version.id,
+  );
   return context.json({
     version,
     entities,
@@ -6556,6 +6580,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     })),
     navigationObstacles,
     navigationTraversals,
+    traversalEvidenceOptions,
     navigationBuilds,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
@@ -6786,20 +6811,236 @@ app.delete("/api/projects/:projectId/spatial/navigation-obstacles/:obstacleId", 
   return context.body(null, 204);
 });
 
+type QualifiedTraversalEvidenceOption = {
+  assetId: string;
+  fileName: string;
+  kind: string;
+  sha256: string;
+  manifestId: string;
+  manifestSha256: string;
+  adapter: string;
+  reviewGeneration: number;
+};
+
+async function qualifiedTraversalEvidenceOptions(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<QualifiedTraversalEvidenceOption[]> {
+  const results = await database.batch([
+    database.prepare(`
+      SELECT manifest.id, manifest.project_id AS manifest_project_id,
+        manifest.version_id AS manifest_version_id, manifest.manifest_asset_id,
+        manifest.manifest_hash, manifest.canonical_manifest_json,
+        manifest.review_generation, manifest_asset.sha256 AS manifest_asset_sha256,
+        COALESCE(manifest.adapter_v2, manifest.adapter) AS adapter
+      FROM capture_bundle_manifests manifest
+      JOIN assets manifest_asset
+        ON manifest_asset.id = manifest.manifest_asset_id
+        AND manifest_asset.organisation_id = manifest.organisation_id
+        AND manifest_asset.project_id = manifest.project_id
+        AND manifest_asset.version_id = manifest.version_id
+        AND manifest_asset.kind = 'report'
+        AND manifest_asset.format = 'capture-bundle-manifest-json'
+        AND manifest_asset.integrity_status = 'verified'
+        AND manifest_asset.deleted_at IS NULL
+      WHERE manifest.organisation_id = ? AND manifest.project_id = ?
+        AND manifest.version_id = ? AND manifest.status = 'reviewed'
+        AND manifest.review_decision = 'accepted' AND manifest.result != 'blocked'
+        AND EXISTS (
+          SELECT 1
+          FROM json_each(
+            CASE WHEN json_valid(manifest.canonical_manifest_json)
+              THEN manifest.canonical_manifest_json ELSE '{"assets":[]}' END,
+            '$.assets'
+          ) declaration
+          JOIN json_each(
+            CASE WHEN json_valid(declaration.value)
+              THEN declaration.value ELSE '{"roles":[]}' END,
+            '$.roles'
+          ) role
+          WHERE role.value = 'traversal_evidence'
+        )
+      ORDER BY manifest.created_at DESC, manifest.id
+    `).bind(organisationId, projectId, versionId),
+    database.prepare(`
+      SELECT DISTINCT asset.id, asset.file_name, asset.kind, asset.sha256
+      FROM assets asset
+      JOIN capture_bundle_manifests manifest
+        ON manifest.organisation_id = asset.organisation_id
+        AND manifest.project_id = asset.project_id
+        AND manifest.version_id = asset.version_id
+      JOIN json_each(
+        CASE WHEN json_valid(manifest.canonical_manifest_json)
+          THEN manifest.canonical_manifest_json ELSE '{"assets":[]}' END,
+        '$.assets'
+      ) declaration
+        ON json_extract(
+          CASE WHEN json_valid(declaration.value) THEN declaration.value ELSE '{}' END,
+          '$.id'
+        ) = asset.id
+      JOIN json_each(
+        CASE WHEN json_valid(declaration.value)
+          THEN declaration.value ELSE '{"roles":[]}' END,
+        '$.roles'
+      ) role
+      WHERE asset.organisation_id = ? AND asset.project_id = ? AND asset.version_id = ?
+        AND manifest.status = 'reviewed' AND manifest.review_decision = 'accepted'
+        AND manifest.result != 'blocked' AND role.value = 'traversal_evidence'
+        AND asset.integrity_status = 'verified' AND asset.deleted_at IS NULL
+        AND asset.sha256 IS NOT NULL
+    `).bind(organisationId, projectId, versionId),
+  ]);
+  const assets = new Map(
+    requiredBatchResult(results, 1).results.flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object") return [];
+      const id = readStringProperty(candidate, "id");
+      const fileName = readStringProperty(candidate, "file_name");
+      const kind = readStringProperty(candidate, "kind");
+      const sha256 = readStringProperty(candidate, "sha256")?.toLowerCase();
+      return id && fileName && kind && sha256 && /^[a-f0-9]{64}$/.test(sha256)
+        ? [[id, { assetId: id, fileName, kind, sha256 }] as const]
+        : [];
+    }),
+  );
+  const options: QualifiedTraversalEvidenceOption[] = [];
+  for (const candidate of requiredBatchResult(results, 0).results) {
+    options.push(...await qualifiedTraversalEvidenceFromManifest(candidate, assets));
+  }
+  return options;
+}
+
+async function qualifiedTraversalEvidenceFromManifest(
+  candidate: unknown,
+  assets: ReadonlyMap<string, {
+    assetId: string;
+    fileName: string;
+    kind: string;
+    sha256: string;
+  }>,
+): Promise<QualifiedTraversalEvidenceOption[]> {
+  if (!candidate || typeof candidate !== "object") return [];
+  const manifestId = readStringProperty(candidate, "id");
+  const manifestProjectId = readStringProperty(candidate, "manifest_project_id");
+  const manifestVersionId = readStringProperty(candidate, "manifest_version_id");
+  const manifestAssetId = readStringProperty(candidate, "manifest_asset_id");
+  const manifestAssetSha256 = readStringProperty(candidate, "manifest_asset_sha256")
+    ?.toLowerCase();
+  const manifestSha256 = readStringProperty(candidate, "manifest_hash")?.toLowerCase();
+  const canonicalManifestJson = readStringProperty(candidate, "canonical_manifest_json");
+  const adapter = readStringProperty(candidate, "adapter");
+  const reviewGeneration = Number(Reflect.get(candidate, "review_generation"));
+  if (
+    !manifestId || !manifestProjectId || !manifestVersionId || !manifestAssetId ||
+    !manifestAssetSha256 || !manifestSha256 || manifestAssetSha256 !== manifestSha256 ||
+    !canonicalManifestJson || !adapter ||
+    !Number.isSafeInteger(reviewGeneration) || reviewGeneration < 1 ||
+    await sha256Hex(canonicalManifestJson) !== manifestSha256
+  ) return [];
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(canonicalManifestJson);
+  } catch {
+    return [];
+  }
+  if (
+    !manifest || typeof manifest !== "object" ||
+    Reflect.get(manifest, "format") !== "whymelabs.spatial.capture-bundle" ||
+    Reflect.get(manifest, "schemaVersion") !== "1.0.0" ||
+    Reflect.get(manifest, "manifestId") !== manifestId
+  ) return [];
+  const manifestProject = Reflect.get(manifest, "project");
+  const manifestVersion = Reflect.get(manifest, "version");
+  if (
+    !manifestProject || typeof manifestProject !== "object" ||
+    Reflect.get(manifestProject, "id") !== manifestProjectId ||
+    Reflect.get(manifestProject, "captureAdapter") !== adapter ||
+    !manifestVersion || typeof manifestVersion !== "object" ||
+    Reflect.get(manifestVersion, "id") !== manifestVersionId
+  ) return [];
+  const declarations = Reflect.get(manifest, "assets");
+  if (!Array.isArray(declarations)) return [];
+  return declarations.flatMap((declaration): QualifiedTraversalEvidenceOption[] => {
+    if (!declaration || typeof declaration !== "object") return [];
+    const roles = Reflect.get(declaration, "roles");
+    if (!Array.isArray(roles) || !roles.includes("traversal_evidence")) return [];
+    const assetId = readStringProperty(declaration, "id");
+    const declaredSha256 = readStringProperty(declaration, "sha256")?.toLowerCase();
+    const asset = assetId ? assets.get(assetId) : null;
+    return asset && declaredSha256 === asset.sha256
+      ? [{
+        ...asset,
+        manifestId,
+        manifestSha256,
+        adapter,
+        reviewGeneration,
+      }]
+      : [];
+  });
+}
+
 async function verifiedTraversalEvidence(
   database: D1Database,
   organisationId: string,
   projectId: string,
   versionId: string,
   assetId: string,
-): Promise<{ id: string; sha256: string } | null> {
-  return database.prepare(`
-    SELECT id, sha256 FROM assets
-    WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
-      AND integrity_status = 'verified' AND deleted_at IS NULL
-      AND sha256 IS NOT NULL
-  `).bind(assetId, organisationId, projectId, versionId)
-    .first<{ id: string; sha256: string }>();
+  manifestId: string,
+): Promise<{
+  id: string;
+  sha256: string;
+  manifestId: string;
+  manifestSha256: string;
+  adapter: string;
+  reviewGeneration: number;
+} | null> {
+  const row = await database.prepare(`
+    SELECT manifest.id, manifest.project_id AS manifest_project_id,
+      manifest.version_id AS manifest_version_id, manifest.manifest_asset_id,
+      manifest.manifest_hash, manifest.canonical_manifest_json,
+      manifest.review_generation, manifest_asset.sha256 AS manifest_asset_sha256,
+      COALESCE(manifest.adapter_v2, manifest.adapter) AS adapter,
+      asset.id AS asset_id, asset.file_name AS asset_file_name,
+      asset.kind AS asset_kind, asset.sha256 AS asset_sha256
+    FROM capture_bundle_manifests manifest
+    JOIN assets manifest_asset
+      ON manifest_asset.id = manifest.manifest_asset_id
+      AND manifest_asset.organisation_id = manifest.organisation_id
+      AND manifest_asset.project_id = manifest.project_id
+      AND manifest_asset.version_id = manifest.version_id
+      AND manifest_asset.kind = 'report'
+      AND manifest_asset.format = 'capture-bundle-manifest-json'
+      AND manifest_asset.integrity_status = 'verified'
+      AND manifest_asset.deleted_at IS NULL
+    JOIN assets asset ON asset.id = ?
+    WHERE manifest.id = ? AND manifest.organisation_id = ?
+      AND manifest.project_id = ? AND manifest.version_id = ?
+      AND manifest.status = 'reviewed' AND manifest.review_decision = 'accepted'
+      AND manifest.result != 'blocked'
+      AND asset.organisation_id = manifest.organisation_id
+      AND asset.project_id = manifest.project_id AND asset.version_id = manifest.version_id
+      AND asset.integrity_status = 'verified' AND asset.deleted_at IS NULL
+      AND asset.sha256 IS NOT NULL
+  `).bind(assetId, manifestId, organisationId, projectId, versionId).first();
+  if (!row) return null;
+  const verifiedAssetId = readStringProperty(row, "asset_id");
+  const fileName = readStringProperty(row, "asset_file_name");
+  const kind = readStringProperty(row, "asset_kind");
+  const sha256 = readStringProperty(row, "asset_sha256")?.toLowerCase();
+  if (!verifiedAssetId || !fileName || !kind || !sha256) return null;
+  const option = (await qualifiedTraversalEvidenceFromManifest(row, new Map([[
+    verifiedAssetId,
+    { assetId: verifiedAssetId, fileName, kind, sha256 },
+  ]])))[0];
+  return option ? {
+    id: option.assetId,
+    sha256: option.sha256,
+    manifestId: option.manifestId,
+    manifestSha256: option.manifestSha256,
+    adapter: option.adapter,
+    reviewGeneration: option.reviewGeneration,
+  } : null;
 }
 
 app.post("/api/projects/:projectId/spatial/navigation-traversals", async (context) => {
@@ -6829,19 +7070,24 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
     project.id,
     version.id,
     parsed.data.evidenceAssetId,
+    parsed.data.evidenceManifestId,
   );
   if (!evidence) {
     return unprocessable(context, {
-      evidenceAssetId: ["Choose an immutable verified asset from this scene version"],
-    });
+      evidenceManifestId: [
+        "Choose an accepted non-blocked capture manifest from this scene version that declares the selected asset as traversal_evidence",
+      ],
+    }, "Traversal evidence needs an accepted capture manifest");
   }
   const id = crypto.randomUUID();
   const traversal = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_traversals (
       id, organisation_id, project_id, version_id, traversal_kind, label,
       path_json, bidirectional, speed_units_per_second, reviewed_purpose,
-      evidence_asset_id, evidence_sha256, client_operation_id, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      evidence_asset_id, evidence_sha256, evidence_manifest_id,
+      evidence_manifest_sha256, evidence_adapter,
+      evidence_manifest_review_generation, client_operation_id, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     RETURNING *
   `).bind(
     id,
@@ -6856,6 +7102,10 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
     parsed.data.reviewedPurpose,
     evidence.id,
     evidence.sha256,
+    evidence.manifestId,
+    evidence.manifestSha256,
+    evidence.adapter,
+    evidence.reviewGeneration,
     parsed.data.clientOperationId,
     auth.userId,
   ).first();
@@ -6885,7 +7135,9 @@ app.patch(
     if (!parsed.success) return validationError(context, parsed.error.flatten());
     const existing = await context.env.DB.prepare(`
       SELECT id, version_id, traversal_kind, label, path_json, bidirectional,
-        speed_units_per_second, reviewed_purpose, evidence_asset_id, evidence_sha256
+        speed_units_per_second, reviewed_purpose, evidence_asset_id, evidence_sha256,
+        evidence_manifest_id, evidence_manifest_sha256, evidence_adapter,
+        evidence_manifest_review_generation
       FROM scene_navigation_traversals
       WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
     `).bind(
@@ -6903,27 +7155,35 @@ app.patch(
       reviewed_purpose: string;
       evidence_asset_id: string;
       evidence_sha256: string;
+      evidence_manifest_id: string;
+      evidence_manifest_sha256: string;
+      evidence_adapter: string;
+      evidence_manifest_review_generation: number;
     }>();
     if (!existing) return notFound(context, "Authored navigation traversal not found");
-    const evidence = parsed.data.evidenceAssetId
-      ? await verifiedTraversalEvidence(
-          context.env.DB,
-          auth.organisationId,
-          context.req.param("projectId"),
-          existing.version_id,
-          parsed.data.evidenceAssetId,
-        )
-      : { id: existing.evidence_asset_id, sha256: existing.evidence_sha256 };
-    if (!evidence?.id || !evidence.sha256) {
+    const evidence = await verifiedTraversalEvidence(
+      context.env.DB,
+      auth.organisationId,
+      context.req.param("projectId"),
+      existing.version_id,
+      parsed.data.evidenceAssetId ?? existing.evidence_asset_id,
+      parsed.data.evidenceManifestId ?? existing.evidence_manifest_id,
+    );
+    if (!evidence) {
       return unprocessable(context, {
-        evidenceAssetId: ["Choose an immutable verified asset from this scene version"],
-      });
+        evidenceManifestId: [
+          "Choose an accepted non-blocked capture manifest from this scene version that declares the selected asset as traversal_evidence",
+        ],
+      }, "Traversal evidence needs an accepted capture manifest");
     }
     const traversal = await context.env.DB.prepare(`
       UPDATE scene_navigation_traversals
       SET traversal_kind = ?, label = ?, path_json = ?, bidirectional = ?,
         speed_units_per_second = ?, reviewed_purpose = ?, evidence_asset_id = ?,
-        evidence_sha256 = ?, updated_at = datetime('now')
+        evidence_sha256 = ?, evidence_manifest_id = ?,
+        evidence_manifest_sha256 = ?, evidence_adapter = ?,
+        evidence_manifest_review_generation = ?,
+        updated_at = datetime('now')
       WHERE id = ?
       RETURNING *
     `).bind(
@@ -6937,6 +7197,10 @@ app.patch(
       parsed.data.reviewedPurpose ?? existing.reviewed_purpose,
       evidence.id,
       evidence.sha256,
+      evidence.manifestId,
+      evidence.manifestSha256,
+      evidence.adapter,
+      evidence.reviewGeneration,
       existing.id,
     ).first();
     await audit(
@@ -7203,14 +7467,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
         AND r.status = 'active' AND e.status = 'active'
       ORDER BY rs.route_id, rs.sequence_number
     `).bind(version.id, project.id, auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
-        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
-        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
-        evidence.integrity_status AS evidence_integrity_status,
-        evidence.deleted_at AS evidence_deleted_at
-      FROM scene_navigation_traversals t
-      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+    context.env.DB.prepare(`${NAVIGATION_TRAVERSAL_EVIDENCE_SELECT}
       WHERE t.version_id = ? AND t.project_id = ? AND t.organisation_id = ?
       ORDER BY t.id
     `).bind(version.id, project.id, auth.organisationId),
@@ -7454,6 +7711,18 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
           );
         }
       }
+    }
+    const artifact = navigationArtifactSchema.safeParse(
+      parseStoredObject(reviewable.artifact_json),
+    );
+    if (
+      !artifact.success ||
+      !navigationArtifactMatchesFrozenConnections(artifact.data, parameters)
+    ) {
+      return conflict(
+        context,
+        "Navigation artifact traversal payload does not match the Worker-frozen build parameters.",
+      );
     }
   }
   const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
@@ -11629,7 +11898,8 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       a.file_name AS input_file_name, a.size_bytes AS input_size_bytes,
       a.sha256 AS input_sha256, sv.status AS version_status,
       us.purpose AS input_purpose, us.created_by AS input_created_by,
-      nb.authoring_hash AS navigation_authoring_hash
+      nb.authoring_hash AS navigation_authoring_hash,
+      nb.parameters_json AS navigation_parameters_json
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
     JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
@@ -11654,6 +11924,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     input_created_by: string | null;
     version_status: string;
     navigation_authoring_hash: string | null;
+    navigation_parameters_json: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
   if (job.job_type === "registered-scene-change-v1") {
@@ -11693,10 +11964,16 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       navigationArtifact.source.sha256.toLowerCase() !== job.input_sha256.toLowerCase() ||
       !job.navigation_authoring_hash ||
       navigationArtifact.source.authoringHash.toLowerCase() !==
-        job.navigation_authoring_hash.toLowerCase()
+        job.navigation_authoring_hash.toLowerCase() ||
+      !navigationArtifactMatchesFrozenConnections(
+        navigationArtifact,
+        parseStoredObject(job.navigation_parameters_json ?? ""),
+      )
     ) {
       return validationError(context, {
-        navigationArtifact: ["Navigation artifact source identity does not match the leased collision GLB"],
+        navigationArtifact: [
+          "Navigation artifact source or authored traversal payload does not match the Worker-frozen build parameters",
+        ],
       });
     }
     const outputKinds = parsed.data.outputs.map((output) => `${output.kind}/${output.format}`).sort();
@@ -13154,7 +13431,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (
     parsed.data.viewerConfig.defaultMovementMode === "fly" &&
     (!approvedNavigation || typeof approvedNavigation !== "object" ||
-      !["spatial-navigation-v7", "spatial-navigation-v8"].includes(
+      !["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
         String(Reflect.get(approvedNavigation, "schemaVersion")),
       ))
   ) {
@@ -17839,6 +18116,44 @@ function parseStoredObject(value: string): unknown {
   }
 }
 
+export function navigationArtifactMatchesFrozenConnections(
+  artifact: unknown,
+  parameters: unknown,
+): boolean {
+  const parsedArtifact = navigationArtifactSchema.safeParse(artifact);
+  const candidateConnections = parameters && typeof parameters === "object"
+    ? Reflect.get(parameters, "offMeshConnections")
+    : undefined;
+  const parsedConnections = authoredTraversalConnectionsSchema.safeParse(candidateConnections);
+  if (!parsedArtifact.success || !parsedConnections.success) return false;
+  // V8 remains readable for existing immutable releases, but its artifact did
+  // not preserve authored landings separately from Recast projections. New
+  // processor completions and approvals must use V9 so the trust boundary can
+  // bind both without accepting an arbitrary substituted landing.
+  if (parsedArtifact.data.schemaVersion === "spatial-navigation-v8") return false;
+  const comparable = (
+    connections: typeof parsedConnections.data,
+    useRequestedLandings: boolean,
+  ) => connections.map((connection) => {
+    const {
+      requestedStartPosition,
+      requestedEndPosition,
+      startPosition,
+      endPosition,
+      ...semanticConnection
+    } = connection;
+    return {
+      ...semanticConnection,
+      startPosition: useRequestedLandings ? requestedStartPosition ?? startPosition : startPosition,
+      endPosition: useRequestedLandings ? requestedEndPosition ?? endPosition : endPosition,
+    };
+  });
+  return JSON.stringify(comparable(
+    parsedArtifact.data.offMeshConnections,
+    parsedArtifact.data.schemaVersion === "spatial-navigation-v9",
+  )) === JSON.stringify(comparable(parsedConnections.data, false));
+}
+
 function storedPosterCamera(value: string): unknown {
   const provenance = parseStoredObject(value);
   return provenance && typeof provenance === "object"
@@ -18759,14 +19074,7 @@ async function captureSpatialSnapshot(
         AND nb.status = 'APPROVED' AND nb.artifact_json IS NOT NULL
       ORDER BY nb.reviewed_at DESC, nb.updated_at DESC LIMIT 25
     `).bind(organisationId, projectId, versionId),
-    database.prepare(`
-      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
-        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
-        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
-        evidence.integrity_status AS evidence_integrity_status,
-        evidence.deleted_at AS evidence_deleted_at
-      FROM scene_navigation_traversals t
-      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+    database.prepare(`${NAVIGATION_TRAVERSAL_EVIDENCE_SELECT}
       WHERE t.organisation_id = ? AND t.project_id = ? AND t.version_id = ?
       ORDER BY t.label, t.created_at
     `).bind(organisationId, projectId, versionId),
@@ -18991,14 +19299,7 @@ export async function currentNavigationAuthoringState(
         AND r.status = 'active'
       ORDER BY rs.route_id, rs.sequence_number
     `).bind(organisationId, projectId, versionId),
-    database.prepare(`
-      SELECT t.id, t.traversal_kind, t.label, t.path_json, t.bidirectional,
-        t.speed_units_per_second, t.reviewed_purpose, t.evidence_asset_id,
-        t.evidence_sha256, t.status, evidence.sha256 AS current_evidence_sha256,
-        evidence.integrity_status AS evidence_integrity_status,
-        evidence.deleted_at AS evidence_deleted_at
-      FROM scene_navigation_traversals t
-      LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
+    database.prepare(`${NAVIGATION_TRAVERSAL_EVIDENCE_SELECT}
       WHERE t.organisation_id = ? AND t.project_id = ? AND t.version_id = ?
       ORDER BY t.id
     `).bind(organisationId, projectId, versionId),
@@ -19115,6 +19416,10 @@ function canonicalNavigationTraversal(row: unknown): Array<{
   reviewedPurpose: string;
   evidenceAssetId: string;
   evidenceSha256: string;
+  evidenceManifestId: string;
+  evidenceManifestSha256: string;
+  evidenceAdapter: string;
+  evidenceManifestReviewGeneration: number;
   status: "active" | "archived";
 }> {
   if (!row || typeof row !== "object") return [];
@@ -19124,12 +19429,34 @@ function canonicalNavigationTraversal(row: unknown): Array<{
   const reviewedPurpose = readStringProperty(row, "reviewed_purpose");
   const evidenceAssetId = readStringProperty(row, "evidence_asset_id");
   const evidenceSha256 = readStringProperty(row, "evidence_sha256")?.toLowerCase();
+  const evidenceManifestId = readStringProperty(row, "evidence_manifest_id");
+  const evidenceManifestSha256 = readStringProperty(row, "evidence_manifest_sha256")
+    ?.toLowerCase();
+  const evidenceAdapter = readStringProperty(row, "evidence_adapter");
+  const evidenceManifestReviewGeneration = Number(
+    Reflect.get(row, "evidence_manifest_review_generation"),
+  );
   const status = readStringProperty(row, "status");
   const evidenceJoined = Reflect.has(row, "current_evidence_sha256");
+  const manifestJoined = Reflect.has(row, "current_evidence_manifest_sha256");
   const currentEvidenceSha256 = readStringProperty(row, "current_evidence_sha256")
     ?.toLowerCase();
   const evidenceIntegrityStatus = readStringProperty(row, "evidence_integrity_status");
   const evidenceDeletedAt = Reflect.get(row, "evidence_deleted_at");
+  const currentEvidenceManifestSha256 = readStringProperty(
+    row,
+    "current_evidence_manifest_sha256",
+  )?.toLowerCase();
+  const currentEvidenceAdapter = readStringProperty(row, "current_evidence_adapter");
+  const evidenceManifestStatus = readStringProperty(row, "evidence_manifest_status");
+  const evidenceManifestResult = readStringProperty(row, "evidence_manifest_result");
+  const evidenceManifestReviewDecision = readStringProperty(
+    row,
+    "evidence_manifest_review_decision",
+  );
+  const currentEvidenceManifestReviewGeneration = Number(
+    Reflect.get(row, "current_evidence_manifest_review_generation"),
+  );
   const speedUnitsPerSecond = Number(Reflect.get(row, "speed_units_per_second"));
   let path: unknown;
   try {
@@ -19138,12 +19465,23 @@ function canonicalNavigationTraversal(row: unknown): Array<{
     return [];
   }
   if (
-    !id || !label || !reviewedPurpose || !evidenceAssetId ||
+    !id || !label || !reviewedPurpose || !evidenceAssetId || !evidenceManifestId ||
     !evidenceSha256 || !/^[a-f0-9]{64}$/i.test(evidenceSha256) ||
+    !evidenceManifestSha256 || !/^[a-f0-9]{64}$/i.test(evidenceManifestSha256) ||
+    !evidenceAdapter || !Number.isSafeInteger(evidenceManifestReviewGeneration) ||
+    evidenceManifestReviewGeneration < 1 ||
     (evidenceJoined && (
       currentEvidenceSha256 !== evidenceSha256 ||
       evidenceIntegrityStatus !== "verified" ||
       evidenceDeletedAt !== null
+    )) ||
+    (manifestJoined && (
+      currentEvidenceManifestSha256 !== evidenceManifestSha256 ||
+      currentEvidenceAdapter !== evidenceAdapter ||
+      evidenceManifestStatus !== "reviewed" ||
+      evidenceManifestResult === "blocked" ||
+      evidenceManifestReviewDecision !== "accepted" ||
+      currentEvidenceManifestReviewGeneration !== evidenceManifestReviewGeneration
     )) ||
     !["active", "archived"].includes(status ?? "") ||
     !["elevator", "ladder", "moving_platform"].includes(traversalKind ?? "") ||
@@ -19160,6 +19498,10 @@ function canonicalNavigationTraversal(row: unknown): Array<{
     reviewedPurpose,
     evidenceAssetId,
     evidenceSha256,
+    evidenceManifestId,
+    evidenceManifestSha256,
+    evidenceAdapter,
+    evidenceManifestReviewGeneration,
     status: status as "active" | "archived",
   }];
 }
@@ -19171,6 +19513,7 @@ function navigationTraversalConnectionFromRow(
 ): Array<{
   id: string;
   traversalKind: "elevator" | "ladder" | "moving_platform";
+  label: string;
   startPosition: [number, number, number];
   controlPoints: Array<[number, number, number]>;
   endPosition: [number, number, number];
@@ -19181,13 +19524,21 @@ function navigationTraversalConnectionFromRow(
   flags: number;
   userId: number;
   reviewedPurpose: string;
-  evidenceReceipt: { assetId: string; sha256: string };
+  evidenceReceipt: {
+    assetId: string;
+    sha256: string;
+    manifestId: string;
+    manifestSha256: string;
+    adapter: string;
+    reviewGeneration: number;
+  };
 }> {
   const parsed = canonicalNavigationTraversal(row)[0];
   if (!parsed || parsed.status !== "active") return [];
   return [{
     id: parsed.id,
     traversalKind: parsed.traversalKind,
+    label: parsed.label,
     startPosition: parsed.path[0]!,
     controlPoints: parsed.path.slice(1, -1),
     endPosition: parsed.path.at(-1)!,
@@ -19201,6 +19552,10 @@ function navigationTraversalConnectionFromRow(
     evidenceReceipt: {
       assetId: parsed.evidenceAssetId,
       sha256: parsed.evidenceSha256,
+      manifestId: parsed.evidenceManifestId,
+      manifestSha256: parsed.evidenceManifestSha256,
+      adapter: parsed.evidenceAdapter,
+      reviewGeneration: parsed.evidenceManifestReviewGeneration,
     },
   }];
 }
@@ -19769,8 +20124,12 @@ function validationError(context: Context<AppEnvironment>, details: unknown): Re
   return context.json({ error: "Validation failed", details, requestId: context.get("requestId") }, 400);
 }
 
-function unprocessable(context: Context<AppEnvironment>, details: unknown): Response {
-  return context.json({ error: "Request cannot be applied", details, requestId: context.get("requestId") }, 422);
+function unprocessable(
+  context: Context<AppEnvironment>,
+  details: unknown,
+  message = "Request cannot be applied",
+): Response {
+  return context.json({ error: message, details, requestId: context.get("requestId") }, 422);
 }
 
 function unauthorized(context: Context<AppEnvironment>, message: string): Response {
@@ -19850,6 +20209,7 @@ function captureBundleApi(manifest: CaptureBundleRow): Record<string, unknown> {
     validation: parseStoredObject(manifest.validation_json),
     reviewDecision: manifest.review_decision,
     reviewNote: manifest.review_note,
+    reviewGeneration: manifest.review_generation,
     reviewedAt: manifest.reviewed_at,
     createdAt: manifest.created_at,
     updatedAt: manifest.updated_at,

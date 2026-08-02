@@ -18,19 +18,25 @@ confused with an external activation or real-data validation gate.
 | Processing orchestration | `LIVE` | Idempotent jobs, leases, heartbeat, progress, cancellation, retry, dead-letter states, Queue dispatch, reconciliation, and pinned Container processor | Vendor-native licensed reconstruction automation and elastic GPU provider |
 | Format pipeline | `LIVE` | Evidence validation plus Spark RAD/SPZ/SOG paths, malformed-input tests, posters, reports, purpose/format separation, and vendor-neutral metric PLY/E57/LAS/LAZ/PTS normalisation through pinned PDAL | Licensed K1/P2 export and quality comparison |
 | Indicative floorplans | `LIVE` | Checksum-bound metric input, canonical Y-up normalisation, bounded multi-level extraction, stair/ramp evidence, immutable proposal evidence, operator review, versioned revisions, and hash-verified SVG/PDF/DXF exports | Real indoor scanner corpus, paid measurement briefs, and qualified sign-off before measured/certified claims |
-| Production viewer | `LIVE` v7; `VALIDATE` v8 traversal evidence | Bundled Spark 2.1, private range delivery, adaptive budgets, progress/error/retry telemetry, guided rooms, live floor plan, v7 reviewed structural collision, verified multi-level Recast navigation, Rapier Walk/Fly movement, public multi-room production scene, and source-complete v8 elevator/ladder/moving-platform controlled paths | Exercise v8 with registered physical traversal evidence on the measured phone matrix before production activation |
+| Production viewer | `LIVE` v7; `VALIDATE` v9 traversal evidence | Bundled Spark 2.1, private range delivery, adaptive budgets, progress/error/retry telemetry, guided rooms, live floor plan, v7 reviewed structural collision, verified multi-level Recast navigation, Rapier Walk/Fly movement, public multi-room production scene, legacy-v8 reading, and source-complete v9 elevator/ladder/moving-platform controlled paths with capture-manifest receipts plus a non-geometric runtime overlay/event | Bind a registered capture frame to scene-world coordinates, then exercise v9 with physical traversal evidence on the measured phone matrix before production activation |
 | Publication and access | `LIVE` | Immutable public/unlisted/token/customer releases, short-lived scene sessions, private R2 range access, revoke, rollback, review links, and approval history | Real customer hostname activation |
 | Security and privacy | `LIVE` | CSP and security headers, same-origin mutation checks, Turnstile-protected OTP requests/resends, output escaping, quotas, tenant isolation, secrets/key rotation, audit records, private raw assets, automated privacy evidence, and human-only disposition | Customer security review for sensitive deployments |
 | Reliability and observability | `LIVE` application controls; `VALIDATE` provider operations | Request IDs, structured logs, operations inventory, queue/dead-letter evidence, bounded auth-state cleanup, lifecycle enforcement, retained-object retrieval drill, recovery runbooks, and Worker health endpoint | External uptime alert route and provider-level restore exercise before paid customer data |
 | Source release gate | `LIVE` checks; `VALIDATE` policy enforcement | Private GitHub repository plus least-privilege, SHA-pinned CI for locked install, dependency audit, application release gate, and processor dry-run | Branch protection requires an upgraded GitHub plan or a public repository |
-| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 180 Worker/domain tests across 35 files, 21 deterministic navigation contracts, and 57 Playwright tests; hermetic Worker runtime with remote bindings disabled; action/control/config audits; responsive browser coverage from 1440×1000 through 320×568; build and production dry-run; pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering | Maintain licensed K1/P2 compact/large/edge-case corpus |
+| Testing | `LIVE` software gate; `VALIDATE` licensed scanner corpus | 185 Worker/domain tests across 36 files, 23 deterministic navigation/migration contracts, and 58 Playwright tests; hermetic Worker runtime with remote bindings disabled; action/control/config audits; responsive browser coverage from 1440×1000 through 320×568; build and production dry-run; pinned open corpus through OTP/JWT, multipart R2, D1 jobs, Spark processing, Workers AI privacy, metric floorplan extraction/review/export, publication, and Chrome rendering | Maintain licensed K1/P2 compact/large/edge-case corpus |
 
 ## Roadmap state
 
 The internally implementable roadmap through Milestone 25, including the
 vendor-neutral floor-plan and v7 structural-navigation milestones, is complete
-and deployed. The v8 authored-traversal extension is source-complete and awaits
-registered physical evidence plus production activation. There is no
+and deployed. The v9 authored-traversal extension now rejects evidence that is
+not frozen into an accepted capture contract with an explicit
+`traversal_evidence` role. Its evidence-linked path overlay and host lifecycle event
+remain navigation UI rather than fabricated scene geometry. Monotonic capture
+review generations prevent reject-then-reaccept from resurrecting an older
+approval. V9 still awaits a frozen numerical capture-to-scene transform,
+registered physical evidence, phone-matrix acceptance, and production
+activation. There is no
 known rendered dead control and no unimplemented application action in the
 current product surface.
 

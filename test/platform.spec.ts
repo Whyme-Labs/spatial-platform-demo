@@ -5,6 +5,7 @@ import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { navigationArtifactSchema } from "../src/worker/contracts";
 import {
   currentNavigationAuthoringState,
+  navigationArtifactMatchesFrozenConnections,
   navigationAuthoringHash,
 } from "../src/worker/index";
 import { sha256Hex } from "../src/worker/security";
@@ -128,6 +129,55 @@ async function recordCompletedPrivacyScan(
 }
 
 describe("Spatial Studio Worker", () => {
+  it("keeps legacy traversal receipts nullable but rejects partially written capture receipts", async () => {
+    await login();
+    const member = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const traversalId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Legacy traversal receipt', ?, 'QA_REQUIRED', 'open-import',
+          'venue-navigator', ?)
+      `).bind(
+        projectId,
+        member!.organisationId,
+        `legacy-traversal-${projectId.slice(0, 8)}`,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, member!.userId),
+    ]);
+    await expect(env.DB.prepare(`
+      INSERT INTO scene_navigation_traversals (
+        id, organisation_id, project_id, version_id, traversal_kind, label,
+        path_json, bidirectional, speed_units_per_second, reviewed_purpose,
+        client_operation_id, created_by
+      ) VALUES (?, ?, ?, ?, 'elevator', 'Legacy lift', '[[0,0,0],[0,3,0]]',
+        1, 1, 'Legacy v8 record with no capture receipt.', ?, ?)
+    `).bind(
+      traversalId,
+      member!.organisationId,
+      projectId,
+      versionId,
+      crypto.randomUUID(),
+      member!.userId,
+    ).run()).resolves.toMatchObject({ success: true });
+    await expect(env.DB.prepare(`
+      UPDATE scene_navigation_traversals SET evidence_adapter = 'xgrids-lcc'
+      WHERE id = ?
+    `).bind(traversalId).run()).rejects.toThrow(
+      "traversal_capture_receipt requires manifest_id, manifest_sha256, adapter, and review_generation together",
+    );
+  });
+
   it("keeps an archived last traversal hash-bound instead of resurrecting an old approval", async () => {
     const profile = {
       world_unit: "metres",
@@ -149,6 +199,10 @@ describe("Spatial Studio Worker", () => {
       reviewed_purpose: "Visible in the registered capture.",
       evidence_asset_id: crypto.randomUUID(),
       evidence_sha256: "a".repeat(64),
+      evidence_manifest_id: crypto.randomUUID(),
+      evidence_manifest_sha256: "b".repeat(64),
+      evidence_adapter: "xgrids-lcc",
+      evidence_manifest_review_generation: 1,
       status: "active",
     };
     const neverAuthored = await navigationAuthoringHash(profile, [], [], [], []);
@@ -2527,14 +2581,17 @@ describe("Spatial Studio Worker", () => {
       planarBoundaryArtifact.structuralValidation!.boundaryTopology.method =
         "explicit-planar-boundary-faces-v2";
       expect(navigationArtifactSchema.safeParse(planarBoundaryArtifact).success).toBe(true);
-      const v8Artifact = {
+      const v9Artifact = {
         ...structuredClone(planarBoundaryArtifact),
-        schemaVersion: "spatial-navigation-v8",
+        schemaVersion: "spatial-navigation-v9",
         offMeshConnections: [{
           id: "gallery-lift",
           traversalKind: "elevator",
-          startPosition: [0.5, 0, 0.5],
+          label: "Gallery lift",
+          requestedStartPosition: [0.5, 0, 0.5],
+          startPosition: [0.5, 0.05, 0.5],
           controlPoints: [[0.5, 2.6, 0.5]],
+          requestedEndPosition: [0.7, 2.55, 0.7],
           endPosition: [0.7, 2.6, 0.7],
           radius: 0.22,
           bidirectional: true,
@@ -2546,6 +2603,10 @@ describe("Spatial Studio Worker", () => {
           evidenceReceipt: {
             assetId: "11111111-1111-4111-8111-111111111111",
             sha256: "a".repeat(64),
+            manifestId: "22222222-2222-4222-8222-222222222222",
+            manifestSha256: "b".repeat(64),
+            adapter: "xgrids-lcc",
+            reviewGeneration: 1,
           },
         }],
         authoredTraversalValidation: {
@@ -2566,12 +2627,81 @@ describe("Spatial Studio Worker", () => {
           })),
         },
       };
-      const missingTraversalEvidence = structuredClone(v8Artifact);
+      const missingTraversalEvidence = structuredClone(v9Artifact);
       delete (missingTraversalEvidence.offMeshConnections[0] as {
         evidenceReceipt?: unknown;
       }).evidenceReceipt;
       expect(navigationArtifactSchema.safeParse(missingTraversalEvidence).success).toBe(false);
-      expect(navigationArtifactSchema.safeParse(v8Artifact).success).toBe(true);
+      expect(navigationArtifactSchema.safeParse(v9Artifact).success).toBe(true);
+      const frozenTraversalParameters = {
+        offMeshConnections: v9Artifact.offMeshConnections.map((connection) => {
+          const {
+            requestedStartPosition,
+            requestedEndPosition,
+            ...frozenConnection
+          } = structuredClone(connection);
+          return {
+            ...frozenConnection,
+            startPosition: requestedStartPosition,
+            endPosition: requestedEndPosition,
+          };
+        }),
+      };
+      expect(navigationArtifactMatchesFrozenConnections(
+        v9Artifact,
+        frozenTraversalParameters,
+      )).toBe(true);
+      for (const mutate of [
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.requestedEndPosition = [0.8, 2.55, 0.7];
+        },
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.evidenceReceipt.manifestId =
+            "33333333-3333-4333-8333-333333333333";
+        },
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.evidenceReceipt.reviewGeneration = 2;
+        },
+      ]) {
+        const substitutedArtifact = structuredClone(v9Artifact);
+        mutate(substitutedArtifact);
+        expect(navigationArtifactMatchesFrozenConnections(
+          substitutedArtifact,
+          frozenTraversalParameters,
+        )).toBe(false);
+      }
+      const legacyV8Artifact = structuredClone(v9Artifact);
+      legacyV8Artifact.schemaVersion = "spatial-navigation-v8";
+      const legacyConnection = legacyV8Artifact.offMeshConnections[0] as {
+        label?: string;
+        requestedStartPosition?: [number, number, number];
+        requestedEndPosition?: [number, number, number];
+        evidenceReceipt: {
+          manifestId?: string;
+          manifestSha256?: string;
+          adapter?: string;
+          reviewGeneration?: number;
+        };
+      };
+      delete legacyConnection.label;
+      delete legacyConnection.requestedStartPosition;
+      delete legacyConnection.requestedEndPosition;
+      delete legacyConnection.evidenceReceipt.manifestId;
+      delete legacyConnection.evidenceReceipt.manifestSha256;
+      delete legacyConnection.evidenceReceipt.adapter;
+      delete legacyConnection.evidenceReceipt.reviewGeneration;
+      expect(navigationArtifactSchema.safeParse(legacyV8Artifact).success).toBe(true);
+      expect(navigationArtifactMatchesFrozenConnections(legacyV8Artifact, {
+        offMeshConnections: structuredClone(legacyV8Artifact.offMeshConnections),
+      })).toBe(false);
+      const fullyQualifiedV8Artifact = structuredClone(v9Artifact);
+      fullyQualifiedV8Artifact.schemaVersion = "spatial-navigation-v8";
+      expect(navigationArtifactSchema.safeParse(fullyQualifiedV8Artifact).success).toBe(false);
+      const partiallyQualifiedV8Artifact = structuredClone(fullyQualifiedV8Artifact);
+      delete (partiallyQualifiedV8Artifact.offMeshConnections[0] as {
+        evidenceReceipt: { adapter?: string };
+      }).evidenceReceipt.adapter;
+      expect(navigationArtifactSchema.safeParse(partiallyQualifiedV8Artifact).success).toBe(false);
     }
     await env.DB.batch([
       env.DB.prepare(`
@@ -3480,7 +3610,66 @@ describe("Spatial Studio Worker", () => {
     const projectId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
     const traversalEvidenceAssetId = crypto.randomUUID();
+    const traversalEvidenceManifestId = crypto.randomUUID();
+    const traversalEvidenceManifestAssetId = crypto.randomUUID();
+    const unqualifiedManifestId = crypto.randomUUID();
+    const unqualifiedManifestAssetId = crypto.randomUUID();
+    const corruptManifestId = crypto.randomUUID();
+    const corruptManifestAssetId = crypto.randomUUID();
+    const nestedCorruptManifestId = crypto.randomUUID();
+    const nestedCorruptManifestAssetId = crypto.randomUUID();
+    const driftedManifestId = crypto.randomUUID();
+    const driftedManifestAssetId = crypto.randomUUID();
     const traversalEvidenceSha256 = "c".repeat(64);
+    const traversalEvidenceManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId: traversalEvidenceManifestId,
+      project: { id: projectId, captureAdapter: "open-import" },
+      version: { id: versionId, versionNumber: 1 },
+      assets: [{
+        id: traversalEvidenceAssetId,
+        roles: ["traversal_evidence"],
+        sha256: traversalEvidenceSha256,
+      }],
+    });
+    const traversalEvidenceManifestHash = await sha256Hex(traversalEvidenceManifest);
+    const unqualifiedManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId: unqualifiedManifestId,
+      project: { id: projectId, captureAdapter: "open-import" },
+      version: { id: versionId, versionNumber: 1 },
+      assets: [{
+        id: traversalEvidenceAssetId,
+        roles: ["gaussian_splat"],
+        sha256: traversalEvidenceSha256,
+      }],
+    });
+    const unqualifiedManifestHash = await sha256Hex(unqualifiedManifest);
+    const corruptManifestHash = await sha256Hex("not-json");
+    const nestedCorruptManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId: nestedCorruptManifestId,
+      project: { id: projectId, captureAdapter: "open-import" },
+      version: { id: versionId, versionNumber: 1 },
+      assets: ["{"],
+    });
+    const nestedCorruptManifestHash = await sha256Hex(nestedCorruptManifest);
+    const driftedManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId: driftedManifestId,
+      project: { id: crypto.randomUUID(), captureAdapter: "xgrids-lcc" },
+      version: { id: crypto.randomUUID(), versionNumber: 99 },
+      assets: [{
+        id: traversalEvidenceAssetId,
+        roles: ["traversal_evidence"],
+        sha256: traversalEvidenceSha256,
+      }],
+    });
+    const driftedManifestHash = await sha256Hex(driftedManifest);
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO projects
@@ -3504,6 +3693,157 @@ describe("Spatial Studio Worker", () => {
         versionId,
         `masters-private/${member!.organisationId}/${projectId}/${versionId}/gallery-capture.ply`,
         traversalEvidenceSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES
+          (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+            'qualified-manifest.json', 'application/json', 4, ?, 'verified'),
+          (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+            'unqualified-manifest.json', 'application/json', 4, ?, 'verified'),
+          (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+            'corrupt-manifest.json', 'application/json', 4, ?, 'verified'),
+          (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+            'nested-corrupt-manifest.json', 'application/json', 4, ?, 'verified'),
+          (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+            'drifted-manifest.json', 'application/json', 4, ?, 'verified')
+      `).bind(
+        traversalEvidenceManifestAssetId, member!.organisationId, projectId, versionId,
+        `reports-private/${member!.organisationId}/${projectId}/${versionId}/qualified-manifest.json`,
+        traversalEvidenceManifestHash,
+        unqualifiedManifestAssetId, member!.organisationId, projectId, versionId,
+        `reports-private/${member!.organisationId}/${projectId}/${versionId}/unqualified-manifest.json`,
+        unqualifiedManifestHash,
+        corruptManifestAssetId, member!.organisationId, projectId, versionId,
+        `reports-private/${member!.organisationId}/${projectId}/${versionId}/corrupt-manifest.json`,
+        corruptManifestHash,
+        nestedCorruptManifestAssetId, member!.organisationId, projectId, versionId,
+        `reports-private/${member!.organisationId}/${projectId}/${versionId}/nested-corrupt-manifest.json`,
+        nestedCorruptManifestHash,
+        driftedManifestAssetId, member!.organisationId, projectId, versionId,
+        `reports-private/${member!.organisationId}/${projectId}/${versionId}/drifted-manifest.json`,
+        driftedManifestHash,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        traversalEvidenceManifestId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "e".repeat(64),
+        traversalEvidenceManifestAssetId,
+        traversalEvidenceManifestHash,
+        traversalEvidenceManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        member!.userId,
+        "Accepted registered capture evidence for traversal qualification.",
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        unqualifiedManifestId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "f".repeat(64),
+        unqualifiedManifestAssetId,
+        unqualifiedManifestHash,
+        unqualifiedManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        member!.userId,
+        "Accepted visual asset manifest without traversal evidence declaration.",
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, 'not-json', ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        corruptManifestId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "7".repeat(64),
+        corruptManifestAssetId,
+        corruptManifestHash,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        member!.userId,
+        "Corrupt accepted fixture must be excluded without breaking the workspace.",
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        nestedCorruptManifestId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "8".repeat(64),
+        nestedCorruptManifestAssetId,
+        nestedCorruptManifestHash,
+        nestedCorruptManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        member!.userId,
+        "Nested corrupt declaration must be excluded without breaking the workspace.",
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        driftedManifestId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "9".repeat(64),
+        driftedManifestAssetId,
+        driftedManifestHash,
+        driftedManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        member!.userId,
+        "Hashed provenance drift fixture must not qualify traversal evidence.",
+        member!.userId,
       ),
     ]);
 
@@ -3591,6 +3931,30 @@ describe("Spatial Studio Worker", () => {
     expect(obstacleResponse.status).toBe(201);
     const obstacle = await obstacleResponse.json<{ obstacle: { id: string } }>();
 
+    const unqualifiedTraversalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId,
+          traversalKind: "elevator",
+          label: "Gallery lift",
+          path: [[-1, 0, 0], [-1, 2.8, 0], [1, 2.8, 0]],
+          bidirectional: true,
+          speedUnitsPerSecond: 1.2,
+          reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
+          evidenceAssetId: traversalEvidenceAssetId,
+          evidenceManifestId: unqualifiedManifestId,
+        }),
+      },
+    );
+    expect(unqualifiedTraversalResponse.status).toBe(422);
+    await expect(unqualifiedTraversalResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("capture manifest"),
+    });
+
     const traversalResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-traversals`,
       {
@@ -3606,6 +3970,7 @@ describe("Spatial Studio Worker", () => {
           speedUnitsPerSecond: 1.2,
           reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
           evidenceAssetId: traversalEvidenceAssetId,
+          evidenceManifestId: traversalEvidenceManifestId,
         }),
       },
     );
@@ -3620,6 +3985,54 @@ describe("Spatial Studio Worker", () => {
       },
     );
     expect(updateTraversalResponse.status).toBe(200);
+    const revokeEvidenceResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/capture-bundles/${traversalEvidenceManifestId}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "rejected",
+          note: "Traversal evidence withdrawn during qualification review.",
+        }),
+      },
+    );
+    expect(revokeEvidenceResponse.status).toBe(200);
+    const staleEvidenceUpdate = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ speedUnitsPerSecond: 1.5 }),
+      },
+    );
+    expect(staleEvidenceUpdate.status).toBe(422);
+    const restoreEvidenceResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/capture-bundles/${traversalEvidenceManifestId}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "accepted",
+          note: "Traversal evidence reaccepted after the qualification review was corrected.",
+        }),
+      },
+    );
+    expect(restoreEvidenceResponse.status).toBe(200);
+    await expect(currentNavigationAuthoringState(
+      env.DB,
+      member!.organisationId,
+      projectId,
+      versionId,
+    )).rejects.toThrow("Active authored traversal records are invalid: stored=1, usable=0");
+    const requalifyTraversalResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ speedUnitsPerSecond: 1.4 }),
+      },
+    );
+    expect(requalifyTraversalResponse.status).toBe(200);
     const automaticNavigation = await currentNavigationAuthoringState(
       env.DB,
       member!.organisationId,
@@ -3633,6 +4046,10 @@ describe("Spatial Studio Worker", () => {
         evidenceReceipt: {
           assetId: traversalEvidenceAssetId,
           sha256: traversalEvidenceSha256,
+          manifestId: traversalEvidenceManifestId,
+          manifestSha256: traversalEvidenceManifestHash,
+          adapter: "open-import",
+          reviewGeneration: 3,
         },
       }),
     ]);
@@ -3741,6 +4158,20 @@ describe("Spatial Studio Worker", () => {
         speed_units_per_second: 1.4,
         evidence_asset_id: traversalEvidenceAssetId,
         evidence_sha256: traversalEvidenceSha256,
+        evidence_manifest_id: traversalEvidenceManifestId,
+        evidence_manifest_sha256: traversalEvidenceManifestHash,
+        evidence_adapter: "open-import",
+        evidence_manifest_review_generation: 3,
+      }],
+      traversalEvidenceOptions: [{
+        assetId: traversalEvidenceAssetId,
+        fileName: "gallery-capture.ply",
+        kind: "master",
+        sha256: traversalEvidenceSha256,
+        manifestId: traversalEvidenceManifestId,
+        manifestSha256: traversalEvidenceManifestHash,
+        adapter: "open-import",
+        reviewGeneration: 3,
       }],
       obstacleProxy: {
         version: "authored-obstacle-boxes-v1",

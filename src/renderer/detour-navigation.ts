@@ -6,13 +6,19 @@ import {
 } from "@recast-navigation/core";
 import type { Vector3Tuple } from "../shared/navigation-runtime";
 import {
+  hasNoCaptureQualification,
+  hasValidOptionalCaptureQualification,
+  isCaptureQualifiedTraversalEvidenceReceipt,
+} from "../shared/traversal-evidence";
+import {
   AuthoredTraversalController,
   type AuthoredTraversalFrame,
+  type AuthoredTraversalKind,
   type AuthoredTraversalLink,
 } from "./authored-traversal";
 
 export type DetourNavigationArtifact = {
-  schemaVersion: "spatial-navigation-v6" | "spatial-navigation-v7" | "spatial-navigation-v8";
+  schemaVersion: "spatial-navigation-v6" | "spatial-navigation-v7" | "spatial-navigation-v8" | "spatial-navigation-v9";
   generator: { version: "0.43.1" };
   agent: { radius: number; height: number; eyeHeight: number };
   build: { cellSize: number; cellHeight: number };
@@ -68,7 +74,7 @@ export class DetourNavigationRuntime {
   }
 
   static async create(value: unknown): Promise<DetourNavigationRuntime> {
-    const artifact = parseArtifact(value);
+    const artifact = parseDetourNavigationArtifact(value);
     initialization ??= init();
     await initialization;
     const bytes = decodeBase64(artifact.detour.bytesBase64);
@@ -108,6 +114,14 @@ export class DetourNavigationRuntime {
     if (!barrier) return false;
     barrier.active = active;
     return true;
+  }
+
+  get authoredTraversalLinks(): readonly AuthoredTraversalLink[] {
+    return this.#artifact.offMeshConnections;
+  }
+
+  get eyeHeight(): number {
+    return this.#artifact.agent.eyeHeight;
   }
 
   isCameraAllowed(position: Vector3Tuple): boolean {
@@ -234,10 +248,11 @@ export class DetourNavigationRuntime {
   }
 }
 
-function parseArtifact(value: unknown): DetourNavigationArtifact {
+export function parseDetourNavigationArtifact(value: unknown): DetourNavigationArtifact {
   if (!value || typeof value !== "object") throw new Error("Navigation artifact is missing");
-  if (!["spatial-navigation-v6", "spatial-navigation-v7", "spatial-navigation-v8"].includes(
-    String(Reflect.get(value, "schemaVersion")),
+  const schemaVersion = String(Reflect.get(value, "schemaVersion"));
+  if (!["spatial-navigation-v6", "spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
+    schemaVersion,
   )) {
     throw new Error("Unsupported navigation artifact schema");
   }
@@ -259,7 +274,7 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
     Reflect.get(detour, "format") !== "recast-navigation-js-export-v1" ||
     typeof Reflect.get(detour, "bytesBase64") !== "string" ||
     !validDynamicBarriers(dynamicBarriers) ||
-    !validAuthoredTraversals(offMeshConnections)) {
+    !validAuthoredTraversals(offMeshConnections, schemaVersion)) {
     throw new Error("Navigation artifact is incomplete");
   }
   for (const [record, names] of [
@@ -270,16 +285,46 @@ function parseArtifact(value: unknown): DetourNavigationArtifact {
       throw new Error("Navigation artifact contains invalid numeric parameters");
     }
   }
-  return value as DetourNavigationArtifact;
+  const artifact = value as DetourNavigationArtifact;
+  if (schemaVersion === "spatial-navigation-v9" && artifact.offMeshConnections.some(
+    (connection) => {
+      const maximumProjectionDistance = Math.max(
+        artifact.agent.radius * 2,
+        artifact.build.cellSize * 3,
+        connection.radius,
+      );
+      return !connection.requestedStartPosition || !connection.requestedEndPosition ||
+        distance(connection.startPosition, connection.requestedStartPosition) >
+          maximumProjectionDistance ||
+        distance(connection.endPosition, connection.requestedEndPosition) >
+          maximumProjectionDistance;
+    }
+  )) {
+    throw new Error("Navigation artifact contains an unbounded traversal landing projection");
+  }
+  return {
+    ...artifact,
+    offMeshConnections: artifact.offMeshConnections.map((connection) => ({
+      ...connection,
+      label: typeof connection.label === "string" && connection.label.trim()
+        ? connection.label
+        : legacyTraversalLabel(connection.traversalKind),
+      evidenceReceipt: { ...connection.evidenceReceipt },
+    })),
+  };
 }
 
-function validAuthoredTraversals(value: unknown): value is AuthoredTraversalLink[] {
+function validAuthoredTraversals(
+  value: unknown,
+  schemaVersion: string,
+): value is AuthoredTraversalLink[] {
   if (!Array.isArray(value)) return false;
   const ids = new Set<string>();
   return value.every((connection) => {
     if (!connection || typeof connection !== "object") return false;
     const id = Reflect.get(connection, "id");
     const kind = Reflect.get(connection, "traversalKind");
+    const label = Reflect.get(connection, "label");
     const controlPoints = Reflect.get(connection, "controlPoints");
     const radius = Number(Reflect.get(connection, "radius"));
     const speed = Number(Reflect.get(connection, "speedUnitsPerSecond"));
@@ -287,6 +332,13 @@ function validAuthoredTraversals(value: unknown): value is AuthoredTraversalLink
     const evidenceReceipt = Reflect.get(connection, "evidenceReceipt");
     if (typeof id !== "string" || !id || ids.has(id) ||
       !["elevator", "ladder", "moving_platform"].includes(String(kind)) ||
+      (schemaVersion === "spatial-navigation-v9" &&
+        (typeof label !== "string" || !label.trim() ||
+          !finiteTuple(Reflect.get(connection, "requestedStartPosition")) ||
+          !finiteTuple(Reflect.get(connection, "requestedEndPosition")))) ||
+      (schemaVersion === "spatial-navigation-v8" &&
+        (Reflect.get(connection, "requestedStartPosition") !== undefined ||
+          Reflect.get(connection, "requestedEndPosition") !== undefined)) ||
       !finiteTuple(Reflect.get(connection, "startPosition")) ||
       !finiteTuple(Reflect.get(connection, "endPosition")) ||
       !Array.isArray(controlPoints) || !controlPoints.every(finiteTuple) ||
@@ -296,10 +348,20 @@ function validAuthoredTraversals(value: unknown): value is AuthoredTraversalLink
       typeof reviewedPurpose !== "string" || !reviewedPurpose.trim() ||
       !evidenceReceipt || typeof evidenceReceipt !== "object" ||
       typeof Reflect.get(evidenceReceipt, "assetId") !== "string" ||
-      !/^[a-f0-9]{64}$/i.test(String(Reflect.get(evidenceReceipt, "sha256")))) return false;
+      !/^[a-f0-9]{64}$/i.test(String(Reflect.get(evidenceReceipt, "sha256"))) ||
+      !hasValidOptionalCaptureQualification(evidenceReceipt) ||
+      (schemaVersion === "spatial-navigation-v8" &&
+        !hasNoCaptureQualification(evidenceReceipt)) ||
+      (schemaVersion === "spatial-navigation-v9" &&
+        !isCaptureQualifiedTraversalEvidenceReceipt(evidenceReceipt))) return false;
     ids.add(id);
     return true;
   });
+}
+
+function legacyTraversalLabel(kind: AuthoredTraversalKind): string {
+  if (kind === "moving_platform") return "Moving platform traversal";
+  return kind === "elevator" ? "Elevator traversal" : "Ladder traversal";
 }
 
 function validDynamicBarriers(value: unknown): boolean {

@@ -1,24 +1,31 @@
 import type { Vector3Tuple } from "../shared/navigation-runtime";
+import type { TraversalEvidenceReceipt } from "../shared/traversal-evidence";
 
 export type AuthoredTraversalKind = "elevator" | "ladder" | "moving_platform";
 
 export type AuthoredTraversalLink = {
   id: string;
   traversalKind: AuthoredTraversalKind;
+  label: string;
+  requestedStartPosition?: Vector3Tuple;
   startPosition: Vector3Tuple;
   controlPoints: Vector3Tuple[];
+  requestedEndPosition?: Vector3Tuple;
   endPosition: Vector3Tuple;
   radius: number;
   bidirectional: boolean;
   speedUnitsPerSecond: number;
   reviewedPurpose: string;
-  evidenceReceipt: { assetId: string; sha256: string };
+  evidenceReceipt: TraversalEvidenceReceipt;
 };
 
 export type AuthoredTraversalFrame = {
   connectionId: string;
   traversalKind: AuthoredTraversalKind;
+  label: string;
+  evidenceReceipt: AuthoredTraversalLink["evidenceReceipt"];
   position: Vector3Tuple;
+  started: boolean;
   phase: "started" | "active" | "completed";
 };
 
@@ -46,6 +53,7 @@ export class AuthoredTraversalController {
       startPosition: [...link.startPosition],
       controlPoints: link.controlPoints.map((point) => [...point]),
       endPosition: [...link.endPosition],
+      evidenceReceipt: { ...link.evidenceReceipt },
     }));
     this.#eyeHeight = eyeHeight;
   }
@@ -118,7 +126,10 @@ export class AuthoredTraversalController {
     const frame: AuthoredTraversalFrame = {
       connectionId: active.connection.id,
       traversalKind: active.connection.traversalKind,
+      label: active.connection.label,
+      evidenceReceipt: { ...active.connection.evidenceReceipt },
       position: [...active.position],
+      started: initialPhase === "started",
       phase: completed ? "completed" : initialPhase,
     };
     if (completed) {

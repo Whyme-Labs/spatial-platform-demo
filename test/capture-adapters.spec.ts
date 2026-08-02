@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  captureAdapterDisplayLabel,
   captureAdapterProfiles,
   planCaptureAssetImport,
 } from "../src/shared/capture-adapters";
@@ -14,6 +15,8 @@ describe("capture adapter import contract", () => {
       "open-import",
     ]);
     expect(captureAdapterProfiles.every((profile) => profile.evidence.length > 0)).toBe(true);
+    expect(captureAdapterDisplayLabel("xgrids-lcc")).toBe("XGRIDS Lixel / LCC");
+    expect(captureAdapterDisplayLabel("future-device")).toBe("Future Device");
   });
 
   it("routes only compatible Gaussian masters into Spark reconstruction", () => {

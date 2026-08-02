@@ -152,7 +152,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   const buildEvidence = card.getByText("Inspect build evidence", { exact: true }).first();
   await expect(buildEvidence).toBeVisible();
   await buildEvidence.click();
-  await expect(card.getByText('"schemaVersion": "spatial-navigation-v8"')).toBeVisible();
+  await expect(card.getByText('"schemaVersion": "spatial-navigation-v9"')).toBeVisible();
 
   for (const viewport of [
     { width: 1280, height: 720 },
@@ -187,6 +187,24 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   }
 });
 
+test("vertical traversal authoring offers only capture-qualified evidence", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { qualifiedTraversalEvidence: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
+
+  const dialog = page.locator("#navigationTraversalDialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("#navigationTraversalEvidenceAsset")).toHaveValue(
+    "23232323-2323-4232-8232-232323232323|24242424-2424-4242-8242-242424242424",
+  );
+  await expect(dialog.locator("#navigationTraversalEvidenceAsset option")).toHaveText(
+    /lift-proof\.ply · XGRIDS Lixel \/ LCC capture · aaaaaaaaaaaa…/,
+  );
+});
+
 async function mockApprovedProject(
   page: Page,
   onPublish: (body: Record<string, unknown>) => void,
@@ -196,6 +214,7 @@ async function mockApprovedProject(
     auxiliaryQaVersion?: boolean;
     navigationBuildHistory?: boolean;
     multiLevelFloorplan?: boolean;
+    qualifiedTraversalEvidence?: boolean;
   } = {},
 ): Promise<void> {
   const project = {
@@ -296,10 +315,40 @@ async function mockApprovedProject(
               sha256: "a".repeat(64),
             }]
             : []),
+          ...(options.qualifiedTraversalEvidence
+            ? [{
+              id: "24242424-2424-4242-8242-242424242424",
+              version_id: versionId,
+              kind: "pointcloud",
+              format: "ply",
+              file_name: "lift-proof.ply",
+              size_bytes: 16384,
+              integrity_status: "verified",
+              sha256: "a".repeat(64),
+            }]
+            : []),
         ],
         jobs: [],
         releases: [],
-        captureBundles: [],
+        captureBundles: options.qualifiedTraversalEvidence
+          ? [{
+            id: "23232323-2323-4232-8232-232323232323",
+            version_id: versionId,
+            adapter: "xgrids-lcc",
+            schema_version: "1.0.0",
+            status: "reviewed",
+            result: "ready",
+            manifest_asset_id: "25252525-2525-4252-8252-252525252525",
+            manifest_hash: "b".repeat(64),
+            validation_json: "{}",
+            review_decision: "accepted",
+            review_generation: 1,
+            review_note: "Accepted lift evidence.",
+            reviewed_at: now,
+            created_at: now,
+            updated_at: now,
+          }]
+          : [],
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {
@@ -396,6 +445,18 @@ async function mockApprovedProject(
         navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
         navigationObstacles: [],
         navigationTraversals: [],
+        traversalEvidenceOptions: options.qualifiedTraversalEvidence
+          ? [{
+            assetId: "24242424-2424-4242-8242-242424242424",
+            fileName: "lift-proof.ply",
+            kind: "pointcloud",
+            sha256: "a".repeat(64),
+            manifestId: "23232323-2323-4232-8232-232323232323",
+            manifestSha256: "b".repeat(64),
+            adapter: "xgrids-lcc",
+            reviewGeneration: 1,
+          }]
+          : [],
         obstacleProxy: { version: "empty-v1", boxes: [] },
         navigationProfile: {
           worldUnit: "scene_units",
@@ -413,7 +474,7 @@ async function mockApprovedProject(
               status: "READY_FOR_REVIEW",
               parameters_json: "{}",
               artifact_json: JSON.stringify({
-                schemaVersion: "spatial-navigation-v8",
+                schemaVersion: "spatial-navigation-v9",
                 source: { authoringHash: "a".repeat(64) },
                 validation: { passed: true, componentCount: 1 },
                 physicalValidation: { passed: true, routeCount: 2 },

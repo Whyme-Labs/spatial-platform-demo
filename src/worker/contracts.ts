@@ -804,8 +804,11 @@ export const navigationAssetsSchema = z.object({
 const authoredTraversalConnectionSchema = z.object({
   id: z.string().trim().min(1),
   traversalKind: z.enum(["elevator", "ladder", "moving_platform"]),
+  label: z.string().trim().min(1).optional(),
+  requestedStartPosition: point3Schema.optional(),
   startPosition: point3Schema,
   controlPoints: z.array(point3Schema),
+  requestedEndPosition: point3Schema.optional(),
   endPosition: point3Schema,
   radius: z.number().positive(),
   bidirectional: z.boolean(),
@@ -817,8 +820,14 @@ const authoredTraversalConnectionSchema = z.object({
   evidenceReceipt: z.object({
     assetId: z.string().uuid(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    manifestId: z.string().uuid().optional(),
+    manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+    adapter: z.string().trim().min(1).optional(),
+    reviewGeneration: z.number().int().positive().optional(),
   }),
 });
+
+export const authoredTraversalConnectionsSchema = z.array(authoredTraversalConnectionSchema);
 
 export const navigationTraversalCreateSchema = z.object({
   clientOperationId: z.string().uuid(),
@@ -830,6 +839,7 @@ export const navigationTraversalCreateSchema = z.object({
   speedUnitsPerSecond: z.number().positive(),
   reviewedPurpose: z.string().trim().min(1),
   evidenceAssetId: z.string().uuid(),
+  evidenceManifestId: z.string().uuid(),
 }).superRefine((value, context) => {
   if (value.path.some((point, index) => index > 0 &&
     point.every((coordinate, axis) => coordinate === value.path[index - 1]![axis]))) {
@@ -849,6 +859,7 @@ export const navigationTraversalUpdateSchema = z.object({
   speedUnitsPerSecond: z.number().positive().optional(),
   reviewedPurpose: z.string().trim().min(1).optional(),
   evidenceAssetId: z.string().uuid().optional(),
+  evidenceManifestId: z.string().uuid().optional(),
 }).superRefine((value, context) => {
   if (!Object.keys(value).length) {
     context.addIssue({ code: "custom", message: "At least one traversal field must be updated" });
@@ -868,6 +879,7 @@ export const navigationArtifactSchema = z.object({
     "spatial-navigation-v6",
     "spatial-navigation-v7",
     "spatial-navigation-v8",
+    "spatial-navigation-v9",
   ]),
   generator: z.object({
     name: z.literal("recast-navigation-js"),
@@ -1237,7 +1249,7 @@ export const navigationArtifactSchema = z.object({
     }
   }).optional(),
 }).superRefine((value, context) => {
-  if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(value.schemaVersion)) {
+  if (["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(value.schemaVersion)) {
     if (!value.collisionSemantics) {
       context.addIssue({
         code: "custom",
@@ -1382,7 +1394,7 @@ export const navigationArtifactSchema = z.object({
       });
     }
   }
-  if (value.schemaVersion === "spatial-navigation-v8") {
+  if (["spatial-navigation-v8", "spatial-navigation-v9"].includes(value.schemaVersion)) {
     const connectionIds = new Set(value.offMeshConnections.map((connection) => connection.id));
     if (
       connectionIds.size !== value.offMeshConnections.length ||
@@ -1400,21 +1412,21 @@ export const navigationArtifactSchema = z.object({
       context.addIssue({
         code: "custom",
         path: ["offMeshConnections"],
-        message: "V8 traversal links require unique ids, agent clearance, and non-zero path segments",
+        message: "Authored traversal links require unique ids, agent clearance, and non-zero path segments",
       });
     }
     if (!value.offMeshConnections.length) {
       context.addIssue({
         code: "custom",
         path: ["offMeshConnections"],
-        message: "V8 requires at least one authored traversal link",
+        message: "Authored traversal artifacts require at least one traversal link",
       });
     }
     if (!value.authoredTraversalValidation) {
       context.addIssue({
         code: "custom",
         path: ["authoredTraversalValidation"],
-        message: "V8 requires Rapier controlled-path evidence for every traversal direction",
+        message: "Authored traversal artifacts require Rapier controlled-path evidence for every direction",
       });
     } else {
       const expectedDirections = new Map(value.offMeshConnections.flatMap((connection) => [
@@ -1440,11 +1452,42 @@ export const navigationArtifactSchema = z.object({
         });
       }
     }
+    if (value.schemaVersion === "spatial-navigation-v9" && value.offMeshConnections.some(
+      (connection) => !connection.label || !connection.requestedStartPosition ||
+        !connection.requestedEndPosition || !connection.evidenceReceipt.manifestId ||
+        !connection.evidenceReceipt.manifestSha256 ||
+        !connection.evidenceReceipt.adapter ||
+        !connection.evidenceReceipt.reviewGeneration ||
+        traversalProjectionDistance(connection.startPosition, connection.requestedStartPosition) >
+          Math.max(value.agent.radius * 2, value.build.cellSize * 3, connection.radius) ||
+        traversalProjectionDistance(connection.endPosition, connection.requestedEndPosition) >
+          Math.max(value.agent.radius * 2, value.build.cellSize * 3, connection.radius),
+    )) {
+      context.addIssue({
+        code: "custom",
+        path: ["offMeshConnections"],
+        message: "V9 requires requested and bounded projected landings plus a labelled capture-manifest qualification receipt on every traversal",
+      });
+    }
+    if (value.schemaVersion === "spatial-navigation-v8" && value.offMeshConnections.some(
+      (connection) => connection.requestedStartPosition !== undefined ||
+        connection.requestedEndPosition !== undefined ||
+        connection.evidenceReceipt.manifestId !== undefined ||
+        connection.evidenceReceipt.manifestSha256 !== undefined ||
+        connection.evidenceReceipt.adapter !== undefined ||
+        connection.evidenceReceipt.reviewGeneration !== undefined,
+    )) {
+      context.addIssue({
+        code: "custom",
+        path: ["offMeshConnections"],
+        message: "Legacy v8 traversal receipts cannot carry v9 capture qualification fields",
+      });
+    }
   } else if (value.offMeshConnections.length || value.authoredTraversalValidation) {
     context.addIssue({
       code: "custom",
       path: ["offMeshConnections"],
-      message: "Authored traversal links require a v8 navigation artifact",
+      message: "Authored traversal links require a v8 or v9 navigation artifact",
     });
   }
   if (value.collisionSemantics && (
@@ -1566,6 +1609,13 @@ export const navigationArtifactSchema = z.object({
     });
   }
 });
+
+function traversalProjectionDistance(
+  left: [number, number, number],
+  right: [number, number, number],
+): number {
+  return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
+}
 
 export const semanticExtractionSchema = z.object({
   clientOperationId: z.string().uuid(),

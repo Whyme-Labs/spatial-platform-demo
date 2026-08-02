@@ -437,7 +437,7 @@ async function processNextJob() {
           indices: geometry.indices,
           obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
         });
-        if (artifact.schemaVersion === "spatial-navigation-v8") {
+        if (artifact.schemaVersion === "spatial-navigation-v9") {
           artifact.authoredTraversalValidation = await validateAuthoredTraversals({
             artifact,
             positions: geometry.positions,
@@ -445,7 +445,7 @@ async function processNextJob() {
             obstacleBoxes: job.navigationBuildConfig.obstacleBoxes ?? [],
           });
         }
-        if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact.schemaVersion)) {
+        if (["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(artifact.schemaVersion)) {
           artifact.structuralValidation = await validateStructuralNavigation({
             artifact,
             positions: geometry.positions,

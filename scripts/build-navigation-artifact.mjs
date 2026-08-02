@@ -63,7 +63,7 @@ artifact.physicalValidation = await validatePhysicalNavigation({
   indices: geometry.indices,
   obstacleBoxes: config.obstacleBoxes ?? [],
 });
-if (artifact.schemaVersion === "spatial-navigation-v8") {
+if (artifact.schemaVersion === "spatial-navigation-v9") {
   artifact.authoredTraversalValidation = await validateAuthoredTraversals({
     artifact,
     positions: geometry.positions,
@@ -71,7 +71,7 @@ if (artifact.schemaVersion === "spatial-navigation-v8") {
     obstacleBoxes: config.obstacleBoxes ?? [],
   });
 }
-if (["spatial-navigation-v7", "spatial-navigation-v8"].includes(artifact.schemaVersion)) {
+if (["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(artifact.schemaVersion)) {
   artifact.structuralValidation = await validateStructuralNavigation({
     artifact,
     positions: geometry.positions,

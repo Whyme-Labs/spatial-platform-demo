@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AuthoredTraversalController } from "../src/renderer/authored-traversal";
+import { parseDetourNavigationArtifact } from "../src/renderer/detour-navigation";
 import { controlledMovementReachedTarget } from "../src/renderer/physical-navigation";
 
 const elevator = {
   id: "east-lift",
   traversalKind: "elevator" as const,
+  label: "East lift",
   startPosition: [0, 0, 0] as [number, number, number],
   controlPoints: [[1, 0, 0], [1, 3, 0]] as Array<[number, number, number]>,
   endPosition: [2, 3, 0] as [number, number, number],
@@ -15,6 +17,10 @@ const elevator = {
   evidenceReceipt: {
     assetId: "11111111-1111-4111-8111-111111111111",
     sha256: "a".repeat(64),
+    manifestId: "22222222-2222-4222-8222-222222222222",
+    manifestSha256: "b".repeat(64),
+    adapter: "xgrids-lcc",
+    reviewGeneration: 1,
   },
 };
 
@@ -25,6 +31,7 @@ describe("authored traversal controller", () => {
     expect(started).toMatchObject({
       connectionId: "east-lift",
       traversalKind: "elevator",
+      started: true,
       phase: "started",
     });
     expect(started?.position).toEqual([0.5, 1.6, 0]);
@@ -34,6 +41,22 @@ describe("authored traversal controller", () => {
       frame = controller.resolveMovement(frame!.position, [20, 20, 20], 0.5);
     }
     expect(frame).toMatchObject({ phase: "completed", position: [2, 4.6, 0] });
+  });
+
+  it("marks a traversal started even when one controller frame also completes it", () => {
+    const controller = new AuthoredTraversalController([{
+      ...elevator,
+      controlPoints: [],
+      endPosition: [0.1, 0, 0],
+      speedUnitsPerSecond: 10,
+    }], 1.6);
+
+    expect(controller.resolveMovement([0, 1.6, 0], [0.1, 1.6, 0], 0.05)).toMatchObject({
+      connectionId: "east-lift",
+      started: true,
+      phase: "completed",
+      position: [0.1, 1.6, 0],
+    });
   });
 
   it("fails closed when collision response slides away from the authored path", () => {
@@ -67,5 +90,57 @@ describe("authored traversal controller", () => {
       connectionId: "east-lift",
       phase: "started",
     });
+  });
+
+  it("keeps legacy v8 traversal artifacts readable without granting v9 qualification", () => {
+    const legacy = parseDetourNavigationArtifact({
+      schemaVersion: "spatial-navigation-v8",
+      generator: { version: "0.43.1" },
+      agent: { radius: 0.25, height: 1.7, eyeHeight: 1.6 },
+      build: { cellSize: 0.1, cellHeight: 0.05 },
+      bounds: [[0, 0, 0], [2, 3, 2]],
+      spawn: { projectedPosition: [0, 0, 0] },
+      detour: { format: "recast-navigation-js-export-v1", bytesBase64: "AA==" },
+      dynamicBarriers: [],
+      offMeshConnections: [{
+        ...elevator,
+        label: undefined,
+        evidenceReceipt: {
+          assetId: elevator.evidenceReceipt.assetId,
+          sha256: elevator.evidenceReceipt.sha256,
+        },
+      }],
+    });
+    expect(legacy.offMeshConnections[0]).toMatchObject({
+      label: "Elevator traversal",
+      evidenceReceipt: {
+        assetId: elevator.evidenceReceipt.assetId,
+        sha256: elevator.evidenceReceipt.sha256,
+      },
+    });
+    expect(() => parseDetourNavigationArtifact({
+      ...legacy,
+      schemaVersion: "spatial-navigation-v9",
+      offMeshConnections: legacy.offMeshConnections.map((connection) => ({
+        ...connection,
+        label: undefined,
+      })),
+    })).toThrow("Navigation artifact is incomplete");
+    expect(() => parseDetourNavigationArtifact({
+      ...legacy,
+      schemaVersion: "spatial-navigation-v8",
+      offMeshConnections: [{ ...elevator }],
+    })).toThrow("Navigation artifact is incomplete");
+    expect(() => parseDetourNavigationArtifact({
+      ...legacy,
+      schemaVersion: "spatial-navigation-v8",
+      offMeshConnections: [{
+        ...elevator,
+        evidenceReceipt: {
+          ...elevator.evidenceReceipt,
+          adapter: undefined,
+        },
+      }],
+    })).toThrow("Navigation artifact is incomplete");
   });
 });

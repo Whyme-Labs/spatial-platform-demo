@@ -768,13 +768,13 @@
       <div class="mock-form-grid">
         <label><span>Traversal type</span><select name="traversalKind" required><option value="elevator">Elevator</option><option value="ladder">Ladder</option><option value="moving_platform">Moving platform</option></select></label>
         <label><span>Label</span><input name="label" required placeholder="East lift" /></label>
-        <label class="full"><span>Immutable evidence asset</span><select id="navigationTraversalEvidenceAsset" name="evidenceAssetId" required></select></label>
+        <label class="full"><span>Accepted capture-manifest evidence</span><select id="navigationTraversalEvidenceAsset" name="evidenceReceipt" required></select></label>
         <label class="full"><span>Controlled path (x, y, z; one feet-level point per line)</span><textarea name="path" required placeholder="1.5, 0, 2&#10;1.5, 3, 2&#10;3, 3, 2"></textarea></label>
         <label><span>Travel speed (<span id="navigationTraversalUnit">metres</span>/second)</span><input name="speedUnitsPerSecond" type="number" min="0" step="any" required /></label>
         <label class="checkbox-row"><input name="bidirectional" type="checkbox" checked /><span>Allow both directions</span></label>
         <label class="full"><span>Review receipt</span><textarea name="reviewedPurpose" required placeholder="Explain what the selected immutable asset proves and why this path is safe to traverse."></textarea></label>
       </div>
-      <p class="field-note">The processor projects both landings onto Recast, proves route topology, then sweeps the production Rapier capsule through every path segment and allowed direction. A blocked path cannot reach review or publication.</p>
+      <p class="field-note">Only an accepted, non-blocked capture contract can support this authored path. The processor projects both landings onto Recast, proves route topology, then sweeps the production Rapier capsule through every path segment and allowed direction. A blocked path cannot reach review or publication.</p>
       <button class="primary-button wide" type="submit">Author traversal</button>
       <p id="navigationTraversalError" class="form-error" role="alert"></p>
     </form>

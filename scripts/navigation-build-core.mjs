@@ -11,7 +11,8 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const LEGACY_SCHEMA_VERSION = "spatial-navigation-v6";
 const STRUCTURAL_SCHEMA_VERSION = "spatial-navigation-v7";
-const AUTHORED_TRAVERSAL_SCHEMA_VERSION = "spatial-navigation-v8";
+const LEGACY_AUTHORED_TRAVERSAL_SCHEMA_VERSION = "spatial-navigation-v8";
+const AUTHORED_TRAVERSAL_SCHEMA_VERSION = "spatial-navigation-v9";
 const GENERATOR_VERSION = "0.43.1";
 const NATIVE_RECAST_COMMIT = "599fd0f023181c0a484df2a18cf1d75a3553852e";
 const MAX_COLLISION_GLB_BYTES = 256 * 1024 * 1024;
@@ -379,6 +380,7 @@ export async function buildRecastNavigationArtifact(input) {
     );
     const frozenTraversals = authoredTraversals.map((connection) => ({
       ...connection,
+      requestedStartPosition: [...connection.startPosition],
       startPosition: vectorTuple(projectRequired(
         query,
         connection.startPosition,
@@ -386,6 +388,7 @@ export async function buildRecastNavigationArtifact(input) {
         Math.max(maximumProjectionDistance, connection.radius),
         `${connection.id}:start`,
       ).point),
+      requestedEndPosition: [...connection.endPosition],
       endPosition: vectorTuple(projectRequired(
         query,
         connection.endPosition,
@@ -581,6 +584,7 @@ export async function importNavigationArtifact(artifact) {
   if (!artifact || ![
     LEGACY_SCHEMA_VERSION,
     STRUCTURAL_SCHEMA_VERSION,
+    LEGACY_AUTHORED_TRAVERSAL_SCHEMA_VERSION,
     AUTHORED_TRAVERSAL_SCHEMA_VERSION,
   ].includes(
     artifact.schemaVersion,
@@ -912,6 +916,7 @@ function canonicalOffMeshConnections(values, agent) {
   return values.map((value) => {
     const id = typeof value?.id === "string" ? value.id.trim() : "";
     const traversalKind = value?.traversalKind;
+    const label = typeof value?.label === "string" ? value.label.trim() : "";
     const startPosition = point3(value?.startPosition) ? [...value.startPosition] : null;
     const endPosition = point3(value?.endPosition) ? [...value.endPosition] : null;
     const controlPoints = Array.isArray(value?.controlPoints) &&
@@ -929,10 +934,26 @@ function canonicalOffMeshConnections(values, agent) {
     const evidenceSha256 = typeof value?.evidenceReceipt?.sha256 === "string"
       ? value.evidenceReceipt.sha256.trim().toLowerCase()
       : "";
+    const evidenceManifestId = typeof value?.evidenceReceipt?.manifestId === "string"
+      ? value.evidenceReceipt.manifestId.trim()
+      : "";
+    const evidenceManifestSha256 = typeof value?.evidenceReceipt?.manifestSha256 === "string"
+      ? value.evidenceReceipt.manifestSha256.trim().toLowerCase()
+      : "";
+    const evidenceAdapter = typeof value?.evidenceReceipt?.adapter === "string"
+      ? value.evidenceReceipt.adapter.trim()
+      : "";
+    const evidenceReviewGeneration = Number(value?.evidenceReceipt?.reviewGeneration);
     if (!id || ids.has(id)) {
       throw new NavigationBuildError(
         "INVALID_AUTHORED_TRAVERSAL",
         `Authored traversal id ${id || "unknown"} is missing or duplicated`,
+      );
+    }
+    if (!label) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} requires a visible label`,
       );
     }
     if (!["elevator", "ladder", "moving_platform"].includes(traversalKind)) {
@@ -972,10 +993,15 @@ function canonicalOffMeshConnections(values, agent) {
         `Authored traversal ${id} requires directionality and a reviewed purpose`,
       );
     }
-    if (!evidenceAssetId || !/^[a-f0-9]{64}$/i.test(evidenceSha256)) {
+    if (
+      !evidenceAssetId || !/^[a-f0-9]{64}$/i.test(evidenceSha256) ||
+      !evidenceManifestId || !/^[a-f0-9]{64}$/i.test(evidenceManifestSha256) ||
+      !evidenceAdapter || !Number.isSafeInteger(evidenceReviewGeneration) ||
+      evidenceReviewGeneration < 1
+    ) {
       throw new NavigationBuildError(
         "INVALID_AUTHORED_TRAVERSAL",
-        `Authored traversal ${id} requires an immutable evidence asset id and SHA-256 receipt`,
+        `Authored traversal ${id} requires an immutable evidence asset and accepted capture-manifest receipt`,
       );
     }
     for (const [name, raw, minimum, maximum] of [
@@ -994,6 +1020,7 @@ function canonicalOffMeshConnections(values, agent) {
     return {
       id,
       traversalKind,
+      label,
       startPosition,
       endPosition,
       controlPoints,
@@ -1007,6 +1034,10 @@ function canonicalOffMeshConnections(values, agent) {
       evidenceReceipt: {
         assetId: evidenceAssetId,
         sha256: evidenceSha256,
+        manifestId: evidenceManifestId,
+        manifestSha256: evidenceManifestSha256,
+        adapter: evidenceAdapter,
+        reviewGeneration: evidenceReviewGeneration,
       },
     };
   });

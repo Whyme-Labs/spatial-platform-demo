@@ -71,6 +71,30 @@ describe("Unreal-equivalent navigation artifact", () => {
     );
   });
 
+  it("keeps legacy v8 artifacts readable in the offline importer", async () => {
+    const positions = [];
+    const indices = [];
+    appendFloor(positions, indices, 0, 0, 4, 4);
+    const artifact = await buildRecastNavigationArtifact({
+      positions,
+      indices,
+      source: {
+        assetId: "legacy-v8-collision",
+        sha256: "8".repeat(64),
+        authoringHash: "9".repeat(64),
+        worldUnit: "metres",
+      },
+      agent: profile,
+      build,
+      spawn: { id: "opening", position: [2, 0, 2] },
+      destinations: [],
+    });
+    const legacyV8Artifact = { ...artifact, schemaVersion: "spatial-navigation-v8" };
+    const runtime = await importNavigationArtifact(legacyV8Artifact);
+    assert.deepEqual(runtime.project([2, 0, 2]), [2, 0.05, 2]);
+    runtime.destroy();
+  });
+
   it("builds a reviewed elevator link between disconnected floors", async () => {
     const positions = [];
     const indices = [];
@@ -108,8 +132,9 @@ describe("Unreal-equivalent navigation artifact", () => {
       offMeshConnections: [{
         id: "east-lift",
         traversalKind: "elevator",
-        startPosition: [1.3, 0.05, 2],
-        endPosition: [3.7, 3.05, 2],
+        label: "East lift",
+        startPosition: [1.3, 0, 2],
+        endPosition: [3.7, 3, 2],
         controlPoints: [[1.75, 0.05, 2], [1.75, 3.05, 2], [3.3, 3.05, 2]],
         radius: 0.22,
         bidirectional: true,
@@ -121,12 +146,20 @@ describe("Unreal-equivalent navigation artifact", () => {
         evidenceReceipt: {
           assetId: "11111111-1111-4111-8111-111111111111",
           sha256: "a".repeat(64),
+          manifestId: "22222222-2222-4222-8222-222222222222",
+          manifestSha256: "b".repeat(64),
+          adapter: "xgrids-lcc",
+          reviewGeneration: 1,
         },
       }],
     });
 
-    assert.equal(artifact.schemaVersion, "spatial-navigation-v8");
+    assert.equal(artifact.schemaVersion, "spatial-navigation-v9");
     assert.equal(artifact.offMeshConnections[0].id, "east-lift");
+    assert.deepEqual(artifact.offMeshConnections[0].requestedStartPosition, [1.3, 0, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].requestedEndPosition, [3.7, 3, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].startPosition, [1.3, 0.05, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].endPosition, [3.7, 3.05, 2]);
     assert.equal(artifact.validation.componentCount, 1);
     assert.equal(artifact.validation.destinations[0].reachable, true);
     const traversalValidation = await validateAuthoredTraversals({
