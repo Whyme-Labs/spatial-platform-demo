@@ -31,7 +31,7 @@
     "processor:start": "node scripts/processing-agent.mjs",
     "capture-agent:once": "node scripts/capture-transfer-agent.mjs --once",
     "capture-agent:start": "node scripts/capture-transfer-agent.mjs",
-    "processor:container:build": "docker build --platform linux/amd64 -f processor/Dockerfile -t spatial-processor:0.9.0 .",
+    "processor:container:build": "docker build --platform linux/amd64 -f processor/Dockerfile -t spatial-processor:0.10.0 .",
     "processor:pdal:verify": "node scripts/verify-pdal-container.mjs",
     "processor:cloud:dry-run": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy -c wrangler.processor.jsonc --env production --dry-run",
     "processor:cloud:staging": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy -c wrangler.processor.jsonc --env staging",

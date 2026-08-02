@@ -15,10 +15,12 @@ verified point-cloud asset in private R2
   -> idempotent D1 extraction/job records
   -> lease-bound processor download and SHA-256 verification
   -> native PLY or pinned PDAL normalisation
-  -> bounded room, wall, and opening proposal
+  -> bounded level, ceiling, room, wall, opening, and stair/ramp proposal
   -> immutable proposal report in private R2
+  -> optional proposal-only structural/navigation preview when the captured shell is complete
   -> required operator correction and decision
   -> immutable approved indicative revision in D1
+  -> recooked collision GLB and navigation build bound to revision ID + plan hash
   -> hash-bound SVG, PDF, and DXF in private R2
 ```
 
@@ -31,8 +33,8 @@ survey by changing a label or export format.
 
 | System | Responsibility |
 |---|---|
-| R2 | Immutable source point clouds, processor proposal reports, and private SVG/PDF/DXF deliverables |
-| D1 | Extraction/job states, source evidence, proposal/revision hashes, operator decisions, export batches, asset metadata, and audit links |
+| R2 | Immutable source point clouds, processor proposal reports, proposal/reviewed collision GLBs, navigation artifacts, and private SVG/PDF/DXF deliverables |
+| D1 | Extraction/job states, source evidence, proposal/revision hashes, revision-bound navigation identity, operator decisions, export batches, asset metadata, and audit links |
 | KV | No source geometry or authoritative workflow state; KV remains appropriate only for bounded ephemeral/cache use |
 
 Files are not stored in D1 or KV. D1 rows refer to R2 object keys and retain
@@ -59,13 +61,20 @@ are not supported. A scanner export should therefore use Cartesian E57.
 
 The first production extractor uses bounded metric occupancy:
 
-1. infer a credible floor elevation;
-2. identify cells with sufficient vertical wall support;
-3. close bounded gaps only for room segmentation;
-4. derive candidate room polygons and wall centre lines;
-5. preserve bounded gaps as opening candidates;
-6. require an operator to correct labels, polygons, wall geometry, opening
-   type, and wall associations.
+1. infer distinct credible floor elevations;
+2. match captured horizontal ceiling support to each floor without deriving a
+   ceiling from wall height;
+3. identify cells with sufficient vertical wall support;
+4. close bounded gaps only for room segmentation;
+5. derive candidate room polygons and wall centre lines;
+6. preserve bounded gaps as same-level opening candidates;
+7. infer continuous stair/ramp surfaces between adjacent levels; and
+8. require an operator to correct level/ceiling evidence, labels, polygons,
+   wall geometry, opening type/associations, and connectors.
+
+Missing ceiling support does not discard the floor-plan proposal, but it blocks
+the automatic collision preview until the operator supplies reviewed evidence.
+The system never substitutes maximum wall height as an imaginary ceiling.
 
 The server rejects an approved plan containing duplicate identifiers,
 self-intersecting room polygons, degenerate walls/openings, inconsistent
@@ -93,6 +102,8 @@ POST /api/projects/:projectId/spatial/floorplan-extractions
 
 POST /api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review
   approved -> new APPROVED revision
+           -> new operator-reviewed collision asset
+           -> new hash-bound navigation build
   rejected -> no revision
 
 POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/exports
@@ -107,6 +118,11 @@ Lease, retry, cancel, worker failure, and completion states are persisted. The
 Studio disables related controls while an operation is pending, retains the
 operator's inputs on failure, exposes retry/cancel actions only when valid,
 and polls only while an extraction is active.
+
+A navigation build produced directly from the machine proposal is a preview
+only and cannot be approved. Only the recooked build whose immutable parameters
+name the approved floor-plan revision ID and exact plan hash can enter the
+navigation approval and publication path.
 
 ## Open-corpus evidence
 

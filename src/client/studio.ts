@@ -407,6 +407,35 @@ type ComparisonCameraPose = {
   up: [number, number, number];
   fovDegrees: number;
 };
+type VersionRenderable = {
+  versionId: string;
+  assetId: string;
+  format: "rad" | "spz" | "sog";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string | null;
+  contentUrl: string;
+  sessionExpiresAt: string;
+  viewer: {
+    splatBudgetMillions?: number;
+    defaultMovementMode?: "walk" | "fly";
+    sceneRotationDegrees?: [number, number, number];
+    sourceToWorld?: {
+      sourceUpAxis: "Y" | "Z";
+      worldUnit?: WorldUnit;
+      metresPerSourceUnit: number;
+      yawDegrees: number;
+      translationMetres: [number, number, number];
+    };
+    initialCamera?: {
+      position: [number, number, number];
+      target: [number, number, number];
+      up?: [number, number, number];
+      fovDegrees?: number;
+    };
+  } | null;
+};
 type VersionComparison = {
   requested: { left: string; right: string };
   versions: Array<Version & {
@@ -422,35 +451,7 @@ type VersionComparison = {
   reviewDecisions: Array<{ version_id: string; decision: string; count: number; latest_at: string }>;
   reviewDecisionHistory: Array<ReviewDecision & { version_id: string }>;
   reviewCommentHistory: Array<ReviewComment & { version_id: string }>;
-  renderables: Array<{
-    versionId: string;
-    assetId: string;
-    format: "rad" | "spz" | "sog";
-    fileName: string;
-    mimeType: string;
-    sizeBytes: number;
-    sha256: string | null;
-    contentUrl: string;
-    sessionExpiresAt: string;
-    viewer: {
-      splatBudgetMillions?: number;
-      defaultMovementMode?: "walk" | "fly";
-      sceneRotationDegrees?: [number, number, number];
-      sourceToWorld?: {
-        sourceUpAxis: "Y" | "Z";
-        worldUnit?: WorldUnit;
-        metresPerSourceUnit: number;
-        yawDegrees: number;
-        translationMetres: [number, number, number];
-      };
-      initialCamera?: {
-        position: [number, number, number];
-        target: [number, number, number];
-        up?: [number, number, number];
-        fovDegrees?: number;
-      };
-    } | null;
-  }>;
+  renderables: VersionRenderable[];
 };
 type HostingPlan = {
   code: string;
@@ -1493,8 +1494,10 @@ function bindInterface(): void {
   byId("newProjectButton").addEventListener("click", () => {
     projectOperationId = crypto.randomUUID();
     byId("projectError").textContent = "";
-    renderProjectTemplateOptions();
+    byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
+    byId("newProjectStatus").textContent = "Ready to upload.";
     renderProjectCustomFieldForm("newProjectCustomFields", {});
+    renderNewCaptureHelp();
     newProjectDialog.showModal();
   });
   byId("portfolioToolsButton").addEventListener("click", () => {
@@ -1507,11 +1510,9 @@ function bindInterface(): void {
     portfolioToolsDialog.showModal();
     void loadRecentAssetHandoff();
   });
-  byId<HTMLSelectElement>("newProjectTemplate").addEventListener("change", (event) => {
-    const select = event.currentTarget;
-    if (!(select instanceof HTMLSelectElement)) return;
-    applyProjectTemplateToForm(select.value, newProjectForm);
-  });
+  byId<HTMLSelectElement>("newCaptureAdapter").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLInputElement>("newCaptureAsset").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLInputElement>("newCaptureGeometry").addEventListener("change", renderNewCaptureHelp);
   const projectSearch = byId<HTMLInputElement>("projectSearch");
   const projectAdapterFilter = byId<HTMLSelectElement>("projectAdapterFilter");
   const projectDeliveryFilter = byId<HTMLSelectElement>("projectDeliveryFilter");
@@ -1915,9 +1916,9 @@ function bindInterface(): void {
       key: "create-project",
       trigger: newProjectSubmit,
       form: newProjectForm,
-      pendingLabel: "Creating project…",
+      pendingLabel: "Uploading capture…",
       errorTarget: byId("projectError"),
-    }, () => createProject(form));
+    }, () => createCapture(form));
   });
   const editProjectSubmit = editProjectForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   editProjectForm.addEventListener("submit", (event) => {
@@ -1944,6 +1945,10 @@ function bindInterface(): void {
     const file = uploadAssetInput.files?.[0];
     if (!file) return;
     const extension = file.name.split(".").at(-1)?.toLowerCase();
+    if (extension && portableCaptureFormats.includes(extension as typeof portableCaptureFormats[number])) {
+      uploadPurpose.value = extension === "rad" ? "web_scene" : "gaussian_splat";
+      syncUploadPurpose(uploadPurpose.value as CaptureAssetPurpose);
+    }
     const format = byId<HTMLSelectElement>("uploadFormat");
     if (extension && Array.from(format.options).some((option) => option.value === extension)) {
       format.value = extension;
@@ -2882,13 +2887,16 @@ function activateView(
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === view);
   });
+  const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
+  if (advancedNavigation) advancedNavigation.open = !["projects", "releases"].includes(view);
   const projectsVisible = view === "projects";
   const jobsVisible = view === "jobs";
   byId("summaryGrid").hidden = !projectsVisible;
   byId("studioGrid").hidden = !["projects", "jobs"].includes(view);
   byId("studioGrid").classList.toggle("jobs-only", jobsVisible);
+  byId("studioGrid").classList.toggle("projects-only", projectsVisible);
   byId("projectBoard").hidden = jobsVisible;
-  byId("queuePanel").hidden = false;
+  byId("queuePanel").hidden = !jobsVisible;
   byId("projectDetail").hidden = !projectsVisible || state.selected === null;
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
@@ -2897,19 +2905,19 @@ function activateView(
   byId("hostingWorkspace").hidden = view !== "hosting";
   byId("teamWorkspace").hidden = view !== "team";
   byId<HTMLButtonElement>("newProjectButton").hidden = !projectsVisible || isReviewer();
-  byId<HTMLButtonElement>("portfolioToolsButton").hidden = !projectsVisible || isReviewer();
+  byId<HTMLButtonElement>("portfolioToolsButton").hidden = true;
   const headings = {
     projects: {
-      eyebrow: "POST-CAPTURE CONTROL PLANE",
-      title: "From immutable source to approved spatial release.",
+      eyebrow: "CAPTURE TO PREVIEW",
+      title: "Upload once. Preview the processed splat. Edit only when needed.",
     },
     jobs: {
       eyebrow: "PROCESSING OPERATIONS",
       title: "Durable jobs with visible progress and accountable outcomes.",
     },
     releases: {
-      eyebrow: "DELIVERY OPERATIONS",
-      title: "Every published scene has a version, owner, and lifecycle.",
+      eyebrow: "PUBLISHED PREVIEWS",
+      title: "Shareable scene URLs and their release history.",
     },
     reviews: {
       eyebrow: "CLIENT APPROVAL",
@@ -3162,7 +3170,77 @@ async function reconcileBillingCheckoutReturn(): Promise<void> {
   );
 }
 
-async function createProject(form: FormData): Promise<void> {
+const portableCaptureFormats = ["ply", "spz", "sog", "splat", "ksplat", "rad"] as const;
+const metricGeometryFormats = ["ply", "e57", "las", "laz", "pts"] as const;
+
+function portableCapturePlan(file: File): {
+  format: typeof portableCaptureFormats[number];
+  purpose: "gaussian_splat" | "web_scene";
+} {
+  const extension = file.name.split(".").at(-1)?.toLowerCase();
+  if (!extension || !portableCaptureFormats.includes(extension as typeof portableCaptureFormats[number])) {
+    throw new Error("Choose a portable PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD export.");
+  }
+  const format = extension as typeof portableCaptureFormats[number];
+  return { format, purpose: format === "rad" ? "web_scene" : "gaussian_splat" };
+}
+
+function metricGeometryPlan(file: File): {
+  format: typeof metricGeometryFormats[number];
+  purpose: "metric_point_cloud";
+} {
+  const extension = file.name.split(".").at(-1)?.toLowerCase();
+  if (!extension || !metricGeometryFormats.includes(extension as typeof metricGeometryFormats[number])) {
+    throw new Error("Choose a registered metric PLY, E57, LAS, LAZ, or PTS point cloud.");
+  }
+  return {
+    format: extension as typeof metricGeometryFormats[number],
+    purpose: "metric_point_cloud",
+  };
+}
+
+function renderNewCaptureHelp(): void {
+  const adapter = byId<HTMLSelectElement>("newCaptureAdapter").value;
+  const file = byId<HTMLInputElement>("newCaptureAsset").files?.[0];
+  const geometryInput = byId<HTMLInputElement>("newCaptureGeometry");
+  const geometry = geometryInput.files?.[0];
+  const vendorCapture = adapter === "xgrids-lcc" || adapter === "fjd-trion";
+  geometryInput.required = vendorCapture;
+  const source = adapter === "xgrids-lcc"
+    ? "XGRIDS"
+    : adapter === "fjd-trion"
+      ? "FJD"
+      : "portable";
+  let message = `${source} intake accepts a portable PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD export. Native project files remain supporting evidence and cannot create the preview alone.`;
+  if (file) {
+    try {
+      const plan = portableCapturePlan(file);
+      message = plan.purpose === "web_scene"
+        ? `${file.name} is a ready Spark scene. It will be verified and made available for private preview.`
+        : `${file.name} will be preserved as the Gaussian master and converted into a browser-ready Spark scene.`;
+    } catch (error) {
+      message = errorMessage(error);
+    }
+  }
+  byId("newCaptureHelp").textContent = message;
+  byId("newCaptureGeometryHelp").textContent = geometry
+    ? `${geometry.name} will be verified, then used to generate the floor plan, structural collision draft, and navigation draft automatically.`
+    : vendorCapture
+      ? "Required for automatic floor-plan and navigation generation. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS from the device workflow."
+      : "Optional. Add registered metric geometry to generate floor-plan and navigation drafts automatically.";
+}
+
+async function createCapture(form: FormData): Promise<void> {
+  const file = form.get("capture");
+  if (!(file instanceof File)) throw new Error("Choose a portable capture result to upload.");
+  const plan = portableCapturePlan(file);
+  const geometryFile = form.get("geometry");
+  const geometry = geometryFile instanceof File && geometryFile.size > 0 ? geometryFile : null;
+  const adapter = String(form.get("captureAdapter") ?? "open-import");
+  if ((adapter === "xgrids-lcc" || adapter === "fjd-trion") && !geometry) {
+    throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
+  }
+  const geometryPlan = geometry ? metricGeometryPlan(geometry) : null;
   projectOperationId ??= crypto.randomUUID();
   try {
     const result = await api<{ project: { id: string } }>("/api/projects", {
@@ -3171,21 +3249,52 @@ async function createProject(form: FormData): Promise<void> {
         clientOperationId: projectOperationId,
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")),
-        captureAdapter: String(form.get("captureAdapter") ?? "open-import"),
-        deliveryTemplate: String(form.get("deliveryTemplate") ?? "Property showcase"),
+        captureAdapter: adapter,
+        deliveryTemplate: "Property showcase",
         notes: optionalString(form.get("notes")),
         customFields: projectCustomFieldsFromForm(byId("newProjectCustomFields")),
       }),
     });
-    newProjectDialog.close();
-    projectOperationId = null;
-    byId<HTMLFormElement>("newProjectForm").reset();
-    showToast("Project created");
+    byId("newProjectStatus").textContent = "Project created. Starting resumable upload…";
     await refreshAll();
     activateView("projects");
     await selectProject(result.project.id);
+    const upload = new FormData();
+    upload.set("asset", file);
+    upload.set("format", plan.format);
+    upload.set("purpose", plan.purpose);
+    const primary = await uploadAsset(upload, {
+      status: byId("newProjectStatus"),
+      progress: byId<HTMLElement>("newProjectUploadProgress"),
+      error: byId("projectError"),
+      closeDialog: geometry ? undefined : newProjectDialog,
+      successToast: geometry
+        ? "Visual capture uploaded; adding spatial geometry"
+        : "Capture uploaded; processing started",
+    });
+    if (geometry && geometryPlan) {
+      byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
+      byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
+      const spatialUpload = new FormData();
+      spatialUpload.set("asset", geometry);
+      spatialUpload.set("format", geometryPlan.format);
+      spatialUpload.set("purpose", geometryPlan.purpose);
+      await uploadAsset(spatialUpload, {
+        status: byId("newProjectStatus"),
+        progress: byId<HTMLElement>("newProjectUploadProgress"),
+        error: byId("projectError"),
+        closeDialog: newProjectDialog,
+        successToast: "Capture uploaded; splat, floor plan, and navigation processing started",
+      }, { targetVersionId: primary.asset.versionId });
+    }
+    projectOperationId = null;
+    window.setTimeout(() => {
+      byId<HTMLFormElement>("newProjectForm").reset();
+      renderNewCaptureHelp();
+    }, 950);
   } catch (error) {
     byId("projectError").textContent = errorMessage(error);
+    throw error;
   }
 }
 
@@ -3325,25 +3434,14 @@ async function refreshProjectPortfolioMetadata(): Promise<void> {
 }
 
 function renderProjectTemplateOptions(): void {
-  const select = byId<HTMLSelectElement>("newProjectTemplate");
+  const select = document.getElementById("newProjectTemplate");
+  if (!(select instanceof HTMLSelectElement)) return;
   const selected = select.value;
   select.replaceChildren(new Option("No template - choose settings below", ""));
   for (const template of state.projectTemplates) {
     select.append(new Option(template.name, template.id));
   }
   select.value = state.projectTemplates.some((template) => template.id === selected) ? selected : "";
-}
-
-function applyProjectTemplateToForm(templateId: string, form: HTMLFormElement): void {
-  const template = state.projectTemplates.find((candidate) => candidate.id === templateId);
-  if (!template) return;
-  const captureAdapter = form.elements.namedItem("captureAdapter");
-  const deliveryTemplate = form.elements.namedItem("deliveryTemplate");
-  const notes = form.elements.namedItem("notes");
-  if (captureAdapter instanceof HTMLSelectElement) captureAdapter.value = template.captureAdapter;
-  if (deliveryTemplate instanceof HTMLSelectElement) deliveryTemplate.value = template.deliveryTemplate;
-  if (notes instanceof HTMLTextAreaElement) notes.value = template.notes ?? "";
-  byId("projectError").textContent = "";
 }
 
 function renderPortfolioTools(): void {
@@ -4377,7 +4475,7 @@ function renderProjects(): void {
     const identity = element("span", "project-identity");
     const icon = element("b", "project-icon property", project.name.slice(0, 1).toUpperCase());
     const name = element("span");
-    name.append(element("strong", "", project.name), element("small", "", project.customerName ?? project.deliveryTemplate));
+    name.append(element("strong", "", project.name), element("small", "", project.customerName ?? "Capture project"));
     identity.append(icon, name);
     const stage = element("span");
     stage.append(element("i", `state ${statusClass(project.status)}`), document.createTextNode(humanStatus(project.status)));
@@ -5940,7 +6038,7 @@ function renderVersionComparison(comparison: VersionComparison): void {
     elements.frame.hidden = false;
     elements.retry.hidden = true;
     setComparisonSideStatus(side, "Starting Spark…", "");
-    elements.frame.src = comparisonRendererUrl(renderable).toString();
+    elements.frame.src = versionRendererUrl(renderable).toString();
     elements.frame.dataset.generation = String(comparisonGeneration);
     comparisonFrameTimeouts[side] = window.setTimeout(() => {
       if (comparisonFrameReady[side] || !versionComparisonDialog.open) return;
@@ -5952,7 +6050,7 @@ function renderVersionComparison(comparison: VersionComparison): void {
   finishComparisonLoadingIfSettled();
 }
 
-function comparisonRendererUrl(renderable: VersionComparison["renderables"][number]): URL {
+function versionRendererUrl(renderable: VersionRenderable): URL {
   const url = new URL("/renderer/index.html", location.origin);
   url.searchParams.set("content", renderable.contentUrl);
   url.searchParams.set("format", renderable.format);
@@ -6860,10 +6958,16 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
     if (summary) {
       const metrics = element("div", "floorplan-run-metrics");
       metrics.append(
+        ...(summary.levelCount === null ? [] : [
+          element("span", "", `${summary.levelCount} level${summary.levelCount === 1 ? "" : "s"}`),
+        ]),
         element("span", "", `${summary.roomCount} room${summary.roomCount === 1 ? "" : "s"}`),
         element("span", "", `${summary.wallCount} wall run${summary.wallCount === 1 ? "" : "s"}`),
         element("span", "", `${summary.openingCount} opening candidate${summary.openingCount === 1 ? "" : "s"}`),
         element("span", "", `${summary.totalRoomAreaM2.toFixed(2)} m² indicative`),
+        ...(summary.connectorCount === null ? [] : [
+          element("span", "", `${summary.connectorCount} stair/ramp connector${summary.connectorCount === 1 ? "" : "s"}`),
+        ]),
       );
       card.append(metrics);
     }
@@ -7317,6 +7421,7 @@ type EditableFloorplan = {
     id: string;
     label: string;
     elevationM: number;
+    ceilingElevationM: number | null;
     rooms: Array<{ id: string; label: string; points: Array<[number, number]> }>;
     walls: Array<{
       id: string;
@@ -7336,6 +7441,14 @@ type EditableFloorplan = {
       widthM: number;
       heightM: number | null;
     }>;
+  }>;
+  connectors: Array<{
+    id: string;
+    label: string;
+    type: "stairs" | "ramp" | "unknown";
+    lowerLevelId: string;
+    upperLevelId: string;
+    points: Array<[number, number, number]>;
   }>;
 };
 
@@ -7424,6 +7537,8 @@ function floorplanProposalSummary(value: string | null): {
   wallCount: number;
   openingCount: number;
   totalRoomAreaM2: number;
+  levelCount: number | null;
+  connectorCount: number | null;
 } | null {
   if (!value) return null;
   try {
@@ -7437,7 +7552,13 @@ function floorplanProposalSummary(value: string | null): {
     if ([roomCount, wallCount, openingCount, totalRoomAreaM2].some((item) => !Number.isFinite(item))) {
       return null;
     }
-    return { roomCount, wallCount, openingCount, totalRoomAreaM2 };
+    const rawLevelCount = Reflect.get(summary, "levelCount");
+    const rawConnectorCount = Reflect.get(summary, "connectorCount");
+    const levelCount = rawLevelCount === undefined ? null : Number(rawLevelCount);
+    const connectorCount = rawConnectorCount === undefined ? null : Number(rawConnectorCount);
+    if ((levelCount !== null && !Number.isFinite(levelCount)) ||
+      (connectorCount !== null && !Number.isFinite(connectorCount))) return null;
+    return { roomCount, wallCount, openingCount, totalRoomAreaM2, levelCount, connectorCount };
   } catch {
     return null;
   }
@@ -7476,6 +7597,8 @@ function floorplanProposalToEditablePlan(proposalJson: string): EditableFloorpla
   const rooms = Array.isArray(proposal.rooms) ? proposal.rooms : [];
   const walls = Array.isArray(proposal.walls) ? proposal.walls : [];
   const openings = Array.isArray(proposal.openings) ? proposal.openings : [];
+  const proposalLevels = Array.isArray(proposal.levels) ? proposal.levels : [];
+  const proposalConnectors = Array.isArray(proposal.connectors) ? proposal.connectors : [];
   if (!rooms.length || !walls.length) {
     throw new Error("The stored proposal has no reviewable rooms or walls.");
   }
@@ -7485,6 +7608,13 @@ function floorplanProposalToEditablePlan(proposalJson: string): EditableFloorpla
       ? Reflect.get(proposalSummary, "inferredFloorElevationM")
       : 0,
   );
+  const inferredCeiling = proposalSummary && typeof proposalSummary === "object"
+    ? Reflect.get(proposalSummary, "inferredCeilingElevationM")
+    : null;
+  const inferredCeilingElevationM = typeof inferredCeiling === "number" &&
+      Number.isFinite(inferredCeiling)
+    ? inferredCeiling
+    : null;
   const toPoint2 = (value: unknown): [number, number] => {
     if (!Array.isArray(value) || value.length !== 3) throw new Error("Proposal geometry is malformed.");
     const point = value.map(Number);
@@ -7493,57 +7623,132 @@ function floorplanProposalToEditablePlan(proposalJson: string): EditableFloorpla
     }
     return [point[0]!, point[2]!];
   };
+  const toPoint3 = (value: unknown): [number, number, number] => {
+    if (!Array.isArray(value) || value.length !== 3) throw new Error("Proposal geometry is malformed.");
+    const point = value.map(Number);
+    if (point.some((coordinate) => !Number.isFinite(coordinate))) {
+      throw new Error("Proposal geometry contains a non-finite coordinate.");
+    }
+    return [point[0]!, point[1]!, point[2]!];
+  };
+  const candidateKey = (candidate: unknown, property: string): string =>
+    candidate && typeof candidate === "object" ? String(Reflect.get(candidate, property) ?? "") : "";
+  const selectCandidates = (
+    candidates: unknown[],
+    property: string,
+    keys: unknown,
+    levelKey: string,
+  ): unknown[] => {
+    if (Array.isArray(keys)) {
+      const selected = new Set(keys.map(String));
+      return candidates.filter((candidate) => selected.has(candidateKey(candidate, property)));
+    }
+    return candidates.filter((candidate) => {
+      if (!candidate || typeof candidate !== "object") return false;
+      const evidence = Reflect.get(candidate, "evidence");
+      return evidence && typeof evidence === "object" &&
+        Reflect.get(evidence, "levelKey") === levelKey;
+    });
+  };
+  const editableRoom = (candidate: unknown, index: number) => {
+    const room = candidate as Record<string, unknown>;
+    const geometry = room.geometry as Record<string, unknown>;
+    if (!Array.isArray(geometry?.points)) throw new Error("A proposed room is missing its polygon.");
+    return {
+      id: String(room.roomKey ?? `room-${index + 1}`),
+      label: String(room.label ?? `Room ${index + 1}`),
+      points: geometry.points.map(toPoint2),
+    };
+  };
+  const editableWall = (candidate: unknown, index: number) => {
+    const wall = candidate as Record<string, unknown>;
+    const geometry = wall.geometry as Record<string, unknown>;
+    if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
+      throw new Error("A proposed wall is missing its endpoints.");
+    }
+    return {
+      id: String(wall.wallKey ?? `wall-${index + 1}`),
+      label: String(wall.label ?? `Wall ${index + 1}`),
+      start: toPoint2(geometry.points[0]),
+      end: toPoint2(geometry.points[1]),
+      thicknessM: Number(wall.thicknessM ?? 0.2),
+      heightM: Number(wall.heightM ?? 2.5),
+    };
+  };
+  const editableOpening = (candidate: unknown, index: number) => {
+    const opening = candidate as Record<string, unknown>;
+    const geometry = opening.geometry as Record<string, unknown>;
+    if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
+      throw new Error("A proposed opening is missing its endpoints.");
+    }
+    return {
+      id: String(opening.openingKey ?? `opening-${index + 1}`),
+      label: String(opening.label ?? `Opening ${index + 1}`),
+      type: "unknown" as const,
+      wallId: null,
+      start: toPoint2(geometry.points[0]),
+      end: toPoint2(geometry.points[1]),
+      widthM: Number(opening.widthM),
+      heightM: null,
+    };
+  };
+  const levels = proposalLevels.length
+    ? proposalLevels.map((candidate, index) => {
+        if (!candidate || typeof candidate !== "object") {
+          throw new Error("A proposed level is malformed.");
+        }
+        const level = candidate as Record<string, unknown>;
+        const levelKey = String(level.levelKey ?? `level-${index + 1}`);
+        return {
+          id: levelKey,
+          label: String(level.label ?? `Level ${index + 1}`),
+          elevationM: Number(level.elevationM),
+          ceilingElevationM: typeof level.ceilingElevationM === "number" &&
+              Number.isFinite(level.ceilingElevationM)
+            ? level.ceilingElevationM
+            : null,
+          rooms: selectCandidates(rooms, "roomKey", level.roomKeys, levelKey).map(editableRoom),
+          walls: selectCandidates(walls, "wallKey", level.wallKeys, levelKey).map(editableWall),
+          openings: selectCandidates(
+            openings,
+            "openingKey",
+            level.openingKeys,
+            levelKey,
+          ).map(editableOpening),
+        };
+      })
+    : [{
+        id: "level-1",
+        label: "Level 1",
+        elevationM: Number.isFinite(elevationM) ? elevationM : 0,
+        ceilingElevationM: inferredCeilingElevationM,
+        rooms: rooms.map(editableRoom),
+        walls: walls.map(editableWall),
+        openings: openings.map(editableOpening),
+      }];
   return {
     schemaVersion: "1.0.0",
     units: "metres",
     coordinateFrame: "registered_y_up_metric_frame",
-    levels: [{
-      id: "level-1",
-      label: "Level 1",
-      elevationM: Number.isFinite(elevationM) ? elevationM : 0,
-      rooms: rooms.map((candidate, index) => {
-        const room = candidate as Record<string, unknown>;
-        const geometry = room.geometry as Record<string, unknown>;
-        if (!Array.isArray(geometry?.points)) throw new Error("A proposed room is missing its polygon.");
-        return {
-          id: String(room.roomKey ?? `room-${index + 1}`),
-          label: String(room.label ?? `Room ${index + 1}`),
-          points: geometry.points.map(toPoint2),
-        };
-      }),
-      walls: walls.map((candidate, index) => {
-        const wall = candidate as Record<string, unknown>;
-        const geometry = wall.geometry as Record<string, unknown>;
-        if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
-          throw new Error("A proposed wall is missing its endpoints.");
-        }
-        return {
-          id: String(wall.wallKey ?? `wall-${index + 1}`),
-          label: String(wall.label ?? `Wall ${index + 1}`),
-          start: toPoint2(geometry.points[0]),
-          end: toPoint2(geometry.points[1]),
-          thicknessM: Number(wall.thicknessM ?? 0.2),
-          heightM: Number(wall.heightM ?? 2.5),
-        };
-      }),
-      openings: openings.map((candidate, index) => {
-        const opening = candidate as Record<string, unknown>;
-        const geometry = opening.geometry as Record<string, unknown>;
-        if (!Array.isArray(geometry?.points) || geometry.points.length !== 2) {
-          throw new Error("A proposed opening is missing its endpoints.");
-        }
-        return {
-          id: String(opening.openingKey ?? `opening-${index + 1}`),
-          label: String(opening.label ?? `Opening ${index + 1}`),
-          type: "unknown",
-          wallId: null,
-          start: toPoint2(geometry.points[0]),
-          end: toPoint2(geometry.points[1]),
-          widthM: Number(opening.widthM),
-          heightM: null,
-        };
-      }),
-    }],
+    levels,
+    connectors: proposalConnectors.map((candidate, index) => {
+      if (!candidate || typeof candidate !== "object") {
+        throw new Error("A proposed connector is malformed.");
+      }
+      const connector = candidate as Record<string, unknown>;
+      const geometry = connector.geometry as Record<string, unknown>;
+      if (!Array.isArray(geometry?.points)) {
+        throw new Error("A proposed connector is missing its surface.");
+      }
+      return {
+        id: String(connector.connectorKey ?? `connector-${index + 1}`),
+        label: String(connector.label ?? `Connector ${index + 1}`),
+        type: "unknown" as const,
+        lowerLevelId: String(connector.lowerLevelKey ?? ""),
+        upperLevelId: String(connector.upperLevelKey ?? ""),
+        points: geometry.points.map(toPoint3),
+      };
+    }),
   };
 }
 
@@ -7568,6 +7773,9 @@ function parseEditableFloorplan(value: string): EditableFloorplan {
   }
   const finitePoint = (point: unknown): point is [number, number] =>
     Array.isArray(point) && point.length === 2 && point.every((value) => Number.isFinite(value));
+  const finitePoint3 = (point: unknown): point is [number, number, number] =>
+    Array.isArray(point) && point.length === 3 && point.every((value) => Number.isFinite(value));
+  const levelIds = new Set<string>();
   for (const level of levels) {
     if (!level || typeof level !== "object") throw new Error("Every level must be an object.");
     if (
@@ -7576,6 +7784,14 @@ function parseEditableFloorplan(value: string): EditableFloorplan {
       !Array.isArray(Reflect.get(level, "openings"))
     ) {
       throw new Error("Every level needs room, wall, and opening arrays.");
+    }
+    const levelId = String(Reflect.get(level, "id") ?? "");
+    if (!levelId || levelIds.has(levelId)) throw new Error("Every level needs a unique id.");
+    levelIds.add(levelId);
+    const ceilingElevation = Reflect.get(level, "ceilingElevationM");
+    if (ceilingElevation !== null &&
+      (typeof ceilingElevation !== "number" || !Number.isFinite(ceilingElevation))) {
+      throw new Error("Every level ceilingElevationM must be a finite metre value or null.");
     }
     for (const room of Reflect.get(level, "rooms") as unknown[]) {
       const points = room && typeof room === "object" ? Reflect.get(room, "points") : null;
@@ -7589,6 +7805,23 @@ function parseEditableFloorplan(value: string): EditableFloorplan {
         !finitePoint(Reflect.get(wall, "start")) ||
         !finitePoint(Reflect.get(wall, "end"))
       ) throw new Error("Every wall needs finite start and end points.");
+    }
+  }
+  const connectorValue = Reflect.get(plan, "connectors");
+  const connectors = connectorValue === undefined ? [] : connectorValue;
+  if (!Array.isArray(connectors)) throw new Error("The corrected plan connectors must be an array.");
+  if (connectorValue === undefined) Reflect.set(plan, "connectors", connectors);
+  for (const connector of connectors) {
+    if (!connector || typeof connector !== "object") {
+      throw new Error("Every connector must be an object.");
+    }
+    const points = Reflect.get(connector, "points");
+    if (!Array.isArray(points) || points.length < 4 || !points.every(finitePoint3)) {
+      throw new Error("Every connector needs at least four finite [x, y, z] points.");
+    }
+    if (!levelIds.has(String(Reflect.get(connector, "lowerLevelId") ?? "")) ||
+      !levelIds.has(String(Reflect.get(connector, "upperLevelId") ?? ""))) {
+      throw new Error("Every connector must reference two levels in this plan.");
     }
   }
   return plan as EditableFloorplan;
@@ -7614,61 +7847,89 @@ function updateFloorplanReviewPreview(): void {
   preview.replaceChildren();
   try {
     const plan = parseEditableFloorplan(byId<HTMLTextAreaElement>("floorplanPlanEditor").value);
-    const level = plan.levels[0]!;
-    const allPoints = [
-      ...level.rooms.flatMap((room) => room.points),
-      ...level.walls.flatMap((wall) => [wall.start, wall.end]),
-      ...level.openings.flatMap((opening) => [opening.start, opening.end]),
-    ];
-    const minX = Math.min(...allPoints.map((point) => point[0]));
-    const maxX = Math.max(...allPoints.map((point) => point[0]));
-    const minZ = Math.min(...allPoints.map((point) => point[1]));
-    const maxZ = Math.max(...allPoints.map((point) => point[1]));
-    const width = 640;
-    const height = 400;
-    const padding = 28;
-    const scale = Math.min(
-      (width - padding * 2) / Math.max(0.1, maxX - minX),
-      (height - padding * 2) / Math.max(0.1, maxZ - minZ),
-    );
-    const x = (value: number) => padding + (value - minX) * scale;
-    const y = (value: number) => height - padding - (value - minZ) * scale;
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.setAttribute("role", "img");
-    svg.setAttribute("aria-label", `${level.label} floor-plan preview`);
-    for (const room of level.rooms) {
-      const polygon = document.createElementNS(svg.namespaceURI, "polygon");
-      polygon.setAttribute("points", room.points.map((point) => `${x(point[0])},${y(point[1])}`).join(" "));
-      polygon.setAttribute("class", "preview-room");
-      svg.append(polygon);
-      const center = room.points.reduce(
-        (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
-        [0, 0],
-      ).map((value) => value / room.points.length) as [number, number];
-      const label = document.createElementNS(svg.namespaceURI, "text");
-      label.setAttribute("x", String(x(center[0])));
-      label.setAttribute("y", String(y(center[1])));
-      label.setAttribute("class", "preview-label");
-      label.textContent = room.label;
-      svg.append(label);
+    for (const level of plan.levels) {
+      preview.append(floorplanLevelPreview(level, plan.connectors));
     }
-    for (const wall of level.walls) {
-      svg.append(floorplanPreviewLine(wall.start, wall.end, "preview-wall", x, y));
-    }
-    for (const opening of level.openings) {
-      svg.append(floorplanPreviewLine(opening.start, opening.end, "preview-opening", x, y));
-    }
-    preview.append(svg);
     validation.classList.remove("floorplan-json-invalid");
+    const roomCount = plan.levels.reduce((sum, level) => sum + level.rooms.length, 0);
+    const wallCount = plan.levels.reduce((sum, level) => sum + level.walls.length, 0);
+    const openingCount = plan.levels.reduce((sum, level) => sum + level.openings.length, 0);
     validation.textContent =
-      `${level.rooms.length} rooms · ${level.walls.length} walls · ${level.openings.length} openings` +
-      `${plan.levels.length > 1 ? ` · previewing first of ${plan.levels.length} levels` : ""}`;
+      `${plan.levels.length} levels · ${roomCount} rooms · ${wallCount} walls · ` +
+      `${openingCount} openings · ${plan.connectors.length} stair/ramp connectors`;
   } catch (error) {
     validation.classList.add("floorplan-json-invalid");
     validation.textContent = errorMessage(error);
     preview.append(emptyState("Fix the structured plan to restore the live preview."));
   }
+}
+
+function floorplanLevelPreview(
+  level: EditableFloorplan["levels"][number],
+  connectors: EditableFloorplan["connectors"],
+): HTMLElement {
+  const levelConnectors = connectors.filter((connector) =>
+    connector.lowerLevelId === level.id || connector.upperLevelId === level.id);
+  const allPoints = [
+    ...level.rooms.flatMap((room) => room.points),
+    ...level.walls.flatMap((wall) => [wall.start, wall.end]),
+    ...level.openings.flatMap((opening) => [opening.start, opening.end]),
+    ...levelConnectors.flatMap((connector) =>
+      connector.points.map((point) => [point[0], point[2]] as [number, number])),
+  ];
+  const minX = Math.min(...allPoints.map((point) => point[0]));
+  const maxX = Math.max(...allPoints.map((point) => point[0]));
+  const minZ = Math.min(...allPoints.map((point) => point[1]));
+  const maxZ = Math.max(...allPoints.map((point) => point[1]));
+  const width = 640;
+  const height = 400;
+  const padding = 28;
+  const scale = Math.min(
+    (width - padding * 2) / Math.max(0.1, maxX - minX),
+    (height - padding * 2) / Math.max(0.1, maxZ - minZ),
+  );
+  const x = (value: number) => padding + (value - minX) * scale;
+  const y = (value: number) => height - padding - (value - minZ) * scale;
+  const figure = document.createElement("figure");
+  figure.className = "floorplan-level-preview";
+  const caption = document.createElement("figcaption");
+  caption.textContent = `${level.label} · ${level.elevationM.toFixed(2)} m`;
+  figure.append(caption);
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${level.label} floor-plan preview`);
+  for (const room of level.rooms) {
+    const polygon = document.createElementNS(svg.namespaceURI, "polygon");
+    polygon.setAttribute("points", room.points.map((point) => `${x(point[0])},${y(point[1])}`).join(" "));
+    polygon.setAttribute("class", "preview-room");
+    svg.append(polygon);
+    const center = room.points.reduce(
+      (sum, point) => [sum[0] + point[0], sum[1] + point[1]] as [number, number],
+      [0, 0],
+    ).map((value) => value / room.points.length) as [number, number];
+    const label = document.createElementNS(svg.namespaceURI, "text");
+    label.setAttribute("x", String(x(center[0])));
+    label.setAttribute("y", String(y(center[1])));
+    label.setAttribute("class", "preview-label");
+    label.textContent = room.label;
+    svg.append(label);
+  }
+  for (const wall of level.walls) {
+    svg.append(floorplanPreviewLine(wall.start, wall.end, "preview-wall", x, y));
+  }
+  for (const opening of level.openings) {
+    svg.append(floorplanPreviewLine(opening.start, opening.end, "preview-opening", x, y));
+  }
+  for (const connector of levelConnectors) {
+    const polygon = document.createElementNS(svg.namespaceURI, "polygon");
+    polygon.setAttribute("points", connector.points
+      .map((point) => `${x(point[0])},${y(point[2])}`).join(" "));
+    polygon.setAttribute("class", "preview-connector");
+    svg.append(polygon);
+  }
+  figure.append(svg);
+  return figure;
 }
 
 function floorplanPreviewLine(
@@ -9560,6 +9821,38 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
   }
 }
 
+async function createVersionPreview(versionId: string): Promise<VersionRenderable> {
+  const project = state.selected?.project;
+  if (!project) throw new Error("Open a project before preparing its preview.");
+  const result = await api<{ renderable: VersionRenderable }>(
+    `/api/projects/${project.id}/versions/${versionId}/preview`,
+    { timeoutMs: 20_000, retries: 2 },
+  );
+  return result.renderable;
+}
+
+async function openVersionPreview(versionId: string): Promise<void> {
+  const previewWindow = window.open("about:blank", "_blank");
+  try {
+    const renderable = await createVersionPreview(versionId);
+    const url = versionRendererUrl(renderable).toString();
+    if (previewWindow) previewWindow.location.replace(url);
+    else window.open(url, "_blank", "noopener");
+  } catch (error) {
+    previewWindow?.close();
+    throw error;
+  }
+}
+
+async function copyVersionPreviewUrl(versionId: string): Promise<void> {
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard access is unavailable. Open the preview and copy its address instead.");
+  }
+  const renderable = await createVersionPreview(versionId);
+  await navigator.clipboard.writeText(versionRendererUrl(renderable).toString());
+  showToast("Private preview URL copied");
+}
+
 function renderProjectDetail(): void {
   const detail = state.selected;
   if (!detail) return;
@@ -9567,13 +9860,171 @@ function renderProjectDetail(): void {
   byId("detailTitle").textContent = detail.project.name;
   byId("detailStatus").textContent = humanStatus(detail.project.status);
   const body = byId("detailBody");
+  body.className = "project-detail-flow";
   body.replaceChildren();
+
+  const renderableVersion = detail.versions.find((version) =>
+    detail.assets.some((asset) =>
+      asset.version_id === version.id &&
+      asset.kind === "web" &&
+      asset.integrity_status === "verified" &&
+      ["rad", "spz", "sog"].includes(asset.format)
+    )
+  ) ?? null;
+  const activeJob = detail.jobs.find((job) => ["QUEUED", "LEASED", "RUNNING"].includes(job.state)) ?? null;
+  const failedJob = detail.jobs.find((job) => ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) ?? null;
+  const hasCapture = detail.assets.length > 0;
+  const hasMetricGeometry = detail.assets.some((asset) =>
+    asset.kind === "pointcloud" && ["ply", "e57", "las", "laz", "pts"].includes(asset.format)
+  );
+  const floorplanJob = detail.jobs.find((job) => job.job_type === "floorplan.extract-v1") ?? null;
+  const navigationJob = detail.jobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
+  const floorplanReady = floorplanJob?.state === "SUCCEEDED";
+  const navigationReady = navigationJob?.state === "SUCCEEDED";
+  const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
+
+  const journey = element("section", "project-journey");
+  const journeyHeading = element("div", "project-journey-heading");
+  const journeyCopy = element("div");
+  journeyCopy.append(
+    element("span", "eyebrow", "CAPTURE JOURNEY"),
+    element("h3", "", renderableVersion ? "Your splat preview is ready." : "From capture result to browser preview."),
+    element(
+      "p",
+      "muted-copy",
+      renderableVersion
+        ? navigationReady
+          ? "The visual splat, floor-plan proposal, and navigation draft were generated automatically. Review or correct them before publishing a walkable release."
+          : "The visual splat is ready to inspect while floor-plan and navigation generation continue automatically from the registered geometry."
+        : activeJob
+          ? `${humanStatus(activeJob.job_type)} is ${humanStatus(activeJob.state).toLowerCase()}: ${activeJob.progress_message ?? `${activeJob.progress}% complete`}.`
+          : failedJob
+            ? `Processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
+            : hasCapture
+              ? "The capture is preserved. Refresh processing activity if a browser derivative has not been queued."
+              : "Upload the portable splat and registered metric geometry together. The platform handles browser conversion, floor-plan extraction, structural collision, and navigation generation.",
+    ),
+  );
+  const journeyActions = element("div", "project-journey-actions");
+  if (!hasCapture) {
+    const upload = element("button", "primary-button", "Upload capture result");
+    upload.disabled = detail.project.status === "ARCHIVED";
+    upload.addEventListener("click", openUploadDialog);
+    journeyActions.append(upload);
+  } else if (renderableVersion) {
+    const preview = element("button", "primary-button", "Open private preview");
+    preview.addEventListener("click", () => {
+      void runAction({
+        key: `open-preview:${renderableVersion.id}`,
+        trigger: preview,
+        pendingLabel: "Preparing preview…",
+      }, () => openVersionPreview(renderableVersion.id));
+    });
+    const copy = element("button", "quiet-button", "Copy preview URL");
+    copy.addEventListener("click", () => {
+      void runAction({
+        key: `copy-preview:${renderableVersion.id}`,
+        trigger: copy,
+        pendingLabel: "Creating link…",
+      }, () => copyVersionPreviewUrl(renderableVersion.id));
+    });
+    const editScene = element("button", "quiet-button", "Edit scene");
+    editScene.addEventListener("click", () => openSceneEditor(detail.project.id, editScene));
+    journeyActions.append(preview, copy, editScene);
+  } else {
+    const refresh = element("button", "quiet-button", "Refresh processing status");
+    refresh.addEventListener("click", () => {
+      void runAction({
+        key: `refresh-project:${detail.project.id}`,
+        trigger: refresh,
+        pendingLabel: "Refreshing…",
+      }, async () => {
+        await refreshAll();
+        await selectProject(detail.project.id, false, false);
+      });
+    });
+    journeyActions.append(refresh);
+  }
+  journeyHeading.append(journeyCopy, journeyActions);
+  const steps = element("div", "project-journey-steps");
+  steps.append(
+    projectJourneyStep("1", "Capture", hasCapture ? "complete" : "current", hasCapture ? "Source preserved" : "Upload export"),
+    projectJourneyStep(
+      "2",
+      "Splat",
+      renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
+      renderableVersion ? "Web scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
+    ),
+    projectJourneyStep(
+      "3",
+      "Floor plan",
+      floorplanReady ? "complete" : floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
+        ? "current"
+        : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
+      floorplanReady ? "Draft ready" : floorplanJob ? humanStatus(floorplanJob.state) : hasMetricGeometry ? "Starts automatically" : "Geometry required",
+    ),
+    projectJourneyStep(
+      "4",
+      "Navigation",
+      navigationReady ? "complete" : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
+        ? "current"
+        : navigationJob ? "blocked" : floorplanReady ? "waiting" : "waiting",
+      navigationReady ? "Draft ready" : navigationJob ? humanStatus(navigationJob.state) : "Follows floor plan",
+    ),
+    projectJourneyStep("5", "Preview", renderableVersion ? "complete" : "waiting", renderableVersion ? "Private URL ready" : "Waiting for scene"),
+  );
+  journey.append(journeyHeading, steps);
+
+  const sharing = detailCard("Preview and sharing");
+  sharing.classList.add("project-sharing-card");
+  if (renderableVersion) {
+    sharing.append(element(
+      "p",
+      "muted-copy",
+      "Private preview URLs are short-lived operator sessions. Public or customer-facing URLs are created only after privacy review and publication.",
+    ));
+  }
+  if (activeRelease) {
+    const publishedLink = document.createElement("a");
+    publishedLink.className = "primary-button wide";
+    publishedLink.href = `/s/${activeRelease.slug}`;
+    publishedLink.target = "_blank";
+    publishedLink.rel = "noopener";
+    publishedLink.textContent = "Open published preview";
+    sharing.append(publishedLink, projectFact("Published URL", `${location.origin}/s/${activeRelease.slug}`));
+  }
+  const latestVersion = detail.versions[0];
+  const releasableVisualVersion = auxiliaryCollisionTargetVersion();
+  if (latestVersion?.status === "QA_REQUIRED") {
+    const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
+    qaButton.addEventListener("click", () => {
+      void runAction({
+        key: `open-qa:${detail.project.id}`,
+        trigger: qaButton,
+        pendingLabel: "Checking evidence…",
+      }, openQaDialog);
+    });
+    sharing.append(qaButton);
+  }
+  if (releasableVisualVersion) {
+    const publishButton = element("button", "primary-button wide", "Publish shareable URL");
+    publishButton.addEventListener("click", () => {
+      void runAction({
+        key: `open-release:${detail.project.id}`,
+        trigger: publishButton,
+        pendingLabel: "Loading release evidence…",
+      }, openReleaseDialog);
+    });
+    sharing.append(publishButton);
+  }
+  if (!sharing.querySelector("button, a")) {
+    sharing.append(element("p", "muted-copy", "A shareable release becomes available after the processed scene passes privacy review."));
+  }
 
   const overview = detailCard("Project record");
   overview.append(
     projectFact("Customer", detail.project.customerName ?? "Not assigned"),
-    projectFact("Capture adapter", detail.project.captureAdapter),
-    projectFact("Delivery", detail.project.deliveryTemplate),
+    projectFact("Capture source", humanStatus(detail.project.captureAdapter)),
     projectFact("Notes", detail.project.notes ?? "No project notes."),
   );
   for (const field of state.projectFields.filter((candidate) =>
@@ -9652,31 +10103,7 @@ function renderProjectDetail(): void {
     ));
   }
 
-  const controls = detailCard("Release controls");
-  const latestVersion = detail.versions[0];
-  const releasableVisualVersion = auxiliaryCollisionTargetVersion();
-  if (latestVersion?.status === "QA_REQUIRED") {
-    const qaButton = element("button", "quiet-button wide", "Run QA approval");
-    qaButton.addEventListener("click", () => {
-      void runAction({
-        key: `open-qa:${detail.project.id}`,
-        trigger: qaButton,
-        pendingLabel: "Checking evidence…",
-      }, openQaDialog);
-    });
-    controls.append(qaButton);
-  }
-  if (releasableVisualVersion) {
-    const publishButton = element("button", "primary-button wide", "Publish new release");
-    publishButton.addEventListener("click", () => {
-      void runAction({
-        key: `open-release:${detail.project.id}`,
-        trigger: publishButton,
-        pendingLabel: "Loading release evidence…",
-      }, openReleaseDialog);
-    });
-    controls.append(publishButton);
-  }
+  const releaseHistory = detailCard("Release history");
   for (const release of detail.releases) {
     const releaseRow = element("div", "release-row");
     const link = document.createElement("a");
@@ -9708,8 +10135,11 @@ function renderProjectDetail(): void {
       });
       releaseRow.append(rollback);
     }
-    controls.append(releaseRow);
+    releaseHistory.append(releaseRow);
   }
+  if (!detail.releases.length) releaseHistory.append(element("p", "muted-copy", "No published releases yet."));
+
+  const optionalTools = detailCard("Optional tools");
   const inviteButton = element("button", "quiet-button wide", "Invite client reviewer");
   inviteButton.addEventListener("click", () => openReviewerDialog(detail.project.id));
   const reviewButton = element("button", "quiet-button wide", "Open review workspace");
@@ -9732,18 +10162,9 @@ function renderProjectDetail(): void {
       pendingLabel: "Loading settings…",
     }, openDeliveryDialog);
   });
-  const spatialButton = element("button", "primary-button wide", "Author spatial experience");
+  const spatialButton = element("button", "quiet-button wide", "Edit scene, rooms and navigation");
   spatialButton.disabled = !detail.project.latestVersionId;
-  spatialButton.addEventListener("click", () => {
-    void runAction({
-      key: `load-spatial:${detail.project.id}`,
-      trigger: spatialButton,
-      pendingLabel: "Opening authoring…",
-    }, async () => {
-      await loadSpatialWorkspace(detail.project.id);
-      activateView("spatial");
-    });
-  });
+  spatialButton.addEventListener("click", () => openSceneEditor(detail.project.id, spatialButton));
   const measurementButton = element("button", "quiet-button wide", "Measurement brief & QA");
   measurementButton.disabled = !detail.project.latestVersionId;
   measurementButton.addEventListener("click", () => {
@@ -9760,11 +10181,47 @@ function renderProjectDetail(): void {
   domainButton.addEventListener("click", () => {
     void openDomainDialog();
   });
-  controls.append(spatialButton, measurementButton, inviteButton, reviewButton, deliveryButton, domainButton);
-  if (!controls.querySelector("button, a")) {
-    controls.append(element("p", "muted-copy", "Complete validation and QA before publication."));
-  }
-  body.append(overview, versions, assets, captureBundles, controls);
+  optionalTools.append(spatialButton, measurementButton, inviteButton, reviewButton, deliveryButton, domainButton);
+
+  const technicalDetails = element("details", "project-detail-disclosure");
+  technicalDetails.append(element("summary", "", "Technical details and source history"));
+  const technicalGrid = element("div", "project-detail-grid");
+  technicalGrid.append(overview, versions, assets, captureBundles, releaseHistory);
+  technicalDetails.append(technicalGrid);
+
+  const optionalDetails = element("details", "project-detail-disclosure");
+  optionalDetails.append(element("summary", "", "Optional editing, evidence, and delivery tools"));
+  const optionalGrid = element("div", "project-detail-grid");
+  optionalGrid.append(optionalTools);
+  optionalDetails.append(optionalGrid);
+
+  body.append(journey, sharing, technicalDetails, optionalDetails);
+}
+
+function projectJourneyStep(
+  number: string,
+  label: string,
+  status: "complete" | "current" | "available" | "waiting" | "blocked",
+  detail: string,
+): HTMLElement {
+  const step = element("article", `project-journey-step ${status}`);
+  step.append(
+    element("span", "project-journey-number", number),
+    element("strong", "", label),
+    element("small", "", detail),
+  );
+  return step;
+}
+
+function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
+  void runAction({
+    key: `load-spatial:${projectId}`,
+    trigger,
+    pendingLabel: "Opening editor…",
+  }, async () => {
+    await loadSpatialWorkspace(projectId);
+    activateView("spatial");
+  });
 }
 
 function projectFact(label: string, value: string): HTMLElement {
@@ -10300,8 +10757,6 @@ function openEditProjectDialog(): void {
   };
   setValue("name", project.name);
   setValue("customerName", project.customerName ?? "");
-  setValue("captureAdapter", project.captureAdapter);
-  setValue("deliveryTemplate", project.deliveryTemplate);
   setValue("notes", project.notes ?? "");
   renderProjectCustomFieldForm("editProjectCustomFields", project.customFields);
   byId("editProjectError").textContent = "";
@@ -10317,8 +10772,8 @@ async function updateProject(form: FormData): Promise<void> {
       body: JSON.stringify({
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")) ?? null,
-        captureAdapter: String(form.get("captureAdapter") ?? "open-import"),
-        deliveryTemplate: String(form.get("deliveryTemplate") ?? "Property showcase"),
+        captureAdapter: project.captureAdapter,
+        deliveryTemplate: project.deliveryTemplate,
         notes: optionalString(form.get("notes")) ?? null,
         customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
       }),
@@ -10649,15 +11104,51 @@ async function discardRecoverableUpload(projectId: string, uploadId: string): Pr
   await refreshAll();
 }
 
-async function uploadAsset(form: FormData): Promise<void> {
-  if (!state.selected) return;
+type UploadPresentation = {
+  status: HTMLElement;
+  progress: HTMLElement;
+  error: HTMLElement;
+  pauseButton?: HTMLButtonElement;
+  closeDialog?: HTMLDialogElement;
+  successToast?: string;
+};
+
+type CompletedCaptureUpload = {
+  asset: {
+    id: string;
+    versionId: string;
+    kind: string;
+    purpose: CaptureAssetPurpose;
+    sizeBytes: number;
+    integrityStatus: string;
+  };
+  job: { id: string; type: string; state: string };
+};
+
+type UploadOptions = {
+  targetVersionId?: string;
+};
+
+async function uploadAsset(
+  form: FormData,
+  presentation: UploadPresentation = {
+    status: byId("uploadStatus"),
+    progress: byId<HTMLElement>("uploadProgress"),
+    error: byId("uploadError"),
+    pauseButton: byId<HTMLButtonElement>("pauseUploadButton"),
+    closeDialog: uploadDialog,
+    successToast: "Source asset ingested",
+  },
+  options: UploadOptions = {},
+): Promise<CompletedCaptureUpload> {
+  if (!state.selected) throw new Error("Open a project before uploading capture data.");
   const file = form.get("asset");
-  if (!(file instanceof File)) return;
+  if (!(file instanceof File)) throw new Error("Choose a capture file to upload.");
   const format = String(form.get("format") ?? "");
   const purpose = String(form.get("purpose") ?? "") as CaptureAssetPurpose;
-  const targetVersionId = purpose === "collision_mesh"
+  const targetVersionId = options.targetVersionId ?? (purpose === "collision_mesh"
     ? auxiliaryCollisionTargetVersion()?.id ?? null
-    : null;
+    : null);
   if (purpose === "collision_mesh" && !targetVersionId) {
     throw new Error("Approve a visual scene version before attaching collision geometry.");
   }
@@ -10670,13 +11161,14 @@ async function uploadAsset(form: FormData): Promise<void> {
       throw new Error("The authored opening camera must be valid JSON.");
     }
   }
-  const status = byId("uploadStatus");
-  const progress = byId<HTMLElement>("uploadProgress");
-  const pauseButton = byId<HTMLButtonElement>("pauseUploadButton");
+  const { status, progress } = presentation;
+  const pauseButton = presentation.pauseButton;
   uploadAbortController = new AbortController();
-  pauseButton.hidden = false;
-  pauseButton.disabled = false;
-  pauseButton.textContent = "Pause upload";
+  if (pauseButton) {
+    pauseButton.hidden = false;
+    pauseButton.disabled = false;
+    pauseButton.textContent = "Pause upload";
+  }
   try {
     const projectId = state.selected.project.id;
     const canResume = activeUpload?.projectId === projectId &&
@@ -10766,7 +11258,7 @@ async function uploadAsset(form: FormData): Promise<void> {
     status.textContent = "Finalising immutable source…";
     const parts = Array.from(upload.parts, ([partNumber, etag]) => ({ partNumber, etag }))
       .sort((left, right) => left.partNumber - right.partNumber);
-    await api(`/api/uploads/${upload.id}/complete`, {
+    const completed = await api<CompletedCaptureUpload>(`/api/uploads/${upload.id}/complete`, {
       method: "POST",
       body: JSON.stringify({ parts }),
       retries: 2,
@@ -10778,20 +11270,26 @@ async function uploadAsset(form: FormData): Promise<void> {
     activeUpload = null;
     pendingUploadOperation = null;
     state.recoverableUploads = state.recoverableUploads.filter((item) => item.id !== upload.id);
-    showToast("Source asset ingested");
-    window.setTimeout(() => uploadDialog.close(), 900);
+    showToast(presentation.successToast ?? "Source asset ingested");
+    if (presentation.closeDialog) {
+      window.setTimeout(() => presentation.closeDialog?.close(), 900);
+    }
     await refreshAll();
+    return completed;
   } catch (error) {
     status.textContent = errorMessage(error);
     const prefix = uploadAbortController.signal.aborted
       ? "Upload paused."
       : errorMessage(error);
-    byId("uploadError").textContent = `${prefix} Uploaded parts are retained in D1 and R2; reopen this project and choose Resume upload to continue from the first incomplete part.`;
+    presentation.error.textContent = `${prefix} Uploaded parts are retained in D1 and R2; reopen this project and choose Resume upload to continue from the first incomplete part.`;
+    throw error;
   } finally {
     uploadAbortController = null;
-    pauseButton.hidden = true;
-    pauseButton.disabled = false;
-    pauseButton.textContent = "Pause upload";
+    if (pauseButton) {
+      pauseButton.hidden = true;
+      pauseButton.disabled = false;
+      pauseButton.textContent = "Pause upload";
+    }
   }
 }
 

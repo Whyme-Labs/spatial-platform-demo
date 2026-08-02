@@ -224,11 +224,13 @@ function structuralGeometryReview(document) {
   const ceilingRectangles = canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling");
   const dynamicBarrierIds = canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier");
   const barrierSegments = canonicalBarrierSegments(value.barrierSegments);
+  const connectorSurfaces = canonicalConnectorSurfaces(value.connectorSurfaces ?? []);
   return {
     schemaVersion: "authored-structural-collision-v2",
     floorRectangles,
     ceilingRectangles,
     barrierSegments,
+    ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
     dynamicBarrierIds,
   };
 }
@@ -299,6 +301,28 @@ function canonicalHorizontalRectangles(values, label) {
     }
     ids.add(id);
     return { id, min, max, elevation };
+  });
+}
+
+function canonicalConnectorSurfaces(values) {
+  if (!Array.isArray(values)) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      "Explicit structural connector surfaces must be an array",
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const points = Array.isArray(value?.points) ? value.points.map(pointTuple) : [];
+    if (!id || ids.has(id) || points.length < 3 || points.some((point) => !point)) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural connector ${id || "unknown"} is invalid`,
+      );
+    }
+    ids.add(id);
+    return { id, points };
   });
 }
 
@@ -740,11 +764,13 @@ function canonicalStructuralGeometry(value) {
       "Structural geometry review metadata is missing or unsupported",
     );
   }
+  const connectorSurfaces = canonicalConnectorSurfaces(value.connectorSurfaces ?? []);
   return {
     schemaVersion: "authored-structural-collision-v2",
     floorRectangles: canonicalHorizontalRectangles(value.floorRectangles, "floor"),
     ceilingRectangles: canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling"),
     barrierSegments: canonicalBarrierSegments(value.barrierSegments),
+    ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
     dynamicBarrierIds: canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier"),
   };
 }

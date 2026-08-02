@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
 import { sha256Hex } from "../src/worker/security";
+import { buildAuthoredStructuralCollisionGlb } from "../scripts/authored-collision.mjs";
 
 const origin = "https://spatial.test";
 let addressSequence = 8800;
@@ -397,6 +398,56 @@ describe("vendor-neutral floor-plan workflow", () => {
         report: ["Floor-plan sampled point count exceeds or omits the queued processing bound"],
       },
     });
+    const storedParameters = await env.DB.prepare(
+      "SELECT parameters_json FROM floorplan_extraction_runs WHERE job_id = ?",
+    ).bind(lease.job.id).first<{ parameters_json: string }>();
+    await env.DB.prepare(
+      "UPDATE floorplan_extraction_runs SET parameters_json = ? WHERE job_id = ?",
+    ).bind(
+      JSON.stringify({ ...JSON.parse(storedParameters!.parameters_json), automaticPipeline: true }),
+      lease.job.id,
+    ).run();
+    const collisionBytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "registered_metric_mesh",
+      floorRectangles: [{ id: "floor-1", min: [0, 0], max: [4, 3], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling-1", min: [0, 0], max: [4, 3], elevation: 2.5 }],
+      barrierSegments: [
+        { id: "north-left", start: [0, 0], end: [1.5, 0], minY: 0, maxY: 2.5 },
+        { id: "north-right", start: [2.5, 0], end: [4, 0], minY: 0, maxY: 2.5 },
+        { id: "east", start: [4, 0], end: [4, 3], minY: 0, maxY: 2.5 },
+        { id: "south", start: [4, 3], end: [0, 3], minY: 0, maxY: 2.5 },
+        { id: "west", start: [0, 3], end: [0, 0], minY: 0, maxY: 2.5 },
+      ],
+      furnitureBoxes: [],
+      dynamicBarrierBoxes: [],
+    });
+    const collisionResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${lease.job.id}/outputs/collision/automatic-collision.glb`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": lease.leaseToken,
+          "content-type": "model/gltf-binary",
+          "content-length": String(collisionBytes.byteLength),
+        },
+        body: collisionBytes,
+      },
+    );
+    expect(collisionResponse.status).toBe(201);
+    const collisionOutput = await collisionResponse.json<{ output: Record<string, unknown> }>();
+    const automaticCompletionBody = {
+      ...completionBody,
+      collisionOutput: {
+        ...collisionOutput.output,
+        sha256: await sha256Hex(collisionBytes),
+      },
+      evidence: {
+        ...completionBody.evidence,
+        outputBytes: reportBytes.byteLength + collisionBytes.byteLength,
+      },
+    };
     const complete = await exports.default.fetch(
       `${origin}/api/worker/jobs/${lease.job.id}/floorplan-extraction-complete`,
       {
@@ -405,43 +456,114 @@ describe("vendor-neutral floor-plan workflow", () => {
           authorization: `Bearer ${env.WORKER_API_TOKEN}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(completionBody),
+        body: JSON.stringify(automaticCompletionBody),
       },
     );
     expect(complete.status).toBe(200);
     const completed = await complete.json<{
       extraction: { status: string; proposalHash: string };
+      automaticNavigation: { id: string; jobId: string; status: string };
     }>();
     expect(completed.extraction).toMatchObject({
       status: "READY_FOR_REVIEW",
       proposalHash: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
+    expect(completed.automaticNavigation).toMatchObject({ status: "QUEUED" });
+    const automaticNavigation = await env.DB.prepare(`
+      SELECT b.status, j.state, a.kind, a.format
+      FROM scene_navigation_builds b
+      JOIN processing_jobs j ON j.id = b.job_id
+      JOIN assets a ON a.id = b.collision_asset_id
+      WHERE b.id = ?
+    `).bind(completed.automaticNavigation.id).first<{
+      status: string;
+      state: string;
+      kind: string;
+      format: string;
+    }>();
+    expect(automaticNavigation).toEqual({
+      status: "QUEUED",
+      state: "QUEUED",
+      kind: "collision",
+      format: "glb",
+    });
+    await env.DB.prepare(`
+      UPDATE scene_navigation_builds
+      SET status = 'READY_FOR_REVIEW', artifact_json = '{}'
+      WHERE id = ?
+    `).bind(completed.automaticNavigation.id).run();
+    const proposalNavigationReview = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-builds/` +
+        `${completed.automaticNavigation.id}/review`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "approve",
+          note: "Attempting to approve the preliminary proposal navigation evidence.",
+        }),
+      },
+    );
+    expect(proposalNavigationReview.status).toBe(409);
+    await expect(proposalNavigationReview.json()).resolves.toMatchObject({
+      error: expect.stringContaining("proposal preview"),
+    });
+    // The approved-plan recook must be self-sufficient even when no proposal
+    // preview was able to create the default profile.
+    await env.DB.prepare(
+      "DELETE FROM scene_navigation_profiles WHERE version_id = ?",
+    ).bind(versionId).run();
 
     const plan = {
       schemaVersion: "1.0.0",
       units: "metres",
       coordinateFrame: "registered_y_up_metric_frame",
-      levels: [{
-        id: "level-1",
-        label: "Ground floor",
-        elevationM: 0,
-        rooms: [{ id: "living-room", label: "Living room", points: [[0, 0], [4, 0], [4, 3], [0, 3]] }],
-        walls: [
-          { id: "wall-1", label: "North wall", start: [0, 0], end: [4, 0], thicknessM: 0.2, heightM: 2.5 },
-          { id: "wall-2", label: "East wall", start: [4, 0], end: [4, 3], thicknessM: 0.2, heightM: 2.5 },
-          { id: "wall-3", label: "South wall", start: [4, 3], end: [0, 3], thicknessM: 0.2, heightM: 2.5 },
-          { id: "wall-4", label: "West wall", start: [0, 3], end: [0, 0], thicknessM: 0.2, heightM: 2.5 },
-        ],
-        openings: [{
-          id: "entry-door",
-          label: "Entry door",
-          type: "door",
-          wallId: "wall-1",
-          start: [1.5, 0],
-          end: [2.5, 0],
-          widthM: 1,
-          heightM: 2.1,
-        }],
+      levels: [
+        {
+          id: "level-1",
+          label: "Ground floor",
+          elevationM: 0,
+          ceilingElevationM: 2.5,
+          rooms: [{ id: "living-room", label: "Living room", points: [[0, 0], [4, 0], [4, 3], [0, 3]] }],
+          walls: [
+            { id: "wall-1", label: "North wall", start: [0, 0], end: [4, 0], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-2", label: "East wall", start: [4, 0], end: [4, 3], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-3", label: "South wall", start: [4, 3], end: [0, 3], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-4", label: "West wall", start: [0, 3], end: [0, 0], thicknessM: 0.2, heightM: 2.5 },
+          ],
+          openings: [{
+            id: "entry-door",
+            label: "Entry door",
+            type: "door",
+            wallId: "wall-1",
+            start: [1.5, 0],
+            end: [2.5, 0],
+            widthM: 1,
+            heightM: 2.1,
+          }],
+        },
+        {
+          id: "level-2",
+          label: "Upper floor",
+          elevationM: 3,
+          ceilingElevationM: 5.5,
+          rooms: [{ id: "upper-room", label: "Upper room", points: [[0, 0], [4, 0], [4, 3], [0, 3]] }],
+          walls: [
+            { id: "wall-5", label: "Upper north wall", start: [0, 0], end: [4, 0], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-6", label: "Upper east wall", start: [4, 0], end: [4, 3], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-7", label: "Upper south wall", start: [4, 3], end: [0, 3], thicknessM: 0.2, heightM: 2.5 },
+            { id: "wall-8", label: "Upper west wall", start: [0, 3], end: [0, 0], thicknessM: 0.2, heightM: 2.5 },
+          ],
+          openings: [],
+        },
+      ],
+      connectors: [{
+        id: "stair-1",
+        label: "Main stair",
+        type: "stairs",
+        lowerLevelId: "level-1",
+        upperLevelId: "level-2",
+        points: [[1.5, 0, 0.4], [1.5, 3, 2.6], [2.5, 3, 2.6], [2.5, 0, 0.4]],
       }],
     };
     const reviewUrl =
@@ -467,11 +589,67 @@ describe("vendor-neutral floor-plan workflow", () => {
     const winningReview = reviewResponses.find((response) => response.status === 200)!;
     const reviewed = await winningReview.json<{
       revision: { id: string; planHash: string; measurementClass: string };
+      collisionAssetId: string;
+      automaticNavigation: {
+        id: string;
+        jobId: string;
+        status: string;
+        floorplanRevisionId: string;
+        planHash: string;
+      };
     }>();
     expect(reviewed.revision).toMatchObject({
       id: expect.any(String),
       planHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       measurementClass: "indicative",
+    });
+    expect(reviewed.collisionAssetId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(reviewed.automaticNavigation).toMatchObject({
+      status: "QUEUED",
+      floorplanRevisionId: reviewed.revision.id,
+      planHash: reviewed.revision.planHash,
+    });
+    const correctedBuild = await env.DB.prepare(`
+      SELECT b.parameters_json, b.authoring_hash, j.state,
+        a.sha256 AS collision_sha256, a.object_key
+      FROM scene_navigation_builds b
+      JOIN processing_jobs j ON j.id = b.job_id
+      JOIN assets a ON a.id = b.collision_asset_id
+      WHERE b.id = ?
+    `).bind(reviewed.automaticNavigation.id).first<{
+      parameters_json: string;
+      authoring_hash: string;
+      state: string;
+      collision_sha256: string;
+      object_key: string;
+    }>();
+    expect(correctedBuild).toBeTruthy();
+    expect(JSON.parse(correctedBuild!.parameters_json)).toMatchObject({
+      automaticLayout: {
+        floorplanExtractionId: created.extraction.id,
+        floorplanRevisionId: reviewed.revision.id,
+        planHash: reviewed.revision.planHash,
+      },
+      source: {
+        assetId: reviewed.collisionAssetId,
+        sha256: correctedBuild!.collision_sha256,
+        authoringHash: correctedBuild!.authoring_hash,
+      },
+    });
+    expect(correctedBuild!.state).toBe("QUEUED");
+    expect(await env.SPATIAL_ASSETS.head(correctedBuild!.object_key)).toBeTruthy();
+    const correctedProfile = await env.DB.prepare(`
+      SELECT world_unit, agent_radius, agent_height
+      FROM scene_navigation_profiles WHERE version_id = ?
+    `).bind(versionId).first<{
+      world_unit: string;
+      agent_radius: number;
+      agent_height: number;
+    }>();
+    expect(correctedProfile).toEqual({
+      world_unit: "metres",
+      agent_radius: 0.25,
+      agent_height: 1.7,
     });
     const approvedRevisionCount = await env.DB.prepare(`
       SELECT COUNT(*) AS count FROM floorplan_revisions
@@ -522,9 +700,19 @@ describe("vendor-neutral floor-plan workflow", () => {
       const bytes = new Uint8Array(await download.arrayBuffer());
       expect(await sha256Hex(bytes)).toBe(item.sha256);
       const text = new TextDecoder().decode(bytes);
-      if (item.format === "pdf") expect(text.startsWith("%PDF-1.4")).toBe(true);
-      if (item.format === "dxf") expect(text).toContain("INDICATIVE ONLY");
-      if (item.format === "svg") expect(text).toContain("not a survey");
+      if (item.format === "pdf") {
+        expect(text.startsWith("%PDF-1.4")).toBe(true);
+        expect(text).toContain("/Count 2");
+      }
+      if (item.format === "dxf") {
+        expect(text).toContain("INDICATIVE ONLY");
+        expect(text).toContain("CONNECTOR");
+      }
+      if (item.format === "svg") {
+        expect(text).toContain("not a survey");
+        expect(text).toContain("class=\"connector\"");
+        expect(text).toContain("Upper floor");
+      }
     }
 
     const exportReplay = await exports.default.fetch(

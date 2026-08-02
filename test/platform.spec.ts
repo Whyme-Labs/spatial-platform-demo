@@ -1506,6 +1506,25 @@ describe("Spatial Studio Worker", () => {
       env.DB.prepare("UPDATE scene_versions SET manifest_json = ? WHERE id = ?")
         .bind(JSON.stringify({ webAssetId: rightAssetId }), secondVersionId),
     ]);
+    const previewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/versions/${secondVersionId}/preview`,
+      { headers: { cookie: reviewerCookie } },
+    );
+    expect(previewResponse.status).toBe(200);
+    expect(previewResponse.headers.get("cache-control")).toBe("private, no-store");
+    const preview = await previewResponse.json<{
+      version: { id: string; number: number; status: string };
+      renderable: { versionId: string; assetId: string; contentUrl: string; sessionExpiresAt: string };
+    }>();
+    expect(preview).toMatchObject({
+      version: { id: secondVersionId, number: 2, status: "QA_REQUIRED" },
+      renderable: { versionId: secondVersionId, assetId: rightAssetId },
+    });
+    expect(preview.renderable.contentUrl).toContain(
+      `/comparison-asset/${project.id}/${secondVersionId}/${rightAssetId}/right.rad?token=`,
+    );
+    expect(Date.parse(preview.renderable.sessionExpiresAt)).toBeGreaterThan(Date.now());
+
     const comparisonResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/versions/compare?left=${versionId}&right=${secondVersionId}`,
       { headers: { cookie: reviewerCookie } },
@@ -2449,6 +2468,12 @@ describe("Spatial Studio Worker", () => {
       },
     });
     expect(v7ArtifactContract.success).toBe(true);
+    if (v7ArtifactContract.success && v7ArtifactContract.data.structuralValidation) {
+      const planarBoundaryArtifact = structuredClone(v7ArtifactContract.data);
+      planarBoundaryArtifact.structuralValidation!.boundaryTopology.method =
+        "explicit-planar-boundary-faces-v2";
+      expect(navigationArtifactSchema.safeParse(planarBoundaryArtifact).success).toBe(true);
+    }
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO assets (

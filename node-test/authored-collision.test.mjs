@@ -137,6 +137,97 @@ describe("authored walkable collision", () => {
     });
   });
 
+  it("builds one reachable navmesh across two reviewed levels and a stair surface", async () => {
+    const bytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "registered_metric_mesh",
+      floorRectangles: [
+        { id: "ground-left", min: [0, 0], max: [2.3, 6], elevation: 0 },
+        { id: "ground-right", min: [3.7, 0], max: [6, 6], elevation: 0 },
+        { id: "ground-landing", min: [2.3, 0], max: [3.7, 1.3], elevation: 0 },
+        { id: "upper-left", min: [0, 0], max: [2.3, 6], elevation: 3 },
+        { id: "upper-right", min: [3.7, 0], max: [6, 6], elevation: 3 },
+        { id: "upper-landing", min: [0, 4.75], max: [6, 6], elevation: 3 },
+      ],
+      ceilingRectangles: [
+        { id: "ground-ceiling-left", min: [0, 0], max: [2.3, 6], elevation: 3 },
+        { id: "ground-ceiling-right", min: [3.7, 0], max: [6, 6], elevation: 3 },
+        { id: "ground-ceiling-landing", min: [0, 4.75], max: [6, 6], elevation: 3 },
+        { id: "upper-ceiling", min: [0, 0], max: [6, 6], elevation: 5.8 },
+      ],
+      barrierSegments: [
+        { id: "ground-west", start: [0, 0], end: [0, 6], minY: 0, maxY: 3 },
+        { id: "ground-south", start: [0, 6], end: [6, 6], minY: 0, maxY: 3 },
+        { id: "ground-east", start: [6, 6], end: [6, 0], minY: 0, maxY: 3 },
+        { id: "ground-north", start: [6, 0], end: [0, 0], minY: 0, maxY: 3 },
+        { id: "upper-west", start: [0, 0], end: [0, 6], minY: 3, maxY: 5.8 },
+        { id: "upper-south", start: [0, 6], end: [6, 6], minY: 3, maxY: 5.8 },
+        { id: "upper-east", start: [6, 6], end: [6, 0], minY: 3, maxY: 5.8 },
+        { id: "upper-north", start: [6, 0], end: [0, 0], minY: 3, maxY: 5.8 },
+      ],
+      connectorSurfaces: Array.from({ length: 19 }, (_, step) => {
+        const elevation = step / 18 * 3;
+        const startZ = 0.5 + step * (4.3 / 18);
+        return {
+          id: `main-stair-tread-${step + 1}`,
+          points: [
+            [2.5, elevation, startZ], [2.5, elevation, startZ + 0.3],
+            [3.5, elevation, startZ + 0.3], [3.5, elevation, startZ],
+          ],
+        };
+      }),
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [],
+    });
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    assert.equal(geometry.structuralGeometry.connectorSurfaces.length, 19);
+    const buildInput = {
+      positions: geometry.positions,
+      indices: geometry.indices,
+      collisionSemantics: geometry.collisionSemantics,
+      structuralGeometry: geometry.structuralGeometry,
+      dynamicBarriers: geometry.dynamicBarriers,
+      source: {
+        assetId: "two-level-fixture",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        authoringHash: "b".repeat(64),
+        worldUnit: "metres",
+      },
+      bounds: [[-0.5, -0.25, -0.5], [6.5, 6.1, 6.5]],
+      agent: {
+        radius: 0.2,
+        height: 1.7,
+        eyeHeight: 1.6,
+        maxClimb: 0.2,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        minimumRegionSizeVoxels: 2,
+        mergeRegionSizeVoxels: 4,
+      },
+      spawn: { id: "ground", position: [1, 0, 2] },
+      destinations: [
+        { id: "ramp-middle", position: [3, 1.5, 2.65] },
+        { id: "ramp-top", position: [3, 3, 4.4] },
+        { id: "upper-landing", position: [3, 3, 4.6] },
+        { id: "upper", position: [1, 3, 2] },
+      ],
+    };
+    let artifact;
+    try {
+      artifact = await buildRecastNavigationArtifact(buildInput);
+    } catch (error) {
+      assert.fail(`${error.message}: ${JSON.stringify(error.details)}`);
+    }
+    assert.equal(artifact.validation.componentCount, 1);
+    assert.deepEqual(artifact.validation.unreachableDestinationIds, []);
+  });
+
   it("rejects a reviewed wall loop with a player-sized opening", async () => {
     await assert.rejects(
       validateStructuralNavigation({
@@ -167,7 +258,7 @@ describe("authored walkable collision", () => {
         indices: [],
       }),
       (error) => error?.code === "STRUCTURAL_NAVIGATION_ACCEPTANCE_FAILED" &&
-        /closed loops/.test(error.message),
+        /not enclosed|closed loops/.test(error.message),
     );
   });
 
@@ -272,7 +363,7 @@ describe("authored walkable collision", () => {
     assert.equal(structural.dynamicBarrierProbeCount, 2);
     assert.deepEqual(structural.boundaryTopology, {
       passed: true,
-      method: "explicit-closed-segment-loops-v1",
+      method: "explicit-planar-boundary-faces-v2",
       loopCount: 1,
       floorComponentCount: 1,
       dynamicClosureCount: 2,

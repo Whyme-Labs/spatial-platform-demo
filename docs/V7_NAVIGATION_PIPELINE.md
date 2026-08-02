@@ -63,6 +63,12 @@ The build remains `READY_FOR_REVIEW` until an operator approves it. Retuning or
 changing authoring creates different evidence; it cannot silently mutate an
 approved build.
 
+For the automatic floor-plan lane, a build made from an uncorrected machine
+proposal is explicitly preview-only. Approving the floor plan recooks the
+collision GLB from the corrected levels, ceilings, walls, openings, and
+connectors, then queues a new navigation build bound to the approved revision
+ID and exact plan hash. Only that revision-bound build can be approved.
+
 ## Required validation
 
 A build cannot be approved unless it proves:
@@ -122,12 +128,16 @@ rebuild navigation or reinterpret current authoring.
 
 ## Operator sequence
 
-1. Select the immutable scene version in Spatial authoring.
-2. Upload and verify the visual and structural assets.
-3. Author or review rooms, anchors, routes, doors, and group classifications.
-4. Tune Walk and Fly profiles for the declared world unit.
-5. Build verified navigation and inspect any processor failure evidence.
-6. Review the validation summary and approve the exact build.
+1. Upload a portable Gaussian and registered metric capture result; Studio
+   creates the immutable scene version and queues spatial processing.
+2. Preview the splat and any automatically generated floor-plan/navigation
+   drafts.
+3. Correct and approve levels, captured ceiling elevations, rooms, walls,
+   openings, and stair/ramp connectors.
+4. Let Studio recook structural collision and verified navigation from the
+   approved revision; tune Walk and Fly only if the default agent does not fit.
+5. Inspect the validation summary and approve the exact revision-bound build.
+6. Author optional anchors, routes, doors, and richer semantics on top.
 7. Publish a new release bound to that build.
 8. Verify Walk, Fly, mobile movement, room routing, floor-plan position, and
    door state on staging before production.
@@ -140,10 +150,15 @@ rebuild navigation or reinterpret current authoring.
 ## Boundaries
 
 V7 closes the static indoor collision, movement, route, and publication gap for
-an explicitly reviewed structural shell. It does not provide automatic wall or
-stair inference, multi-level circulation, moving furniture physics, elevators,
-survey accuracy, clearance certification, accessibility certification, or
-native XGRIDS/FJD reconstruction.
+an explicitly reviewed structural shell. The automatic spatial v2 processor can
+now infer multiple captured levels and continuous stair/ramp candidates from a
+registered metric point cloud, cook bounded Recast treads and landings, and
+fail the build when any inferred level is unreachable. It requires captured or
+operator-reviewed ceiling support and does not manufacture ceilings from wall
+height. It does not infer
+unobserved circulation, elevators, ladders, or moving platforms, and it does not
+provide moving-furniture physics, survey accuracy, clearance certification,
+accessibility certification, or native XGRIDS/FJD reconstruction.
 
 Provisional `SU` scenes are valid interaction demonstrations but not real-world
 measurements. A metric release requires a separately measured scene version and

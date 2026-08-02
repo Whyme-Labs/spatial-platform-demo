@@ -3,6 +3,7 @@ import {
   extractMetricFloorPlan,
   parsePlySceneSignature,
 } from "../scripts/processing-agent-core.mjs";
+import { floorplanProposalReportSchema } from "../src/worker/contracts";
 
 function asciiPly(points: Array<[number, number, number]>): Uint8Array {
   return new TextEncoder().encode([
@@ -47,6 +48,46 @@ function rectangularTwoRoomFixture(): Uint8Array {
   return asciiPly(points);
 }
 
+function twoLevelStairFixture(): Uint8Array {
+  const points: Array<[number, number, number]> = [];
+  const add = (point: [number, number, number]) => points.push(point);
+  const addLevel = (elevation: number) => {
+    for (let x = 0.125; x < 6; x += 0.25) {
+      for (let z = 0.125; z < 5; z += 0.25) {
+        add([x, elevation, z]);
+        // Preserve a captured stairwell opening instead of drawing a ceiling
+        // plane through the connector volume.
+        if (x < 2 || x > 4) add([x, elevation + 2.5, z]);
+      }
+    }
+    for (let y = elevation + 0.25; y <= elevation + 2.5; y += 0.25) {
+      for (let x = 0; x <= 6; x += 0.25) {
+        add([x, y, 0]);
+        add([x, y, 5]);
+      }
+      for (let z = 0; z <= 5; z += 0.25) {
+        add([0, y, z]);
+        add([6, y, z]);
+      }
+    }
+  };
+  addLevel(0);
+  addLevel(3);
+
+  // A 1 m wide, 6 m long staircase represented by dense tread support. The
+  // extractor must infer one continuous reviewed ramp proxy rather than an
+  // off-mesh teleport between otherwise disconnected levels.
+  const steps = 12;
+  for (let step = 0; step <= steps; step += 1) {
+    const elevation = step / steps * 3;
+    const startZ = -1 + step * 0.5;
+    for (let x = 2.5; x <= 3.5; x += 0.125) {
+      for (let z = startZ; z < startZ + 0.5; z += 0.125) add([x, elevation, z]);
+    }
+  }
+  return asciiPly(points);
+}
+
 describe("vendor-neutral metric floor-plan extraction", () => {
   it("turns a registered metric PLY into reviewable rooms, walls, and an opening", () => {
     const signature = parsePlySceneSignature(rectangularTwoRoomFixture(), {
@@ -67,7 +108,7 @@ describe("vendor-neutral metric floor-plan extraction", () => {
 
     expect(report).toMatchObject({
       schemaVersion: "1.0.0",
-      method: "metric-pointcloud-floorplan-v1",
+      method: "metric-pointcloud-floorplan-v2",
       result: "proposal_ready",
       humanReviewRequired: true,
       source: {
@@ -110,5 +151,44 @@ describe("vendor-neutral metric floor-plan extraction", () => {
       floorBandM: 0.15,
       minimumRoomAreaM2: 2,
     })).toThrowError(/wall/i);
+  });
+
+  it("extracts distinct levels and a continuous stair connector", () => {
+    const signature = parsePlySceneSignature(twoLevelStairFixture(), {
+      voxelSizeM: 0.1,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      wallMinHeightM: 0.25,
+      wallMaxHeightM: 2.5,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+      maximumOpeningWidthM: 1.25,
+      maximumRooms: 20,
+      maximumSamplePoints: 1_000_000,
+    });
+
+    expect(report).toMatchObject({
+      method: "metric-pointcloud-floorplan-v2",
+      summary: {
+        levelCount: 2,
+        connectorCount: 1,
+      },
+    });
+    expect(report.levels.map((level) => level.elevationM)).toEqual([0, 3]);
+    expect(report.levels.map((level) => level.ceilingElevationM)).toEqual([2.55, 5.55]);
+    expect(report.connectors).toEqual([expect.objectContaining({
+      kind: "stair_or_ramp_candidate",
+      lowerLevelKey: "level-001",
+      upperLevelKey: "level-002",
+      riseM: expect.closeTo(3, 1),
+      slopeDegrees: expect.any(Number),
+      geometry: { type: "polygon", points: expect.any(Array) },
+    })]);
+    expect(report.connectors[0].geometry.points).toHaveLength(4);
+    const parsed = floorplanProposalReportSchema.safeParse(report);
+    expect(parsed.success, parsed.success ? "" : parsed.error.message).toBe(true);
   });
 });

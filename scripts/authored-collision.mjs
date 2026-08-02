@@ -66,10 +66,14 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
   const floors = normalizeHorizontalRectangles(config?.floorRectangles, "floor", ids);
   const ceilings = normalizeHorizontalRectangles(config?.ceilingRectangles, "ceiling", ids);
   const barriers = normalizeBarrierSegments(config?.barrierSegments, ids);
+  const connectors = normalizeConnectorSurfaces(config?.connectorSurfaces ?? [], ids);
   if (!floors.length || !ceilings.length || !barriers.length) {
     throw new Error("V2 structural collision requires explicit floors, ceilings, and barriers");
   }
   const floorGeometry = horizontalRectanglesGeometry(floors, false);
+  if (connectors.length) {
+    appendGeometry(floorGeometry, triangulateAuthoredSurfaces(connectors));
+  }
   const barrierGeometry = emptyGeometry();
   appendGeometry(barrierGeometry, horizontalRectanglesGeometry(ceilings, true));
   appendGeometry(barrierGeometry, barrierSegmentsGeometry(barriers));
@@ -99,6 +103,7 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
       floorRectangles: floors,
       ceilingRectangles: ceilings,
       barrierSegments: barriers,
+      connectorSurfaces: connectors,
       dynamicBarrierIds: dynamicBarriers.map((barrier) => barrier.id),
     },
     dynamicBarriers,
@@ -253,6 +258,15 @@ function normalizeBarrierSegments(values, ids) {
       throw new Error(`barrier segment ${id} has invalid geometry`);
     }
     return { id, start, end, minY, maxY };
+  });
+}
+
+function normalizeConnectorSurfaces(values, ids) {
+  if (!Array.isArray(values)) throw new Error("connector surfaces must be an array");
+  return values.map((value) => {
+    const id = stableUniqueId(value, "connector surface", ids);
+    const points = normalizeRing(value?.points, id);
+    return { id, points };
   });
 }
 

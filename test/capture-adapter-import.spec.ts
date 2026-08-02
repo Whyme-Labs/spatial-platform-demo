@@ -188,6 +188,154 @@ describe("capture adapter evidence ingestion", () => {
       .toBe(verifiedSha256);
   });
 
+  it("attaches registered geometry to the visual version and queues floor-plan generation automatically", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Automatic capture ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "xgrids-lcc",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+
+    const uploadBytes = async (input: {
+      bytes: Uint8Array;
+      fileName: string;
+      format: string;
+      purpose: string;
+      targetVersionId?: string;
+    }) => {
+      const created = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          fileName: input.fileName,
+          sizeBytes: input.bytes.byteLength,
+          format: input.format,
+          purpose: input.purpose,
+          mimeType: "application/octet-stream",
+          ...(input.targetVersionId ? { targetVersionId: input.targetVersionId } : {}),
+        }),
+      });
+      expect(created.status).toBe(201);
+      const { upload } = await created.json<{
+        upload: { id: string; versionId: string; assetId: string };
+      }>();
+      const partResponse = await exports.default.fetch(
+        `${origin}/api/uploads/${upload.id}/parts/1`,
+        {
+          method: "PUT",
+          headers: { cookie, "content-length": String(input.bytes.byteLength) },
+          body: input.bytes,
+        },
+      );
+      expect(partResponse.status).toBe(200);
+      const { part } = await partResponse.json<{ part: { etag: string } }>();
+      const completed = await exports.default.fetch(`${origin}/api/uploads/${upload.id}/complete`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ partNumber: 1, etag: part.etag }] }),
+      });
+      expect(completed.status).toBe(200);
+      return {
+        upload,
+        completion: await completed.json<{ job: { id: string } }>(),
+      };
+    };
+
+    const visual = await uploadBytes({
+      bytes: new Uint8Array([0x52, 0x41, 0x44, 0x01]),
+      fileName: "capture.rad",
+      format: "rad",
+      purpose: "web_scene",
+    });
+    const metricBytes = new TextEncoder().encode(
+      "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n",
+    );
+    const geometry = await uploadBytes({
+      bytes: metricBytes,
+      fileName: "registered-room.ply",
+      format: "ply",
+      purpose: "metric_point_cloud",
+      targetVersionId: visual.upload.versionId,
+    });
+    expect(geometry.upload.versionId).toBe(visual.upload.versionId);
+
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: `automatic-floorplan-${crypto.randomUUID()}`,
+        jobId: geometry.completion.job.id,
+      }),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const lease = await leaseResponse.json<{ leaseToken: string }>();
+    const verifiedSha256 = await crypto.subtle.digest("SHA-256", metricBytes)
+      .then((hash) => Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""));
+    const workerComplete = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${geometry.completion.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Registered geometry verified",
+          outputs: [],
+          report: { source: { sha256: verifiedSha256 } },
+          evidence: {
+            processorVersion: "spatial-evidence/1.0.0",
+            computeDurationMs: 10,
+            activeHumanDurationMs: 0,
+            inputBytes: metricBytes.byteLength,
+            outputBytes: 0,
+            toolVersions: { processor: "test" },
+          },
+        }),
+      },
+    );
+    expect(workerComplete.status).toBe(200);
+    const completed = await workerComplete.json<{
+      automaticFloorplan: { id: string; jobId: string; status: string };
+    }>();
+    expect(completed.automaticFloorplan).toMatchObject({ status: "QUEUED" });
+    const automatic = await env.DB.prepare(`
+      SELECT r.status, r.parameters_json, j.state, j.job_type
+      FROM floorplan_extraction_runs r
+      JOIN processing_jobs j ON j.id = r.job_id
+      WHERE r.id = ?
+    `).bind(completed.automaticFloorplan.id).first<{
+      status: string;
+      parameters_json: string;
+      state: string;
+      job_type: string;
+    }>();
+    expect(automatic).toMatchObject({
+      status: "QUEUED",
+      state: "QUEUED",
+      job_type: "floorplan.extract-v1",
+    });
+    expect(JSON.parse(automatic!.parameters_json)).toMatchObject({
+      automaticPipeline: true,
+      coordinateAssurance: "registered_y_up_metric_frame",
+    });
+    const versionCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM scene_versions WHERE project_id = ?",
+    ).bind(project.id).first<{ count: number }>();
+    expect(versionCount?.count).toBe(1);
+  });
+
   it("binds an authored SOG opening camera to the immutable version and processor lease", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {

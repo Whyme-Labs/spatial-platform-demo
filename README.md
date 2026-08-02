@@ -12,18 +12,25 @@ access-controlled browser release without exposing raw capture files.
 ## Implemented production path
 
 ```text
-Project
+Portable XGRIDS / FJD / open Gaussian export
+  + registered metric point cloud for device captures
+  -> automatic project creation
   -> purpose/format-aware resumable multipart R2 upload
   -> bounded capture-evidence validation or Gaussian processing
   -> immutable scene version
   -> leased/idempotent processing job
+  -> automatic metric floor-plan proposal
+  -> automatic structural collision + Recast preview when captured shell evidence is complete
+  -> short-lived authenticated private preview URL
+  -> Spark 2.x renderer
+  -> operator correction of generated levels / ceilings / rooms / openings / connectors
+  -> recooked collision + Recast build bound to the approved floor-plan revision
+  -> optional approval of generated scene / room / navigation data
   -> operator QA approval
   -> numbered immutable release revision
   -> stable public/private release channel
   -> short-lived scene session
   -> range-capable R2 delivery
-  -> Spark 2.x renderer
-  -> authored rooms / POIs / guided routes
   -> collision and navigation runtime
   -> queued automated privacy evidence
   -> mandatory human privacy disposition
@@ -31,6 +38,25 @@ Project
   -> approval / hosting lifecycle
   -> telemetry / revoke / rollback
 ```
+
+The primary Studio journey is deliberately narrower than the full operations
+surface: **Upload capture -> Process splat + floor plan + navigation -> Preview
+-> Correct or approve generated drafts (optional for visual-only sharing) -> Publish**.
+Creating a project, selecting a delivery template, declaring a low-level asset
+purpose, registering a capture contract, or manually starting floor-plan and
+navigation jobs are not prerequisites for the first splat preview. The Studio
+creates the project with safe defaults, automatically queues spatial drafts
+from registered geometry, and exposes correction, QA, measurement, review,
+hosting, and custom-domain modules only as post-preview or advanced operations.
+
+XGRIDS and FJD intake requires both a portable Gaussian result (`PLY`, `SPZ`,
+`SOG`, `SPLAT`, `KSPLAT`) or browser-ready Spark `RAD`, and a registered metric
+point cloud (`PLY`, `E57`, `LAS`, `LAZ`, or `PTS`) for automatic floor-plan and
+navigation generation. Native `XBIN`, `LCC`, and `FJDSLAM` projects can still be
+preserved as private supporting evidence, but they cannot truthfully enter the
+automatic preview lane without portable exports. A processed version can be opened before publication through
+an authenticated, short-lived exact-asset preview session; public or customer
+URLs still require privacy review and an explicit release.
 
 The direct production path accepts browser-ready Spark `.rad`, `.spz`, and
 `.sog` assets. Gaussian PLY and SPZ source assets can also be leased to the
@@ -112,9 +138,11 @@ Implemented:
   accept-selected/reject-all review, and polygonal navigation triangles only
   after human acceptance
 - vendor-neutral registered PLY/E57/LAS/LAZ/PTS floor-plan extraction with
-  explicit source-axis normalisation, immutable proposal evidence, mandatory
-  operator correction, versioned indicative revisions, and hash-bound private
-  SVG/PDF/DXF exports that remain separate from measurement certification
+  explicit source-axis normalisation, captured multi-level ceiling and
+  stair/ramp evidence, immutable proposals, mandatory operator correction,
+  revision-bound collision/navigation recooking, versioned indicative
+  revisions, and hash-bound private SVG/PDF/DXF exports that remain separate
+  from measurement certification
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1
@@ -133,6 +161,9 @@ Implemented:
   Jobs, and Releases views while retaining its immutable project history
 - short-lived signed scene sessions, HTTP range delivery, revocation, and
   rollback
+- authenticated pre-publication version previews with short-lived exact-asset
+  URLs, so operators can inspect a processed splat before optional authoring or
+  release QA
 - Spark RAD, SPZ, and SOG browser delivery
 - bundled Spark 2.1 and Three.js runtime; no client-side CDN dependency
 - device-adaptive Spark budgets, guided navigation, room/POI semantics, and a
@@ -181,11 +212,17 @@ Intentionally outside the current production boundary:
 - licensed scanner-origin validation and full 6DoF/control-point registration;
   the deployed raw-scene lane can estimate bounded same-scale,
   gravity-aligned yaw and translation, but does not certify survey accuracy
-- automatic multi-level circulation, stair inference, or survey-grade automatic
-  floor plans; the deployed vendor-neutral floor-plan lane derives a bounded
-  single-level room/wall/opening proposal from registered PLY/E57/LAS/LAZ/PTS,
-  requires operator correction, and only exports visibly indicative
-  SVG/PDF/DXF
+- survey-grade automatic floor plans or unobserved vertical circulation; the
+  vendor-neutral v2 lane detects distinct captured levels, infers continuous
+  stair/ramp evidence, cooks radius-cleared Recast treads and landings, and
+  rejects disconnected levels before review. It requires captured or
+  operator-reviewed ceiling support and never manufactures a ceiling from wall
+  height. Proposal-derived navigation is preview-only; approval recooks a new
+  build bound to the corrected revision and plan hash. Every level and
+  connector remains an indicative proposal requiring operator correction.
+  Elevators, ladders,
+  moving platforms, or stairs absent from the registered geometry must be
+  authored explicitly
 - arbitrary capture editing, furniture asset placement, or generative
   background reconstruction after deleting captured objects
 - activation and acceptance of a real customer enterprise identity provider
@@ -244,6 +281,12 @@ blocked/closed in both Rapier and Detour before publication. A release freezes
 the exact approved build ID, authoring hash, JSON report asset, Detour binary,
 SHA-256 hashes, and sizes. The example Home Scan authoring contract is
 [`assets/home-scan-structural-v7.json`](./assets/home-scan-structural-v7.json).
+
+For automatically extracted plans, a complete captured shell may create an
+early navigation preview, but that preview is not approvable. Floor-plan
+approval recooks collision from the corrected level, ceiling, wall, opening,
+and connector data and queues a new build cryptographically bound to the
+approved revision ID and plan hash.
 
 The processor reads `WORKER_API_TOKEN` from the environment. Use
 `npm run processor:once` for a single lease attempt or deployment smoke. It does

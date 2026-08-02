@@ -157,8 +157,40 @@ test.describe("authenticated studio UI", () => {
     await mockAuthenticatedStudio(page);
     await page.goto("/studio.html#projects");
     await expect(page.getByRole("heading", {
-      name: "From immutable source to approved spatial release.",
+      name: "Upload once. Preview the processed splat. Edit only when needed.",
     })).toBeVisible();
+  });
+
+  test("capture intake keeps legacy project workflow settings out of the primary path", async ({ page }) => {
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    const dialog = page.locator("#newProjectDialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("heading", {
+      name: "Upload a capture result and let the platform prepare the preview.",
+      exact: true,
+    })).toBeVisible();
+    await expect(dialog.getByLabel("Project name", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: "Capture source", exact: true })).toBeVisible();
+    await expect(dialog.locator("#newCaptureAsset")).toHaveAttribute(
+      "accept",
+      ".ply,.spz,.sog,.splat,.ksplat,.rad",
+    );
+    await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute(
+      "accept",
+      ".ply,.e57,.las,.laz,.pts",
+    );
+    await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute(
+      "required",
+      "",
+    );
+    await expect(dialog.getByText(
+      "Required for automatic floor-plan and navigation generation. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS from the device workflow.",
+      { exact: true },
+    )).toBeVisible();
+    await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByLabel("Start from template", { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText("Project details", { exact: true })).toBeVisible();
+    await expectResponsiveSurface(page, "#newProjectDialog");
   });
 
   test("studio shell uses the shared type system and responsive control layout", async ({ page }) => {
@@ -215,16 +247,18 @@ test.describe("authenticated studio UI", () => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
 
-      await page.getByRole("button", { name: "◇ Projects", exact: true }).click();
+      await page.getByRole("button", { name: "Projects", exact: true }).click();
       await expectColumnsAligned(page, ".project-row");
 
-      await page.getByRole("button", { name: "⇄ Processing jobs", exact: true }).click();
+      await page.getByText("Advanced tools", { exact: true }).click();
+      await page.getByRole("button", { name: "Processing activity", exact: true }).click();
       await expectColumnsAligned(page, ".queue-item");
 
-      await page.getByRole("button", { name: "↗ Releases", exact: true }).click();
+      await page.getByRole("button", { name: "Published previews", exact: true }).click();
       await expectColumnsAligned(page, ".release-list-row");
 
-      await page.getByRole("button", { name: "◌ Team access", exact: true }).click();
+      await page.getByText("Advanced tools", { exact: true }).click();
+      await page.getByRole("button", { name: "Team access", exact: true }).click();
       await expectColumnsAligned(page, ".team-member-row");
 
       await page.evaluate(() => {
@@ -432,7 +466,7 @@ test.describe("studio authentication lifecycle", () => {
     await page.goto("/studio.html#projects");
 
     await expect(page.getByRole("heading", {
-      name: "From immutable source to approved spatial release.",
+      name: "Upload once. Preview the processed splat. Edit only when needed.",
     })).toBeVisible();
     await expect.poll(() => sessionRequests).toBe(2);
     await expect.poll(() => refreshRequests).toBe(1);
@@ -468,7 +502,7 @@ test.describe("studio authentication lifecycle", () => {
     await page.goto("/studio.html#projects");
 
     await expect(page.getByRole("heading", {
-      name: "From immutable source to approved spatial release.",
+      name: "Upload once. Preview the processed splat. Edit only when needed.",
     })).toBeVisible();
     await expect.poll(() => refreshRequests).toBe(3);
     await expect(page.locator("#loginDialog")).not.toBeVisible();

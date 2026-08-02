@@ -80,7 +80,7 @@ export const captureAdapterProfiles: CaptureAdapterProfile[] = [
       "Images, poses, and calibration when the licensed exporter provides them",
     ],
     nativeInputs: [
-      "xbin", "lcc", "lcc2", "ply", "spz", "sog", "e57", "las", "laz", "zip",
+      "xbin", "lcc", "lcc2", "ply", "spz", "sog", "splat", "ksplat", "rad", "e57", "las", "laz", "zip",
       "jpg", "jpeg", "png", "webp", "json", "csv", "yaml", "yml",
     ],
     limitations: [
@@ -99,7 +99,7 @@ export const captureAdapterProfiles: CaptureAdapterProfile[] = [
       "Images and calibrated transforms when exported",
     ],
     nativeInputs: [
-      "fjdslam", "ply", "spz", "sog", "e57", "las", "laz", "pts", "jpg", "jpeg",
+      "fjdslam", "ply", "spz", "sog", "splat", "ksplat", "rad", "e57", "las", "laz", "pts", "jpg", "jpeg",
       "png", "webp", "zip", "json", "csv", "yaml", "yml",
     ],
     limitations: [

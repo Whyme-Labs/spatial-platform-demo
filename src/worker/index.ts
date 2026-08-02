@@ -1,5 +1,11 @@
 import { Hono, type Context } from "hono";
 import { Earcut } from "three/src/extras/Earcut.js";
+// These modules are shared with the offline processor so an approved plan is
+// recooked from the exact same structural semantics as the proposal preview.
+// @ts-expect-error JavaScript pipeline modules intentionally expose a stable ESM API.
+import { buildAuthoredStructuralCollisionGlb } from "../../scripts/authored-collision.mjs";
+// @ts-expect-error JavaScript pipeline modules intentionally expose a stable ESM API.
+import { structuralCollisionConfigFromReviewPlan } from "../../scripts/automatic-spatial-pipeline.mjs";
 import {
   manualJobCompletionSchema,
   customDomainSchema,
@@ -555,7 +561,7 @@ type FloorplanExtractionRow = {
   version_id: string;
   input_asset_id: string;
   job_id: string;
-  method: "metric-pointcloud-floorplan-v1";
+  method: "metric-pointcloud-floorplan-v1" | "metric-pointcloud-floorplan-v2";
   normalizer: string;
   status: "QUEUED" | "PROCESSING" | "READY_FOR_REVIEW" | "REVIEWED" | "REJECTED" | "FAILED" | "CANCELLED";
   parameters_json: string;
@@ -4943,6 +4949,80 @@ app.patch("/api/projects/:projectId/reviews/comments/:commentId", async (context
   return context.json({ comment: result });
 });
 
+app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) => {
+  const access = await requireReviewProject(context, context.req.param("projectId"));
+  if (access instanceof Response) return access;
+  const versionId = context.req.param("versionId");
+  const version = await context.env.DB.prepare(`
+    SELECT id, version_number, status
+    FROM scene_versions
+    WHERE id = ? AND project_id = ?
+  `).bind(versionId, access.project.id).first<{
+    id: string;
+    version_number: number;
+    status: string;
+  }>();
+  if (!version) return notFound(context, "Scene version not found");
+  const assets = await context.env.DB.prepare(`
+    SELECT id, version_id, format, file_name, mime_type, object_key,
+      size_bytes, sha256, integrity_status
+    FROM assets
+    WHERE project_id = ? AND organisation_id = ? AND version_id = ?
+      AND kind = 'web' AND integrity_status = 'verified' AND deleted_at IS NULL
+    ORDER BY created_at DESC
+  `).bind(access.project.id, access.auth.organisationId, versionId).all<{
+    id: string;
+    version_id: string;
+    format: string;
+    file_name: string;
+    mime_type: string;
+    object_key: string;
+    size_bytes: number;
+    sha256: string | null;
+    integrity_status: string;
+  }>();
+  const asset = assets.results.find((candidate) => allowedWebFormats.has(candidate.format));
+  if (!asset || !(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
+    return conflict(context, "This version does not have a verified browser scene yet");
+  }
+  const releaseConfig = await context.env.DB.prepare(`
+    SELECT viewer_config_json
+    FROM releases
+    WHERE project_id = ? AND organisation_id = ? AND version_id = ?
+      AND revoked_at IS NULL
+    ORDER BY published_at DESC
+    LIMIT 1
+  `).bind(access.project.id, access.auth.organisationId, versionId).first<{
+    viewer_config_json: string;
+  }>();
+  const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const sessionExpiresAt = Math.floor(Date.now() / 1000) + tokenTtl;
+  const token = await signSceneToken({
+    releaseId: comparisonAssetTokenScope(access.project.id, version.id, asset.id),
+    expiresAt: sessionExpiresAt,
+  }, context.env.SESSION_PEPPER);
+  context.header("Cache-Control", "private, no-store");
+  return context.json({
+    version: {
+      id: version.id,
+      number: version.version_number,
+      status: version.status,
+    },
+    renderable: {
+      versionId: version.id,
+      assetId: asset.id,
+      format: asset.format,
+      fileName: asset.file_name,
+      mimeType: asset.mime_type,
+      sizeBytes: asset.size_bytes,
+      sha256: asset.sha256,
+      contentUrl: `/comparison-asset/${access.project.id}/${version.id}/${asset.id}/${encodeURIComponent(asset.file_name)}?token=${encodeURIComponent(token)}`,
+      sessionExpiresAt: new Date(sessionExpiresAt * 1000).toISOString(),
+      viewer: releaseConfig ? parseStoredObject(releaseConfig.viewer_config_json) : null,
+    },
+  });
+});
+
 app.get("/api/projects/:projectId/versions/compare", async (context) => {
   const access = await requireReviewProject(context, context.req.param("projectId"));
   if (access instanceof Response) return access;
@@ -6957,7 +7037,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-        'spatial-processor/0.9.0', ?, 'QUEUED', 65, 3,
+        'spatial-processor/0.10.0', ?, 'QUEUED', 65, 3,
         'Waiting for an offline Recast navigation worker')
     `).bind(
       jobId,
@@ -7004,6 +7084,56 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationBuildReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const reviewable = await context.env.DB.prepare(`
+    SELECT id, status, artifact_json, parameters_json
+    FROM scene_navigation_builds
+    WHERE id = ? AND project_id = ? AND organisation_id = ?
+  `).bind(
+    context.req.param("buildId"),
+    context.req.param("projectId"),
+    auth.organisationId,
+  ).first<{
+    id: string;
+    status: string;
+    artifact_json: string | null;
+    parameters_json: string;
+  }>();
+  if (!reviewable || reviewable.status !== "READY_FOR_REVIEW" || !reviewable.artifact_json) {
+    return conflict(context, "Only a completed navigation build can be reviewed");
+  }
+  if (parsed.data.decision === "approve") {
+    const parameters = parseStoredObject(reviewable.parameters_json);
+    const automaticLayout = parameters && typeof parameters === "object"
+      ? Reflect.get(parameters, "automaticLayout")
+      : null;
+    if (automaticLayout && typeof automaticLayout === "object") {
+      const extractionId = Reflect.get(automaticLayout, "floorplanExtractionId");
+      const revisionId = Reflect.get(automaticLayout, "floorplanRevisionId");
+      const planHash = Reflect.get(automaticLayout, "planHash");
+      if (typeof extractionId === "string" && typeof revisionId !== "string") {
+        return conflict(
+          context,
+          "This navigation build is a proposal preview. Approve the corrected floor plan to create an approvable build.",
+        );
+      }
+      if (typeof revisionId === "string") {
+        const revision = await context.env.DB.prepare(`
+          SELECT status, plan_hash FROM floorplan_revisions
+          WHERE id = ? AND project_id = ? AND organisation_id = ?
+        `).bind(
+          revisionId,
+          context.req.param("projectId"),
+          auth.organisationId,
+        ).first<{ status: string; plan_hash: string }>();
+        if (!revision || revision.status !== "approved" || revision.plan_hash !== planHash) {
+          return conflict(
+            context,
+            "Navigation evidence is not bound to the current approved floor-plan revision.",
+          );
+        }
+      }
+    }
+  }
   const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
   const build = await context.env.DB.prepare(`
     UPDATE scene_navigation_builds
@@ -7730,7 +7860,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.9.0', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.10.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -8196,7 +8326,7 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.9.0', ?, 'QUEUED', 78, 3,
+        'spatial-processor/0.10.0', ?, 'QUEUED', 78, 3,
         'Waiting for a vendor-neutral floor-plan worker')
     `).bind(
       jobId,
@@ -8209,9 +8339,9 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
     context.env.DB.prepare(`
       INSERT INTO floorplan_extraction_runs (
         id, organisation_id, project_id, version_id, input_asset_id, job_id,
-        normalizer, parameters_json, source_evidence_json,
+        method, normalizer, parameters_json, source_evidence_json,
         client_operation_id, request_hash, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, 'metric-pointcloud-floorplan-v2', ?, ?, ?, ?, ?, ?)
     `).bind(
       extractionId,
       auth.organisationId,
@@ -8287,6 +8417,129 @@ app.post(
     const revisionId = parsed.data.decision === "approve" ? crypto.randomUUID() : null;
     const planJson = parsed.data.plan ? JSON.stringify(parsed.data.plan) : null;
     const planHash = planJson ? await sha256Hex(planJson) : null;
+    const extractionParameters = parseStoredObject(extraction.parameters_json);
+    const automaticPipeline = extractionParameters && typeof extractionParameters === "object" &&
+      Reflect.get(extractionParameters, "automaticPipeline") === true;
+    let correctedCollision: {
+      assetId: string;
+      objectKey: string;
+      fileName: string;
+      bytes: Uint8Array;
+      sha256: string;
+      etag: string;
+    } | null = null;
+    let correctedNavigation: {
+      id: string;
+      jobId: string;
+      clientOperationId: string;
+      authoringHash: string;
+      requestHash: string;
+      parameters: Record<string, unknown>;
+    } | null = null;
+    if (automaticPipeline && revisionId && planHash && parsed.data.plan) {
+      let writingCorrectedCollision = false;
+      try {
+        const structuralConfig = structuralCollisionConfigFromReviewPlan(parsed.data.plan);
+        const bytes = buildAuthoredStructuralCollisionGlb(structuralConfig, {
+          generator: "Spatial Studio reviewed-floorplan-collision-v2",
+          source: {
+            floorplanExtractionId: extraction.id,
+            floorplanRevisionId: revisionId,
+            planHash,
+          },
+        }) as Uint8Array;
+        const collisionSha256 = await sha256Hex(bytes);
+        const collisionAssetId = crypto.randomUUID();
+        const objectKey = `delivery-private/${auth.organisationId}/${project.id}` +
+          `/${extraction.version_id}/floorplan-revisions/${revisionId}` +
+          `/collision-${planHash.slice(0, 16)}.glb`;
+        writingCorrectedCollision = true;
+        const storedCollision = await context.env.SPATIAL_ASSETS.put(objectKey, bytes, {
+          httpMetadata: { contentType: "model/gltf-binary" },
+          customMetadata: {
+            floorplanExtractionId: extraction.id,
+            floorplanRevisionId: revisionId,
+            planHash,
+            provenance: "operator_reviewed",
+          },
+        });
+        writingCorrectedCollision = false;
+        correctedCollision = {
+          assetId: collisionAssetId,
+          objectKey,
+          fileName: `reviewed-floorplan-collision-${planHash.slice(0, 12)}.glb`,
+          bytes,
+          sha256: collisionSha256,
+          etag: storedCollision.etag,
+        };
+        const navigationId = crypto.randomUUID();
+        const navigationJobId = crypto.randomUUID();
+        const navigationClientOperationId = crypto.randomUUID();
+        const navigationAuthoringHash = await sha256Hex(JSON.stringify({
+          schemaVersion: "automatic-floorplan-navigation-v2",
+          floorplanExtractionId: extraction.id,
+          floorplanRevisionId: revisionId,
+          planHash,
+          collisionAssetId,
+          collisionSha256,
+        }));
+        const navigationParameters = {
+          provisional: false,
+          automaticLayout: {
+            schemaVersion: "automatic-floorplan-layout-v2",
+            floorplanExtractionId: extraction.id,
+            floorplanRevisionId: revisionId,
+            planHash,
+          },
+          bounds: null,
+          spawn: null,
+          destinations: [],
+          offMeshConnections: [],
+          obstacleBoxes: [],
+          build: {
+            cellSize: 0.1,
+            cellHeight: 0.05,
+            tileSize: 32,
+            maxEdgeLengthVoxels: 12,
+            maxSimplificationError: 1.3,
+            minimumRegionSizeVoxels: 2,
+            mergeRegionSizeVoxels: 4,
+          },
+          source: {
+            assetId: collisionAssetId,
+            sha256: collisionSha256,
+            authoringHash: navigationAuthoringHash,
+            worldUnit: "metres",
+          },
+          agent: {
+            radius: 0.25,
+            height: 1.7,
+            eyeHeight: 1.6,
+            maxClimb: 0.2,
+            maxSlopeDegrees: 45,
+            maxSpeed: 1.6,
+            maxAcceleration: 8,
+          },
+        };
+        correctedNavigation = {
+          id: navigationId,
+          jobId: navigationJobId,
+          clientOperationId: navigationClientOperationId,
+          authoringHash: navigationAuthoringHash,
+          requestHash: await sha256Hex(JSON.stringify(navigationParameters)),
+          parameters: navigationParameters,
+        };
+      } catch (error) {
+        if (writingCorrectedCollision) throw error;
+        return unprocessable(context, {
+          plan: [
+            error instanceof Error
+              ? error.message
+              : "The reviewed plan could not produce structural collision",
+          ],
+        });
+      }
+    }
     let response: Record<string, unknown> = {};
     let reviewWriteError: unknown = null;
     for (let allocationAttempt = 0; allocationAttempt < 3; allocationAttempt += 1) {
@@ -8310,6 +8563,16 @@ app.post(
             revisionNumber,
             status: "approved",
             measurementClass: "indicative",
+            planHash,
+          }
+          : null,
+        collisionAssetId: correctedCollision?.assetId ?? null,
+        automaticNavigation: correctedNavigation
+          ? {
+            id: correctedNavigation.id,
+            jobId: correctedNavigation.jobId,
+            status: "QUEUED",
+            floorplanRevisionId: revisionId,
             planHash,
           }
           : null,
@@ -8389,6 +8652,145 @@ app.post(
           ),
         );
       }
+      if (correctedCollision && correctedNavigation && revisionId && planHash) {
+        statements.push(
+          context.env.DB.prepare(`
+            INSERT INTO assets (
+              id, organisation_id, project_id, version_id, kind, format, object_key,
+              file_name, mime_type, size_bytes, etag, sha256, integrity_status
+            )
+            SELECT ?, ?, ?, ?, 'collision', 'glb', ?, ?, 'model/gltf-binary',
+              ?, ?, ?, 'verified'
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ? AND review_response_json = ?
+            )
+          `).bind(
+            correctedCollision.assetId,
+            auth.organisationId,
+            project.id,
+            extraction.version_id,
+            correctedCollision.objectKey,
+            correctedCollision.fileName,
+            correctedCollision.bytes.byteLength,
+            correctedCollision.etag,
+            correctedCollision.sha256,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO scene_navigation_profiles (
+              version_id, organisation_id, project_id, world_unit, agent_radius,
+              agent_height, eye_height, max_step_metres, max_slope_degrees,
+              max_speed, max_acceleration, updated_by
+            )
+            SELECT ?, ?, ?, 'metres', 0.25, 1.7, 1.6, 0.2, 45, 1.6, 8, ?
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ? AND review_response_json = ?
+            )
+            ON CONFLICT(version_id) DO NOTHING
+          `).bind(
+            extraction.version_id,
+            auth.organisationId,
+            project.id,
+            auth.userId,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO processing_jobs (
+              id, organisation_id, project_id, version_id, input_asset_id, job_type,
+              processor_version, idempotency_key, state, priority, max_attempts,
+              progress_message
+            )
+            SELECT ?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.10.0',
+              ?, 'QUEUED', 74, 3,
+              'Waiting to verify navigation from the approved floor-plan revision'
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ? AND review_response_json = ?
+            )
+          `).bind(
+            correctedNavigation.jobId,
+            auth.organisationId,
+            project.id,
+            extraction.version_id,
+            correctedCollision.assetId,
+            `approved-floorplan-navigation:${revisionId}:${planHash}`,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO scene_navigation_builds (
+              id, organisation_id, project_id, version_id, collision_asset_id,
+              job_id, status, parameters_json, client_operation_id, request_hash,
+              authoring_hash, created_by
+            )
+            SELECT ?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ? AND review_response_json = ?
+            )
+          `).bind(
+            correctedNavigation.id,
+            auth.organisationId,
+            project.id,
+            extraction.version_id,
+            correctedCollision.assetId,
+            correctedNavigation.jobId,
+            JSON.stringify(correctedNavigation.parameters),
+            correctedNavigation.clientOperationId,
+            correctedNavigation.requestHash,
+            correctedNavigation.authoringHash,
+            auth.userId,
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+          context.env.DB.prepare(`
+            INSERT INTO audit_events (
+              id, organisation_id, actor_user_id, action, resource_type, resource_id,
+              request_id, metadata_json
+            )
+            SELECT ?, ?, ?, 'spatial.navigation_build.approved_floorplan_auto_queue',
+              'scene_navigation_build', ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM floorplan_extraction_runs
+              WHERE id = ? AND review_client_operation_id = ?
+                AND review_request_hash = ? AND review_response_json = ?
+            )
+          `).bind(
+            crypto.randomUUID(),
+            auth.organisationId,
+            auth.userId,
+            correctedNavigation.id,
+            context.get("requestId"),
+            JSON.stringify({
+              jobId: correctedNavigation.jobId,
+              floorplanExtractionId: extraction.id,
+              floorplanRevisionId: revisionId,
+              planHash,
+              collisionAssetId: correctedCollision.assetId,
+            }),
+            extraction.id,
+            parsed.data.clientOperationId,
+            requestHash,
+            serializedResponse,
+          ),
+        );
+      }
       try {
         await context.env.DB.batch(statements);
         reviewWriteError = null;
@@ -8417,16 +8819,25 @@ app.post(
       storedReview?.review_client_operation_id !== parsed.data.clientOperationId ||
       storedReview.review_request_hash !== requestHash
     ) {
+      if (correctedCollision) {
+        await context.env.SPATIAL_ASSETS.delete(correctedCollision.objectKey);
+      }
       if (reviewWriteError) throw reviewWriteError;
       return conflict(context, "A different floor-plan review completed first");
     }
     if (reviewWriteError) {
+      if (correctedCollision && storedReview.review_response_json !== JSON.stringify(response)) {
+        await context.env.SPATIAL_ASSETS.delete(correctedCollision.objectKey);
+      }
       return context.json({
         ...(parseStoredObject(storedReview.review_response_json ?? "{}") as Record<string, unknown>),
         idempotent: true,
       });
     }
     if (storedReview.review_response_json !== JSON.stringify(response)) {
+      if (correctedCollision) {
+        await context.env.SPATIAL_ASSETS.delete(correctedCollision.objectKey);
+      }
       return context.json({
         ...(parseStoredObject(storedReview.review_response_json ?? "{}") as Record<string, unknown>),
         idempotent: true,
@@ -8437,6 +8848,7 @@ app.post(
       revisionId,
       planHash,
     });
+    if (correctedNavigation) dispatchProcessingJob(context, correctedNavigation.jobId);
     return context.json(parseStoredObject(storedReview.review_response_json ?? "{}"));
   },
 );
@@ -9780,9 +10192,10 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
     format: parsed.data.format,
   });
   if (!importPlan.accepted) return context.json({ error: importPlan.reason }, 422);
-  if (parsed.data.targetVersionId && purpose !== "collision_mesh") {
+  const auxiliaryPurposes = new Set<CaptureAssetPurpose>(["metric_point_cloud", "collision_mesh"]);
+  if (parsed.data.targetVersionId && !auxiliaryPurposes.has(purpose)) {
     return unprocessable(context, {
-      targetVersionId: ["Only auxiliary collision geometry may attach to an existing scene version"],
+      targetVersionId: ["Only registered metric geometry or collision geometry may attach to an existing scene version"],
     });
   }
   if (parsed.data.clientOperationId) {
@@ -9847,28 +10260,20 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   const auxiliaryAttachment = Boolean(parsed.data.targetVersionId);
   if (parsed.data.targetVersionId) {
     const targetVersion = await context.env.DB.prepare(`
-      SELECT sv.id, sv.status,
-        EXISTS(
-          SELECT 1 FROM assets a
-          WHERE a.version_id = sv.id AND a.project_id = sv.project_id
-            AND a.organisation_id = ? AND a.kind = 'web'
-            AND a.integrity_status = 'verified' AND a.deleted_at IS NULL
-        ) AS has_verified_web
+      SELECT sv.id, sv.status
       FROM scene_versions sv
       WHERE sv.id = ? AND sv.project_id = ?
     `).bind(
-      organisationId,
       parsed.data.targetVersionId,
       project.id,
-    ).first<{ id: string; status: string; has_verified_web: number }>();
+    ).first<{ id: string; status: string }>();
     if (
       !targetVersion ||
-      !["APPROVED", "PUBLISHED"].includes(targetVersion.status) ||
-      targetVersion.has_verified_web !== 1
+      !["INGESTED", "QA_REQUIRED", "APPROVED", "PUBLISHED", "PROCESSING_FAILED"].includes(targetVersion.status)
     ) {
       return unprocessable(context, {
         targetVersionId: [
-          "Auxiliary collision geometry requires an approved or published version with a verified web scene",
+          "Registered geometry requires an ingested scene version from the same capture journey",
         ],
       });
     }
@@ -10074,8 +10479,8 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
   const versionBeforeUpload = await context.env.DB.prepare(
     "SELECT status FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(upload.version_id, upload.project_id).first<{ status: string }>();
-  const auxiliaryAttachment = upload.purpose === "collision_mesh" &&
-    ["APPROVED", "PUBLISHED"].includes(versionBeforeUpload?.status ?? "");
+  const auxiliaryAttachment = ["metric_point_cloud", "collision_mesh"].includes(upload.purpose) &&
+    versionBeforeUpload?.status !== "UPLOADING";
   const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       INSERT INTO assets
@@ -10871,12 +11276,15 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
-      j.job_type, j.state, a.kind AS input_kind, a.size_bytes AS input_size_bytes,
+      j.job_type, j.state, a.kind AS input_kind, a.format AS input_format,
+      a.file_name AS input_file_name, a.size_bytes AS input_size_bytes,
       a.sha256 AS input_sha256, sv.status AS version_status,
+      us.purpose AS input_purpose, us.created_by AS input_created_by,
       nb.authoring_hash AS navigation_authoring_hash
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
     JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
+    LEFT JOIN upload_sessions us ON us.asset_id = j.input_asset_id
     LEFT JOIN scene_navigation_builds nb ON nb.job_id = j.id
     WHERE j.id = ? AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
       AND j.lease_expires_at > ?
@@ -10889,8 +11297,12 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     job_type: string;
     state: string;
     input_kind: string;
+    input_format: string;
+    input_file_name: string;
     input_size_bytes: number;
     input_sha256: string | null;
+    input_purpose: CaptureAssetPurpose | null;
+    input_created_by: string | null;
     version_status: string;
     navigation_authoring_hash: string | null;
   }>();
@@ -11070,7 +11482,30 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     }
   }
   await context.env.DB.batch(completionStatements);
-  return context.json({ job: { id: job.id, state: "SUCCEEDED" }, outputs: outputSummary, qaReportId });
+  const automaticFloorplan =
+    job.job_type === "asset.evidence-validate" &&
+      job.input_kind === "pointcloud" &&
+      job.input_purpose === "metric_point_cloud" &&
+      job.input_created_by &&
+      verifiedInputSha256
+      ? await queueAutomaticFloorplanExtraction(context, {
+        organisationId: job.organisation_id,
+        projectId: job.project_id,
+        versionId: job.version_id,
+        assetId: job.input_asset_id!,
+        fileName: job.input_file_name,
+        format: job.input_format,
+        sha256: verifiedInputSha256,
+        sizeBytes: job.input_size_bytes,
+        createdBy: job.input_created_by,
+      })
+      : null;
+  return context.json({
+    job: { id: job.id, state: "SUCCEEDED" },
+    outputs: outputSummary,
+    qaReportId,
+    automaticFloorplan,
+  });
 });
 
 app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
@@ -11491,7 +11926,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     SELECT j.id, j.organisation_id, j.project_id, j.version_id,
       j.input_asset_id, j.state, a.size_bytes AS input_size_bytes,
       a.format AS input_format, r.id AS extraction_id, r.parameters_json,
-      r.normalizer
+      r.normalizer, r.created_by
     FROM processing_jobs j
     JOIN floorplan_extraction_runs r ON r.job_id = j.id
     JOIN assets a ON a.id = j.input_asset_id
@@ -11514,6 +11949,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     extraction_id: string;
     parameters_json: string;
     normalizer: string;
+    created_by: string;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
@@ -11545,6 +11981,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     });
   }
   const serverParameters = parseStoredObject(job.parameters_json);
+  const automaticPipeline = Reflect.get(serverParameters as object, "automaticPipeline") === true;
   if (
     parsed.data.evidence.normalization.sourceUpAxis !==
       Reflect.get(serverParameters as object, "sourceUpAxis")
@@ -11599,6 +12036,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     ...parsed.data.report.rooms.map((room) => room.roomKey),
     ...parsed.data.report.walls.map((wall) => wall.wallKey),
     ...parsed.data.report.openings.map((opening) => opening.openingKey),
+    ...(parsed.data.report.connectors ?? []).map((connector) => connector.connectorKey),
   ];
   if (new Set(proposalKeys).size !== proposalKeys.length) {
     return validationError(context, { report: ["Every proposal key must be unique"] });
@@ -11644,9 +12082,61 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   }
   const stored = await context.env.SPATIAL_ASSETS.head(output.objectKey);
   if (!stored) return validationError(context, { objectKey: ["Stored floor-plan report does not exist"] });
-  if (stored.size !== parsed.data.evidence.outputBytes) {
+  const collisionOutput = parsed.data.collisionOutput;
+  let storedCollision: R2Object | null = null;
+  let storedCollisionHash: string | null = null;
+  if (collisionOutput) {
+    const collisionPrefix =
+      `delivery-private/${job.organisation_id}/${job.project_id}/${job.version_id}/`;
+    if (!collisionOutput.objectKey.startsWith(collisionPrefix)) {
+      return validationError(context, {
+        collisionOutput: ["Automatic collision output is outside the immutable delivery prefix"],
+      });
+    }
+    if (safeFileName(collisionOutput.fileName) !== collisionOutput.fileName) {
+      return validationError(context, {
+        collisionOutput: ["Automatic collision filename is not canonical"],
+      });
+    }
+    if (!collisionOutput.sha256) {
+      return validationError(context, {
+        collisionOutput: ["Automatic collision output requires the processor SHA-256"],
+      });
+    }
+    storedCollision = await context.env.SPATIAL_ASSETS.head(collisionOutput.objectKey);
+    if (!storedCollision) {
+      return validationError(context, {
+        collisionOutput: ["Stored automatic collision output does not exist"],
+      });
+    }
+    const collisionObject = await context.env.SPATIAL_ASSETS.get(collisionOutput.objectKey);
+    if (!collisionObject) {
+      return validationError(context, {
+        collisionOutput: ["Stored automatic collision output disappeared"],
+      });
+    }
+    const collisionBytes = await collisionObject.arrayBuffer();
+    const collisionView = new DataView(collisionBytes);
+    if (
+      collisionBytes.byteLength < 20 ||
+      collisionView.getUint32(0, true) !== 0x46546c67 ||
+      collisionView.getUint32(4, true) !== 2 ||
+      collisionView.getUint32(8, true) !== collisionBytes.byteLength
+    ) {
+      return unprocessable(context, {
+        collisionOutput: ["Automatic collision output is not a complete binary glTF 2.0 asset"],
+      });
+    }
+    storedCollisionHash = await sha256Hex(collisionBytes);
+    if (storedCollisionHash !== collisionOutput.sha256) {
+      return unprocessable(context, {
+        collisionOutput: ["Automatic collision SHA-256 does not match the immutable R2 object"],
+      });
+    }
+  }
+  if (stored.size + (storedCollision?.size ?? 0) !== parsed.data.evidence.outputBytes) {
     return validationError(context, {
-      evidence: ["Reported output bytes do not match the stored floor-plan report"],
+      evidence: ["Reported output bytes do not match the stored floor-plan artifacts"],
     });
   }
   if (!output.sha256) {
@@ -11687,6 +12177,64 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   const proposalJson = JSON.stringify(parsed.data.report);
   const proposalHash = await sha256Hex(proposalJson);
   const reportAssetId = crypto.randomUUID();
+  const collisionAssetId = collisionOutput && storedCollision && storedCollisionHash
+    ? crypto.randomUUID()
+    : null;
+  const navigationBuildId = automaticPipeline && collisionAssetId ? crypto.randomUUID() : null;
+  const navigationJobId = navigationBuildId ? crypto.randomUUID() : null;
+  const navigationClientOperationId = navigationBuildId ? crypto.randomUUID() : null;
+  const navigationAuthoringHash = collisionAssetId && storedCollisionHash
+    ? await sha256Hex(JSON.stringify({
+      schemaVersion: "automatic-floorplan-navigation-v2",
+      floorplanExtractionId: job.extraction_id,
+      proposalHash,
+      collisionAssetId,
+      collisionSha256: storedCollisionHash,
+    }))
+    : null;
+  const navigationParameters = navigationBuildId && collisionAssetId &&
+      storedCollisionHash && navigationAuthoringHash
+    ? {
+      provisional: false,
+      automaticLayout: {
+        schemaVersion: "automatic-floorplan-layout-v2",
+        floorplanExtractionId: job.extraction_id,
+        proposalHash,
+      },
+      bounds: null,
+      spawn: null,
+      destinations: [],
+      offMeshConnections: [],
+      obstacleBoxes: [],
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        maxEdgeLengthVoxels: 12,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 2,
+        mergeRegionSizeVoxels: 4,
+      },
+      source: {
+        assetId: collisionAssetId,
+        sha256: storedCollisionHash,
+        authoringHash: navigationAuthoringHash,
+        worldUnit: "metres",
+      },
+      agent: {
+        radius: 0.25,
+        height: 1.7,
+        eyeHeight: 1.6,
+        maxClimb: 0.2,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+    }
+    : null;
+  const navigationRequestHash = navigationParameters
+    ? await sha256Hex(JSON.stringify(navigationParameters))
+    : null;
   const executionEvidence = {
     ...parsed.data.evidence,
     completedAt: new Date().toISOString(),
@@ -11694,7 +12242,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     proposalHash,
     humanReviewRequired: true,
   };
-  await context.env.DB.batch([
+  const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       INSERT INTO assets (
         id, organisation_id, project_id, version_id, kind, format, object_key,
@@ -11712,6 +12260,25 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       stored.etag,
       storedReportHash,
     ),
+    ...(collisionAssetId && collisionOutput && storedCollision && storedCollisionHash
+      ? [context.env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, etag, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'collision', 'glb', ?, ?, ?, ?, ?, ?, 'verified')
+      `).bind(
+        collisionAssetId,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+        collisionOutput.objectKey,
+        collisionOutput.fileName,
+        collisionOutput.mimeType,
+        storedCollision.size,
+        storedCollision.etag,
+        storedCollisionHash,
+      )]
+      : []),
     context.env.DB.prepare(`
       UPDATE processing_jobs
       SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
@@ -11724,7 +12291,12 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     `).bind(
       parsed.data.progressMessage,
       JSON.stringify({
-        outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }],
+        outputs: [
+          { id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size },
+          ...(collisionAssetId && storedCollision
+            ? [{ id: collisionAssetId, kind: "collision", format: "glb", sizeBytes: storedCollision.size }]
+            : []),
+        ],
         proposalHash,
       }),
       parsed.data.evidence.processorVersion,
@@ -11748,7 +12320,83 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       job.extraction_id,
       job.id,
     ),
-  ]);
+  ];
+  if (
+    navigationBuildId && navigationJobId && navigationClientOperationId &&
+    navigationAuthoringHash && navigationRequestHash && navigationParameters &&
+    collisionAssetId
+  ) {
+    completionStatements.push(
+      context.env.DB.prepare(`
+        INSERT INTO scene_navigation_profiles (
+          version_id, organisation_id, project_id, world_unit, agent_radius,
+          agent_height, eye_height, max_step_metres, max_slope_degrees,
+          max_speed, max_acceleration, updated_by
+        ) VALUES (?, ?, ?, 'metres', 0.25, 1.7, 1.6, 0.2, 45, 1.6, 8, ?)
+        ON CONFLICT(version_id) DO NOTHING
+      `).bind(
+        job.version_id,
+        job.organisation_id,
+        job.project_id,
+        job.created_by,
+      ),
+      context.env.DB.prepare(`
+        INSERT INTO processing_jobs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_type,
+          processor_version, idempotency_key, state, priority, max_attempts,
+          progress_message
+        ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
+          'spatial-processor/0.10.0', ?, 'QUEUED', 72, 3,
+          'Automatically queued from the generated floor-plan collision draft')
+      `).bind(
+        navigationJobId,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+        collisionAssetId,
+        `automatic-navigation:${job.extraction_id}:v2`,
+      ),
+      context.env.DB.prepare(`
+        INSERT INTO scene_navigation_builds (
+          id, organisation_id, project_id, version_id, collision_asset_id,
+          job_id, status, parameters_json, client_operation_id, request_hash,
+          authoring_hash, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?)
+      `).bind(
+        navigationBuildId,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+        collisionAssetId,
+        navigationJobId,
+        JSON.stringify(navigationParameters),
+        navigationClientOperationId,
+        navigationRequestHash,
+        navigationAuthoringHash,
+        job.created_by,
+      ),
+      context.env.DB.prepare(`
+        INSERT INTO audit_events (
+          id, organisation_id, actor_user_id, action, resource_type, resource_id,
+          request_id, metadata_json
+        ) VALUES (?, ?, ?, 'spatial.navigation_build.auto_queue',
+          'scene_navigation_build', ?, ?, ?)
+      `).bind(
+        crypto.randomUUID(),
+        job.organisation_id,
+        job.created_by,
+        navigationBuildId,
+        context.get("requestId"),
+        JSON.stringify({
+          jobId: navigationJobId,
+          floorplanExtractionId: job.extraction_id,
+          collisionAssetId,
+        }),
+      ),
+    );
+  }
+  await context.env.DB.batch(completionStatements);
+  if (navigationJobId) dispatchProcessingJob(context, navigationJobId);
   return context.json({
     job: { id: job.id, state: "SUCCEEDED" },
     extraction: {
@@ -11760,6 +12408,9 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       openingCount: parsed.data.report.openings.length,
     },
     reportAssetId,
+    automaticNavigation: navigationBuildId && navigationJobId
+      ? { id: navigationBuildId, jobId: navigationJobId, status: "QUEUED" }
+      : null,
   });
 });
 
@@ -13132,6 +13783,131 @@ function outputFormat(kind: string, fileName: string): string | null {
   if (separator <= 0 || separator === fileName.length - 1) return null;
   const format = fileName.slice(separator + 1).toLowerCase();
   return workerOutputFormats.get(kind)?.has(format) ? format : null;
+}
+
+async function queueAutomaticFloorplanExtraction(
+  context: Context<AppEnvironment>,
+  input: {
+    organisationId: string;
+    projectId: string;
+    versionId: string;
+    assetId: string;
+    fileName: string;
+    format: string;
+    sha256: string;
+    sizeBytes: number;
+    createdBy: string;
+  },
+): Promise<{ id: string; jobId: string; status: string }> {
+  const idempotencyKey = `automatic-floorplan:${input.assetId}:v2`;
+  const existing = await context.env.DB.prepare(`
+    SELECT r.id, r.job_id, r.status
+    FROM floorplan_extraction_runs r
+    JOIN processing_jobs j ON j.id = r.job_id
+    WHERE j.idempotency_key = ? AND r.organisation_id = ?
+  `).bind(idempotencyKey, input.organisationId).first<{
+    id: string;
+    job_id: string;
+    status: string;
+  }>();
+  if (existing) return { id: existing.id, jobId: existing.job_id, status: existing.status };
+
+  const extractionId = crypto.randomUUID();
+  const jobId = crypto.randomUUID();
+  const clientOperationId = crypto.randomUUID();
+  const sourceUpAxis = input.format.toLowerCase() === "ply" ? "y" : "z";
+  const normalizer = input.format.toLowerCase() === "ply" && sourceUpAxis === "y"
+    ? "native-ply-v1"
+    : "pdal";
+  const parameters = {
+    automaticPipeline: true,
+    coordinateAssurance: "registered_y_up_metric_frame",
+    sourceUpAxis,
+    registrationEvidence:
+      "Automatically queued from the registered metric point cloud attached during capture intake.",
+    gridSizeM: 0.25,
+    floorBandM: 0.15,
+    wallMinHeightM: 0.25,
+    wallMaxHeightM: 2.5,
+    minimumWallHeightCoverage: 0.45,
+    minimumRoomAreaM2: 2,
+    maximumOpeningWidthM: 1.25,
+    maximumRooms: 100,
+    maximumSamplePoints: 2_000_000,
+    elevationHintM: null,
+  };
+  const sourceEvidence = {
+    assetId: input.assetId,
+    fileName: input.fileName,
+    sourceFormat: input.format.toLowerCase(),
+    sizeBytes: input.sizeBytes,
+    sha256: input.sha256,
+    integrityStatus: "verified",
+    coordinateAssurance: parameters.coordinateAssurance,
+    sourceUpAxis,
+    registrationEvidence: parameters.registrationEvidence,
+    normalizer,
+    automaticPipeline: true,
+  };
+  const requestHash = await sha256Hex(JSON.stringify({
+    versionId: input.versionId,
+    inputAssetId: input.assetId,
+    ...parameters,
+  }));
+  await context.env.DB.batch([
+    context.env.DB.prepare(`
+      INSERT INTO processing_jobs (
+        id, organisation_id, project_id, version_id, input_asset_id, job_type,
+        processor_version, idempotency_key, state, priority, max_attempts,
+        progress_message
+      ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
+        'spatial-processor/0.10.0', ?, 'QUEUED', 70, 3,
+        'Automatically queued from verified capture geometry')
+    `).bind(
+      jobId,
+      input.organisationId,
+      input.projectId,
+      input.versionId,
+      input.assetId,
+      idempotencyKey,
+    ),
+    context.env.DB.prepare(`
+      INSERT INTO floorplan_extraction_runs (
+        id, organisation_id, project_id, version_id, input_asset_id, job_id,
+        method, normalizer, parameters_json, source_evidence_json,
+        client_operation_id, request_hash, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, 'metric-pointcloud-floorplan-v2', ?, ?, ?, ?, ?, ?)
+    `).bind(
+      extractionId,
+      input.organisationId,
+      input.projectId,
+      input.versionId,
+      input.assetId,
+      jobId,
+      normalizer,
+      JSON.stringify(parameters),
+      JSON.stringify(sourceEvidence),
+      clientOperationId,
+      requestHash,
+      input.createdBy,
+    ),
+    context.env.DB.prepare(`
+      INSERT INTO audit_events (
+        id, organisation_id, actor_user_id, action, resource_type, resource_id,
+        request_id, metadata_json
+      ) VALUES (?, ?, ?, 'spatial.floorplan_extraction.auto_queue',
+        'floorplan_extraction', ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      input.organisationId,
+      input.createdBy,
+      extractionId,
+      context.get("requestId"),
+      JSON.stringify({ jobId, versionId: input.versionId, inputAssetId: input.assetId }),
+    ),
+  ]);
+  dispatchProcessingJob(context, jobId);
+  return { id: extractionId, jobId, status: "QUEUED" };
 }
 
 function canonicalOutputMimeType(kind: string, format: string, supplied?: string): string {
@@ -16835,9 +17611,11 @@ function floorplanExtractionApi(run: FloorplanExtractionRow): Record<string, unk
 
 function floorplanPlanIssue(plan: FloorplanPlan): string | null {
   const identifiers = new Set<string>();
+  const elevationByLevel = new Map<string, number>();
   for (const level of plan.levels) {
     if (identifiers.has(level.id)) return `Duplicate floor-plan identifier: ${level.id}`;
     identifiers.add(level.id);
+    elevationByLevel.set(level.id, level.elevationM);
     const wallIds = new Set<string>();
     for (const room of level.rooms) {
       if (identifiers.has(room.id)) return `Duplicate floor-plan identifier: ${room.id}`;
@@ -16868,6 +17646,21 @@ function floorplanPlanIssue(plan: FloorplanPlan): string | null {
       if (opening.wallId && !wallIds.has(opening.wallId)) {
         return `Opening ${opening.label} refers to a wall outside its level`;
       }
+    }
+  }
+  for (const connector of plan.connectors) {
+    if (identifiers.has(connector.id)) return `Duplicate floor-plan identifier: ${connector.id}`;
+    identifiers.add(connector.id);
+    const lowerElevation = elevationByLevel.get(connector.lowerLevelId);
+    const upperElevation = elevationByLevel.get(connector.upperLevelId);
+    if (lowerElevation === undefined || upperElevation === undefined ||
+      upperElevation <= lowerElevation) {
+      return `Connector ${connector.label} does not join two ascending levels`;
+    }
+    const elevations = connector.points.map((point) => point[1]);
+    if (Math.abs(Math.min(...elevations) - lowerElevation) > 0.1 ||
+      Math.abs(Math.max(...elevations) - upperElevation) > 0.1) {
+      return `Connector ${connector.label} endpoints do not match its level elevations`;
     }
   }
   return null;
@@ -17036,7 +17829,12 @@ function generateIndicativeFloorplanSvg(
     const openings = level.openings.map((opening) =>
       `<line x1="${dxfNumber(x(opening.start[0]))}" y1="${dxfNumber(y(opening.start[1]))}" x2="${dxfNumber(x(opening.end[0]))}" y2="${dxfNumber(y(opening.end[1]))}" class="opening"/>`
     ).join("");
-    const result = `<g transform="translate(0 ${dxfNumber(offsetY)})"><text x="${padding}" y="24" class="level">${xmlText(level.label)} · ${dxfNumber(level.elevationM)} m</text><g transform="translate(0 36)">${roomPaths}${walls}${openings}</g></g>`;
+    const connectors = plan.connectors
+      .filter((connector) => connector.lowerLevelId === level.id || connector.upperLevelId === level.id)
+      .map((connector) => `<polygon points="${connector.points.map((point) =>
+        `${dxfNumber(x(point[0]))},${dxfNumber(y(point[2]))}`).join(" ")}" class="connector"/>`)
+      .join("");
+    const result = `<g transform="translate(0 ${dxfNumber(offsetY)})"><text x="${padding}" y="24" class="level">${xmlText(level.label)} · ${dxfNumber(level.elevationM)} m</text><g transform="translate(0 36)">${roomPaths}${walls}${openings}${connectors}</g></g>`;
     offsetY += levelHeight + levelGap;
     return result;
   }).join("");
@@ -17049,6 +17847,7 @@ function generateIndicativeFloorplanSvg(
     .wall{stroke:#171916;stroke-width:8;stroke-linecap:square}
     .opening{stroke:#fff;stroke-width:12;stroke-linecap:butt}
     .opening+*{stroke:#2f786f}
+    .connector{fill:#dfff66;fill-opacity:.45;stroke:#607d00;stroke-width:3;stroke-dasharray:8 5}
     .label{font:500 13px system-ui,sans-serif;text-anchor:middle;dominant-baseline:middle;fill:#20231f}
     .level{font:700 18px system-ui,sans-serif;fill:#20231f}
     .meta{font:500 12px ui-monospace,monospace;fill:#62675f}
@@ -17083,10 +17882,11 @@ function generateIndicativeFloorplanDxf(
     "9", "$INSUNITS", "70", "6",
     "0", "ENDSEC",
     "0", "SECTION", "2", "TABLES",
-    "0", "TABLE", "2", "LAYER", "70", "5",
+    "0", "TABLE", "2", "LAYER", "70", "6",
     ...dxfLayer("ROOM_OUTLINE", 8),
     ...dxfLayer("WALL", 7),
     ...dxfLayer("OPENING", 4),
+    ...dxfLayer("CONNECTOR", 3),
     ...dxfLayer("LABEL", 3),
     ...dxfLayer("INDICATIVE", 1),
     "0", "ENDTAB", "0", "ENDSEC",
@@ -17119,6 +17919,13 @@ function generateIndicativeFloorplanDxf(
       values.push(...floorplanDxfLine("OPENING", opening.start, opening.end, level.elevationM));
     }
   }
+  for (const connector of plan.connectors) {
+    for (let index = 0; index < connector.points.length; index += 1) {
+      const start = connector.points[index]!;
+      const end = connector.points[(index + 1) % connector.points.length]!;
+      values.push(...floorplanDxfLine3("CONNECTOR", start, end));
+    }
+  }
   values.push(
     "0", "TEXT", "8", "INDICATIVE",
     "10", "0", "20", "0", "30", "0", "40", "0.35",
@@ -17126,6 +17933,18 @@ function generateIndicativeFloorplanDxf(
     "0", "ENDSEC", "0", "EOF",
   );
   return `${values.join("\n")}\n`;
+}
+
+function floorplanDxfLine3(
+  layer: string,
+  start: [number, number, number],
+  end: [number, number, number],
+): string[] {
+  return [
+    "0", "LINE", "8", layer,
+    "10", dxfNumber(start[0]), "20", dxfNumber(start[2]), "30", dxfNumber(start[1]),
+    "11", dxfNumber(end[0]), "21", dxfNumber(end[2]), "31", dxfNumber(end[1]),
+  ];
 }
 
 function floorplanDxfLine(
@@ -17180,6 +17999,18 @@ function generateIndicativeFloorplanPdf(
       ...level.openings.map((opening) =>
         `${dxfNumber(x(opening.start[0]))} ${dxfNumber(y(opening.start[1]))} m ${dxfNumber(x(opening.end[0]))} ${dxfNumber(y(opening.end[1]))} l S`
       ),
+      "0.38 0.49 0.00 RG 2 w [7 4] 0 d",
+      ...plan.connectors
+        .filter((connector) => connector.lowerLevelId === level.id || connector.upperLevelId === level.id)
+        .flatMap((connector) => {
+          const [first, ...rest] = connector.points;
+          return [
+            `${dxfNumber(x(first![0]))} ${dxfNumber(y(first![2]))} m`,
+            ...rest.map((point) => `${dxfNumber(x(point[0]))} ${dxfNumber(y(point[2]))} l`),
+            "h S",
+          ];
+        }),
+      "[] 0 d",
       "BT /F1 16 Tf 50 555 Td",
       `(${pdfText(metadata.projectName)} - ${pdfText(level.label)}) Tj ET`,
       "BT /F1 9 Tf 50 537 Td",

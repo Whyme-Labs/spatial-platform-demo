@@ -27,6 +27,11 @@ import {
   validatePhysicalNavigation,
   validateStructuralNavigation,
 } from "./physical-navigation-validation.mjs";
+import { buildAuthoredStructuralCollisionGlb } from "./authored-collision.mjs";
+import {
+  automaticNavigationLayout as buildAutomaticNavigationLayout,
+  automaticStructuralCollisionConfig as buildAutomaticStructuralCollisionConfig,
+} from "./automatic-spatial-pipeline.mjs";
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
@@ -49,7 +54,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.9.0";
+const processorVersion = "spatial-processor/0.10.0";
 const sparkVersion = "2.1.0";
 const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
@@ -294,26 +299,64 @@ async function processNextJob() {
       });
       await heartbeat(job.id, lease.leaseToken, 88, "Uploading immutable floor-plan proposal");
       const output = await uploadOutput(job, lease.leaseToken, "report", reportPath, "application/json");
+      let collisionOutput = null;
+      if (job.floorplanConfig.automaticPipeline === true) {
+        await heartbeat(job.id, lease.leaseToken, 92, "Building automatic structural collision draft");
+        try {
+          const collisionPath = join(
+            workDirectory,
+            `automatic-structural-collision-${job.floorplanExtractionId}.glb`,
+          );
+          const collisionBytes = buildAuthoredStructuralCollisionGlb(
+            buildAutomaticStructuralCollisionConfig(report),
+            {
+              generator: "Spatial Studio automatic-floorplan-collision-v2",
+              source: {
+                floorplanExtractionId: job.floorplanExtractionId,
+                inputAssetId: job.input.id,
+                inputSha256: download.sha256,
+                humanReviewRequired: true,
+              },
+            },
+          );
+          await writeFile(collisionPath, collisionBytes, { mode: 0o600 });
+          collisionOutput = await uploadOutput(
+            job,
+            lease.leaseToken,
+            "collision",
+            collisionPath,
+            "model/gltf-binary",
+          );
+        } catch (error) {
+          if (error?.code !== "AUTOMATIC_COLLISION_CEILING_MISSING") throw error;
+        }
+      }
       if (heartbeatFailure) throw heartbeatFailure;
       const computeDurationMs = Math.round(performance.now() - jobStartedAt);
       const completion = await fetchJson(`/api/worker/jobs/${job.id}/floorplan-extraction-complete`, {
         method: "POST",
         body: JSON.stringify({
           leaseToken: lease.leaseToken,
-          progressMessage: "Indicative floor-plan proposal is ready for operator review",
+          progressMessage: collisionOutput
+            ? "Floor-plan, collision, and navigation drafts are ready for review"
+            : "Indicative floor-plan proposal is ready for operator review",
           output,
+          ...(collisionOutput ? { collisionOutput } : {}),
           report,
           evidence: {
             processorVersion,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
-            outputBytes: output.sizeBytes,
+            outputBytes: output.sizeBytes + (collisionOutput?.sizeBytes ?? 0),
             toolVersions: {
               node: process.version,
-              processor: "0.9.0",
-              extractor: "metric-pointcloud-floorplan-v1",
+              processor: "0.10.0",
+              extractor: "metric-pointcloud-floorplan-v2",
               normalizer: normalized.tool,
+              ...(collisionOutput
+                ? { collision: "automatic-floorplan-collision-v2" }
+                : {}),
             },
             normalization: {
               sourceFormat: String(job.input.format).toLowerCase(),
@@ -363,9 +406,12 @@ async function processNextJob() {
       let artifact;
       try {
         geometry = await extractCollisionGeometryFromGlb(collisionBytes);
+        const navigationConfig = job.navigationBuildConfig.automaticLayout
+          ? buildAutomaticNavigationLayout(job.navigationBuildConfig, geometry)
+          : job.navigationBuildConfig;
         await heartbeat(job.id, lease.leaseToken, 48, "Building radius-cleared tiled Recast mesh");
         artifact = await buildRecastNavigationArtifact({
-          ...job.navigationBuildConfig,
+          ...navigationConfig,
           positions: geometry.positions,
           indices: geometry.indices,
           ...(geometry.collisionSemantics
@@ -378,7 +424,7 @@ async function processNextJob() {
               }
             : {}),
           source: {
-            ...job.navigationBuildConfig.source,
+            ...navigationConfig.source,
             assetId: job.input.id,
             sha256: download.sha256,
           },
@@ -452,7 +498,7 @@ async function processNextJob() {
             outputBytes: navmeshOutput.sizeBytes + reportOutput.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.9.0",
+              processor: "0.10.0",
               recastNavigationJs: "0.43.1",
               nativeRecast: artifact.generator.nativeRecastCommit,
               rapier3d: artifact.physicalValidation.version,
@@ -547,7 +593,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.9.0",
+              processor: "0.10.0",
               extractor: sourceToWorld
                 ? "registered-ply-walkable-candidates-v2"
                 : "registered-ply-walkable-candidates-v1",
@@ -680,7 +726,7 @@ async function processNextJob() {
             outputBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.9.0",
+              processor: "0.10.0",
               validator: "bounded-file-signature-v1",
               ...(posterRenderer
                 ? {
@@ -807,7 +853,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.9.0",
+            processor: "0.10.0",
             posterCamera: posterCamera ? "authored" : "auto",
           },
         },
@@ -1024,7 +1070,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.9.0",
+          processor: "0.10.0",
           method: "registered-ply-voxel-change-v1",
         },
       },

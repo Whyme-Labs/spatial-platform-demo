@@ -18,7 +18,7 @@ test("release authoring resets project-specific fields and submits scene rotatio
   await page.getByRole("button", { name: "Manage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Corrected Spark room" })).toBeVisible();
 
-  const openRelease = page.getByRole("button", { name: "Publish new release", exact: true });
+  const openRelease = page.getByRole("button", { name: "Publish shareable URL", exact: true });
   await openRelease.click();
   const dialog = page.locator("#releaseDialog");
   await dialog.getByRole("textbox", { name: "Subtitle", exact: true }).fill("Stale project copy");
@@ -50,7 +50,7 @@ test("release authoring loads spatial guards before enabling visual rotation", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Manage", exact: true }).click();
-  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
   await expect(dialog.locator("input[name='sceneRotationZ']")).toBeDisabled();
@@ -64,7 +64,7 @@ test("release authoring makes visual rotation and reviewed transforms mutually e
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Manage", exact: true }).click();
-  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
   const applyTransform = dialog.getByRole("checkbox", {
@@ -93,9 +93,44 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Manage", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Run QA approval", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Publish new release", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
   await expect(page.locator("#releaseDialog")).toBeVisible();
+});
+
+test("processed projects lead with preview and expose automatic spatial generation", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Your splat preview is ready.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Edit scene", exact: true })).toBeVisible();
+  await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
+  await expect(page.getByText("Floor plan", { exact: true })).toBeVisible();
+  await expect(page.getByText("Geometry required", { exact: true })).toBeVisible();
+});
+
+test("multi-level floor-plan review shows every level and vertical connector", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { multiLevelFloorplan: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await expect(page.getByText("2 levels", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 stair/ramp connector", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Correct and review plan", exact: true }).click();
+
+  const dialog = page.locator("#floorplanReviewDialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".floorplan-level-preview")).toHaveCount(2);
+  await expect(dialog.getByRole("img", { name: "Ground floor floor-plan preview" })).toBeVisible();
+  await expect(dialog.getByRole("img", { name: "Level 2 floor-plan preview" })).toBeVisible();
+  await expect(dialog.locator(".preview-connector")).toHaveCount(2);
+  await expect(dialog.locator("#floorplanReviewValidation")).toHaveText(
+    "2 levels · 2 rooms · 8 walls · 0 openings · 1 stair/ramp connectors",
+  );
 });
 
 test("navigation authoring actions and review rows never touch or overlap", async ({ page }) => {
@@ -103,7 +138,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Manage", exact: true }).click();
-  await page.getByRole("button", { name: "Author spatial experience", exact: true }).click();
+  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
@@ -158,6 +193,7 @@ async function mockApprovedProject(
     reviewedTransform?: boolean;
     auxiliaryQaVersion?: boolean;
     navigationBuildHistory?: boolean;
+    multiLevelFloorplan?: boolean;
   } = {},
 ): Promise<void> {
   const project = {
@@ -246,6 +282,18 @@ async function mockApprovedProject(
               integrity_status: "verified",
             }]
             : []),
+          ...(options.multiLevelFloorplan
+            ? [{
+              id: "13131313-1313-4313-8313-131313131313",
+              version_id: versionId,
+              kind: "pointcloud",
+              format: "ply",
+              file_name: "registered-room.ply",
+              size_bytes: 8192,
+              integrity_status: "verified",
+              sha256: "a".repeat(64),
+            }]
+            : []),
         ],
         jobs: [],
         releases: [],
@@ -312,6 +360,35 @@ async function mockApprovedProject(
         rawChangeReports: [],
         semanticExtractions: reviewedTransform,
         semanticCandidates: [],
+        floorplanExtractions: options.multiLevelFloorplan
+          ? [{
+            id: "14141414-1414-4414-8414-141414141414",
+            version_id: versionId,
+            input_asset_id: "13131313-1313-4313-8313-131313131313",
+            job_id: "15151515-1515-4515-8515-151515151515",
+            method: "metric-pointcloud-floorplan-v2",
+            normalizer: "native-ply",
+            status: "READY_FOR_REVIEW",
+            parameters_json: "{}",
+            source_evidence_json: "{}",
+            proposal_json: JSON.stringify(multiLevelFloorplanProposal()),
+            proposal_hash: "b".repeat(64),
+            report_asset_id: "16161616-1616-4616-8616-161616161616",
+            review_decision: null,
+            review_note: null,
+            error_json: null,
+            job_state: "SUCCEEDED",
+            job_progress: 100,
+            job_progress_message: "Multi-level proposal ready for review",
+            job_error_json: null,
+            input_file_name: "registered-room.ply",
+            input_format: "ply",
+            input_size_bytes: 8192,
+            created_at: now,
+          }]
+          : [],
+        floorplanRevisions: [],
+        floorplanExports: [],
         deliveryPolicy: null,
         collisionProxy: { version: "empty-v1", boxes: [] },
         navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
@@ -395,6 +472,113 @@ async function mockApprovedProject(
     }
     return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
   });
+}
+
+function multiLevelFloorplanProposal(): Record<string, unknown> {
+  const room = (roomKey: string, levelKey: string, elevationM: number) => ({
+    roomKey,
+    kind: "room_candidate",
+    label: levelKey === "level-001" ? "Ground room" : "Upper room",
+    areaM2: 36,
+    elevationM,
+    confidence: 0.9,
+    geometry: {
+      type: "polygon",
+      points: [[0, elevationM, 0], [6, elevationM, 0],
+        [6, elevationM, 6], [0, elevationM, 6]],
+    },
+    evidence: { levelKey },
+  });
+  const wall = (
+    wallKey: string,
+    levelKey: string,
+    elevationM: number,
+    start: [number, number],
+    end: [number, number],
+  ) => ({
+    wallKey,
+    kind: "wall_candidate",
+    label: wallKey,
+    elevationM,
+    heightM: 3,
+    thicknessM: 0.2,
+    confidence: 0.9,
+    geometry: {
+      type: "line",
+      points: [[start[0], elevationM, start[1]], [end[0], elevationM, end[1]]],
+    },
+    evidence: { levelKey },
+  });
+  const rooms = [
+    room("room-001", "level-001", 0),
+    room("room-002", "level-002", 3),
+  ];
+  const edges: Array<[[number, number], [number, number]]> = [
+    [[0, 0], [6, 0]], [[6, 0], [6, 6]], [[6, 6], [0, 6]], [[0, 6], [0, 0]],
+  ];
+  const walls = [
+    ...edges.map(([start, end], index) =>
+      wall(`wall-00${index + 1}`, "level-001", 0, start, end)),
+    ...edges.map(([start, end], index) =>
+      wall(`wall-00${index + 5}`, "level-002", 3, start, end)),
+  ];
+  return {
+    schemaVersion: "1.0.0",
+    method: "metric-pointcloud-floorplan-v2",
+    result: "proposal_ready",
+    measurementClass: "indicative",
+    summary: {
+      inferredFloorElevationM: 0,
+      credibleHorizontalLayerCount: 2,
+      wallCellCount: 96,
+      wallCount: 8,
+      roomCount: 2,
+      openingCount: 0,
+      totalRoomAreaM2: 72,
+      levelCount: 2,
+      connectorCount: 1,
+    },
+    levels: [
+      {
+        levelKey: "level-001",
+        label: "Ground floor",
+        elevationM: 0,
+        roomKeys: ["room-001"],
+        wallKeys: ["wall-001", "wall-002", "wall-003", "wall-004"],
+        openingKeys: [],
+      },
+      {
+        levelKey: "level-002",
+        label: "Level 2",
+        elevationM: 3,
+        roomKeys: ["room-002"],
+        wallKeys: ["wall-005", "wall-006", "wall-007", "wall-008"],
+        openingKeys: [],
+      },
+    ],
+    connectors: [{
+      connectorKey: "connector-001",
+      kind: "stair_or_ramp_candidate",
+      label: "Stair/ramp candidate 1",
+      lowerLevelKey: "level-001",
+      upperLevelKey: "level-002",
+      riseM: 3,
+      runM: 4.3,
+      widthM: 1,
+      slopeDegrees: 35,
+      confidence: 0.8,
+      geometry: {
+        type: "polygon",
+        points: [[2.5, 0, 0.5], [2.5, 3, 4.8], [3.5, 3, 4.8], [3.5, 0, 0.5]],
+      },
+      evidence: {},
+    }],
+    rooms,
+    walls,
+    openings: [],
+    humanReviewRequired: true,
+    limitations: ["Indicative fixture requiring operator review."],
+  };
 }
 
 function json(route: Route, status: number, body: unknown): Promise<void> {

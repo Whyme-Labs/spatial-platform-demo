@@ -292,67 +292,42 @@ function validateStructuralBoundaryTopology(artifact) {
       loops: [],
     };
   }
-  const nodes = new Map();
-  const edges = [];
+  const groupedBarriers = new Map();
   for (const barrier of geometry.barrierSegments) {
     const startKey = point2Key(barrier.start);
     const endKey = point2Key(barrier.end);
     if (startKey === endKey) {
       throw structuralFailure(barrier.id, "Structural boundary contains a zero-length edge");
     }
-    addBoundaryNode(nodes, startKey, barrier.start, endKey);
-    addBoundaryNode(nodes, endKey, barrier.end, startKey);
-    edges.push([startKey, endKey]);
+    const groupKey = `${round(barrier.minY)}:${round(barrier.maxY)}`;
+    const group = groupedBarriers.get(groupKey) ?? [];
+    group.push(barrier);
+    groupedBarriers.set(groupKey, group);
   }
-  const invalidNodes = [...nodes.entries()]
-    .filter(([, node]) => node.neighbours.length !== 2)
-    .map(([key, node]) => ({ key, degree: node.neighbours.length }));
-  if (invalidNodes.length) {
-    throw structuralFailure(
-      "boundary-topology",
-      "Reviewed structural barriers do not form closed loops",
-      { invalidNodes },
-    );
-  }
-  const unusedEdges = new Set(edges.map(([start, end]) => edgeKey(start, end)));
-  const loops = [];
-  while (unusedEdges.size) {
-    const firstEdge = unusedEdges.values().next().value;
-    const [first, second] = firstEdge.split("|");
-    const loopKeys = [first];
-    let previous = first;
-    let current = second;
-    unusedEdges.delete(firstEdge);
-    while (current !== first) {
-      loopKeys.push(current);
-      const node = nodes.get(current);
-      const next = node.neighbours.find((candidate) => candidate !== previous);
-      if (!next || loopKeys.length > edges.length + 1) {
-        throw structuralFailure("boundary-topology", "Structural boundary loop traversal failed");
-      }
-      const nextEdge = edgeKey(current, next);
-      if (!unusedEdges.delete(nextEdge) && next !== first) {
-        throw structuralFailure("boundary-topology", "Structural boundary contains a reused or crossing edge");
-      }
-      previous = current;
-      current = next;
-    }
-    loops.push(loopKeys.map((key) => nodes.get(key).point));
-  }
+  const candidateLoops = [...groupedBarriers.values()]
+    .flatMap((barriers) => planarBarrierLoops(barriers));
   const floorComponents = rectangleComponents(geometry.floorRectangles);
+  const acceptedLoops = new Map();
   for (const component of floorComponents) {
     for (const rectangle of component) {
       const center = [
         (rectangle.min[0] + rectangle.max[0]) / 2,
         (rectangle.min[1] + rectangle.max[1]) / 2,
       ];
-      if (!loops.some((loop) => pointInPolygon2(center, loop))) {
+      const containingLoops = candidateLoops
+        .filter((loop) => Math.abs(loop.minY - rectangle.elevation) <= 0.1 &&
+          pointInPolygon2(center, loop.points))
+        .sort((left, right) => Math.abs(signedPolygonArea2(left.points)) -
+          Math.abs(signedPolygonArea2(right.points)));
+      if (!containingLoops.length) {
         throw structuralFailure(
           rectangle.id,
           "Reviewed floor component is not enclosed by a structural boundary loop",
           { center },
         );
       }
+      const loop = containingLoops[0];
+      acceptedLoops.set(loop.key, loop);
       const coveredByCeiling = geometry.ceilingRectangles.some((ceiling) =>
         ceiling.elevation > rectangle.elevation &&
         center[0] > ceiling.min[0] - 1e-6 && center[0] < ceiling.max[0] + 1e-6 &&
@@ -362,16 +337,88 @@ function validateStructuralBoundaryTopology(artifact) {
       }
     }
   }
+  const loops = [...acceptedLoops.values()];
   return {
     summary: {
       passed: true,
-      method: "explicit-closed-segment-loops-v1",
+      method: "explicit-planar-boundary-faces-v2",
       loopCount: loops.length,
       floorComponentCount: floorComponents.length,
       dynamicClosureCount: 0,
     },
     loops,
   };
+}
+
+function planarBarrierLoops(barriers) {
+  const nodes = new Map();
+  const edges = [];
+  for (const barrier of barriers) {
+    const startKey = point2Key(barrier.start);
+    const endKey = point2Key(barrier.end);
+    addBoundaryNode(nodes, startKey, barrier.start, endKey);
+    addBoundaryNode(nodes, endKey, barrier.end, startKey);
+    edges.push([startKey, endKey]);
+  }
+  for (const node of nodes.values()) {
+    node.neighbours = [...new Set(node.neighbours)].sort((left, right) => {
+      const leftPoint = nodes.get(left).point;
+      const rightPoint = nodes.get(right).point;
+      return Math.atan2(leftPoint[1] - node.point[1], leftPoint[0] - node.point[0]) -
+        Math.atan2(rightPoint[1] - node.point[1], rightPoint[0] - node.point[0]);
+    });
+  }
+  const visited = new Set();
+  const loops = new Map();
+  for (const [first, second] of edges.flatMap(([start, end]) => [[start, end], [end, start]])) {
+    const startDirection = `${first}>${second}`;
+    if (visited.has(startDirection)) continue;
+    let from = first;
+    let to = second;
+    const keys = [];
+    let closed = false;
+    for (let guard = 0; guard <= edges.length * 2 + 2; guard += 1) {
+      const directionKey = `${from}>${to}`;
+      if (visited.has(directionKey)) break;
+      visited.add(directionKey);
+      keys.push(from);
+      const neighbours = nodes.get(to)?.neighbours ?? [];
+      const incoming = neighbours.indexOf(from);
+      if (incoming < 0 || !neighbours.length) break;
+      const next = neighbours[(incoming - 1 + neighbours.length) % neighbours.length];
+      from = to;
+      to = next;
+      if (from === first && to === second) {
+        closed = true;
+        break;
+      }
+    }
+    if (!closed) continue;
+    const uniqueKeys = [...new Set(keys)];
+    if (uniqueKeys.length < 3) continue;
+    const points = keys.map((key) => nodes.get(key).point);
+    if (Math.abs(signedPolygonArea2(points)) <= 1e-6) continue;
+    const key = uniqueKeys.sort().join("|");
+    if (!loops.has(key)) {
+      loops.set(key, {
+        key: `${round(barriers[0].minY)}:${round(barriers[0].maxY)}:${key}`,
+        minY: barriers[0].minY,
+        maxY: barriers[0].maxY,
+        points,
+      });
+    }
+  }
+  return [...loops.values()];
+}
+
+function signedPolygonArea2(points) {
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    area += current[0] * next[1] - next[0] * current[1];
+  }
+  return area / 2;
 }
 
 function validateCornerSlides({
@@ -395,11 +442,14 @@ function validateCornerSlides({
   controller.setMinSlopeSlideAngle(degreesToRadians(Math.min(89, agent.maxSlopeDegrees + 5)));
   const probes = [];
   try {
-    for (const [loopIndex, loop] of loops.entries()) {
+    for (const [loopIndex, loopRecord] of loops.entries()) {
+      const loop = loopRecord.points;
       for (const [cornerIndex, corner] of loop.entries()) {
         const cornerId = `loop-${loopIndex + 1}-corner-${cornerIndex + 1}`;
-        const offset = Math.max(agent.radius * 2.6, 0.35);
+        const offset = Math.max(agent.radius * 4, 0.5);
         let selected = null;
+        let interiorSampleCount = 0;
+        let overlapSampleCount = 0;
         for (let sample = 0; sample < 32; sample += 1) {
           const angle = sample / 32 * Math.PI * 2;
           const origin2 = [
@@ -411,12 +461,10 @@ function validateCornerSlides({
             corner[1] - Math.sin(angle) * offset,
           ];
           if (!pointInPolygon2(origin2, loop) || pointInPolygon2(requestedEnd2, loop)) continue;
-          const floorElevation = floorElevationAt(
-            artifact.structuralGeometry?.floorRectangles ?? [],
-            origin2,
-          );
-          if (floorElevation === null) continue;
-          const center = [origin2[0], floorElevation + agent.height / 2 + 0.002, origin2[1]];
+          interiorSampleCount += 1;
+          const floorElevation = loopRecord.minY;
+          const floorClearance = Math.max(0.01, agent.radius * 0.05);
+          const center = [origin2[0], floorElevation + agent.height / 2 + floorClearance, origin2[1]];
           const overlap = world.intersectionWithShape(
             toVector(center),
             { x: 0, y: 0, z: 0, w: 1 },
@@ -426,13 +474,22 @@ function validateCornerSlides({
             collider,
             body,
           );
+          if (overlap) overlapSampleCount += 1;
           if (!overlap) {
             selected = { origin2, requestedEnd2, floorElevation, center };
             break;
           }
         }
         if (!selected) {
-          throw structuralFailure(cornerId, "No player-sized interior origin could exercise this corner");
+          throw structuralFailure(
+            cornerId,
+            "No player-sized interior origin could exercise this corner",
+            {
+              corner: roundedPoint([corner[0], loopRecord.minY, corner[1]]),
+              interiorSampleCount,
+              overlapSampleCount,
+            },
+          );
         }
         body.setTranslation(toVector(selected.center), true);
         world.step();
@@ -657,10 +714,6 @@ function addBoundaryNode(nodes, key, point, neighbour) {
 
 function point2Key(point) {
   return `${round(Number(point[0]))},${round(Number(point[1]))}`;
-}
-
-function edgeKey(first, second) {
-  return first < second ? `${first}|${second}` : `${second}|${first}`;
 }
 
 function rectangleComponents(rectangles) {

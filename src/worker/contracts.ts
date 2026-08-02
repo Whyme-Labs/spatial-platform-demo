@@ -1090,6 +1090,7 @@ export const navigationArtifactSchema = z.object({
       passed: z.literal(true),
       method: z.enum([
         "explicit-closed-segment-loops-v1",
+        "explicit-planar-boundary-faces-v2",
         "registered-mesh-anchor-enclosure",
       ]),
       loopCount: z.number().int().nonnegative(),
@@ -1204,8 +1205,10 @@ export const navigationArtifactSchema = z.object({
         });
       }
       if (value.structuralGeometry && (
-        value.structuralValidation.boundaryTopology.method !==
-          "explicit-closed-segment-loops-v1" ||
+        !new Set([
+          "explicit-closed-segment-loops-v1",
+          "explicit-planar-boundary-faces-v2",
+        ]).has(value.structuralValidation.boundaryTopology.method) ||
         value.structuralValidation.boundaryTopology.loopCount < 1 ||
         value.structuralValidation.boundaryTopology.floorComponentCount < 1
       )) {
@@ -1647,22 +1650,58 @@ const floorplanOpeningProposalSchema = floorplanLineProposalSchema.extend({
   heightM: z.number().positive().max(100).nullable(),
 });
 
+const floorplanLevelProposalSchema = z.object({
+  levelKey: z.string().regex(/^level-[0-9]{3}$/),
+  label: z.string().trim().min(1).max(120),
+  elevationM: boundedMetricSchema,
+  ceilingElevationM: boundedMetricSchema.nullable(),
+  roomKeys: z.array(z.string().regex(/^room-[0-9]{3}$/)).min(1).max(250),
+  wallKeys: z.array(z.string().regex(/^wall-[0-9]{3}$/)).min(1).max(5_000),
+  openingKeys: z.array(z.string().regex(/^opening-[0-9]{3}$/)).max(2_000),
+});
+
+const floorplanConnectorProposalSchema = z.object({
+  connectorKey: z.string().regex(/^connector-[0-9]{3}$/),
+  kind: z.literal("stair_or_ramp_candidate"),
+  label: z.string().trim().min(1).max(120),
+  lowerLevelKey: z.string().regex(/^level-[0-9]{3}$/),
+  upperLevelKey: z.string().regex(/^level-[0-9]{3}$/),
+  riseM: z.number().positive().max(100),
+  runM: z.number().positive().max(1_000),
+  widthM: z.number().positive().max(50),
+  slopeDegrees: z.number().positive().max(89),
+  confidence: z.number().min(0).max(1),
+  geometry: z.object({
+    type: z.literal("polygon"),
+    points: z.array(point3Schema).length(4),
+  }),
+  evidence: z.record(z.string(), z.unknown()),
+});
+
 export const floorplanProposalReportSchema = z.object({
     schemaVersion: z.literal("1.0.0"),
-    method: z.literal("metric-pointcloud-floorplan-v1"),
+    method: z.enum([
+      "metric-pointcloud-floorplan-v1",
+      "metric-pointcloud-floorplan-v2",
+    ]),
     result: z.literal("proposal_ready"),
     measurementClass: z.literal("indicative"),
     source: z.record(z.string(), z.unknown()),
     parameters: z.record(z.string(), z.unknown()),
     summary: z.object({
       inferredFloorElevationM: boundedMetricSchema,
+      inferredCeilingElevationM: boundedMetricSchema.nullable().optional(),
       credibleHorizontalLayerCount: z.number().int().positive(),
       wallCellCount: z.number().int().positive(),
       wallCount: z.number().int().min(1).max(5_000),
       roomCount: z.number().int().min(1).max(250),
       openingCount: z.number().int().min(0).max(2_000),
       totalRoomAreaM2: z.number().positive().max(10_000_000),
+      levelCount: z.number().int().min(1).max(100).optional(),
+      connectorCount: z.number().int().min(0).max(100).optional(),
     }),
+    levels: z.array(floorplanLevelProposalSchema).min(1).max(100).optional(),
+    connectors: z.array(floorplanConnectorProposalSchema).max(100).optional(),
     rooms: z.array(floorplanRoomProposalSchema).min(1).max(250),
     walls: z.array(floorplanWallProposalSchema).min(1).max(5_000),
     openings: z.array(floorplanOpeningProposalSchema).max(2_000),
@@ -1682,6 +1721,59 @@ export const floorplanProposalReportSchema = z.object({
         });
       }
     }
+    if (report.method === "metric-pointcloud-floorplan-v2") {
+      if (!report.levels || !report.connectors) {
+        context.addIssue({
+          code: "custom",
+          path: ["levels"],
+          message: "Multi-level floor-plan reports require level and connector arrays",
+        });
+        return;
+      }
+      if (report.summary.levelCount !== report.levels.length ||
+        report.summary.connectorCount !== report.connectors.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["summary"],
+          message: "Level and connector counts must match their proposal arrays",
+        });
+      }
+      const levelKeys = new Set(report.levels.map((level) => level.levelKey));
+      const assignedRoomKeys = report.levels.flatMap((level) => level.roomKeys);
+      const assignedWallKeys = report.levels.flatMap((level) => level.wallKeys);
+      const assignedOpeningKeys = report.levels.flatMap((level) => level.openingKeys);
+      for (const [path, assigned, proposals] of [
+        ["roomKeys", assignedRoomKeys, report.rooms.map((room) => room.roomKey)],
+        ["wallKeys", assignedWallKeys, report.walls.map((wall) => wall.wallKey)],
+        ["openingKeys", assignedOpeningKeys, report.openings.map((opening) => opening.openingKey)],
+      ] as const) {
+        if (assigned.length !== new Set(assigned).size ||
+          assigned.length !== proposals.length ||
+          proposals.some((key) => !assigned.includes(key))) {
+          context.addIssue({
+            code: "custom",
+            path: ["levels", path],
+            message: `Every ${path} proposal must belong to exactly one level`,
+          });
+        }
+      }
+      const elevationByLevel = new Map(report.levels.map((level) =>
+        [level.levelKey, level.elevationM]));
+      for (const [index, connector] of report.connectors.entries()) {
+        const lower = elevationByLevel.get(connector.lowerLevelKey);
+        const upper = elevationByLevel.get(connector.upperLevelKey);
+        if (!levelKeys.has(connector.lowerLevelKey) ||
+          !levelKeys.has(connector.upperLevelKey) || lower === undefined ||
+          upper === undefined || upper <= lower ||
+          Math.abs((upper - lower) - connector.riseM) > 0.05) {
+          context.addIssue({
+            code: "custom",
+            path: ["connectors", index],
+            message: "A connector must join two declared levels with matching metric rise",
+          });
+        }
+      }
+    }
   });
 
 export const workerFloorplanExtractionCompletionSchema = z.object({
@@ -1691,6 +1783,10 @@ export const workerFloorplanExtractionCompletionSchema = z.object({
     kind: z.literal("report"),
     format: z.literal("json"),
   }),
+  collisionOutput: workerOutputSchema.extend({
+    kind: z.literal("collision"),
+    format: z.literal("glb"),
+  }).optional(),
   report: floorplanProposalReportSchema,
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
@@ -1741,10 +1837,42 @@ export const floorplanReviewPlanSchema = z.object({
     id: floorplanKeySchema,
     label: z.string().trim().min(1).max(120),
     elevationM: boundedMetricSchema,
+    ceilingElevationM: boundedMetricSchema.nullable().optional(),
     rooms: z.array(floorplanRoomSchema).min(1).max(250),
     walls: z.array(floorplanWallSchema).min(1).max(5_000),
     openings: z.array(floorplanOpeningSchema).max(2_000),
   })).min(1).max(100),
+  connectors: z.array(z.object({
+    id: floorplanKeySchema,
+    label: z.string().trim().min(1).max(120),
+    type: z.enum(["stairs", "ramp", "unknown"]),
+    lowerLevelId: floorplanKeySchema,
+    upperLevelId: floorplanKeySchema,
+    points: z.array(point3Schema).min(4).max(256),
+  })).max(100).default([]),
+}).superRefine((plan, context) => {
+  const elevationByLevel = new Map(plan.levels.map((level) => [level.id, level.elevationM]));
+  for (const [index, level] of plan.levels.entries()) {
+    if (level.ceilingElevationM !== undefined && level.ceilingElevationM !== null &&
+      level.ceilingElevationM - level.elevationM < 1.8) {
+      context.addIssue({
+        code: "custom",
+        path: ["levels", index, "ceilingElevationM"],
+        message: "A reviewed ceiling must be at least 1.8 metres above its floor",
+      });
+    }
+  }
+  for (const [index, connector] of plan.connectors.entries()) {
+    const lower = elevationByLevel.get(connector.lowerLevelId);
+    const upper = elevationByLevel.get(connector.upperLevelId);
+    if (lower === undefined || upper === undefined || upper <= lower) {
+      context.addIssue({
+        code: "custom",
+        path: ["connectors", index],
+        message: "A floor-plan connector must join two declared levels in ascending order",
+      });
+    }
+  }
 });
 
 export const floorplanExtractionReviewSchema = z.object({

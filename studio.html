@@ -15,15 +15,20 @@
         <span class="brand-mark"><i></i><i></i><i></i></span>
         <span><strong>Spatial Studio</strong><small>Production operations</small></span>
       </a>
-      <nav class="studio-nav" aria-label="Operations">
-        <button class="nav-item active" data-section="projects"><span>◇</span>Projects</button>
-        <button class="nav-item" data-section="jobs"><span>⇄</span>Processing jobs</button>
-        <button class="nav-item" data-section="releases"><span>↗</span>Releases</button>
-        <button class="nav-item" data-section="reviews"><span>◎</span>Client review</button>
-        <button class="nav-item" data-section="spatial"><span>⌖</span>Spatial authoring</button>
-        <button class="nav-item" data-section="measurement"><span>⌁</span>Measurement</button>
-        <button class="nav-item" data-section="hosting"><span>◫</span>Hosting & lifecycle</button>
-        <button class="nav-item" data-section="team" hidden><span>◌</span>Team access</button>
+      <nav class="studio-nav" aria-label="Studio">
+        <button class="nav-item active" data-section="projects">Projects</button>
+        <button class="nav-item" data-section="releases">Published previews</button>
+        <details class="studio-nav-advanced">
+          <summary>Advanced tools</summary>
+          <div>
+            <button class="nav-item" data-section="jobs">Processing activity</button>
+            <button class="nav-item" data-section="reviews">Client review</button>
+            <button class="nav-item" data-section="spatial">Scene editor</button>
+            <button class="nav-item" data-section="measurement">Measurement evidence</button>
+            <button class="nav-item" data-section="hosting">Hosting & lifecycle</button>
+            <button class="nav-item" data-section="team" hidden>Team access</button>
+          </div>
+        </details>
       </nav>
       <div class="sidebar-bottom">
         <div class="workspace-card">
@@ -45,13 +50,13 @@
     <main class="studio-main">
       <header class="studio-header">
         <div>
-          <span id="viewEyebrow" class="eyebrow">POST-CAPTURE CONTROL PLANE</span>
-          <h1 id="viewTitle">From immutable source to approved spatial release.</h1>
+          <span id="viewEyebrow" class="eyebrow">CAPTURE TO PREVIEW</span>
+          <h1 id="viewTitle">Upload once. Preview the processed splat. Edit only when needed.</h1>
         </div>
         <div class="header-actions">
           <button class="quiet-button" id="refreshButton" type="button">Refresh</button>
-          <button class="quiet-button" id="portfolioToolsButton" type="button">Portfolio tools</button>
-          <button class="primary-button" id="newProjectButton" type="button">+ New project</button>
+          <button class="quiet-button" id="portfolioToolsButton" type="button" hidden>Portfolio tools</button>
+          <button class="primary-button" id="newProjectButton" type="button">Upload capture</button>
         </div>
       </header>
 
@@ -79,9 +84,9 @@
           <div class="project-command-bar">
             <label class="project-search">
               <span class="sr-only">Search projects</span>
-              <input id="projectSearch" type="search" maxlength="120" placeholder="Search project, customer, or delivery…" />
+              <input id="projectSearch" type="search" maxlength="120" placeholder="Search project or customer…" />
             </label>
-            <label>
+            <label hidden>
               <span class="sr-only">Capture adapter</span>
               <select id="projectAdapterFilter">
                 <option value="">All capture sources</option>
@@ -91,7 +96,7 @@
                 <option value="phone-video">Phone / video</option>
               </select>
             </label>
-            <label>
+            <label hidden>
               <span class="sr-only">Delivery template</span>
               <select id="projectDeliveryFilter"><option value="">All delivery templates</option></select>
             </label>
@@ -104,11 +109,11 @@
                 <option value="name_desc">Name Z-A</option>
               </select>
             </label>
-            <label>
+            <label hidden>
               <span class="sr-only">Saved project view</span>
               <select id="savedProjectView"><option value="">Current filters</option></select>
             </label>
-            <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
+            <button id="saveProjectViewButton" class="quiet-button" type="button" hidden>Save view</button>
             <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
           </div>
           <div id="projectBulkBar" class="bulk-action-bar" role="status" aria-live="polite" hidden>
@@ -241,21 +246,29 @@
     </form>
   </dialog>
 
-  <dialog id="newProjectDialog" class="dialog-card wide-dialog">
+  <dialog id="newProjectDialog" class="dialog-card wide-dialog capture-intake-dialog">
     <form id="newProjectForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
-      <span class="eyebrow">NEW SPATIAL PROJECT</span>
-      <h2>Create the canonical project before ingest.</h2>
+      <span class="eyebrow">NEW CAPTURE</span>
+      <h2>Upload a capture result and let the platform prepare the preview.</h2>
+      <p>Upload the visual splat and registered geometry from XGRIDS or FJD together. The platform creates the project, prepares the browser scene, and automatically generates floor-plan and navigation drafts for review.</p>
       <div class="mock-form-grid">
-        <label class="full"><span>Start from template</span><select id="newProjectTemplate" name="templateId"><option value="">No template - choose settings below</option></select></label>
-        <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
-        <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
-        <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
-        <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
-        <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000" placeholder="Area, floors, access, privacy and accuracy requirements"></textarea></label>
+        <label for="newCaptureName"><span>Project name</span><input id="newCaptureName" name="name" required minlength="3" maxlength="120" placeholder="Ground floor showroom" /></label>
+        <label for="newCaptureAdapter"><span>Capture source</span><select id="newCaptureAdapter" name="captureAdapter"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD</option><option value="open-import">Portable splat</option></select></label>
+        <label class="full capture-file-field" for="newCaptureAsset"><span>Portable splat export</span><input id="newCaptureAsset" name="capture" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Accepted: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
+        <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Registered metric point cloud</span><input id="newCaptureGeometry" name="geometry" type="file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Required for XGRIDS/FJD automatic floor-plan and navigation generation. Use a registered Y-up metric PLY, E57, LAS, LAZ, or PTS export.</small></label>
       </div>
-      <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
-      <button class="primary-button wide" type="submit">Create project</button>
+      <details class="form-advanced-settings">
+        <summary>Project details</summary>
+        <div class="mock-form-grid">
+          <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
+          <label class="full"><span>Notes</span><textarea name="notes" maxlength="4000" placeholder="Optional context for the capture or team"></textarea></label>
+        </div>
+        <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+      </details>
+      <div class="upload-progress"><i id="newProjectUploadProgress"></i></div>
+      <small id="newProjectStatus" role="status" aria-live="polite">Ready to upload.</small>
+      <button class="primary-button wide" type="submit">Upload and process</button>
       <p id="projectError" class="form-error" role="alert"></p>
     </form>
   </dialog>
@@ -453,18 +466,24 @@
   <dialog id="uploadDialog" class="dialog-card wide-dialog">
     <form id="uploadForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
-      <span class="eyebrow">IMMUTABLE SOURCE INGEST</span>
-      <h2>Preserve a capture asset or delivery master.</h2>
-      <p>The browser sends resumable 25 MiB parts. R2 keeps the immutable bytes; D1 records their purpose, integrity state, and processing lifecycle. Compatible Gaussian assets stay on their verified renderer lane.</p>
+      <span class="eyebrow">NEW REVISION</span>
+      <h2>Upload another capture result.</h2>
+      <p>Compatible Gaussian exports are preserved as immutable source, processed automatically, and added as a new project revision.</p>
       <section id="uploadAdapterGuidance" class="notice-card"></section>
       <section id="uploadRecovery" class="notice-card" aria-live="polite" hidden></section>
       <div class="mock-form-grid">
-        <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
-        <label><span>Declared format</span><select id="uploadFormat" name="format"><option value="ply">PLY</option></select></label>
-        <label class="full"><span>Immutable local file</span><input id="uploadAssetInput" name="asset" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.zip" required /><small id="uploadPurposeHelp">Spark will validate and derive a browser-ready RAD scene from this portable Gaussian master.</small></label>
+        <label class="full"><span>Portable splat export</span><input id="uploadAssetInput" name="asset" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="uploadPurposeHelp">Spark will validate this portable Gaussian export and prepare a browser-ready scene.</small></label>
         <label id="uploadPosterCameraField" class="full" hidden><span>Authored opening camera (JSON)</span><textarea id="uploadPosterCamera" name="posterCamera" rows="5" spellcheck="false" placeholder='{"position":[0,1,0],"target":[0,1,-1],"up":[0,1,0],"fovDegrees":65}'></textarea><small>SOG web scenes require an authored source camera so the processor poster and published opening agree.</small></label>
         <label><span>Target project</span><input id="uploadProjectName" disabled /></label>
       </div>
+      <details class="form-advanced-settings">
+        <summary>Advanced ingest options</summary>
+        <p class="field-note">Use these only to preserve supporting evidence or attach authored collision geometry. They do not replace the portable splat needed for preview.</p>
+        <div class="mock-form-grid">
+          <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
+          <label><span>Declared format</span><select id="uploadFormat" name="format"><option value="ply">PLY</option></select></label>
+        </div>
+      </details>
       <div class="upload-progress"><i id="uploadProgress"></i></div>
       <small id="uploadStatus" role="status" aria-live="polite">Ready to upload.</small>
       <button class="primary-button wide" type="submit">Start resumable upload</button>
@@ -539,12 +558,10 @@
     <form id="editProjectForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">PROJECT SETTINGS</span>
-      <h2>Maintain the canonical project record.</h2>
+      <h2>Update the project details people see.</h2>
       <div class="mock-form-grid">
         <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
         <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
-        <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
-        <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
         <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
       </div>
       <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>

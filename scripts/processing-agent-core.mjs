@@ -1091,7 +1091,35 @@ export function normalizeSourceToWorldSignature(signature, sourceToWorld) {
   };
 }
 
-export function extractMetricFloorPlan(signature, {
+export function extractMetricFloorPlan(signature, options = {}) {
+  const explicitElevation = options.elevationHintM ?? null;
+  const candidateElevations = explicitElevation === null
+    ? metricFloorLevelCandidates(signature, options)
+    : [explicitElevation];
+  const levelReports = [];
+  for (const elevationHintM of candidateElevations) {
+    try {
+      const report = extractSingleLevelMetricFloorPlan(signature, {
+        ...options,
+        elevationHintM,
+      });
+      if (levelReports.some((candidate) =>
+        Math.abs(candidate.summary.inferredFloorElevationM -
+          report.summary.inferredFloorElevationM) <= 0.5)) continue;
+      levelReports.push(report);
+    } catch (error) {
+      if (explicitElevation !== null || !isRejectedFloorLevelCandidate(error)) throw error;
+    }
+  }
+  if (!levelReports.length) {
+    return extractSingleLevelMetricFloorPlan(signature, options);
+  }
+  levelReports.sort((left, right) =>
+    left.summary.inferredFloorElevationM - right.summary.inferredFloorElevationM);
+  return combineMetricFloorPlanLevels(signature, levelReports, options);
+}
+
+function extractSingleLevelMetricFloorPlan(signature, {
   gridSizeM = 0.25,
   floorBandM = 0.15,
   wallMinHeightM = 0.25,
@@ -1221,6 +1249,11 @@ export function extractMetricFloorPlan(signature, {
     return right.cells.size - left.cells.size || left.elevationM - right.elevationM;
   });
   const floor = credibleLayers[0];
+  const inferredCeilingElevationM = metricCeilingElevation(
+    floor,
+    credibleLayers,
+    minimumRoomCells,
+  );
 
   const verticalResolutionM = Math.max(
     0.025,
@@ -1418,6 +1451,7 @@ export function extractMetricFloorPlan(signature, {
     },
     summary: {
       inferredFloorElevationM: floor.elevationM,
+      inferredCeilingElevationM,
       credibleHorizontalLayerCount: credibleLayers.length,
       wallCellCount: wallCells.size,
       wallCount: walls.length,
@@ -1438,6 +1472,384 @@ export function extractMetricFloorPlan(signature, {
     ],
     generatedAt: new Date().toISOString(),
   };
+}
+
+function metricFloorLevelCandidates(signature, {
+  gridSizeM = 0.25,
+  floorBandM = 0.15,
+  wallMinHeightM = 0.25,
+  wallMaxHeightM = 2.5,
+  minimumRoomAreaM2 = 2,
+} = {}) {
+  if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) return [];
+  const minimumCells = Math.ceil(minimumRoomAreaM2 / (gridSizeM * gridSizeM));
+  const layers = new Map();
+  const points = [];
+  for (const voxel of signature.voxels.values()) {
+    const [x, y, z] = voxel.centroid ?? [];
+    if (![x, y, z].every(Number.isFinite)) continue;
+    points.push([x, y, z]);
+    const index = Math.round(y / floorBandM);
+    const cells = layers.get(index) ?? new Set();
+    cells.add(`${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`);
+    layers.set(index, cells);
+  }
+  const observed = [...layers.entries()]
+    .filter(([, cells]) => cells.size >= minimumCells)
+    .map(([index, cells]) => ({
+      elevationM: semanticRound(index * floorBandM),
+      cells,
+      supportDensity: metricHorizontalSupportDensity(cells, minimumCells),
+    }));
+  if (!observed.length) return [];
+  const substantial = observed
+    .filter((layer) => layer.supportDensity >= 0.3)
+    .sort((left, right) => left.elevationM - right.elevationM);
+  const clusters = [];
+  const clusterGap = Math.max(0.45, floorBandM * 5);
+  for (const layer of substantial) {
+    const cluster = clusters.at(-1);
+    if (cluster && layer.elevationM - cluster.at(-1).elevationM <= clusterGap) {
+      cluster.push(layer);
+    } else {
+      clusters.push([layer]);
+    }
+  }
+  return clusters.map((cluster) => [...cluster].sort((left, right) => {
+    const scoreDifference = metricWallSupportScore(
+      points,
+      right.elevationM,
+      gridSizeM,
+      wallMinHeightM,
+      wallMaxHeightM,
+      floorBandM,
+    ) - metricWallSupportScore(
+      points,
+      left.elevationM,
+      gridSizeM,
+      wallMinHeightM,
+      wallMaxHeightM,
+      floorBandM,
+    );
+    return scoreDifference || right.cells.size - left.cells.size ||
+      left.elevationM - right.elevationM;
+  })[0].elevationM);
+}
+
+function metricHorizontalSupportDensity(cells, minimumCells) {
+  const components = semanticCellComponents(cells)
+    .filter((component) => component.length >= minimumCells);
+  if (!components.length) return 0;
+  return Math.max(...components.map((component) => {
+    const xs = component.map(([x]) => x);
+    const zs = component.map(([, z]) => z);
+    const boundsArea = (Math.max(...xs) - Math.min(...xs) + 1) *
+      (Math.max(...zs) - Math.min(...zs) + 1);
+    return boundsArea ? component.length / boundsArea : 0;
+  }));
+}
+
+function metricCeilingElevation(floor, credibleLayers, minimumCells) {
+  const candidates = credibleLayers
+    .filter((layer) => {
+      const clearance = layer.elevationM - floor.elevationM;
+      if (clearance < 1.8 || clearance > 8) return false;
+      if (metricHorizontalSupportDensity(layer.cells, minimumCells) < 0.3) return false;
+      let overlap = 0;
+      for (const cell of floor.cells) {
+        if (layer.cells.has(cell)) overlap += 1;
+      }
+      layer.floorOverlapRatio = overlap / Math.max(1, floor.cells.size);
+      return layer.floorOverlapRatio >= 0.35;
+    })
+    .sort((left, right) =>
+      left.elevationM - right.elevationM ||
+      right.floorOverlapRatio - left.floorOverlapRatio);
+  return candidates.length ? candidates[0].elevationM : null;
+}
+
+function metricWallSupportScore(
+  points,
+  elevationM,
+  gridSizeM,
+  wallMinHeightM,
+  wallMaxHeightM,
+  floorBandM,
+) {
+  const resolution = Math.max(0.025, floorBandM);
+  const binsByCell = new Map();
+  for (const [x, y, z] of points) {
+    const relativeY = y - elevationM;
+    if (relativeY < wallMinHeightM || relativeY > wallMaxHeightM) continue;
+    const key = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+    const bins = binsByCell.get(key) ?? new Set();
+    bins.add(Math.round(relativeY / resolution));
+    binsByCell.set(key, bins);
+  }
+  return [...binsByCell.values()]
+    .filter((bins) => bins.size >= 3)
+    .reduce((score, bins) => score + bins.size, 0);
+}
+
+function isRejectedFloorLevelCandidate(error) {
+  return error instanceof ProcessingAgentError && new Set([
+    "INSUFFICIENT_WALL_SUPPORT",
+    "INSUFFICIENT_ROOM_SUPPORT",
+    "INSUFFICIENT_FLOOR_SUPPORT",
+  ]).has(error.code);
+}
+
+function combineMetricFloorPlanLevels(signature, reports, options) {
+  const rooms = [];
+  const walls = [];
+  const openings = [];
+  const levels = [];
+  for (const [levelIndex, report] of reports.entries()) {
+    const levelKey = `level-${String(levelIndex + 1).padStart(3, "0")}`;
+    const levelRooms = report.rooms.map((room, roomIndex) => ({
+      ...room,
+      roomKey: `room-${String(rooms.length + roomIndex + 1).padStart(3, "0")}`,
+      evidence: { ...room.evidence, levelKey },
+    }));
+    const levelWalls = report.walls.map((wall, wallIndex) => ({
+      ...wall,
+      wallKey: `wall-${String(walls.length + wallIndex + 1).padStart(3, "0")}`,
+      evidence: { ...wall.evidence, levelKey },
+    }));
+    const levelOpenings = report.openings.map((opening, openingIndex) => ({
+      ...opening,
+      openingKey: `opening-${String(openings.length + openingIndex + 1).padStart(3, "0")}`,
+      evidence: { ...opening.evidence, levelKey },
+    }));
+    rooms.push(...levelRooms);
+    walls.push(...levelWalls);
+    openings.push(...levelOpenings);
+    levels.push({
+      levelKey,
+      label: levelIndex === 0 ? "Ground floor" : `Level ${levelIndex + 1}`,
+      elevationM: report.summary.inferredFloorElevationM,
+      ceilingElevationM: report.summary.inferredCeilingElevationM,
+      roomKeys: levelRooms.map((room) => room.roomKey),
+      wallKeys: levelWalls.map((wall) => wall.wallKey),
+      openingKeys: levelOpenings.map((opening) => opening.openingKey),
+    });
+  }
+  const connectors = inferMetricVerticalConnectors(signature, levels, rooms, {
+    gridSizeM: options.gridSizeM ?? 0.25,
+    floorBandM: options.floorBandM ?? 0.15,
+  });
+  const first = reports[0];
+  return {
+    ...first,
+    method: "metric-pointcloud-floorplan-v2",
+    parameters: {
+      ...first.parameters,
+      elevationHintM: options.elevationHintM ?? null,
+    },
+    summary: {
+      inferredFloorElevationM: levels[0].elevationM,
+      credibleHorizontalLayerCount: Math.max(
+        ...reports.map((report) => report.summary.credibleHorizontalLayerCount),
+      ),
+      levelCount: levels.length,
+      connectorCount: connectors.length,
+      wallCellCount: reports.reduce((sum, report) => sum + report.summary.wallCellCount, 0),
+      wallCount: walls.length,
+      roomCount: rooms.length,
+      openingCount: openings.length,
+      totalRoomAreaM2: semanticRound(rooms.reduce((sum, room) => sum + room.areaM2, 0)),
+    },
+    levels,
+    connectors,
+    rooms,
+    walls,
+    openings,
+    limitations: [
+      ...first.limitations.filter((limitation) => !/multi-level/i.test(limitation)),
+      "Every inferred stair or ramp is a continuous metric navigation proxy that requires operator review; disconnected levels fail navigation validation.",
+      "Elevators, ladders, moving platforms, and inaccessible level changes require explicitly authored traversal semantics.",
+    ],
+  };
+}
+
+function inferMetricVerticalConnectors(signature, levels, rooms, {
+  gridSizeM,
+  floorBandM,
+}) {
+  if (levels.length < 2) return [];
+  const points = [...signature.voxels.values()]
+    .map((voxel) => voxel.centroid)
+    .filter((point) => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite));
+  const connectors = [];
+  for (let levelIndex = 0; levelIndex + 1 < levels.length; levelIndex += 1) {
+    const lower = levels[levelIndex];
+    const upper = levels[levelIndex + 1];
+    const riseM = upper.elevationM - lower.elevationM;
+    if (riseM < 1.2 || riseM > 8) continue;
+    const byCell = new Map();
+    for (const [x, y, z] of points) {
+      if (y <= lower.elevationM + 0.05 || y >= upper.elevationM - 0.05) continue;
+      const key = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+      const values = byCell.get(key) ?? { cell: semanticParseCell(key), samples: [] };
+      values.samples.push([x, y, z]);
+      byCell.set(key, values);
+    }
+    const supportCells = new Map();
+    for (const [key, value] of byCell) {
+      const elevations = value.samples.map((sample) => sample[1]).sort((a, b) => a - b);
+      if (elevations.at(-1) - elevations[0] > Math.max(0.45, floorBandM * 3)) continue;
+      const median = elevations[Math.floor(elevations.length / 2)];
+      supportCells.set(key, {
+        cell: value.cell,
+        point: [
+          (value.cell[0] + 0.5) * gridSizeM,
+          median,
+          (value.cell[1] + 0.5) * gridSizeM,
+        ],
+      });
+    }
+    const components = connectedMetricSupportComponents(supportCells);
+    const candidates = components
+      .map((component) => fitMetricConnector(component, lower, upper, rooms, {
+        gridSizeM,
+        riseM,
+      }))
+      .filter(Boolean)
+      .sort((left, right) => right.confidence - left.confidence || right.widthM - left.widthM);
+    if (!candidates.length) continue;
+    const connector = candidates[0];
+    connectors.push({
+      ...connector,
+      connectorKey: `connector-${String(connectors.length + 1).padStart(3, "0")}`,
+      lowerLevelKey: lower.levelKey,
+      upperLevelKey: upper.levelKey,
+    });
+  }
+  return connectors;
+}
+
+function connectedMetricSupportComponents(cells) {
+  const remaining = new Set(cells.keys());
+  const components = [];
+  while (remaining.size) {
+    const seed = remaining.values().next().value;
+    remaining.delete(seed);
+    const queue = [seed];
+    const component = [];
+    while (queue.length) {
+      const key = queue.shift();
+      component.push(cells.get(key));
+      const [x, z] = semanticParseCell(key);
+      for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          if (!dx && !dz) continue;
+          const neighbour = `${x + dx},${z + dz}`;
+          if (remaining.delete(neighbour)) queue.push(neighbour);
+        }
+      }
+    }
+    if (component.length >= 12) components.push(component);
+  }
+  return components;
+}
+
+function fitMetricConnector(component, lower, upper, rooms, { gridSizeM, riseM }) {
+  const points = component.map((cell) => cell.point);
+  const elevationValues = points.map((point) => point[1]);
+  const minimumElevation = Math.min(...elevationValues);
+  const maximumElevation = Math.max(...elevationValues);
+  if ((maximumElevation - minimumElevation) / riseM < 0.65) return null;
+  const meanX = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+  const meanZ = points.reduce((sum, point) => sum + point[2], 0) / points.length;
+  let xx = 0;
+  let zz = 0;
+  let xz = 0;
+  for (const point of points) {
+    const dx = point[0] - meanX;
+    const dz = point[2] - meanZ;
+    xx += dx * dx;
+    zz += dz * dz;
+    xz += dx * dz;
+  }
+  const angle = 0.5 * Math.atan2(2 * xz, xx - zz);
+  let direction = [Math.cos(angle), Math.sin(angle)];
+  const perpendicular = [-direction[1], direction[0]];
+  const samples = points.map((point) => ({
+    t: (point[0] - meanX) * direction[0] + (point[2] - meanZ) * direction[1],
+    s: (point[0] - meanX) * perpendicular[0] + (point[2] - meanZ) * perpendicular[1],
+    y: point[1],
+  }));
+  const meanT = samples.reduce((sum, sample) => sum + sample.t, 0) / samples.length;
+  const meanY = samples.reduce((sum, sample) => sum + sample.y, 0) / samples.length;
+  const varianceT = samples.reduce((sum, sample) => sum + (sample.t - meanT) ** 2, 0);
+  if (varianceT <= 1e-6) return null;
+  let slope = samples.reduce((sum, sample) =>
+    sum + (sample.t - meanT) * (sample.y - meanY), 0) / varianceT;
+  let intercept = meanY - slope * meanT;
+  if (slope < 0) {
+    direction = direction.map((value) => -value);
+    for (const sample of samples) sample.t *= -1;
+    slope *= -1;
+    intercept = meanY - slope * -meanT;
+  }
+  const totalY = samples.reduce((sum, sample) => sum + (sample.y - meanY) ** 2, 0);
+  const residualY = samples.reduce((sum, sample) =>
+    sum + (sample.y - (slope * sample.t + intercept)) ** 2, 0);
+  const fit = totalY > 1e-8 ? 1 - residualY / totalY : 0;
+  const slopeDegrees = Math.atan(slope) * 180 / Math.PI;
+  if (fit < 0.7 || slopeDegrees < 10 || slopeDegrees > 42) return null;
+  const tValues = samples.map((sample) => sample.t);
+  const sValues = samples.map((sample) => sample.s);
+  const observedRun = Math.max(...tValues) - Math.min(...tValues);
+  const widthM = Math.min(3, Math.max(...sValues) - Math.min(...sValues) + gridSizeM);
+  if (observedRun < riseM / Math.tan(42 * Math.PI / 180) || widthM < 0.65) return null;
+  const lowT = (lower.elevationM - intercept) / slope;
+  const highT = (upper.elevationM - intercept) / slope;
+  const lowCenter = [meanX + direction[0] * lowT, lower.elevationM, meanZ + direction[1] * lowT];
+  const highCenter = [meanX + direction[0] * highT, upper.elevationM, meanZ + direction[1] * highT];
+  if (!metricPointNearRooms(lowCenter, lower.levelKey, rooms, 1.25) ||
+    !metricPointNearRooms(highCenter, upper.levelKey, rooms, 1.25)) return null;
+  const halfWidth = Math.min(widthM / 2, 1.25);
+  const side = [-direction[1] * halfWidth, direction[0] * halfWidth];
+  return {
+    kind: "stair_or_ramp_candidate",
+    label: `Stair or ramp to ${upper.label}`,
+    riseM: semanticRound(riseM),
+    runM: semanticRound(Math.abs(highT - lowT)),
+    widthM: semanticRound(halfWidth * 2),
+    slopeDegrees: semanticRound(slopeDegrees),
+    confidence: semanticRound(Math.min(0.97, 0.55 + fit * 0.3 +
+      Math.min(0.1, widthM / 20))),
+    geometry: {
+      type: "polygon",
+      points: [
+        [semanticRound(lowCenter[0] + side[0]), lower.elevationM, semanticRound(lowCenter[2] + side[1])],
+        [semanticRound(highCenter[0] + side[0]), upper.elevationM, semanticRound(highCenter[2] + side[1])],
+        [semanticRound(highCenter[0] - side[0]), upper.elevationM, semanticRound(highCenter[2] - side[1])],
+        [semanticRound(lowCenter[0] - side[0]), lower.elevationM, semanticRound(lowCenter[2] - side[1])],
+      ],
+    },
+    evidence: {
+      occupiedCellCount: component.length,
+      elevationCoverage: semanticRound((maximumElevation - minimumElevation) / riseM),
+      linearFit: semanticRound(fit),
+      gridSizeM,
+      reviewClassificationRequired: true,
+    },
+  };
+}
+
+function metricPointNearRooms(point, levelKey, rooms, tolerance) {
+  return rooms.some((room) => {
+    if (room.evidence?.levelKey !== levelKey) return false;
+    const points = room.geometry?.points ?? [];
+    const xs = points.map((candidate) => candidate[0]);
+    const zs = points.map((candidate) => candidate[2]);
+    return point[0] >= Math.min(...xs) - tolerance &&
+      point[0] <= Math.max(...xs) + tolerance &&
+      point[2] >= Math.min(...zs) - tolerance &&
+      point[2] <= Math.max(...zs) + tolerance;
+  });
 }
 
 function metricWallSegments(cells, gridSizeM, elevationM, wallHeightM) {
@@ -1960,7 +2372,12 @@ export function compareRegisteredScenes({
 }
 
 export function processorFailure(error) {
-  if (error instanceof ProcessingAgentError) {
+  if (error instanceof ProcessingAgentError || (
+    error instanceof Error &&
+    typeof error.code === "string" &&
+    typeof error.failureClass === "string" &&
+    typeof error.retryable === "boolean"
+  )) {
     return {
       code: error.code,
       message: error.message,
