@@ -119,3 +119,60 @@ reject the old bearer with HTTP 401, while the migration trigger independently
 rejects revoked authorization.
 This is a state-transition receipt; no maximum physical-run duration or total
 account quota is inferred from it.
+
+## FJD vendor qualification transport and artifact receipt
+
+Last measured: 2026-08-03
+
+The official P2 Horse source archive measured 2,587,208,251 bytes. Its ZIP
+central directory measured 773 bytes and located the Gaussian PLY as a
+481,046,648-byte deflated entry producing 536,812,164 bytes. The extractor
+therefore transfers the selected entry rather than the full archive. The
+separate V4e interior LAS measured 161,765,909 bytes. Both installed inputs are
+stream-hashed and pinned in `test/vendor-corpus/fjd-manifest.json`; vendor bytes
+remain in ignored `.cache` storage.
+
+The only range-window constant is `ZIP_END_RECORD_SEARCH_BYTES=65557`. This is
+not an estimated capacity limit: the ZIP protocol defines an end record of 22
+bytes and a maximum comment length of 65,535 bytes. ZIP64 and multi-disk
+archives fail with an explicit unsupported-contract error rather than silently
+truncating offsets.
+
+The inflating writer uses the manifest's exact uncompressed byte count as its
+maximum, not a guessed allowance. If the stream asks for one byte more, the
+error names the fixture budget, exact pinned limit, and observed ask before the
+partial file can be installed. The current ignored cache measured 838,964 KiB
+after both inputs, the RAD, and JSON receipts were present.
+
+The measured P2 input contains 2,164,559 splats at SH degree 3. A cached-input
+local qualification produced a signature-valid 152,148,256-byte RAD container
+in 15,406 ms while
+also rehashing both inputs and decoding the LAS with PDAL. Input acquisition is
+excluded, and the streaming hash warms the PLY in the OS page cache before
+Spark runs; this is not a cold-build claim. Pinned PDAL 2.9.2 decoded all
+3,851,558 LAS points. It reported
+unknown horizontal units and no spatial reference, so the sample is blocked
+from metric registration, floor-plan generation, structural collision, and
+navigation regardless of successful format decoding.
+
+Spark includes measured build durations in RAD metadata. Two repeated builds
+after streaming input verification produced 152,148,264 and 152,148,256 bytes
+with different SHA-256 values. The production invariant is therefore exact
+per-run output identity, not byte-for-byte reproducibility across builds.
+Qualification always rebuilds the RAD and records that run's byte count and
+SHA-256.
+
+Reproduce the current receipts from the repository root:
+
+```sh
+npm run processor:setup
+npm run processor:container:build
+npm run corpus:fjd:inspect
+npm run corpus:fjd:qualify
+du -sk .cache/fjd-sample-corpus
+```
+
+Machine-readable remote, input, decoder, and output receipts are written under
+`.cache/fjd-sample-corpus/reports`. Remeasure and update this section when FJD
+replaces a sample, Spark changes its encoding, PDAL changes its decoder, or the
+first paired indoor FJD bundle becomes available.

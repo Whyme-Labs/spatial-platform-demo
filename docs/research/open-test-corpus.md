@@ -389,10 +389,14 @@ without misrepresenting synthetic geometry as a surveyed building.
    The AWS Laundry scene covers indoor Gaussian rendering; it does not include
    source poses or images.
 
-2. **No independent public FJD or XGRIDS raw scanner bundle is adopted.**
-   Public marketing/demo outputs do not establish redistribution rights for
-   XBIN, FJDSLAM, LCC, or LCC2 source packages. Vendor-supplied evaluation data
-   should remain private until a written redistribution licence exists.
+2. **Official FJD samples are adopted only as a private qualification lane.**
+   The pinned P2 archive pairs a raw package and external video with a Gaussian
+   result, while the pinned V4e interior LAS exercises real LAS decoding. Its
+   unknown units and absent spatial reference prevent metric registration. The
+   samples are different captures and therefore do not prove registered
+   visual/collision geometry or automatic walkability. The vendor page does not
+   grant dataset redistribution rights, so downloads and derived RAD files stay
+   in ignored `.cache` storage. No XGRIDS sample is adopted yet.
 
 3. **No upstream public RAD fixture is adopted.**
    Spark's official example asset list points at externally hosted World Labs

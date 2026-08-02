@@ -1,0 +1,59 @@
+{
+  "schemaVersion": "whymelabs.fjd-sample-corpus.v1",
+  "primaryDevice": "fjd",
+  "vendorPage": "https://store.fjdtrion.com/pages/sample-data",
+  "redistribution": "not-granted",
+  "fixtures": [
+    {
+      "id": "fjd-p2-horse-gaussian",
+      "capture": "P2 Horse 3DGS",
+      "role": "gaussian_splat",
+      "source": {
+        "provider": "google-drive",
+        "fileId": "1LZL4_CvxQV1bqlrRir4TDTPm5MEZn0W8",
+        "archiveFileName": "P2 Horse 3DGS.zip",
+        "archiveSizeBytes": 2587208251,
+        "archiveEntryCount": 6,
+        "centralDirectorySizeBytes": 773,
+        "centralDirectoryOffset": 2587207380,
+        "zipEntry": {
+          "name": "3DGS result/Nanjing Horse 3dgs_2026-01-25-10-54-33_Gaussian.ply",
+          "compressionMethod": 8,
+          "crc32": "667bd5dd",
+          "compressedSizeBytes": 481046648,
+          "uncompressedSizeBytes": 536812164,
+          "localHeaderOffset": 2436135
+        }
+      },
+      "fileName": "fjd-p2-horse-gaussian.ply",
+      "sizeBytes": 536812164,
+      "sha256": "5146b69324c30fcf0946013a92b70d47eed825586a38756dc6f7d8613a9d5b65",
+      "inspection": {
+        "headerBytes": 1531,
+        "vertexCount": 2164559,
+        "sphericalHarmonicDegree": 3,
+        "propertyCount": 62
+      }
+    },
+    {
+      "id": "fjd-v4e-interior-las",
+      "capture": "V4e LiDAR interior",
+      "role": "metric_point_cloud",
+      "source": {
+        "provider": "google-drive",
+        "fileId": "1IE6JoQJiP-x4OGbturWfRdWf6b0FZhxJ"
+      },
+      "fileName": "fjd-v4e-interior.las",
+      "sizeBytes": 161765909,
+      "sha256": "99afa8faab24b7bfa13a63482e06a382ad6f18140f05cf686f8ecc87a31fa9fb"
+    }
+  ],
+  "qualificationCases": [
+    {
+      "id": "p2-horse-v4e-tool-compatibility",
+      "gaussianFixtureId": "fjd-p2-horse-gaussian",
+      "pointCloudFixtureId": "fjd-v4e-interior-las",
+      "relationship": "different-captures"
+    }
+  ]
+}

@@ -12,7 +12,7 @@ access-controlled browser release without exposing raw capture files.
 ## Implemented production path
 
 ```text
-Portable XGRIDS / FJD / open Gaussian export
+Portable FJD / XGRIDS / open Gaussian export
   + registered metric point cloud for device captures
   -> automatic project creation
   -> purpose/format-aware resumable multipart R2 upload
@@ -57,6 +57,12 @@ preserved as private supporting evidence, but they cannot truthfully enter the
 automatic preview lane without portable exports. A processed version can be opened before publication through
 an authenticated, short-lived exact-asset preview session; public or customer
 URLs still require privacy review and an explicit release.
+
+Hardware qualification is currently **FJD first** because FJD is the first
+capture device in the product rollout. The repository pins official P2 and V4e
+sample identities and provides an on-demand private qualification lane; XGRIDS
+sample integration is deliberately deferred until the FJD lane is complete.
+This priority does not change the vendor-neutral production asset contract.
 
 The direct production path accepts browser-ready Spark `.rad`, `.spz`, and
 `.sog` assets. Gaussian PLY and SPZ source assets can also be leased to the
@@ -334,6 +340,8 @@ credential in Studio without changing operator sessions or `WORKER_API_TOKEN`.
 npm run check
 npm run corpus:all
 npm run corpus:e2e:local
+npm run corpus:fjd:inspect
+npm run corpus:fjd:qualify
 ```
 
 This regenerates Worker types, type-checks the client and Worker, statically
@@ -364,6 +372,12 @@ provenance, and the vendor-data boundaries are recorded in
 [`docs/verification/open-corpus-e2e.md`](./docs/verification/open-corpus-e2e.md)
 and
 [`docs/research/open-test-corpus.md`](./docs/research/open-test-corpus.md).
+The FJD commands range-inspect the official P2 archive, selectively extract its
+Gaussian PLY without downloading the whole archive, verify a separate official
+V4e interior LAS, and build a Spark RAD compatibility artifact. Vendor bytes
+and reports remain under ignored `.cache/fjd-sample-corpus`; the exact pins,
+commands, results, rights boundary, and remaining paired-frame gap are recorded
+in [`docs/verification/fjd-sample-corpus.md`](./docs/verification/fjd-sample-corpus.md).
 
 ## Deployments
 
