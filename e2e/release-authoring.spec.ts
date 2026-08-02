@@ -201,7 +201,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
     "23232323-2323-4232-8232-232323232323|24242424-2424-4242-8242-242424242424",
   );
   await expect(dialog.locator("#navigationTraversalEvidenceAsset option")).toHaveText(
-    /lift-proof\.ply · XGRIDS Lixel \/ LCC capture · aaaaaaaaaaaa…/,
+    /lift-proof\.ply · XGRIDS Lixel \/ LCC capture · registration cccccccccccc…/,
   );
 });
 
@@ -455,6 +455,14 @@ async function mockApprovedProject(
             manifestSha256: "b".repeat(64),
             adapter: "xgrids-lcc",
             reviewGeneration: 1,
+            registrationSha256: "c".repeat(64),
+            sourceToWorld: {
+              sourceUpAxis: "Y",
+              worldUnit: "metres",
+              metresPerSourceUnit: 1,
+              yawDegrees: 0,
+              translationMetres: [0, 0, 0],
+            },
           }]
           : [],
         obstacleProxy: { version: "empty-v1", boxes: [] },

@@ -62,6 +62,9 @@ export function expiredRefreshTokenCookie(): string {
 type SceneTokenPayload = {
   releaseId: string;
   expiresAt: number;
+  scope?: "telemetry";
+  sessionId?: string;
+  channelActivationGeneration?: number;
 };
 
 export async function signSceneToken(payload: SceneTokenPayload, secret: string): Promise<string> {
@@ -79,7 +82,14 @@ export async function verifySceneToken(token: string, secret: string): Promise<S
   if (!timingSafeEqual(expectedSignature, suppliedSignature)) return null;
   try {
     const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload))) as SceneTokenPayload;
-    if (typeof payload.releaseId !== "string" || typeof payload.expiresAt !== "number") return null;
+    if (typeof payload.releaseId !== "string") return null;
+    if (payload.scope !== undefined && payload.scope !== "telemetry") return null;
+    if (payload.sessionId !== undefined && typeof payload.sessionId !== "string") return null;
+    if (payload.scope === "telemetry" && (
+      !payload.sessionId || !Number.isSafeInteger(payload.channelActivationGeneration) ||
+      payload.channelActivationGeneration! < 1
+    )) return null;
+    if (typeof payload.expiresAt !== "number") return null;
     if (payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
     return payload;
   } catch {

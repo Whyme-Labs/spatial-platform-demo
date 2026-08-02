@@ -248,6 +248,7 @@ type CaptureBundleValidation = {
     reconstructionPortable: boolean;
     independentlyReconstructable: boolean;
     automationReady: boolean;
+    sceneRegistered: boolean;
   };
   issues: Array<{
     code: string;
@@ -990,6 +991,9 @@ type SpatialWorkspace = {
     evidence_manifest_sha256: string;
     evidence_adapter: string;
     evidence_manifest_review_generation: number;
+    evidence_registration_sha256: string | null;
+    evidence_source_to_world_json: string | null;
+    evidence_source_path_json: string | null;
     created_at: string;
     updated_at: string;
   }>;
@@ -1002,6 +1006,14 @@ type SpatialWorkspace = {
     manifestSha256: string;
     adapter: string;
     reviewGeneration: number;
+    registrationSha256: string;
+    sourceToWorld: {
+      sourceUpAxis: "Y" | "Z";
+      worldUnit: "metres";
+      metresPerSourceUnit: number;
+      yawDegrees: number;
+      translationMetres: [number, number, number];
+    };
   }>;
   obstacleProxy: {
     version: string;
@@ -2407,6 +2419,10 @@ function bindInterface(): void {
     renderCaptureBundlePreview();
   });
   byId("captureBundleAssets").addEventListener("change", renderCaptureBundlePreview);
+  byId<HTMLInputElement>("captureAttachSceneRegistration").addEventListener("change", (event) => {
+    setCaptureSceneRegistrationEnabled((event.currentTarget as HTMLInputElement).checked);
+    renderCaptureBundlePreview();
+  });
   const captureBundleReviewSubmit =
     captureBundleReviewForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   captureBundleReviewForm.addEventListener("submit", (event) => {
@@ -3758,6 +3774,27 @@ async function exportProjectPortfolio(projectIds: string[] | null): Promise<void
   showToast(`${file.fileName ?? "Spatial portfolio"} downloaded`);
 }
 
+async function exportNavigationTraversalEvidence(release: Release): Promise<void> {
+  const file = await apiFile(
+    `/api/releases/${release.id}/navigation-traversal-evidence`,
+  );
+  downloadBrowserFile(
+    file.blob,
+    file.fileName ?? `release-${release.release_number}-navigation-evidence.json`,
+  );
+  if (file.sha256) {
+    showNotice(
+      `${file.fileName ?? "Traversal evidence"} downloaded. SHA-256 ${file.sha256}`,
+      "success",
+    );
+  } else {
+    showNotice(
+      `${file.fileName ?? "Traversal evidence"} downloaded without a server digest; do not use it as a qualification receipt.`,
+      "warning",
+    );
+  }
+}
+
 function downloadBrowserFile(blob: Blob, fileName: string): void {
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -4707,6 +4744,15 @@ function renderReleases(): void {
       });
       actions.append(manage);
     }
+    const exportEvidence = element("button", "quiet-button", "Export traversal evidence");
+    exportEvidence.addEventListener("click", () => {
+      void runAction({
+        key: `export-navigation-evidence:${release.id}`,
+        trigger: exportEvidence,
+        pendingLabel: "Exporting…",
+      }, () => exportNavigationTraversalEvidence(release));
+    });
+    actions.append(exportEvidence);
     if (release.is_active && !release.revoked_at) {
       const revoke = element("button", "danger-button", "Revoke");
       revoke.addEventListener("click", () => {
@@ -6657,6 +6703,13 @@ function renderSpatial(): void {
             manifestSha256: traversal.evidence_manifest_sha256,
             adapter: traversal.evidence_adapter,
             reviewGeneration: traversal.evidence_manifest_review_generation,
+            registrationSha256: traversal.evidence_registration_sha256,
+            sourceToWorld: traversal.evidence_source_to_world_json
+              ? JSON.parse(traversal.evidence_source_to_world_json)
+              : null,
+            sourcePath: traversal.evidence_source_path_json
+              ? JSON.parse(traversal.evidence_source_path_json)
+              : null,
           },
         }, null, 2)));
       } catch (error) {
@@ -8404,23 +8457,31 @@ function openNavigationTraversalDialog(
   const evidenceOptions = navigationEvidenceOptions();
   if (!evidenceOptions.length) {
     showNotice(
-      "Accept a non-blocked capture contract that declares an immutable asset as traversal evidence before authoring a traversal.",
+      "Accept a non-blocked capture contract with a numerical capture-to-scene registration and immutable traversal evidence before authoring a traversal.",
       "error",
     );
     return;
   }
   const evidenceSelect = byId<HTMLSelectElement>("navigationTraversalEvidenceAsset");
   evidenceSelect.replaceChildren(...evidenceOptions.map((option) => new Option(
-    `${option.fileName} · ${captureAdapterDisplayLabel(option.adapter)} capture · ${option.sha256.slice(0, 12)}…`,
+    `${option.fileName} · ${captureAdapterDisplayLabel(option.adapter)} capture · registration ${option.registrationSha256.slice(0, 12)}…`,
     `${option.manifestId}|${option.assetId}`,
   )));
   if (traversal) {
     setFormValue(form, "traversalKind", traversal.traversal_kind);
     setFormValue(form, "label", traversal.label);
     try {
-      const path = JSON.parse(traversal.path_json) as unknown;
+      const path = traversal.evidence_source_path_json
+        ? JSON.parse(traversal.evidence_source_path_json) as unknown
+        : null;
       if (Array.isArray(path)) {
-        setFormValue(form, "path", path.map((point) => String(point)).join("\n"));
+        setFormValue(form, "sourcePath", path.map((point) => String(point)).join("\n"));
+      } else {
+        showNotice(
+          `Stored traversal ${traversal.id} predates capture-frame path receipts. Archive it and author a new traversal from source coordinates.`,
+          "error",
+        );
+        return;
       }
     } catch (error) {
       showNotice(
@@ -8459,7 +8520,7 @@ async function createNavigationTraversal(form: FormData): Promise<void> {
   const project = state.selected?.project;
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
-  const path = parseTraversalPath(String(form.get("path") ?? ""));
+  const sourcePath = parseTraversalPath(String(form.get("sourcePath") ?? ""));
   const [evidenceManifestId, evidenceAssetId] = String(
     form.get("evidenceReceipt") ?? "",
   ).split("|");
@@ -8469,7 +8530,7 @@ async function createNavigationTraversal(form: FormData): Promise<void> {
   const body = {
     traversalKind: String(form.get("traversalKind") ?? "elevator"),
     label: String(form.get("label") ?? ""),
-    path,
+    sourcePath,
     bidirectional: form.get("bidirectional") === "on",
     speedUnitsPerSecond: Number(form.get("speedUnitsPerSecond")),
     reviewedPurpose: String(form.get("reviewedPurpose") ?? ""),
@@ -10386,6 +10447,15 @@ function renderProjectDetail(): void {
     link.rel = "noopener";
     link.textContent = `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}`;
     releaseRow.append(link);
+    const exportEvidence = element("button", "quiet-button", "Export traversal evidence");
+    exportEvidence.addEventListener("click", () => {
+      void runAction({
+        key: `export-navigation-evidence:${release.id}`,
+        trigger: exportEvidence,
+        pendingLabel: "Exporting…",
+      }, () => exportNavigationTraversalEvidence(release));
+    });
+    releaseRow.append(exportEvidence);
     if (release.is_active) {
       const revoke = element("button", "danger-button", "Revoke");
       revoke.addEventListener("click", () => {
@@ -10523,6 +10593,7 @@ function openCaptureBundleDialog(): void {
   if (!detail) return;
   const form = byId<HTMLFormElement>("captureBundleForm");
   form.reset();
+  setCaptureSceneRegistrationEnabled(false);
   captureBundleOperation = null;
   byId("captureBundleError").textContent = "";
   const versionSelect = byId<HTMLSelectElement>("captureBundleVersion");
@@ -10685,10 +10756,48 @@ function renderCaptureBundleAssets(versionId: string): void {
         roles.options[0].selected = true;
       }
       renderCaptureBundlePreview();
+      renderCaptureRegistrationEvidenceOptions();
     });
-    roles.addEventListener("change", renderCaptureBundlePreview);
+    roles.addEventListener("change", () => {
+      renderCaptureBundlePreview();
+      renderCaptureRegistrationEvidenceOptions();
+    });
     row.append(selected, description, roles);
     container.append(row);
+  }
+  renderCaptureRegistrationEvidenceOptions();
+}
+
+function renderCaptureRegistrationEvidenceOptions(): void {
+  const select = byId<HTMLSelectElement>("captureRegistrationEvidence");
+  const selectedId = select.value;
+  const declarations = selectedCaptureBundleAssets();
+  const assets = state.selected?.assets ?? [];
+  select.replaceChildren();
+  for (const declaration of declarations) {
+    const asset = assets.find((candidate) => candidate.id === declaration.assetId);
+    if (!asset) continue;
+    select.append(new Option(
+      `${asset.file_name} · ${declaration.roles.map((role) => captureBundleRoleLabels[role] ?? humanStatus(role)).join(", ")}`,
+      asset.id,
+    ));
+  }
+  if (selectedId && Array.from(select.options).some((option) => option.value === selectedId)) {
+    select.value = selectedId;
+  }
+}
+
+function setCaptureSceneRegistrationEnabled(enabled: boolean): void {
+  for (const container of document.querySelectorAll<HTMLElement>(
+    "#captureBundleForm [data-scene-registration-field]",
+  )) {
+    container.hidden = !enabled;
+    for (const control of container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+      "input, select",
+    )) {
+      control.required = enabled;
+      if (!enabled) control.value = "";
+    }
   }
 }
 
@@ -10751,12 +10860,16 @@ function renderCaptureBundlePreview(): void {
     capabilities.collisionMesh ? "collision geometry" : null,
   ].filter(Boolean);
   preview.className = "notice-card";
+  const registered = byId<HTMLInputElement>("captureAttachSceneRegistration").checked;
   preview.textContent =
     `${assets.length} immutable asset${assets.length === 1 ? "" : "s"} selected. ` +
     (ready.length ? `Evidences ${ready.join(", ")}. ` : "No delivery capability is evidenced yet. ") +
     (independent
-      ? "Images, poses, intrinsics, and extrinsics are all represented."
-      : "Independent reconstruction remains unproven until images, poses, intrinsics, and extrinsics are all preserved.");
+      ? "Images, poses, intrinsics, and extrinsics are all represented. "
+      : "Independent reconstruction remains unproven until images, poses, intrinsics, and extrinsics are all preserved. ") +
+    (registered
+      ? "A reviewed numeric scene registration will be attached."
+      : "No scene registration will be claimed; this provenance-only manifest cannot qualify traversal.");
 }
 
 async function registerCaptureBundle(form: FormData): Promise<void> {
@@ -10770,6 +10883,46 @@ async function registerCaptureBundle(form: FormData): Promise<void> {
   const exportedAt = new Date(String(form.get("exportedAt") ?? ""));
   if (Number.isNaN(exportedAt.getTime())) throw new Error("Enter a valid export time.");
   const epsgValue = optionalString(form.get("epsg"));
+  const axisConvention = String(form.get("axisConvention") ?? "right-handed-y-up");
+  const coordinateUnits = String(form.get("coordinateUnits") ?? "metres");
+  const attachSceneRegistration = form.get("attachSceneRegistration") === "on";
+  let sceneRegistration: {
+    evidenceAssetId: string;
+    sourceToWorld: {
+      sourceUpAxis: "Y" | "Z";
+      worldUnit: "metres";
+      metresPerSourceUnit: number;
+      yawDegrees: number;
+      translationMetres: number[];
+    };
+  } | undefined;
+  if (attachSceneRegistration) {
+    const sourceUpAxis = axisConvention.endsWith("z-up") ? "Z" : "Y";
+    const metresPerSourceUnit = coordinateUnits === "millimetres" ? 0.001 : 1;
+    const registrationNumbers = [
+      Number(form.get("registrationYawDegrees")),
+      Number(form.get("registrationTranslationX")),
+      Number(form.get("registrationTranslationY")),
+      Number(form.get("registrationTranslationZ")),
+    ];
+    if (registrationNumbers.some((value) => !Number.isFinite(value))) {
+      throw new Error("Capture-to-scene yaw and translation must be evidence-derived finite numbers.");
+    }
+    const registrationEvidenceAssetId = String(form.get("registrationEvidenceAssetId") ?? "");
+    if (!assets.some((asset) => asset.assetId === registrationEvidenceAssetId)) {
+      throw new Error("Choose one selected immutable asset as registration evidence.");
+    }
+    sceneRegistration = {
+      evidenceAssetId: registrationEvidenceAssetId,
+      sourceToWorld: {
+        sourceUpAxis,
+        worldUnit: "metres",
+        metresPerSourceUnit,
+        yawDegrees: registrationNumbers[0]!,
+        translationMetres: registrationNumbers.slice(1),
+      },
+    };
+  }
   const limitations = String(form.get("limitations") ?? "")
     .split(/\r?\n/)
     .map((item) => item.trim())
@@ -10795,10 +10948,11 @@ async function registerCaptureBundle(form: FormData): Promise<void> {
     },
     coordinateFrame: {
       id: String(form.get("coordinateFrameId") ?? "").trim(),
-      units: String(form.get("coordinateUnits") ?? "metres"),
-      axisConvention: String(form.get("axisConvention") ?? "right-handed-y-up"),
+      units: coordinateUnits,
+      axisConvention,
       epsg: epsgValue ? Number(epsgValue) : null,
       registrationMethod: String(form.get("registrationMethod") ?? "").trim(),
+      ...(sceneRegistration ? { sceneRegistration } : {}),
     },
     assets: assets.map((asset) => ({
       assetId: asset.assetId,
@@ -10857,7 +11011,8 @@ function renderCaptureBundleSummary(bundle: CaptureBundle): HTMLElement {
     "muted-copy",
     `${validation.summary.assetCount} assets · ${formatBytes(validation.summary.totalBytes)} · ` +
       `${validation.summary.reconstructionPortable ? "portable reconstruction" : "portability incomplete"} · ` +
-      `${validation.summary.independentlyReconstructable ? "independent inputs complete" : "independent inputs incomplete"}`,
+      `${validation.summary.independentlyReconstructable ? "independent inputs complete" : "independent inputs incomplete"} · ` +
+      `${validation.summary.sceneRegistered ? "scene transform registered" : "scene transform missing"}`,
   ));
   if (validation.issues.length) {
     const issues = document.createElement("ul");

@@ -38,10 +38,11 @@ async function login(): Promise<string> {
 
 describe("vendor-neutral capture bundle", () => {
   it("classifies portability separately from independent reconstruction", () => {
+    const metricAssetId = crypto.randomUUID();
     const validation = validateCaptureBundle({
       assets: [
         {
-          id: crypto.randomUUID(),
+          id: metricAssetId,
           roles: ["raw_capture", "metric_point_cloud", "traversal_evidence"],
           kind: "source",
           format: "ply",
@@ -80,6 +81,17 @@ describe("vendor-neutral capture bundle", () => {
       },
       exporterMode: "gui",
       coordinateUnits: "metres",
+      coordinateAxisConvention: "right-handed-y-up",
+      sceneRegistration: {
+        evidenceAssetId: metricAssetId,
+        sourceToWorld: {
+          sourceUpAxis: "Y",
+          worldUnit: "metres",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+      },
       declaredLimitations: ["Camera calibration was not included in the supplied export."],
     });
 
@@ -91,6 +103,7 @@ describe("vendor-neutral capture bundle", () => {
         reconstructionPortable: true,
         independentlyReconstructable: false,
         automationReady: false,
+        sceneRegistered: true,
       },
     });
     expect(validation.issues).toContainEqual(expect.objectContaining({
@@ -198,6 +211,16 @@ describe("vendor-neutral capture bundle", () => {
         axisConvention: "right-handed-y-up",
         epsg: null,
         registrationMethod: "The operator preserved the scanner-local metric frame without an external control network.",
+        sceneRegistration: {
+          evidenceAssetId: pointCloudId,
+          sourceToWorld: {
+            sourceUpAxis: "Y",
+            worldUnit: "metres",
+            metresPerSourceUnit: 1,
+            yawDegrees: 0,
+            translationMetres: [0, 0, 0],
+          },
+        },
       },
       assets: [
         {
@@ -256,6 +279,7 @@ describe("vendor-neutral capture bundle", () => {
           metricReady: true,
           reconstructionPortable: true,
           independentlyReconstructable: false,
+          sceneRegistered: true,
         },
       },
     });
@@ -345,16 +369,46 @@ describe("vendor-neutral capture bundle", () => {
     const object = await env.SPATIAL_ASSETS.get(stored!.object_key);
     expect(object).not.toBeNull();
     expect(object!.size).toBe(stored!.size_bytes);
-    const persisted = JSON.parse(await object!.text()) as {
+    const manifestBytes = await object!.arrayBuffer();
+    const manifestDigest = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", manifestBytes)),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    expect(manifestDigest).toBe(stored!.manifest_hash);
+    const persisted = JSON.parse(new TextDecoder().decode(manifestBytes)) as {
       project: { id: string };
       version: { id: string };
       assets: Array<{ id: string; sha256: string }>;
+      sceneRegistration: {
+        schemaVersion: "capture-to-scene-registration-v1";
+        evidenceAssetId: string;
+        transformSha256: string;
+        sourceToWorld: {
+          sourceUpAxis: "Y" | "Z";
+          worldUnit: "metres";
+          metresPerSourceUnit: number;
+          yawDegrees: number;
+          translationMetres: [number, number, number];
+        };
+      };
       validation: { result: string };
     };
     expect(persisted).toMatchObject({
       project: { id: project.project.id },
       version: { id: versionId },
       validation: { result: "ready_with_warnings" },
+      sceneRegistration: {
+        schemaVersion: "capture-to-scene-registration-v1",
+        evidenceAssetId: pointCloudId,
+        transformSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+        sourceToWorld: {
+          sourceUpAxis: "Y",
+          worldUnit: "metres",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+      },
     });
     expect(persisted.assets).toHaveLength(2);
     expect(persisted.assets.every((asset) => /^[a-f0-9]{64}$/.test(asset.sha256))).toBe(true);

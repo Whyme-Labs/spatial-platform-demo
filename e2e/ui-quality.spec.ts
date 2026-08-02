@@ -193,6 +193,27 @@ test.describe("authenticated studio UI", () => {
     await expectResponsiveSurface(page, "#newProjectDialog");
   });
 
+  test("capture contracts do not invent an identity scene registration", async ({ page }) => {
+    await page.locator("#captureBundleDialog").evaluate((dialog) =>
+      (dialog as HTMLDialogElement).showModal()
+    );
+    const toggle = page.getByLabel("Attach a reviewed numeric capture-to-scene registration");
+    const evidence = page.locator("#captureRegistrationEvidence");
+    await expect(toggle).not.toBeChecked();
+    await expect(evidence).toBeHidden();
+    for (const name of [
+      "registrationYawDegrees",
+      "registrationTranslationX",
+      "registrationTranslationY",
+      "registrationTranslationZ",
+    ]) {
+      await expect(page.locator(`#captureBundleForm [name='${name}']`)).toHaveValue("");
+    }
+    await toggle.check();
+    await expect(evidence).toBeVisible();
+    await expect(evidence).toHaveAttribute("required", "");
+  });
+
   test("studio shell uses the shared type system and responsive control layout", async ({ page }) => {
     const sort = page.locator("#projectSort");
     await sort.selectOption("name_asc");
@@ -284,6 +305,13 @@ test.describe("authenticated studio UI", () => {
       await page.locator("[data-geometry-column-fixture]").evaluate((fixture) => fixture.remove());
       await expectResponsiveSurface(page, ".studio-shell");
     }
+  });
+
+  test("traversal evidence download keeps the complete server digest visible", async ({ page }) => {
+    await page.getByText("Advanced tools", { exact: true }).click();
+    await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    await page.getByRole("button", { name: "Export traversal evidence" }).first().click();
+    await expect(page.locator("#globalNotice")).toContainText(`SHA-256 ${"a".repeat(64)}`);
   });
 
   test("archived projects stay out of current production and remain recoverable", async ({ page }) => {
@@ -948,6 +976,21 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
           max_attempts: 3,
           created_at: now,
         }],
+      });
+    }
+    if (
+      path ===
+      "/api/releases/77777777-7777-4777-8777-777777777771/navigation-traversal-evidence"
+    ) {
+      return route.fulfill({
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-disposition":
+            `attachment; filename="release-2-navigation-${"a".repeat(64)}.json"`,
+          "x-spatial-sha256": "a".repeat(64),
+        },
+        body: '{"schemaVersion":"navigation-traversal-evidence-export-v1","events":[]}',
       });
     }
     if (path === "/api/releases") {

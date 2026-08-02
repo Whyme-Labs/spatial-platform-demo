@@ -24,7 +24,7 @@ import {
 } from "../shared/navigation-runtime";
 import { parseWorldUnit } from "../shared/world-units";
 import { captureAdapterDisplayLabel } from "../shared/capture-adapters";
-import { isCaptureQualifiedTraversalEvidenceReceipt } from "../shared/traversal-evidence";
+import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import type { DetourNavigationRuntime } from "./detour-navigation";
 import type { PhysicalNavigationRuntime } from "./physical-navigation";
 import type { PhysicalMovementMode } from "./physical-navigation";
@@ -123,6 +123,7 @@ type RendererMessage =
         adapter: string;
         manifestSha256: string;
         reviewGeneration: number;
+        registrationSha256: string;
       } | null;
       message?: string;
     }
@@ -847,11 +848,12 @@ function authoredTraversalMessage(
     traversalKind: frame.traversalKind,
     label: frame.label,
     phase,
-    qualification: isCaptureQualifiedTraversalEvidenceReceipt(receipt)
+    qualification: isSceneRegisteredTraversalEvidenceReceipt(receipt)
       ? {
         adapter: receipt.adapter,
         manifestSha256: receipt.manifestSha256,
         reviewGeneration: receipt.reviewGeneration,
+        registrationSha256: receipt.registrationSha256,
       }
       : null,
     ...(message ? { message } : {}),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AuthoredTraversalController } from "../src/renderer/authored-traversal";
 import { parseDetourNavigationArtifact } from "../src/renderer/detour-navigation";
 import { controlledMovementReachedTarget } from "../src/renderer/physical-navigation";
+import { isSceneRegisteredTraversalEvidenceReceipt } from "../src/shared/traversal-evidence";
 
 const elevator = {
   id: "east-lift",
@@ -21,10 +22,30 @@ const elevator = {
     manifestSha256: "b".repeat(64),
     adapter: "xgrids-lcc",
     reviewGeneration: 1,
+    registrationSha256: "c".repeat(64),
+    sourceToWorld: {
+      sourceUpAxis: "Y" as const,
+      worldUnit: "metres" as const,
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0] as [number, number, number],
+    },
+    sourcePath: [[0, 0, 0], [1, 0, 0], [1, 3, 0], [2, 3, 0]] as Array<[number, number, number]>,
   },
 };
 
 describe("authored traversal controller", () => {
+  it("distinguishes a numerically registered capture receipt from legacy manifest provenance", () => {
+    expect(isSceneRegisteredTraversalEvidenceReceipt(elevator.evidenceReceipt)).toBe(true);
+    expect(isSceneRegisteredTraversalEvidenceReceipt({
+      assetId: elevator.evidenceReceipt.assetId,
+      sha256: elevator.evidenceReceipt.sha256,
+      manifestId: elevator.evidenceReceipt.manifestId,
+      manifestSha256: elevator.evidenceReceipt.manifestSha256,
+      adapter: elevator.evidenceReceipt.adapter,
+      reviewGeneration: elevator.evidenceReceipt.reviewGeneration,
+    })).toBe(false);
+  });
   it("moves through the reviewed path at authored speed instead of teleporting", () => {
     const controller = new AuthoredTraversalController([elevator], 1.6);
     const started = controller.resolveMovement([0, 1.6, 0], [0.2, 1.6, 0], 0.5);

@@ -82,13 +82,42 @@ floors through a reviewed Detour link, replays every allowed 3D path direction
 with the production Rapier capsule, unit-tests non-teleport controller timing
 and one-way behavior, and drives an Arrow-key browser traversal from the lower
 to the upper landing. The browser proof also asserts the start/completion host
-events and their frozen capture-adapter, manifest-hash, and monotonic
-review-generation receipt. It decodes a real canvas screenshot and verifies
+events and their frozen registration hash. Worker/domain contracts prove that
+the signed, expiring review session accepts only a connection from the frozen release
+and resolves its capture adapter, manifest hash, review generation, numeric
+source-to-world transform, and capture-frame path server-side. It decodes a
+real canvas screenshot and verifies
 that enabling the authored route adds visible route-overlay pixels. Negative
-contracts substitute a path, manifest identity, or review generation while
+contracts omit the numerical registration or substitute a capture/world path,
+manifest identity, review generation, registration hash, or transform while
 retaining the expected authoring hash and prove that the Worker rejects the
 processor payload. Legacy v8 artifact parsing remains a compatibility contract
 and does not grant the v9 qualification claim.
+
+The authenticated review host accepts the renderer's evidence-linked traversal
+lifecycle event and records a `navigation_traversal` diagnostic row with a
+stable logical run id across credential renewal and a same-tab reload, server
+receive time, per-session sequence, device profile, and server-resolved frozen
+registration receipt. The contract issues two simultaneous first requests to
+prove the authoritative auth-session identity is idempotent without browser
+storage, then proves lifecycle enforcement retires an expired run and an
+authenticated idle tab reconstructs the same UUID with its next sequence
+derived from immutable prior events. A separate R1 to R2 to R1
+rollback contract proves the channel activation generation prevents the old R1
+session and bearer from returning. The same integration contract mints
+evidence credentials and then proves both logout and project-reviewer access
+revocation reject the old bearer immediately; the migration trigger repeats
+the authorization guard below the HTTP layer. Capacity coverage requires an expiry-index
+query plan without a temporary sort and drains 501 expired session rows as 500
+then 1 while reporting D1 rows read/written and whether a pending backlog
+remains. The deterministic
+Studio export includes its full byte SHA-256 in the response header, download
+name, and visible Studio success receipt. Physical qualification
+uses [the device matrix template](verification/physical-navigation-matrix-template.md);
+synthetic browser runs never populate its accepted rows.
+The contracts also expire copied bearers and reject a superseded release
+immediately while its already-invalid session row remains bounded by credential
+expiry and the indexed lifecycle lane.
 
 Playwright serves the built `dist/` bundle through Vite Preview on port 8791.
 All API responses used by UI-layout tests are explicit fixtures. Worker routing

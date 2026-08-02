@@ -88,6 +88,7 @@ import {
   professionalSignoffSchema,
   projectCostSchema,
   telemetrySchema,
+  telemetrySessionSchema,
   uploadCompleteSchema,
   uploadInputSchema,
   workerJobCompletionSchema,
@@ -150,6 +151,18 @@ import {
 import { hasNonIdentitySceneRotation } from "../shared/scene-rotation";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import { inspectWalkableConnectivity } from "../shared/navigation-connectivity";
+import {
+  transformSourcePoint,
+  type Vector3Tuple,
+} from "../shared/navigation-runtime";
+import {
+  CAPTURE_SCENE_REGISTRATION_SCHEMA_VERSION,
+  SCENE_WORLD_COORDINATE_FRAME,
+  captureSceneRegistrationPayload,
+  parseCaptureSceneRegistration,
+  type CaptureSceneRegistration,
+} from "../shared/capture-registration";
+import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import {
   CloudflareSaasError,
   createCloudflareCustomHostname,
@@ -832,6 +845,8 @@ const NAVIGATION_TRAVERSAL_EVIDENCE_SELECT = `
     t.evidence_sha256, t.evidence_manifest_id,
     t.evidence_manifest_sha256, t.evidence_adapter,
     t.evidence_manifest_review_generation,
+    t.evidence_registration_sha256, t.evidence_source_to_world_json,
+    t.evidence_source_path_json,
     t.status, t.created_at, t.updated_at,
     evidence.sha256 AS current_evidence_sha256,
     evidence.integrity_status AS evidence_integrity_status,
@@ -841,7 +856,17 @@ const NAVIGATION_TRAVERSAL_EVIDENCE_SELECT = `
     manifest.status AS evidence_manifest_status,
     manifest.result AS evidence_manifest_result,
     manifest.review_decision AS evidence_manifest_review_decision,
-    manifest.review_generation AS current_evidence_manifest_review_generation
+    manifest.review_generation AS current_evidence_manifest_review_generation,
+    json_extract(
+      CASE WHEN json_valid(manifest.canonical_manifest_json)
+        THEN manifest.canonical_manifest_json ELSE '{}' END,
+      '$.sceneRegistration.transformSha256'
+    ) AS current_evidence_registration_sha256,
+    json_extract(
+      CASE WHEN json_valid(manifest.canonical_manifest_json)
+        THEN manifest.canonical_manifest_json ELSE '{}' END,
+      '$.sceneRegistration.sourceToWorld'
+    ) AS current_evidence_source_to_world_json
   FROM scene_navigation_traversals t
   LEFT JOIN assets evidence ON evidence.id = t.evidence_asset_id
   LEFT JOIN capture_bundle_manifests manifest ON manifest.id = t.evidence_manifest_id
@@ -4405,10 +4430,38 @@ app.post("/api/projects/:projectId/capture-bundles", async (context) => {
     rights: parsed.data.rights,
     exporterMode: parsed.data.exporter.mode,
     coordinateUnits: parsed.data.coordinateFrame.units,
+    coordinateAxisConvention: parsed.data.coordinateFrame.axisConvention,
+    sceneRegistration: parsed.data.coordinateFrame.sceneRegistration,
     declaredLimitations: parsed.data.limitations,
   });
   const manifestId = crypto.randomUUID();
   const manifestAssetId = crypto.randomUUID();
+  const requestedSceneRegistration = parsed.data.coordinateFrame.sceneRegistration;
+  const registrationEvidence = requestedSceneRegistration
+    ? evidenceAssets.find((asset) => asset.id === requestedSceneRegistration.evidenceAssetId)
+    : null;
+  const registrationPayload = requestedSceneRegistration && registrationEvidence?.sha256
+    ? captureSceneRegistrationPayload({
+      schemaVersion: CAPTURE_SCENE_REGISTRATION_SCHEMA_VERSION,
+      sourceCoordinateFrameId: parsed.data.coordinateFrame.id,
+      targetCoordinateFrameId: SCENE_WORLD_COORDINATE_FRAME,
+      evidenceAssetId: registrationEvidence.id,
+      evidenceSha256: registrationEvidence.sha256,
+      method: parsed.data.coordinateFrame.registrationMethod,
+      sourceToWorld: {
+        ...requestedSceneRegistration.sourceToWorld,
+        worldUnit: "metres",
+      },
+    })
+    : null;
+  const sceneRegistration = registrationPayload
+    ? {
+      ...registrationPayload,
+      transformSha256: await sha256Hex(JSON.stringify(registrationPayload)),
+    }
+    : null;
+  const { sceneRegistration: _requestedSceneRegistration, ...coordinateFrame } =
+    parsed.data.coordinateFrame;
   const canonicalManifest = {
     format: "whymelabs.spatial.capture-bundle",
     schemaVersion: parsed.data.schemaVersion,
@@ -4423,7 +4476,8 @@ app.post("/api/projects/:projectId/capture-bundles", async (context) => {
     },
     captureSystem: parsed.data.captureSystem,
     exporter: parsed.data.exporter,
-    coordinateFrame: parsed.data.coordinateFrame,
+    coordinateFrame,
+    ...(sceneRegistration ? { sceneRegistration } : {}),
     assets: parsed.data.assets.map((declaration) => {
       const asset = evidenceAssets.find((candidate) => candidate.id === declaration.assetId)!;
       return {
@@ -4445,7 +4499,7 @@ app.post("/api/projects/:projectId/capture-bundles", async (context) => {
   };
   const canonicalManifestJson = JSON.stringify(canonicalManifest);
   const manifestHash = await sha256Hex(canonicalManifestJson);
-  const manifestBytes = new TextEncoder().encode(`${canonicalManifestJson}\n`);
+  const manifestBytes = new TextEncoder().encode(canonicalManifestJson);
   const fileName = `capture-bundle-${manifestId}.json`;
   const objectKey =
     `reports-private/${auth.organisationId}/${project.id}/${version.id}/capture-bundles/${manifestId}/${fileName}`;
@@ -6820,6 +6874,8 @@ type QualifiedTraversalEvidenceOption = {
   manifestSha256: string;
   adapter: string;
   reviewGeneration: number;
+  registrationSha256: string;
+  sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
 };
 
 async function qualifiedTraversalEvidenceOptions(
@@ -6865,32 +6921,41 @@ async function qualifiedTraversalEvidenceOptions(
       ORDER BY manifest.created_at DESC, manifest.id
     `).bind(organisationId, projectId, versionId),
     database.prepare(`
-      SELECT DISTINCT asset.id, asset.file_name, asset.kind, asset.sha256
-      FROM assets asset
-      JOIN capture_bundle_manifests manifest
-        ON manifest.organisation_id = asset.organisation_id
-        AND manifest.project_id = asset.project_id
-        AND manifest.version_id = asset.version_id
-      JOIN json_each(
-        CASE WHEN json_valid(manifest.canonical_manifest_json)
-          THEN manifest.canonical_manifest_json ELSE '{"assets":[]}' END,
-        '$.assets'
-      ) declaration
-        ON json_extract(
-          CASE WHEN json_valid(declaration.value) THEN declaration.value ELSE '{}' END,
-          '$.id'
-        ) = asset.id
-      JOIN json_each(
-        CASE WHEN json_valid(declaration.value)
-          THEN declaration.value ELSE '{"roles":[]}' END,
-        '$.roles'
-      ) role
+      WITH reviewed_manifests AS (
+        SELECT canonical_manifest_json
+        FROM capture_bundle_manifests
+        WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+          AND status = 'reviewed' AND review_decision = 'accepted'
+          AND result != 'blocked' AND json_valid(canonical_manifest_json)
+      ), declared_asset_ids AS (
+        SELECT DISTINCT json_extract(declaration.value, '$.id') AS asset_id
+        FROM reviewed_manifests manifest
+        JOIN json_each(manifest.canonical_manifest_json, '$.assets') declaration
+        WHERE json_valid(declaration.value) AND (
+          json_extract(declaration.value, '$.id') = json_extract(
+            manifest.canonical_manifest_json,
+            '$.sceneRegistration.evidenceAssetId'
+          ) OR EXISTS (
+            SELECT 1 FROM json_each(declaration.value, '$.roles') role
+            WHERE role.value = 'traversal_evidence'
+          )
+        )
+      )
+      SELECT asset.id, asset.file_name, asset.kind, asset.sha256
+      FROM declared_asset_ids declaration
+      JOIN assets asset ON asset.id = declaration.asset_id
       WHERE asset.organisation_id = ? AND asset.project_id = ? AND asset.version_id = ?
-        AND manifest.status = 'reviewed' AND manifest.review_decision = 'accepted'
-        AND manifest.result != 'blocked' AND role.value = 'traversal_evidence'
         AND asset.integrity_status = 'verified' AND asset.deleted_at IS NULL
         AND asset.sha256 IS NOT NULL
-    `).bind(organisationId, projectId, versionId),
+      ORDER BY asset.id
+    `).bind(
+      organisationId,
+      projectId,
+      versionId,
+      organisationId,
+      projectId,
+      versionId,
+    ),
   ]);
   const assets = new Map(
     requiredBatchResult(results, 1).results.flatMap((candidate) => {
@@ -6904,11 +6969,16 @@ async function qualifiedTraversalEvidenceOptions(
         : [];
     }),
   );
-  const options: QualifiedTraversalEvidenceOption[] = [];
-  for (const candidate of requiredBatchResult(results, 0).results) {
-    options.push(...await qualifiedTraversalEvidenceFromManifest(candidate, assets));
+  const optionGroups = await Promise.all(
+    requiredBatchResult(results, 0).results.map((candidate) =>
+      qualifiedTraversalEvidenceFromManifest(candidate, assets)
+    ),
+  );
+  const options = new Map<string, QualifiedTraversalEvidenceOption>();
+  for (const option of optionGroups.flat()) {
+    options.set(`${option.manifestId}:${option.assetId}`, option);
   }
-  return options;
+  return [...options.values()];
 }
 
 async function qualifiedTraversalEvidenceFromManifest(
@@ -6961,6 +7031,29 @@ async function qualifiedTraversalEvidenceFromManifest(
   ) return [];
   const declarations = Reflect.get(manifest, "assets");
   if (!Array.isArray(declarations)) return [];
+  const sceneRegistration = parseCaptureSceneRegistration(
+    Reflect.get(manifest, "sceneRegistration"),
+  );
+  const coordinateFrame = Reflect.get(manifest, "coordinateFrame");
+  if (
+    !sceneRegistration || !coordinateFrame || typeof coordinateFrame !== "object" ||
+    Reflect.get(coordinateFrame, "id") !== sceneRegistration.sourceCoordinateFrameId ||
+    !captureSceneRegistrationMatchesCoordinateFrame(sceneRegistration, coordinateFrame) ||
+    await sha256Hex(JSON.stringify(captureSceneRegistrationPayload(sceneRegistration))) !==
+      sceneRegistration.transformSha256
+  ) return [];
+  const registrationEvidence = assets.get(sceneRegistration.evidenceAssetId);
+  const registrationDeclaration = declarations.find((declaration) =>
+    declaration && typeof declaration === "object" &&
+    Reflect.get(declaration, "id") === sceneRegistration.evidenceAssetId
+  );
+  if (
+    !registrationEvidence ||
+    registrationEvidence.sha256 !== sceneRegistration.evidenceSha256 ||
+    !registrationDeclaration ||
+    readStringProperty(registrationDeclaration, "sha256")?.toLowerCase() !==
+      sceneRegistration.evidenceSha256
+  ) return [];
   return declarations.flatMap((declaration): QualifiedTraversalEvidenceOption[] => {
     if (!declaration || typeof declaration !== "object") return [];
     const roles = Reflect.get(declaration, "roles");
@@ -6975,6 +7068,8 @@ async function qualifiedTraversalEvidenceFromManifest(
         manifestSha256,
         adapter,
         reviewGeneration,
+        registrationSha256: sceneRegistration.transformSha256,
+        sourceToWorld: sceneRegistration.sourceToWorld,
       }]
       : [];
   });
@@ -6994,6 +7089,8 @@ async function verifiedTraversalEvidence(
   manifestSha256: string;
   adapter: string;
   reviewGeneration: number;
+  registrationSha256: string;
+  sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
 } | null> {
   const row = await database.prepare(`
     SELECT manifest.id, manifest.project_id AS manifest_project_id,
@@ -7024,15 +7121,53 @@ async function verifiedTraversalEvidence(
       AND asset.sha256 IS NOT NULL
   `).bind(assetId, manifestId, organisationId, projectId, versionId).first();
   if (!row) return null;
-  const verifiedAssetId = readStringProperty(row, "asset_id");
-  const fileName = readStringProperty(row, "asset_file_name");
-  const kind = readStringProperty(row, "asset_kind");
-  const sha256 = readStringProperty(row, "asset_sha256")?.toLowerCase();
-  if (!verifiedAssetId || !fileName || !kind || !sha256) return null;
-  const option = (await qualifiedTraversalEvidenceFromManifest(row, new Map([[
-    verifiedAssetId,
-    { assetId: verifiedAssetId, fileName, kind, sha256 },
-  ]])))[0];
+  const canonicalManifestJson = readStringProperty(row, "canonical_manifest_json");
+  if (!canonicalManifestJson) return null;
+  let canonicalManifest: unknown;
+  try {
+    canonicalManifest = JSON.parse(canonicalManifestJson);
+  } catch {
+    return null;
+  }
+  const registration = parseCaptureSceneRegistration(
+    canonicalManifest && typeof canonicalManifest === "object"
+      ? Reflect.get(canonicalManifest, "sceneRegistration")
+      : null,
+  );
+  if (!registration) return null;
+  const registrationAsset = registration.evidenceAssetId === assetId
+    ? row
+    : await database.prepare(`
+      SELECT id AS asset_id, file_name AS asset_file_name, kind AS asset_kind,
+        sha256 AS asset_sha256
+      FROM assets
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+        AND integrity_status = 'verified' AND deleted_at IS NULL AND sha256 IS NOT NULL
+    `).bind(
+      registration.evidenceAssetId,
+      organisationId,
+      projectId,
+      versionId,
+    ).first();
+  if (!registrationAsset) return null;
+  const assets = new Map<string, {
+    assetId: string;
+    fileName: string;
+    kind: string;
+    sha256: string;
+  }>();
+  for (const candidate of [row, registrationAsset]) {
+    const id = readStringProperty(candidate, "asset_id");
+    const fileName = readStringProperty(candidate, "asset_file_name");
+    const kind = readStringProperty(candidate, "asset_kind");
+    const sha256 = readStringProperty(candidate, "asset_sha256")?.toLowerCase();
+    if (id && fileName && kind && sha256 && /^[a-f0-9]{64}$/.test(sha256)) {
+      assets.set(id, { assetId: id, fileName, kind, sha256 });
+    }
+  }
+  const option = (await qualifiedTraversalEvidenceFromManifest(row, assets)).find(
+    (candidate) => candidate.assetId === assetId,
+  );
   return option ? {
     id: option.assetId,
     sha256: option.sha256,
@@ -7040,7 +7175,39 @@ async function verifiedTraversalEvidence(
     manifestSha256: option.manifestSha256,
     adapter: option.adapter,
     reviewGeneration: option.reviewGeneration,
+    registrationSha256: option.registrationSha256,
+    sourceToWorld: option.sourceToWorld,
   } : null;
+}
+
+function captureSceneRegistrationMatchesCoordinateFrame(
+  registration: CaptureSceneRegistration,
+  coordinateFrame: object,
+): boolean {
+  const units = Reflect.get(coordinateFrame, "units");
+  const axisConvention = Reflect.get(coordinateFrame, "axisConvention");
+  const expectedScale = units === "metres" ? 1 : units === "millimetres" ? 0.001 : null;
+  const expectedUpAxis = typeof axisConvention === "string" && axisConvention.endsWith("y-up")
+    ? "Y"
+    : typeof axisConvention === "string" && axisConvention.endsWith("z-up") ? "Z" : null;
+  return typeof axisConvention === "string" && axisConvention.startsWith("right-handed") &&
+    expectedScale !== null &&
+    registration.sourceToWorld.metresPerSourceUnit === expectedScale &&
+    registration.sourceToWorld.sourceUpAxis === expectedUpAxis;
+}
+
+async function hasMetricNavigationProfile(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<boolean> {
+  return Boolean(await database.prepare(`
+    SELECT 1 AS metric
+    FROM scene_navigation_profiles
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND world_unit = 'metres'
+  `).bind(organisationId, projectId, versionId).first<{ metric: number }>());
 }
 
 app.post("/api/projects/:projectId/spatial/navigation-traversals", async (context) => {
@@ -7059,11 +7226,31 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
   if (!version) return notFound(context, "Scene version not found");
+  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
   const existing = await context.env.DB.prepare(`
     SELECT * FROM scene_navigation_traversals
     WHERE organisation_id = ? AND client_operation_id = ?
   `).bind(auth.organisationId, parsed.data.clientOperationId).first();
-  if (existing) return context.json({ traversal: existing, idempotent: true });
+  if (existing) {
+    if (readStringProperty(existing, "request_hash") !== requestHash) {
+      return conflict(
+        context,
+        "Operation ID was already used for a different authored traversal request",
+      );
+    }
+    return context.json({ traversal: existing, idempotent: true });
+  }
+  if (!await hasMetricNavigationProfile(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+    version.id,
+  )) {
+    return conflict(
+      context,
+      "Capture-registered traversal authoring requires a metric navigation profile for this scene version",
+    );
+  }
   const evidence = await verifiedTraversalEvidence(
     context.env.DB,
     auth.organisationId,
@@ -7075,10 +7262,14 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
   if (!evidence) {
     return unprocessable(context, {
       evidenceManifestId: [
-        "Choose an accepted non-blocked capture manifest from this scene version that declares the selected asset as traversal_evidence",
+        "Choose an accepted non-blocked capture manifest from this scene version with a verified numerical capture-to-scene registration that declares the selected asset as traversal_evidence",
       ],
-    }, "Traversal evidence needs an accepted capture manifest");
+    }, "Traversal evidence needs a registered capture manifest");
   }
+  const sourcePath = parsed.data.sourcePath as Vector3Tuple[];
+  const worldPath = sourcePath.map((point) =>
+    transformSourcePoint(point, evidence.sourceToWorld)
+  );
   const id = crypto.randomUUID();
   const traversal = await context.env.DB.prepare(`
     INSERT INTO scene_navigation_traversals (
@@ -7086,8 +7277,11 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
       path_json, bidirectional, speed_units_per_second, reviewed_purpose,
       evidence_asset_id, evidence_sha256, evidence_manifest_id,
       evidence_manifest_sha256, evidence_adapter,
-      evidence_manifest_review_generation, client_operation_id, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      evidence_manifest_review_generation, evidence_registration_sha256,
+      evidence_source_to_world_json, evidence_source_path_json,
+      client_operation_id, request_hash, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(organisation_id, client_operation_id) DO NOTHING
     RETURNING *
   `).bind(
     id,
@@ -7096,7 +7290,7 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
     version.id,
     parsed.data.traversalKind,
     parsed.data.label,
-    JSON.stringify(parsed.data.path),
+    JSON.stringify(worldPath),
     parsed.data.bidirectional ? 1 : 0,
     parsed.data.speedUnitsPerSecond,
     parsed.data.reviewedPurpose,
@@ -7106,10 +7300,27 @@ app.post("/api/projects/:projectId/spatial/navigation-traversals", async (contex
     evidence.manifestSha256,
     evidence.adapter,
     evidence.reviewGeneration,
+    evidence.registrationSha256,
+    JSON.stringify(evidence.sourceToWorld),
+    JSON.stringify(sourcePath),
     parsed.data.clientOperationId,
+    requestHash,
     auth.userId,
   ).first();
-  if (!traversal) throw new Error("Authored navigation traversal was not persisted");
+  if (!traversal) {
+    const concurrent = await context.env.DB.prepare(`
+      SELECT * FROM scene_navigation_traversals
+      WHERE organisation_id = ? AND client_operation_id = ?
+    `).bind(auth.organisationId, parsed.data.clientOperationId).first();
+    if (!concurrent) throw new Error("Authored navigation traversal was not persisted");
+    if (readStringProperty(concurrent, "request_hash") !== requestHash) {
+      return conflict(
+        context,
+        "Operation ID was already used for a different authored traversal request",
+      );
+    }
+    return context.json({ traversal: concurrent, idempotent: true });
+  }
   await audit(
     context,
     auth,
@@ -7137,7 +7348,8 @@ app.patch(
       SELECT id, version_id, traversal_kind, label, path_json, bidirectional,
         speed_units_per_second, reviewed_purpose, evidence_asset_id, evidence_sha256,
         evidence_manifest_id, evidence_manifest_sha256, evidence_adapter,
-        evidence_manifest_review_generation
+        evidence_manifest_review_generation, evidence_registration_sha256,
+        evidence_source_to_world_json, evidence_source_path_json
       FROM scene_navigation_traversals
       WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
     `).bind(
@@ -7159,8 +7371,22 @@ app.patch(
       evidence_manifest_sha256: string;
       evidence_adapter: string;
       evidence_manifest_review_generation: number;
+      evidence_registration_sha256: string;
+      evidence_source_to_world_json: string;
+      evidence_source_path_json: string;
     }>();
     if (!existing) return notFound(context, "Authored navigation traversal not found");
+    if (!await hasMetricNavigationProfile(
+      context.env.DB,
+      auth.organisationId,
+      context.req.param("projectId"),
+      existing.version_id,
+    )) {
+      return conflict(
+        context,
+        "Capture-registered traversal authoring requires a metric navigation profile for this scene version",
+      );
+    }
     const evidence = await verifiedTraversalEvidence(
       context.env.DB,
       auth.organisationId,
@@ -7172,24 +7398,48 @@ app.patch(
     if (!evidence) {
       return unprocessable(context, {
         evidenceManifestId: [
-          "Choose an accepted non-blocked capture manifest from this scene version that declares the selected asset as traversal_evidence",
+          "Choose an accepted non-blocked capture manifest from this scene version with a verified numerical capture-to-scene registration that declares the selected asset as traversal_evidence",
         ],
-      }, "Traversal evidence needs an accepted capture manifest");
+      }, "Traversal evidence needs a registered capture manifest");
     }
+    if (
+      parsed.data.sourcePath === undefined &&
+      evidence.registrationSha256 !== existing.evidence_registration_sha256
+    ) {
+      return unprocessable(context, {
+        sourcePath: [
+          "Changing the capture registration requires a path authored in the new capture frame",
+        ],
+      }, "Traversal needs capture-frame coordinates for the selected registration");
+    }
+    const sourcePath = parsed.data.sourcePath ?? canonicalTraversalSourcePath(
+      existing.evidence_source_path_json,
+    );
+    if (!sourcePath) {
+      return unprocessable(context, {
+        sourcePath: [
+          "This legacy traversal has no capture-frame path; archive it and author a new evidence-derived traversal",
+        ],
+      }, "Traversal needs capture-frame coordinates");
+    }
+    const worldPath = sourcePath.map((point) =>
+      transformSourcePoint(point, evidence.sourceToWorld)
+    );
     const traversal = await context.env.DB.prepare(`
       UPDATE scene_navigation_traversals
       SET traversal_kind = ?, label = ?, path_json = ?, bidirectional = ?,
         speed_units_per_second = ?, reviewed_purpose = ?, evidence_asset_id = ?,
         evidence_sha256 = ?, evidence_manifest_id = ?,
         evidence_manifest_sha256 = ?, evidence_adapter = ?,
-        evidence_manifest_review_generation = ?,
+        evidence_manifest_review_generation = ?, evidence_registration_sha256 = ?,
+        evidence_source_to_world_json = ?, evidence_source_path_json = ?,
         updated_at = datetime('now')
       WHERE id = ?
       RETURNING *
     `).bind(
       parsed.data.traversalKind ?? existing.traversal_kind,
       parsed.data.label ?? existing.label,
-      parsed.data.path ? JSON.stringify(parsed.data.path) : existing.path_json,
+      JSON.stringify(worldPath),
       parsed.data.bidirectional === undefined
         ? existing.bidirectional
         : parsed.data.bidirectional ? 1 : 0,
@@ -7201,6 +7451,9 @@ app.patch(
       evidence.manifestSha256,
       evidence.adapter,
       evidence.reviewGeneration,
+      evidence.registrationSha256,
+      JSON.stringify(evidence.sourceToWorld),
+      JSON.stringify(sourcePath),
       existing.id,
     ).first();
     await audit(
@@ -7511,6 +7764,12 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
   const activeTraversalRows = traversalRows.filter(
     (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
   );
+  if (activeTraversalRows.length && worldUnit !== "metres") {
+    return conflict(
+      context,
+      "Capture-registered traversals require a metric navigation profile; provisional scene-unit builds cannot include them",
+    );
+  }
   const routeDestinations = routeStopRows.flatMap((row) =>
     navigationDestinationFromRouteStop(row, Number(profile.eye_height))
   );
@@ -9593,8 +9852,8 @@ app.post(
           context.env.DB.prepare(`
             INSERT INTO floorplan_exports (
               id, organisation_id, project_id, version_id, revision_id, batch_id,
-              asset_id, format, plan_hash, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              asset_id, format, plan_hash, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).bind(
             exportId,
             auth.organisationId,
@@ -9606,6 +9865,7 @@ app.post(
             format,
             revision.plan_hash,
             auth.userId,
+            row.created_at,
           ),
         );
       }
@@ -13611,6 +13871,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(slug) DO UPDATE SET
         active_release_id = excluded.active_release_id,
+        activation_generation = release_channels.activation_generation + 1,
         updated_at = datetime('now')
       WHERE release_channels.organisation_id = excluded.organisation_id
         AND release_channels.project_id = excluded.project_id
@@ -13709,7 +13970,7 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
   }
   await context.env.DB.batch([
     context.env.DB.prepare(
-      "UPDATE release_channels SET active_release_id = ?, updated_at = datetime('now') WHERE slug = ? AND organisation_id = ?",
+      "UPDATE release_channels SET active_release_id = ?, activation_generation = activation_generation + 1, updated_at = datetime('now') WHERE slug = ? AND organisation_id = ?",
     ).bind(release.id, context.req.param("slug"), auth.organisationId),
     context.env.DB.prepare(
       "UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
@@ -13733,13 +13994,185 @@ app.delete("/api/release-channels/:slug", async (context) => {
   if (!channel) return notFound(context, "Release channel not found");
   await context.env.DB.batch([
     context.env.DB.prepare("UPDATE releases SET revoked_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(channel.active_release_id, auth.organisationId),
-    context.env.DB.prepare("UPDATE release_channels SET active_release_id = NULL, updated_at = datetime('now') WHERE id = ?").bind(channel.id),
+    context.env.DB.prepare("UPDATE release_channels SET active_release_id = NULL, activation_generation = activation_generation + 1, updated_at = datetime('now') WHERE id = ?").bind(channel.id),
     context.env.DB.prepare(
       "UPDATE projects SET status = 'REVOKED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
     ).bind(channel.project_id, auth.organisationId),
   ]);
   await audit(context, auth, "release.revoke", "release_channel", channel.id);
   return context.body(null, 204);
+});
+
+async function stableTelemetrySessionId(
+  releaseId: string,
+  channelId: string,
+  channelActivationGeneration: number,
+  reviewerId: string,
+  authSessionId: string,
+): Promise<string> {
+  const digest = await sha256Hex(JSON.stringify([
+    "viewer-telemetry-session-v1",
+    releaseId,
+    channelId,
+    channelActivationGeneration,
+    reviewerId,
+    authSessionId,
+  ]));
+  const variant = ((Number.parseInt(digest[16]!, 16) & 0b0011) | 0b1000).toString(16);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
+
+type TelemetrySessionState = {
+  active_release_id: string | null;
+  activation_generation: number;
+  session_activation_generation: number;
+  release_revoked_at: string | null;
+  release_expires_at: string | null;
+  reviewer_authorized: number;
+};
+
+async function telemetrySessionState(
+  database: D1Database,
+  sessionId: string | undefined,
+  releaseId: string,
+): Promise<TelemetrySessionState | null> {
+  if (!sessionId) return null;
+  return database.prepare(`
+    SELECT channel.active_release_id, channel.activation_generation,
+      session.activation_generation AS session_activation_generation,
+      release.revoked_at AS release_revoked_at,
+      release.expires_at AS release_expires_at,
+      EXISTS (
+        SELECT 1
+        FROM auth_sessions AS auth_session
+        JOIN memberships AS membership
+          ON membership.organisation_id = auth_session.organisation_id
+          AND membership.user_id = auth_session.user_id
+        WHERE auth_session.id = session.auth_session_id
+          AND auth_session.user_id = session.created_by
+          AND auth_session.organisation_id = release.organisation_id
+          AND auth_session.revoked_at IS NULL
+          AND unixepoch(auth_session.expires_at) > unixepoch('now')
+          AND membership.revoked_at IS NULL
+          AND membership.status = 'active'
+          AND (
+            membership.role IN ('platform_admin', 'production_operator')
+            OR EXISTS (
+              SELECT 1 FROM project_access AS access
+              WHERE access.organisation_id = release.organisation_id
+                AND access.project_id = release.project_id
+                AND access.user_id = auth_session.user_id
+                AND access.role = 'customer_reviewer'
+                AND access.revoked_at IS NULL
+            )
+          )
+      ) AS reviewer_authorized
+    FROM viewer_telemetry_sessions AS session
+    JOIN release_channels AS channel ON channel.id = session.channel_id
+    JOIN releases AS release ON release.id = session.release_id
+    WHERE session.id = ? AND session.release_id = ?
+  `).bind(sessionId, releaseId).first<TelemetrySessionState>();
+}
+
+function telemetrySessionMatchesActiveRelease(
+  session: TelemetrySessionState,
+  releaseId: string,
+  signedActivationGeneration: number | undefined,
+): boolean {
+  return session.active_release_id === releaseId &&
+    session.activation_generation === session.session_activation_generation &&
+    signedActivationGeneration === session.activation_generation;
+}
+
+function telemetrySessionReleaseIsAvailable(session: TelemetrySessionState): boolean {
+  return !session.release_revoked_at &&
+    (!session.release_expires_at || Date.parse(session.release_expires_at) > Date.now());
+}
+
+app.post("/api/releases/:slug/telemetry-session", async (context) => {
+  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  const parsed = telemetrySessionSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const release = await activeRelease(context.env.DB, context.req.param("slug"));
+  if (!release) return notFound(context, "Active published scene not found");
+  if (release.id !== parsed.data.releaseId) {
+    return context.json({
+      error: "This viewer no longer matches the active release. Reload before recording evidence.",
+    }, 410);
+  }
+  if (
+    release.revoked_at ||
+    (release.expires_at && Date.parse(release.expires_at) <= Date.now())
+  ) return context.json({ error: "This scene is no longer available" }, 410);
+  const access = await requireReviewProject(context, release.project_id, true);
+  if (access instanceof Response) return access;
+  const channel = await context.env.DB.prepare(`
+    SELECT id, activation_generation FROM release_channels
+    WHERE slug = ? AND active_release_id = ?
+  `).bind(context.req.param("slug"), release.id).first<{
+    id: string;
+    activation_generation: number;
+  }>();
+  if (!channel) return context.json({ error: "This scene is no longer the active release" }, 410);
+  const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const expiresAtEpochSeconds = Math.floor(Date.now() / 1000) + tokenTtl;
+  const sessionId = await stableTelemetrySessionId(
+    release.id,
+    channel.id,
+    channel.activation_generation,
+    access.auth.userId,
+    access.auth.sessionId,
+  );
+  if (parsed.data.sessionId && parsed.data.sessionId !== sessionId) {
+    return context.json({
+      error: "The traversal evidence session does not match this authenticated session.",
+    }, 410);
+  }
+  const created = await context.env.DB.prepare(`
+    INSERT INTO viewer_telemetry_sessions
+      (id, release_id, channel_id, created_by, auth_session_id,
+        activation_generation, expires_at_epoch, next_sequence)
+    SELECT ?, ?, ?, ?, ?, ?, ?, COALESCE((
+      SELECT MAX(session_sequence) + 1
+      FROM viewer_events
+      WHERE release_id = ? AND session_id = ?
+        AND event_type = 'navigation_traversal'
+    ), 1)
+    WHERE EXISTS (
+      SELECT 1 FROM release_channels
+      WHERE id = ? AND active_release_id = ? AND activation_generation = ?
+    )
+    ON CONFLICT(channel_id, release_id, activation_generation, auth_session_id)
+    DO UPDATE SET
+      expires_at_epoch = excluded.expires_at_epoch,
+      updated_at = datetime('now')
+    RETURNING id
+  `).bind(
+    sessionId,
+    release.id,
+    channel.id,
+    access.auth.userId,
+    access.auth.sessionId,
+    channel.activation_generation,
+    expiresAtEpochSeconds,
+    release.id,
+    sessionId,
+    channel.id,
+    release.id,
+    channel.activation_generation,
+  ).first<{ id: string }>();
+  if (!created) {
+    return context.json({ error: "This scene is no longer the active release" }, 410);
+  }
+  const token = await signSceneToken({
+    releaseId: release.id,
+    expiresAt: expiresAtEpochSeconds,
+    scope: "telemetry",
+    sessionId: created.id,
+    channelActivationGeneration: channel.activation_generation,
+  }, context.env.SESSION_PEPPER);
+  context.header("Cache-Control", "private, no-store");
+  return context.json({ sessionId: created.id, token, expiresAtEpochSeconds });
 });
 
 app.get("/api/releases/:slug/manifest", async (context) => {
@@ -13915,6 +14348,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       );
     }
   }
+  context.header("Cache-Control", "private, no-store");
   return context.json({
     schemaVersion: "1.0.0",
     release: {
@@ -13997,7 +14431,7 @@ app.get("/asset/:releaseId/:assetId/:fileName", async (context) => {
   const token = context.req.query("token");
   if (!token) return unauthorized(context, "Missing scene token");
   const payload = await verifySceneToken(token, context.env.SESSION_PEPPER);
-  if (!payload || payload.releaseId !== context.req.param("releaseId")) return unauthorized(context, "Invalid or expired scene token");
+  if (!payload || payload.scope || payload.releaseId !== context.req.param("releaseId")) return unauthorized(context, "Invalid or expired scene token");
   const asset = await context.env.DB.prepare(`
     SELECT a.* FROM assets a
     JOIN releases r ON (
@@ -14023,7 +14457,7 @@ app.get("/comparison-asset/:projectId/:versionId/:assetId/:fileName", async (con
     context.req.param("versionId"),
     context.req.param("assetId"),
   );
-  if (!payload || payload.releaseId !== expectedScope) {
+  if (!payload || payload.scope || payload.releaseId !== expectedScope) {
     return unauthorized(context, "Invalid or expired comparison token");
   }
   const asset = await context.env.DB.prepare(`
@@ -14123,22 +14557,255 @@ app.post("/api/telemetry", async (context) => {
   if (!(await allowRate(context.env.DB, "telemetry", clientAddress, 120, 60))) return tooManyRequests(context);
   const parsed = telemetrySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const releaseExists = await context.env.DB.prepare("SELECT id FROM releases WHERE id = ?").bind(parsed.data.releaseId).first<{ id: string }>();
-  if (!releaseExists) return notFound(context, "Release not found");
-  await context.env.DB.prepare(`
-    INSERT INTO viewer_events
-      (id, release_id, event_type, session_id, device_profile, metric_value, metadata_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    crypto.randomUUID(),
-    parsed.data.releaseId,
-    parsed.data.eventType,
-    parsed.data.sessionId ?? null,
-    parsed.data.deviceProfile ?? null,
-    parsed.data.metricValue ?? null,
-    JSON.stringify(parsed.data.metadata),
-  ).run();
+  const release = await context.env.DB.prepare(`
+    SELECT id, spatial_snapshot_json, revoked_at, expires_at
+    FROM releases WHERE id = ?
+  `).bind(parsed.data.releaseId).first<{
+    id: string;
+    spatial_snapshot_json: string | null;
+    revoked_at: string | null;
+    expires_at: string | null;
+  }>();
+  if (!release) return notFound(context, "Release not found");
+  let metadata: unknown = parsed.data.metadata;
+  let sessionSequence: number | null = null;
+  const receivedAtMs = Date.now();
+  if (parsed.data.eventType === "navigation_traversal") {
+    const authorization = context.req.header("Authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+    const tokenPayload = token
+      ? await verifySceneToken(token, context.env.SESSION_PEPPER)
+      : null;
+    if (
+      !tokenPayload || tokenPayload.scope !== "telemetry" ||
+      tokenPayload.releaseId !== release.id ||
+      tokenPayload.sessionId !== parsed.data.sessionId
+    ) return unauthorized(context, "Invalid or expired telemetry session");
+    const sessionChannel = await telemetrySessionState(
+      context.env.DB,
+      parsed.data.sessionId,
+      release.id,
+    );
+    if (!sessionChannel) return unauthorized(context, "Invalid or expired telemetry session");
+    if (!telemetrySessionMatchesActiveRelease(
+      sessionChannel,
+      release.id,
+      tokenPayload.channelActivationGeneration,
+    )) {
+      return context.json({ error: "This scene is no longer the active release" }, 410);
+    }
+    if (!telemetrySessionReleaseIsAvailable(sessionChannel)) {
+      return context.json({ error: "This scene is no longer available" }, 410);
+    }
+    if (!sessionChannel.reviewer_authorized) {
+      return unauthorized(context, "Reviewer authorization has ended");
+    }
+    if (
+      release.revoked_at ||
+      (release.expires_at && Date.parse(release.expires_at) <= Date.now())
+    ) return context.json({ error: "This scene is no longer available" }, 410);
+    const snapshot = release.spatial_snapshot_json
+      ? parseSpatialSnapshot(release.spatial_snapshot_json)
+      : null;
+    const artifact = snapshot && typeof snapshot === "object"
+      ? navigationArtifactSchema.safeParse(Reflect.get(snapshot, "navigationArtifact"))
+      : null;
+    const connection = artifact?.success
+      ? artifact.data.offMeshConnections.find((candidate) =>
+        candidate.id === parsed.data.metadata.connectionId
+      )
+      : null;
+    if (
+      !artifact?.success || !connection ||
+      artifact.data.schemaVersion !== "spatial-navigation-v9" ||
+      !isSceneRegisteredTraversalEvidenceReceipt(connection.evidenceReceipt)
+    ) {
+      return unprocessable(context, {
+        connectionId: [
+          "Choose a capture-derived traversal from this release's frozen v9 navigation artifact",
+        ],
+      }, "Traversal telemetry does not match the frozen release");
+    }
+    metadata = {
+      connectionId: connection.id,
+      traversalKind: connection.traversalKind,
+      label: connection.label ?? null,
+      phase: parsed.data.metadata.phase,
+      adapter: connection.evidenceReceipt.adapter,
+      manifestSha256: connection.evidenceReceipt.manifestSha256,
+      reviewGeneration: connection.evidenceReceipt.reviewGeneration,
+      registrationSha256: connection.evidenceReceipt.registrationSha256,
+      sourceToWorld: connection.evidenceReceipt.sourceToWorld,
+      sourcePath: connection.evidenceReceipt.sourcePath,
+    };
+    const session = await context.env.DB.prepare(`
+      UPDATE viewer_telemetry_sessions
+      SET next_sequence = next_sequence + 1, updated_at = datetime('now')
+      WHERE id = ? AND release_id = ? AND expires_at_epoch >= ?
+        AND EXISTS (
+          SELECT 1
+          FROM release_channels AS channel
+          JOIN releases AS release
+            ON release.id = viewer_telemetry_sessions.release_id
+          JOIN auth_sessions AS auth_session
+            ON auth_session.id = viewer_telemetry_sessions.auth_session_id
+            AND auth_session.user_id = viewer_telemetry_sessions.created_by
+            AND auth_session.organisation_id = release.organisation_id
+          JOIN memberships AS membership
+            ON membership.organisation_id = auth_session.organisation_id
+            AND membership.user_id = auth_session.user_id
+          WHERE channel.id = viewer_telemetry_sessions.channel_id
+            AND channel.active_release_id = viewer_telemetry_sessions.release_id
+            AND channel.activation_generation = viewer_telemetry_sessions.activation_generation
+            AND release.revoked_at IS NULL
+            AND (
+              release.expires_at IS NULL
+              OR unixepoch(release.expires_at) > unixepoch('now')
+            )
+            AND auth_session.revoked_at IS NULL
+            AND unixepoch(auth_session.expires_at) > unixepoch('now')
+            AND membership.revoked_at IS NULL
+            AND membership.status = 'active'
+            AND (
+              membership.role IN ('platform_admin', 'production_operator')
+              OR EXISTS (
+                SELECT 1 FROM project_access AS access
+                WHERE access.organisation_id = release.organisation_id
+                  AND access.project_id = release.project_id
+                  AND access.user_id = auth_session.user_id
+                  AND access.role = 'customer_reviewer'
+                  AND access.revoked_at IS NULL
+              )
+            )
+        )
+      RETURNING next_sequence - 1 AS session_sequence
+    `).bind(
+      parsed.data.sessionId,
+      release.id,
+      Math.floor(Date.now() / 1000),
+    ).first<{ session_sequence: number }>();
+    if (!session) {
+      const current = await telemetrySessionState(
+        context.env.DB,
+        parsed.data.sessionId,
+        release.id,
+      );
+      if (!current || !telemetrySessionMatchesActiveRelease(
+        current,
+        release.id,
+        tokenPayload.channelActivationGeneration,
+      )) return context.json({ error: "This scene is no longer the active release" }, 410);
+      if (!telemetrySessionReleaseIsAvailable(current)) {
+        return context.json({ error: "This scene is no longer available" }, 410);
+      }
+      if (!current.reviewer_authorized) {
+        return unauthorized(context, "Reviewer authorization has ended");
+      }
+      return unauthorized(context, "Invalid or expired telemetry session");
+    }
+    sessionSequence = session.session_sequence;
+  }
+  try {
+    await context.env.DB.prepare(`
+      INSERT INTO viewer_events
+        (id, release_id, event_type, session_id, device_profile, metric_value,
+          metadata_json, received_at_ms, session_sequence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      parsed.data.releaseId,
+      parsed.data.eventType,
+      parsed.data.sessionId ?? null,
+      parsed.data.deviceProfile ?? null,
+      parsed.data.metricValue ?? null,
+      JSON.stringify(metadata),
+      receivedAtMs,
+      sessionSequence,
+    ).run();
+  } catch (error) {
+    if (parsed.data.eventType === "navigation_traversal") {
+      const current = await telemetrySessionState(
+        context.env.DB,
+        parsed.data.sessionId,
+        release.id,
+      );
+      if (!current || !telemetrySessionMatchesActiveRelease(
+        current,
+        release.id,
+        current.session_activation_generation,
+      )) return context.json({ error: "This scene is no longer the active release" }, 410);
+      if (!telemetrySessionReleaseIsAvailable(current)) {
+        return context.json({ error: "This scene is no longer available" }, 410);
+      }
+      if (!current.reviewer_authorized) {
+        return unauthorized(context, "Reviewer authorization has ended");
+      }
+    }
+    throw error;
+  }
   return context.body(null, 204);
+});
+
+app.get("/api/releases/:releaseId/navigation-traversal-evidence", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  const release = await context.env.DB.prepare(`
+    SELECT r.id, r.release_number, r.version_id, sv.version_number
+    FROM releases r
+    JOIN scene_versions sv ON sv.id = r.version_id
+    WHERE r.id = ? AND r.organisation_id = ?
+  `).bind(context.req.param("releaseId"), auth.organisationId).first<{
+    id: string;
+    release_number: number;
+    version_id: string;
+    version_number: number;
+  }>();
+  if (!release) return notFound(context, "Release not found");
+  const events = await context.env.DB.prepare(`
+    SELECT id, session_id, device_profile, metadata_json, occurred_at,
+      received_at_ms, session_sequence
+    FROM viewer_events
+    WHERE release_id = ? AND event_type = 'navigation_traversal'
+    ORDER BY session_id,
+      CASE WHEN session_sequence IS NULL THEN 1 ELSE 0 END,
+      session_sequence, received_at_ms, occurred_at, id
+  `).bind(release.id).all<{
+    id: string;
+    session_id: string | null;
+    device_profile: string | null;
+    metadata_json: string;
+    occurred_at: string;
+    received_at_ms: number | null;
+    session_sequence: number | null;
+  }>();
+  const body = JSON.stringify({
+    schemaVersion: "navigation-traversal-evidence-export-v1",
+    release: {
+      id: release.id,
+      releaseNumber: release.release_number,
+      versionId: release.version_id,
+      versionNumber: release.version_number,
+    },
+    events: events.results.map((event) => ({
+      id: event.id,
+      sessionId: event.session_id,
+      deviceProfile: event.device_profile,
+      occurredAt: event.occurred_at,
+      receivedAtMs: event.received_at_ms,
+      sessionSequence: event.session_sequence,
+      evidence: parseStoredObject(event.metadata_json),
+    })),
+  });
+  const digest = await sha256Hex(body);
+  return new Response(body, {
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="release-${release.release_number}-navigation-${digest}.json"`,
+      "Cache-Control": "private, no-store",
+      "ETag": `"${digest}"`,
+      "X-Spatial-SHA256": digest,
+    },
+  });
 });
 
 app.get("/", async (context) => {
@@ -14184,7 +14851,7 @@ async function authenticate(context: Context<AppEnvironment>): Promise<AuthSessi
   return authenticateRequest(context.req.raw, context.env);
 }
 
-async function requireAuth(context: Context<AppEnvironment>): Promise<AuthContext | Response> {
+async function requireAuth(context: Context<AppEnvironment>): Promise<AuthSessionRow | Response> {
   const auth = await authenticate(context);
   return auth ?? unauthorized(context, "Sign in required");
 }
@@ -14301,7 +14968,7 @@ async function requireReviewProject(
   context: Context<AppEnvironment>,
   projectId: string,
   write = false,
-): Promise<{ auth: AuthContext; project: ProjectRow; accessRole: string } | Response> {
+): Promise<{ auth: AuthSessionRow; project: ProjectRow; accessRole: string } | Response> {
   const auth = await requireAuth(context);
   if (auth instanceof Response) return auth;
   const project = await scopedProject(context.env.DB, auth.organisationId, projectId);
@@ -17208,12 +17875,18 @@ function readFiniteNumber(value: unknown, property: string): number | null {
 }
 
 type LifecycleTrigger = "scheduled" | "manual";
+// Receipt: docs/CAPACITY_RECEIPTS.md#traversal-evidence-session-lifecycle
+const TELEMETRY_SESSION_CLEANUP_BATCH = 500;
 type LifecycleSummary = {
   invitationsExpired: number;
   oidcAttemptsDeleted: number;
   otpChallengesDeleted: number;
   rateLimitWindowsDeleted: number;
   refreshHistoryDeleted: number;
+  telemetrySessionsRetired: number;
+  telemetrySessionRowsRead: number;
+  telemetrySessionRowsWritten: number;
+  telemetrySessionRetirementPending: boolean;
   releasesExpired: number;
   subscriptionsPastDue: number;
   subscriptionsExpired: number;
@@ -17234,6 +17907,10 @@ async function runLifecycleEnforcement(
     otpChallengesDeleted: 0,
     rateLimitWindowsDeleted: 0,
     refreshHistoryDeleted: 0,
+    telemetrySessionsRetired: 0,
+    telemetrySessionRowsRead: 0,
+    telemetrySessionRowsWritten: 0,
+    telemetrySessionRetirementPending: false,
     releasesExpired: 0,
     subscriptionsPastDue: 0,
     subscriptionsExpired: 0,
@@ -17344,6 +18021,27 @@ async function runLifecycleEnforcement(
     `).run();
     summary.refreshHistoryDeleted = expiredRefreshHistory.meta.changes ?? 0;
 
+    const retiredTelemetrySessions = await env.DB.prepare(`
+      DELETE FROM viewer_telemetry_sessions
+      WHERE id IN (
+        SELECT id
+        FROM viewer_telemetry_sessions
+        WHERE expires_at_epoch < unixepoch('now')
+        ORDER BY expires_at_epoch, id
+        LIMIT ?
+      )
+    `).bind(TELEMETRY_SESSION_CLEANUP_BATCH).run();
+    summary.telemetrySessionsRetired = retiredTelemetrySessions.meta.changes ?? 0;
+    summary.telemetrySessionRowsRead = retiredTelemetrySessions.meta.rows_read;
+    summary.telemetrySessionRowsWritten = retiredTelemetrySessions.meta.rows_written;
+    const pendingTelemetrySession = await env.DB.prepare(`
+      SELECT 1 AS pending
+      FROM viewer_telemetry_sessions
+      WHERE expires_at_epoch < unixepoch('now')
+      LIMIT 1
+    `).first<{ pending: number }>();
+    summary.telemetrySessionRetirementPending = Boolean(pendingTelemetrySession);
+
     const expiredReleases = await env.DB.prepare(`
       SELECT r.id, r.organisation_id, r.project_id FROM releases r
       WHERE r.revoked_at IS NULL AND r.expires_at IS NOT NULL
@@ -17353,7 +18051,10 @@ async function runLifecycleEnforcement(
       await env.DB.batch([
         env.DB.prepare("UPDATE releases SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL").bind(release.id),
         env.DB.prepare(`
-          UPDATE release_channels SET active_release_id = NULL, updated_at = datetime('now')
+          UPDATE release_channels
+          SET active_release_id = NULL,
+            activation_generation = activation_generation + 1,
+            updated_at = datetime('now')
           WHERE active_release_id = ?
         `).bind(release.id),
         lifecycleActionStatement(env.DB, runId, release.organisation_id, release.project_id,
@@ -17403,7 +18104,10 @@ async function runLifecycleEnforcement(
               WHERE project_id = ? AND organisation_id = ? AND revoked_at IS NULL
             `).bind(subscription.project_id, subscription.organisation_id),
             env.DB.prepare(`
-              UPDATE release_channels SET active_release_id = NULL, updated_at = datetime('now')
+              UPDATE release_channels
+              SET active_release_id = NULL,
+                activation_generation = activation_generation + 1,
+                updated_at = datetime('now')
               WHERE project_id = ? AND organisation_id = ?
             `).bind(subscription.project_id, subscription.organisation_id),
             lifecycleActionStatement(env.DB, runId, subscription.organisation_id, subscription.project_id,
@@ -17541,6 +18245,10 @@ async function sendLifecycleDigestEmail(env: Env, summary: LifecycleSummary, run
     `Expired OTP challenges deleted: ${summary.otpChallengesDeleted}`,
     `Expired rate-limit windows deleted: ${summary.rateLimitWindowsDeleted}`,
     `Expired refresh-token history deleted: ${summary.refreshHistoryDeleted}`,
+    `Traversal evidence sessions retired: ${summary.telemetrySessionsRetired}`,
+    `Traversal evidence cleanup rows read: ${summary.telemetrySessionRowsRead}`,
+    `Traversal evidence cleanup rows written: ${summary.telemetrySessionRowsWritten}`,
+    `Traversal evidence session retirement pending: ${summary.telemetrySessionRetirementPending ? "yes" : "no"}`,
     `Releases expired: ${summary.releasesExpired}`,
     `Subscriptions past due: ${summary.subscriptionsPastDue}`,
     `Subscriptions expired: ${summary.subscriptionsExpired}`,
@@ -18126,6 +18834,9 @@ export function navigationArtifactMatchesFrozenConnections(
     : undefined;
   const parsedConnections = authoredTraversalConnectionsSchema.safeParse(candidateConnections);
   if (!parsedArtifact.success || !parsedConnections.success) return false;
+  if (parsedConnections.data.some((connection) =>
+    !isSceneRegisteredTraversalEvidenceReceipt(connection.evidenceReceipt)
+  )) return false;
   // V8 remains readable for existing immutable releases, but its artifact did
   // not preserve authored landings separately from Recast projections. New
   // processor completions and approvals must use V9 so the trust boundary can
@@ -19420,6 +20131,9 @@ function canonicalNavigationTraversal(row: unknown): Array<{
   evidenceManifestSha256: string;
   evidenceAdapter: string;
   evidenceManifestReviewGeneration: number;
+  evidenceRegistrationSha256: string;
+  evidenceSourceToWorld: CaptureSceneRegistration["sourceToWorld"];
+  evidenceSourcePath: Vector3Tuple[];
   status: "active" | "archived";
 }> {
   if (!row || typeof row !== "object") return [];
@@ -19435,6 +20149,16 @@ function canonicalNavigationTraversal(row: unknown): Array<{
   const evidenceAdapter = readStringProperty(row, "evidence_adapter");
   const evidenceManifestReviewGeneration = Number(
     Reflect.get(row, "evidence_manifest_review_generation"),
+  );
+  const evidenceRegistrationSha256 = readStringProperty(
+    row,
+    "evidence_registration_sha256",
+  )?.toLowerCase();
+  const evidenceSourceToWorld = canonicalSourceToWorldTransform(parseStoredObject(
+    readStringProperty(row, "evidence_source_to_world_json") ?? "null",
+  ));
+  const evidenceSourcePath = canonicalTraversalSourcePath(
+    readStringProperty(row, "evidence_source_path_json") ?? null,
   );
   const status = readStringProperty(row, "status");
   const evidenceJoined = Reflect.has(row, "current_evidence_sha256");
@@ -19457,6 +20181,13 @@ function canonicalNavigationTraversal(row: unknown): Array<{
   const currentEvidenceManifestReviewGeneration = Number(
     Reflect.get(row, "current_evidence_manifest_review_generation"),
   );
+  const currentEvidenceRegistrationSha256 = readStringProperty(
+    row,
+    "current_evidence_registration_sha256",
+  )?.toLowerCase();
+  const currentEvidenceSourceToWorld = canonicalSourceToWorldTransform(parseStoredObject(
+    readStringProperty(row, "current_evidence_source_to_world_json") ?? "null",
+  ));
   const speedUnitsPerSecond = Number(Reflect.get(row, "speed_units_per_second"));
   let path: unknown;
   try {
@@ -19470,6 +20201,9 @@ function canonicalNavigationTraversal(row: unknown): Array<{
     !evidenceManifestSha256 || !/^[a-f0-9]{64}$/i.test(evidenceManifestSha256) ||
     !evidenceAdapter || !Number.isSafeInteger(evidenceManifestReviewGeneration) ||
     evidenceManifestReviewGeneration < 1 ||
+    !evidenceRegistrationSha256 || !/^[a-f0-9]{64}$/i.test(evidenceRegistrationSha256) ||
+    !evidenceSourceToWorld || evidenceSourceToWorld.worldUnit !== "metres" ||
+    !evidenceSourcePath ||
     (evidenceJoined && (
       currentEvidenceSha256 !== evidenceSha256 ||
       evidenceIntegrityStatus !== "verified" ||
@@ -19482,10 +20216,15 @@ function canonicalNavigationTraversal(row: unknown): Array<{
       evidenceManifestResult === "blocked" ||
       evidenceManifestReviewDecision !== "accepted" ||
       currentEvidenceManifestReviewGeneration !== evidenceManifestReviewGeneration
+      || currentEvidenceRegistrationSha256 !== evidenceRegistrationSha256
+      || JSON.stringify(currentEvidenceSourceToWorld) !== JSON.stringify(evidenceSourceToWorld)
     )) ||
     !["active", "archived"].includes(status ?? "") ||
     !["elevator", "ladder", "moving_platform"].includes(traversalKind ?? "") ||
     !Array.isArray(path) || path.length < 2 || !path.every(finitePoint3) ||
+    JSON.stringify(path) !== JSON.stringify(evidenceSourcePath.map((point) =>
+      transformSourcePoint(point, evidenceSourceToWorld)
+    )) ||
     !Number.isFinite(speedUnitsPerSecond) || speedUnitsPerSecond <= 0
   ) return [];
   return [{
@@ -19502,6 +20241,12 @@ function canonicalNavigationTraversal(row: unknown): Array<{
     evidenceManifestSha256,
     evidenceAdapter,
     evidenceManifestReviewGeneration,
+    evidenceRegistrationSha256,
+    evidenceSourceToWorld: {
+      ...evidenceSourceToWorld,
+      worldUnit: "metres",
+    },
+    evidenceSourcePath,
     status: status as "active" | "archived",
   }];
 }
@@ -19531,6 +20276,9 @@ function navigationTraversalConnectionFromRow(
     manifestSha256: string;
     adapter: string;
     reviewGeneration: number;
+    registrationSha256: string;
+    sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
+    sourcePath: Vector3Tuple[];
   };
 }> {
   const parsed = canonicalNavigationTraversal(row)[0];
@@ -19556,8 +20304,29 @@ function navigationTraversalConnectionFromRow(
       manifestSha256: parsed.evidenceManifestSha256,
       adapter: parsed.evidenceAdapter,
       reviewGeneration: parsed.evidenceManifestReviewGeneration,
+      registrationSha256: parsed.evidenceRegistrationSha256,
+      sourceToWorld: parsed.evidenceSourceToWorld,
+      sourcePath: parsed.evidenceSourcePath,
     },
   }];
+}
+
+function canonicalTraversalSourcePath(value: string | null): Vector3Tuple[] | null {
+  if (!value) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (
+    !Array.isArray(parsed) || parsed.length < 2 || !parsed.every(finitePoint3) ||
+    parsed.some((point: unknown, index: number) => index > 0 &&
+      Array.isArray(point) && point.every((coordinate: unknown, axis: number) =>
+        coordinate === (parsed[index - 1] as unknown[])[axis]
+      ))
+  ) return null;
+  return parsed as Vector3Tuple[];
 }
 
 function buildSpatialRuntime(

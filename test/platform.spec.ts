@@ -8,7 +8,7 @@ import {
   navigationArtifactMatchesFrozenConnections,
   navigationAuthoringHash,
 } from "../src/worker/index";
-import { sha256Hex } from "../src/worker/security";
+import { sha256Hex, signSceneToken } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 const origin = "https://spatial.test";
@@ -174,7 +174,7 @@ describe("Spatial Studio Worker", () => {
       UPDATE scene_navigation_traversals SET evidence_adapter = 'xgrids-lcc'
       WHERE id = ?
     `).bind(traversalId).run()).rejects.toThrow(
-      "traversal_capture_receipt requires manifest_id, manifest_sha256, adapter, and review_generation together",
+      "traversal_capture_receipt requires manifest_id, manifest_sha256, adapter, review_generation, registration_sha256, source_to_world, and source_path together",
     );
   });
 
@@ -203,6 +203,15 @@ describe("Spatial Studio Worker", () => {
       evidence_manifest_sha256: "b".repeat(64),
       evidence_adapter: "xgrids-lcc",
       evidence_manifest_review_generation: 1,
+      evidence_registration_sha256: "c".repeat(64),
+      evidence_source_to_world_json: JSON.stringify({
+        sourceUpAxis: "Y",
+        worldUnit: "metres",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      }),
+      evidence_source_path_json: JSON.stringify([[0, 0, 0], [0, 3, 0]]),
       status: "active",
     };
     const neverAuthored = await navigationAuthoringHash(profile, [], [], [], []);
@@ -2576,6 +2585,7 @@ describe("Spatial Studio Worker", () => {
       },
     });
     expect(v7ArtifactContract.success).toBe(true);
+    let telemetryNavigationArtifact: unknown = null;
     if (v7ArtifactContract.success && v7ArtifactContract.data.structuralValidation) {
       const planarBoundaryArtifact = structuredClone(v7ArtifactContract.data);
       planarBoundaryArtifact.structuralValidation!.boundaryTopology.method =
@@ -2607,6 +2617,15 @@ describe("Spatial Studio Worker", () => {
             manifestSha256: "b".repeat(64),
             adapter: "xgrids-lcc",
             reviewGeneration: 1,
+            registrationSha256: "c".repeat(64),
+            sourceToWorld: {
+              sourceUpAxis: "Y",
+              worldUnit: "metres",
+              metresPerSourceUnit: 1,
+              yawDegrees: 0,
+              translationMetres: [0, 0, 0],
+            },
+            sourcePath: [[0.5, 0, 0.5], [0.5, 2.6, 0.5], [0.7, 2.55, 0.7]],
           },
         }],
         authoredTraversalValidation: {
@@ -2633,6 +2652,7 @@ describe("Spatial Studio Worker", () => {
       }).evidenceReceipt;
       expect(navigationArtifactSchema.safeParse(missingTraversalEvidence).success).toBe(false);
       expect(navigationArtifactSchema.safeParse(v9Artifact).success).toBe(true);
+      telemetryNavigationArtifact = structuredClone(v9Artifact);
       const frozenTraversalParameters = {
         offMeshConnections: v9Artifact.offMeshConnections.map((connection) => {
           const {
@@ -2662,6 +2682,15 @@ describe("Spatial Studio Worker", () => {
         (candidate: typeof v9Artifact) => {
           candidate.offMeshConnections[0]!.evidenceReceipt.reviewGeneration = 2;
         },
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.evidenceReceipt.registrationSha256 = "d".repeat(64);
+        },
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.evidenceReceipt.sourceToWorld.yawDegrees = 5;
+        },
+        (candidate: typeof v9Artifact) => {
+          candidate.offMeshConnections[0]!.evidenceReceipt.sourcePath[1] = [0.5, 2.5, 0.5];
+        },
       ]) {
         const substitutedArtifact = structuredClone(v9Artifact);
         mutate(substitutedArtifact);
@@ -2681,6 +2710,9 @@ describe("Spatial Studio Worker", () => {
           manifestSha256?: string;
           adapter?: string;
           reviewGeneration?: number;
+          registrationSha256?: string;
+          sourceToWorld?: unknown;
+          sourcePath?: unknown;
         };
       };
       delete legacyConnection.label;
@@ -2690,6 +2722,9 @@ describe("Spatial Studio Worker", () => {
       delete legacyConnection.evidenceReceipt.manifestSha256;
       delete legacyConnection.evidenceReceipt.adapter;
       delete legacyConnection.evidenceReceipt.reviewGeneration;
+      delete legacyConnection.evidenceReceipt.registrationSha256;
+      delete legacyConnection.evidenceReceipt.sourceToWorld;
+      delete legacyConnection.evidenceReceipt.sourcePath;
       expect(navigationArtifactSchema.safeParse(legacyV8Artifact).success).toBe(true);
       expect(navigationArtifactMatchesFrozenConnections(legacyV8Artifact, {
         offMeshConnections: structuredClone(legacyV8Artifact.offMeshConnections),
@@ -2832,9 +2867,583 @@ describe("Spatial Studio Worker", () => {
     );
     expect(releaseResponse.status).toBe(201);
     const release = await releaseResponse.clone().json<{
-      release: { id: string; releaseNumber: number; versionNumber: number };
+      release: { id: string; slug: string; releaseNumber: number; versionNumber: number };
     }>();
     expect(release.release).toMatchObject({ releaseNumber: 1, versionNumber: 1 });
+    const storedSnapshot = await env.DB.prepare(`
+      SELECT spatial_snapshot_json FROM releases WHERE id = ?
+    `).bind(release.release.id).first<{ spatial_snapshot_json: string }>();
+    const telemetrySnapshot = JSON.parse(storedSnapshot!.spatial_snapshot_json) as Record<string, unknown>;
+    telemetrySnapshot.navigationArtifact = telemetryNavigationArtifact;
+    await env.DB.prepare(`
+      UPDATE releases SET spatial_snapshot_json = ? WHERE id = ?
+    `).bind(JSON.stringify(telemetrySnapshot), release.release.id).run();
+    const publishedManifestResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/manifest`,
+    );
+    expect(publishedManifestResponse.status).toBe(200);
+    expect(publishedManifestResponse.headers.get("cache-control")).toBe("private, no-store");
+    await expect(publishedManifestResponse.json()).resolves.not.toHaveProperty("telemetry");
+    const unauthenticatedTelemetrySession = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+        }),
+      },
+    );
+    expect(unauthenticatedTelemetrySession.status).toBe(401);
+    const issueTelemetrySession = () => exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ releaseId: release.release.id }),
+      },
+    );
+    const [telemetrySessionResponse, concurrentTelemetrySessionResponse] =
+      await Promise.all([issueTelemetrySession(), issueTelemetrySession()]);
+    expect(telemetrySessionResponse.status).toBe(200);
+    expect(concurrentTelemetrySessionResponse.status).toBe(200);
+    expect(telemetrySessionResponse.headers.get("cache-control")).toBe("private, no-store");
+    const publishedTelemetry = await telemetrySessionResponse.json<{
+      sessionId: string;
+      token: string;
+      expiresAtEpochSeconds: number;
+    }>();
+    await expect(concurrentTelemetrySessionResponse.json()).resolves.toMatchObject({
+      sessionId: publishedTelemetry.sessionId,
+    });
+    const retriedTelemetryResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+        }),
+      },
+    );
+    expect(retriedTelemetryResponse.status).toBe(200);
+    const retriedTelemetry = await retriedTelemetryResponse.json<{
+      sessionId: string;
+      token: string;
+      expiresAtEpochSeconds: number;
+    }>();
+    expect(retriedTelemetry.sessionId).toBe(publishedTelemetry.sessionId);
+    const renewedTelemetryResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          sessionId: publishedTelemetry.sessionId,
+        }),
+      },
+    );
+    expect(renewedTelemetryResponse.status).toBe(200);
+    const renewedTelemetry = await renewedTelemetryResponse.json<{
+      sessionId: string;
+      token: string;
+      expiresAtEpochSeconds: number;
+    }>();
+    expect(renewedTelemetry.sessionId).toBe(publishedTelemetry.sessionId);
+    expect(renewedTelemetry.expiresAtEpochSeconds).toBeGreaterThanOrEqual(
+      publishedTelemetry.expiresAtEpochSeconds,
+    );
+    const substitutedSessionResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          sessionId: "99999999-9999-4999-8999-999999999999",
+        }),
+      },
+    );
+    expect(substitutedSessionResponse.status).toBe(410);
+    const activeSessionCount = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM viewer_telemetry_sessions WHERE release_id = ?
+    `).bind(release.release.id).first<{ count: number }>();
+    expect(activeSessionCount?.count).toBe(1);
+    const rejectedTelemetryAssetAccess = await exports.default.fetch(
+      `${origin}/asset/${release.release.id}/${completed.asset.id}/scene.rad?token=${encodeURIComponent(publishedTelemetry.token)}`,
+    );
+    expect(rejectedTelemetryAssetAccess.status).toBe(401);
+    const rejectedUnknownTraversal = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${publishedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: publishedTelemetry.sessionId,
+        metadata: { connectionId: "invented-lift", phase: "completed" },
+      }),
+    });
+    expect(rejectedUnknownTraversal.status).toBe(422);
+    const rejectedSubstitutedReceipt = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${publishedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: publishedTelemetry.sessionId,
+        metadata: {
+          connectionId: "gallery-lift",
+          phase: "completed",
+          registrationSha256: "d".repeat(64),
+        },
+      }),
+    });
+    expect(rejectedSubstitutedReceipt.status).toBe(400);
+    const expiredTelemetryToken = await signSceneToken({
+      releaseId: release.release.id,
+      expiresAt: Math.floor(Date.now() / 1000) - 1,
+      scope: "telemetry",
+      sessionId: publishedTelemetry.sessionId,
+      channelActivationGeneration: 1,
+    }, env.SESSION_PEPPER);
+    const rejectedExpiredSession = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${expiredTelemetryToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: publishedTelemetry.sessionId,
+        metadata: { connectionId: "gallery-lift", phase: "started" },
+      }),
+    });
+    expect(rejectedExpiredSession.status).toBe(401);
+    for (const phase of ["started", "completed"] as const) {
+      const traversalTelemetry = await exports.default.fetch(`${origin}/api/telemetry`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${publishedTelemetry.token}`,
+          "content-type": "application/json",
+          "CF-Connecting-IP": "2001:db8::7777",
+        },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          eventType: "navigation_traversal",
+          sessionId: publishedTelemetry.sessionId,
+          deviceProfile: "physical-device-under-review",
+          metadata: {
+            connectionId: "gallery-lift",
+            phase,
+          },
+        }),
+      });
+      expect(traversalTelemetry.status).toBe(204);
+    }
+    const storedTraversalTelemetry = await env.DB.prepare(`
+      SELECT event_type, session_id, device_profile, metadata_json,
+        received_at_ms, session_sequence
+      FROM viewer_events
+      WHERE release_id = ? AND session_id = ?
+      ORDER BY session_sequence
+    `).bind(release.release.id, publishedTelemetry.sessionId).all<{
+      event_type: string;
+      session_id: string;
+      device_profile: string;
+      metadata_json: string;
+      received_at_ms: number;
+      session_sequence: number;
+    }>();
+    expect(storedTraversalTelemetry.results).toHaveLength(2);
+    expect(storedTraversalTelemetry.results.map((event) => event.session_sequence)).toEqual([1, 2]);
+    expect(storedTraversalTelemetry.results.every((event) =>
+      Number.isSafeInteger(event.received_at_ms)
+    )).toBe(true);
+    expect(storedTraversalTelemetry.results[1]).toMatchObject({
+      event_type: "navigation_traversal",
+      session_id: publishedTelemetry.sessionId,
+      device_profile: "physical-device-under-review",
+    });
+    expect(JSON.parse(storedTraversalTelemetry.results[1]!.metadata_json)).toEqual({
+      connectionId: "gallery-lift",
+      traversalKind: "elevator",
+      label: "Gallery lift",
+      phase: "completed",
+      adapter: "xgrids-lcc",
+      manifestSha256: "b".repeat(64),
+      reviewGeneration: 1,
+      registrationSha256: "c".repeat(64),
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "metres",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
+      sourcePath: [[0.5, 0, 0.5], [0.5, 2.6, 0.5], [0.7, 2.55, 0.7]],
+    });
+    await env.DB.prepare(`
+      UPDATE viewer_telemetry_sessions
+      SET expires_at_epoch = unixepoch('now') - 1
+      WHERE id = ?
+    `).bind(publishedTelemetry.sessionId).run();
+    const expiredRunLifecycleResponse = await exports.default.fetch(
+      `${origin}/api/hosting/lifecycle/run`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(expiredRunLifecycleResponse.status).toBe(200);
+    const expiredRunLifecycle = await expiredRunLifecycleResponse.json<{
+      summary: { telemetrySessionsRetired: number };
+    }>();
+    expect(expiredRunLifecycle.summary.telemetrySessionsRetired).toBeGreaterThanOrEqual(1);
+    const resumedSessionResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          sessionId: publishedTelemetry.sessionId,
+        }),
+      },
+    );
+    expect(resumedSessionResponse.status).toBe(200);
+    const resumedTelemetry = await resumedSessionResponse.json<{
+      sessionId: string;
+      token: string;
+    }>();
+    expect(resumedTelemetry.sessionId).toBe(publishedTelemetry.sessionId);
+    const resumedTraversal = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${resumedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: resumedTelemetry.sessionId,
+        deviceProfile: "physical-device-under-review",
+        metadata: { connectionId: "gallery-lift", phase: "started" },
+      }),
+    });
+    expect(resumedTraversal.status).toBe(204);
+    const resumedSequences = await env.DB.prepare(`
+      SELECT session_sequence FROM viewer_events
+      WHERE release_id = ? AND session_id = ?
+      ORDER BY session_sequence
+    `).bind(release.release.id, publishedTelemetry.sessionId).all<{
+      session_sequence: number;
+    }>();
+    expect(resumedSequences.results.map((event) => event.session_sequence)).toEqual([1, 2, 3]);
+    const traversalEvidenceExport = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.id}/navigation-traversal-evidence`,
+      { headers: { cookie } },
+    );
+    expect(traversalEvidenceExport.status).toBe(200);
+    const exportBytes = await traversalEvidenceExport.clone().arrayBuffer();
+    const exportDigest = Array.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", exportBytes)),
+      (byte) => byte.toString(16).padStart(2, "0"),
+    ).join("");
+    expect(traversalEvidenceExport.headers.get("x-spatial-sha256")).toBe(exportDigest);
+    expect(traversalEvidenceExport.headers.get("content-disposition")).toContain(
+      exportDigest,
+    );
+    await expect(traversalEvidenceExport.json()).resolves.toMatchObject({
+      schemaVersion: "navigation-traversal-evidence-export-v1",
+      release: { id: release.release.id, releaseNumber: 1, versionNumber: 1 },
+      events: [
+        {
+          sessionId: publishedTelemetry.sessionId,
+          sessionSequence: 1,
+          evidence: { connectionId: "gallery-lift", phase: "started" },
+        },
+        {
+          sessionId: publishedTelemetry.sessionId,
+          sessionSequence: 2,
+          evidence: {
+            connectionId: "gallery-lift",
+            phase: "completed",
+            registrationSha256: "c".repeat(64),
+          },
+        },
+        {
+          sessionId: publishedTelemetry.sessionId,
+          sessionSequence: 3,
+          evidence: { connectionId: "gallery-lift", phase: "started" },
+        },
+      ],
+    });
+    const secondPhysicalDeviceCookie = await login();
+    const inactiveSessionResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie: secondPhysicalDeviceCookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+        }),
+      },
+    );
+    expect(inactiveSessionResponse.status).toBe(200);
+    const inactiveSession = await inactiveSessionResponse.json<{
+      sessionId: string;
+      token: string;
+    }>();
+    expect(inactiveSession.sessionId).not.toBe(publishedTelemetry.sessionId);
+    const secondDeviceLogout = await exports.default.fetch(`${origin}/api/auth/session`, {
+      method: "DELETE",
+      headers: { cookie: secondPhysicalDeviceCookie },
+    });
+    expect(secondDeviceLogout.status).toBe(204);
+    const revokedAuthTelemetry = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${inactiveSession.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: inactiveSession.sessionId,
+        deviceProfile: "revoked-auth-session",
+        metadata: { connectionId: "gallery-lift", phase: "completed" },
+      }),
+    });
+    expect(revokedAuthTelemetry.status).toBe(401);
+    await expect(revokedAuthTelemetry.json()).resolves.toMatchObject({
+      error: "Reviewer authorization has ended",
+    });
+    const reviewOwner = await env.DB.prepare(`
+      SELECT organisation_id, created_by FROM projects WHERE id = ?
+    `).bind(project.id).first<{ organisation_id: string; created_by: string }>();
+    expect(reviewOwner).toBeTruthy();
+    const reviewerUserId = crypto.randomUUID();
+    const reviewerAuthSessionId = crypto.randomUUID();
+    const reviewerEmail = `traversal-reviewer-${reviewerUserId.slice(0, 8)}@example.com`;
+    const reviewerRefreshSecret = `traversal-reviewer-${reviewerAuthSessionId}`;
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO users (id, email, display_name)
+        VALUES (?, ?, 'Traversal reviewer')
+      `).bind(reviewerUserId, reviewerEmail),
+      env.DB.prepare(`
+        INSERT INTO memberships (organisation_id, user_id, role)
+        VALUES (?, ?, 'customer_reviewer')
+      `).bind(reviewOwner!.organisation_id, reviewerUserId),
+      env.DB.prepare(`
+        INSERT INTO project_access
+          (organisation_id, project_id, user_id, role, invited_by)
+        VALUES (?, ?, ?, 'customer_reviewer', ?)
+      `).bind(
+        reviewOwner!.organisation_id,
+        project.id,
+        reviewerUserId,
+        reviewOwner!.created_by,
+      ),
+      env.DB.prepare(`
+        INSERT INTO auth_sessions
+          (id, user_id, organisation_id, refresh_token_hash, expires_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        reviewerAuthSessionId,
+        reviewerUserId,
+        reviewOwner!.organisation_id,
+        await sha256Hex(`${reviewerRefreshSecret}:${env.REFRESH_TOKEN_PEPPER}`),
+        new Date(Date.now() + 60_000).toISOString(),
+      ),
+    ]);
+    const reviewerTokens = await issueAuthTokens(env, {
+      userId: reviewerUserId,
+      organisationId: reviewOwner!.organisation_id,
+      email: reviewerEmail,
+      displayName: "Traversal reviewer",
+      role: "customer_reviewer",
+    }, reviewerAuthSessionId, reviewerRefreshSecret);
+    const reviewerSessionResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: {
+          cookie: `spatial_access=${reviewerTokens.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ releaseId: release.release.id }),
+      },
+    );
+    expect(reviewerSessionResponse.status).toBe(200);
+    const reviewerTelemetry = await reviewerSessionResponse.json<{
+      sessionId: string;
+      token: string;
+    }>();
+    await env.DB.prepare(`
+      UPDATE project_access SET revoked_at = datetime('now')
+      WHERE project_id = ? AND user_id = ?
+    `).bind(project.id, reviewerUserId).run();
+    const revokedProjectAccessTelemetry = await exports.default.fetch(
+      `${origin}/api/telemetry`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${reviewerTelemetry.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          eventType: "navigation_traversal",
+          sessionId: reviewerTelemetry.sessionId,
+          deviceProfile: "revoked-project-access",
+          metadata: { connectionId: "gallery-lift", phase: "completed" },
+        }),
+      },
+    );
+    expect(revokedProjectAccessTelemetry.status).toBe(401);
+    await expect(revokedProjectAccessTelemetry.json()).resolves.toMatchObject({
+      error: "Reviewer authorization has ended",
+    });
+    await env.DB.prepare(`
+      UPDATE releases SET expires_at = ? WHERE id = ?
+    `).bind(new Date(Date.now() - 1_000).toISOString(), release.release.id).run();
+    const expiredReleaseTelemetry = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${publishedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: publishedTelemetry.sessionId,
+        deviceProfile: "expired-iso-release",
+        metadata: { connectionId: "gallery-lift", phase: "completed" },
+      }),
+    });
+    expect(expiredReleaseTelemetry.status).toBe(410);
+    await expect(expiredReleaseTelemetry.json()).resolves.toMatchObject({
+      error: "This scene is no longer available",
+    });
+    await env.DB.prepare(`
+      UPDATE releases SET expires_at = NULL WHERE id = ?
+    `).bind(release.release.id).run();
+    await env.DB.prepare(`
+      UPDATE viewer_telemetry_sessions
+      SET expires_at_epoch = unixepoch('now') - 1
+      WHERE id IN (?, ?)
+    `).bind(inactiveSession.sessionId, reviewerTelemetry.sessionId).run();
+    const lifecycleResponse = await exports.default.fetch(
+      `${origin}/api/hosting/lifecycle/run`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(lifecycleResponse.status).toBe(200);
+    const lifecycle = await lifecycleResponse.json<{
+      summary: { telemetrySessionsRetired: number };
+    }>();
+    expect(lifecycle.summary.telemetrySessionsRetired).toBeGreaterThanOrEqual(1);
+    const sessionsAfterExpiry = await env.DB.prepare(`
+      SELECT id FROM viewer_telemetry_sessions WHERE release_id = ? ORDER BY id
+    `).bind(release.release.id).all<{ id: string }>();
+    expect(sessionsAfterExpiry.results).toEqual([{ id: publishedTelemetry.sessionId }]);
+    const telemetryCapacityOwner = await env.DB.prepare(`
+      SELECT organisation_id, created_by FROM projects WHERE id = ?
+    `).bind(project.id).first<{
+      organisation_id: string;
+      created_by: string;
+    }>();
+    const telemetryCapacityChannel = await env.DB.prepare(`
+      SELECT id, activation_generation FROM release_channels WHERE slug = ?
+    `).bind(release.release.slug).first<{
+      id: string;
+      activation_generation: number;
+    }>();
+    expect(telemetryCapacityOwner).toBeTruthy();
+    expect(telemetryCapacityChannel).toBeTruthy();
+    await env.DB.prepare(`
+      WITH RECURSIVE sequence(number) AS (
+        SELECT 1
+        UNION ALL
+        SELECT number + 1 FROM sequence WHERE number < 501
+      )
+      INSERT INTO auth_sessions (
+        id, user_id, organisation_id, refresh_token_hash, expires_at,
+        last_seen_at, created_at
+      )
+      SELECT printf('telemetry-capacity-auth-%04d', number), ?, ?,
+        printf('telemetry-capacity-refresh-%04d', number),
+        datetime('now', '+1 day'), datetime('now'), datetime('now')
+      FROM sequence
+    `).bind(
+      telemetryCapacityOwner!.created_by,
+      telemetryCapacityOwner!.organisation_id,
+    ).run();
+    await env.DB.prepare(`
+      WITH RECURSIVE sequence(number) AS (
+        SELECT 1
+        UNION ALL
+        SELECT number + 1 FROM sequence WHERE number < 501
+      )
+      INSERT INTO viewer_telemetry_sessions (
+        id, release_id, channel_id, created_by, auth_session_id,
+        activation_generation, expires_at_epoch, next_sequence
+      )
+      SELECT printf('telemetry-capacity-run-%04d', number), ?, ?, ?,
+        printf('telemetry-capacity-auth-%04d', number), ?,
+        unixepoch('now') - 1, 1
+      FROM sequence
+    `).bind(
+      release.release.id,
+      telemetryCapacityChannel!.id,
+      telemetryCapacityOwner!.created_by,
+      telemetryCapacityChannel!.activation_generation,
+    ).run();
+    const firstCapacityDrainResponse = await exports.default.fetch(
+      `${origin}/api/hosting/lifecycle/run`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(firstCapacityDrainResponse.status).toBe(200);
+    const firstCapacityDrain = await firstCapacityDrainResponse.json<{
+      summary: {
+        telemetrySessionsRetired: number;
+        telemetrySessionRowsRead: number;
+        telemetrySessionRowsWritten: number;
+        telemetrySessionRetirementPending: boolean;
+      };
+    }>();
+    expect(firstCapacityDrain).toMatchObject({
+      summary: {
+        telemetrySessionsRetired: 500,
+        telemetrySessionRetirementPending: true,
+      },
+    });
+    expect(firstCapacityDrain.summary.telemetrySessionRowsRead).toBeGreaterThanOrEqual(500);
+    expect(firstCapacityDrain.summary.telemetrySessionRowsWritten).toBe(500);
+    const pendingCapacityRows = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM viewer_telemetry_sessions
+      WHERE id LIKE 'telemetry-capacity-run-%'
+    `).first<{ count: number }>();
+    expect(pendingCapacityRows?.count).toBe(1);
+    const secondCapacityDrainResponse = await exports.default.fetch(
+      `${origin}/api/hosting/lifecycle/run`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(secondCapacityDrainResponse.status).toBe(200);
+    await expect(secondCapacityDrainResponse.json()).resolves.toMatchObject({
+      summary: {
+        telemetrySessionsRetired: 1,
+        telemetrySessionRetirementPending: false,
+      },
+    });
+    await env.DB.prepare(`
+      UPDATE releases SET spatial_snapshot_json = ? WHERE id = ?
+    `).bind(storedSnapshot!.spatial_snapshot_json, release.release.id).run();
     const repeatedReleaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -2927,6 +3536,24 @@ describe("Spatial Studio Worker", () => {
     }>();
     expect(revisedRelease.release).toMatchObject({ releaseNumber: 2, versionNumber: 1 });
     expect(revisedRelease.release.id).not.toBe(release.release.id);
+    const supersededTelemetryResponse = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${renewedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: renewedTelemetry.sessionId,
+        metadata: { connectionId: "gallery-lift", phase: "completed" },
+      }),
+    });
+    expect(supersededTelemetryResponse.status).toBe(410);
+    const retiredSessionCount = await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM viewer_telemetry_sessions WHERE release_id = ?
+    `).bind(release.release.id).first<{ count: number }>();
+    expect(retiredSessionCount?.count).toBe(1);
     const supersededAssetResponse = await exports.default.fetch(new URL(
       `/public-asset/${release.release.id}/${upload.assetId}/scene.rad`,
       origin,
@@ -3175,6 +3802,68 @@ describe("Spatial Studio Worker", () => {
     await expect(blockedArchive.json()).resolves.toMatchObject({
       error: "Revoke the active release before archiving this project",
     });
+
+    const rollbackResponse = await exports.default.fetch(
+      `${origin}/api/release-channels/publishable-apartment/rollback`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ releaseId: release.release.id }),
+      },
+    );
+    expect(rollbackResponse.status).toBe(200);
+    const rolledBackChannel = await env.DB.prepare(`
+      SELECT active_release_id, activation_generation FROM release_channels
+      WHERE slug = 'publishable-apartment'
+    `).first<{
+      active_release_id: string;
+      activation_generation: number;
+    }>();
+    expect(rolledBackChannel).toEqual({
+      active_release_id: release.release.id,
+      activation_generation: 3,
+    });
+    const staleActivationRenewal = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+          sessionId: publishedTelemetry.sessionId,
+        }),
+      },
+    );
+    expect(staleActivationRenewal.status).toBe(410);
+    const rolledBackSessionResponse = await exports.default.fetch(
+      `${origin}/api/releases/${release.release.slug}/telemetry-session`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          releaseId: release.release.id,
+        }),
+      },
+    );
+    expect(rolledBackSessionResponse.status).toBe(200);
+    const rolledBackSession = await rolledBackSessionResponse.json<{
+      sessionId: string;
+    }>();
+    expect(rolledBackSession.sessionId).not.toBe(publishedTelemetry.sessionId);
+    const resurrectedBearerResponse = await exports.default.fetch(`${origin}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${renewedTelemetry.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        releaseId: release.release.id,
+        eventType: "navigation_traversal",
+        sessionId: publishedTelemetry.sessionId,
+        metadata: { connectionId: "gallery-lift", phase: "completed" },
+      }),
+    });
+    expect(resurrectedBearerResponse.status).toBe(410);
 
     const revokeResponse = await exports.default.fetch(
       `${origin}/api/release-channels/publishable-apartment`,
@@ -3621,12 +4310,41 @@ describe("Spatial Studio Worker", () => {
     const driftedManifestId = crypto.randomUUID();
     const driftedManifestAssetId = crypto.randomUUID();
     const traversalEvidenceSha256 = "c".repeat(64);
+    const traversalRegistrationPayload = {
+      schemaVersion: "capture-to-scene-registration-v1",
+      sourceCoordinateFrameId: "registered-gallery-y-up",
+      targetCoordinateFrameId: "scene-world-right-handed-y-up-metres",
+      evidenceAssetId: traversalEvidenceAssetId,
+      evidenceSha256: traversalEvidenceSha256,
+      method: "The exported metric point cloud and traversal path share the reviewed device frame.",
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "metres",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [10, 0, 0],
+      },
+    };
+    const traversalRegistrationHash = await sha256Hex(
+      JSON.stringify(traversalRegistrationPayload),
+    );
     const traversalEvidenceManifest = JSON.stringify({
       format: "whymelabs.spatial.capture-bundle",
       schemaVersion: "1.0.0",
       manifestId: traversalEvidenceManifestId,
       project: { id: projectId, captureAdapter: "open-import" },
       version: { id: versionId, versionNumber: 1 },
+      coordinateFrame: {
+        id: "registered-gallery-y-up",
+        units: "metres",
+        axisConvention: "right-handed-y-up",
+        epsg: null,
+        registrationMethod: traversalRegistrationPayload.method,
+      },
+      sceneRegistration: {
+        ...traversalRegistrationPayload,
+        transformSha256: traversalRegistrationHash,
+      },
       assets: [{
         id: traversalEvidenceAssetId,
         roles: ["traversal_evidence"],
@@ -3642,7 +4360,7 @@ describe("Spatial Studio Worker", () => {
       version: { id: versionId, versionNumber: 1 },
       assets: [{
         id: traversalEvidenceAssetId,
-        roles: ["gaussian_splat"],
+        roles: ["traversal_evidence"],
         sha256: traversalEvidenceSha256,
       }],
     });
@@ -3771,7 +4489,7 @@ describe("Spatial Studio Worker", () => {
         unqualifiedManifest,
         JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
         member!.userId,
-        "Accepted visual asset manifest without traversal evidence declaration.",
+        "Accepted traversal evidence without a numerical capture-to-scene registration.",
         member!.userId,
       ),
       env.DB.prepare(`
@@ -3847,7 +4565,7 @@ describe("Spatial Studio Worker", () => {
       ),
     ]);
 
-    const navigationProfileResponse = await exports.default.fetch(
+    const provisionalNavigationProfileResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
       {
         method: "PUT",
@@ -3855,6 +4573,46 @@ describe("Spatial Studio Worker", () => {
         body: JSON.stringify({
           versionId,
           worldUnit: "scene_units",
+          agentRadius: 0.3,
+          agentHeight: 1.75,
+          eyeHeight: 1.58,
+          maxStepMetres: 0.08,
+        }),
+      },
+    );
+    expect(provisionalNavigationProfileResponse.status).toBe(200);
+    const provisionalMetricTraversal = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId,
+          traversalKind: "elevator",
+          label: "Unsafe provisional lift",
+          sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0]],
+          bidirectional: true,
+          speedUnitsPerSecond: 1.2,
+          reviewedPurpose: "This must not mix a metric registration with scene units.",
+          evidenceAssetId: traversalEvidenceAssetId,
+          evidenceManifestId: traversalEvidenceManifestId,
+        }),
+      },
+    );
+    expect(provisionalMetricTraversal.status).toBe(409);
+    await expect(provisionalMetricTraversal.json()).resolves.toMatchObject({
+      error: expect.stringContaining("metric navigation profile"),
+    });
+
+    const navigationProfileResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          versionId,
+          worldUnit: "metres",
           agentRadius: 0.3,
           agentHeight: 1.75,
           eyeHeight: 1.58,
@@ -3941,7 +4699,7 @@ describe("Spatial Studio Worker", () => {
           versionId,
           traversalKind: "elevator",
           label: "Gallery lift",
-          path: [[-1, 0, 0], [-1, 2.8, 0], [1, 2.8, 0]],
+          sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0]],
           bidirectional: true,
           speedUnitsPerSecond: 1.2,
           reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
@@ -3955,17 +4713,63 @@ describe("Spatial Studio Worker", () => {
       error: expect.stringContaining("capture manifest"),
     });
 
-    const traversalResponse = await exports.default.fetch(
+    const traversalOperationId = crypto.randomUUID();
+    const traversalUrl =
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals`;
+    const traversalRequest = {
+      clientOperationId: traversalOperationId,
+      versionId,
+      traversalKind: "elevator",
+      label: "Gallery lift",
+      sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0]],
+      bidirectional: true,
+      speedUnitsPerSecond: 1.2,
+      reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
+      evidenceAssetId: traversalEvidenceAssetId,
+      evidenceManifestId: traversalEvidenceManifestId,
+    };
+    const [firstTraversalResponse, concurrentTraversalResponse] = await Promise.all([
+      exports.default.fetch(traversalUrl, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(traversalRequest),
+      }),
+      exports.default.fetch(traversalUrl, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(traversalRequest),
+      }),
+    ]);
+    expect([firstTraversalResponse.status, concurrentTraversalResponse.status].sort()).toEqual([200, 201]);
+    const [firstTraversal, concurrentTraversal] = await Promise.all([
+      firstTraversalResponse.json<{
+        traversal: { id: string; path_json: string; evidence_source_path_json: string };
+      }>(),
+      concurrentTraversalResponse.json<{
+        traversal: { id: string; path_json: string; evidence_source_path_json: string };
+      }>(),
+    ]);
+    expect(concurrentTraversal.traversal.id).toBe(firstTraversal.traversal.id);
+    const traversal: {
+      traversal: { id: string; path_json: string; evidence_source_path_json: string };
+    } = firstTraversal;
+    expect(JSON.parse(traversal.traversal.path_json)).toEqual([
+      [-1, 0, 0], [-1, 2.8, 0], [1, 2.8, 0],
+    ]);
+    expect(JSON.parse(traversal.traversal.evidence_source_path_json)).toEqual([
+      [-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0],
+    ]);
+    const conflictingTraversalReplay = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-traversals`,
       {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
-          clientOperationId: crypto.randomUUID(),
+          clientOperationId: traversalOperationId,
           versionId,
           traversalKind: "elevator",
           label: "Gallery lift",
-          path: [[-1, 0, 0], [-1, 2.8, 0], [1, 2.8, 0]],
+          sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-8.5, 2.8, 0]],
           bidirectional: true,
           speedUnitsPerSecond: 1.2,
           reviewedPurpose: "Reviewed lift path in the registered gallery capture.",
@@ -3974,8 +4778,63 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(traversalResponse.status).toBe(201);
-    const traversal = await traversalResponse.json<{ traversal: { id: string } }>();
+    expect(conflictingTraversalReplay.status).toBe(409);
+    await expect(conflictingTraversalReplay.json()).resolves.toMatchObject({
+      error: expect.stringContaining("different authored traversal request"),
+    });
+    const racingConflictOperationId = crypto.randomUUID();
+    const racingConflictBase = {
+      ...traversalRequest,
+      clientOperationId: racingConflictOperationId,
+      label: "Service lift A",
+    };
+    const [firstRacingConflict, secondRacingConflict] = await Promise.all([
+      exports.default.fetch(traversalUrl, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(racingConflictBase),
+      }),
+      exports.default.fetch(traversalUrl, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ ...racingConflictBase, label: "Service lift B" }),
+      }),
+    ]);
+    expect([firstRacingConflict.status, secondRacingConflict.status].sort()).toEqual([201, 409]);
+    const racingWinnerResponse = firstRacingConflict.status === 201
+      ? firstRacingConflict
+      : secondRacingConflict;
+    const racingWinner = await racingWinnerResponse.json<{ traversal: { id: string } }>();
+    const archivedRacingWinner = await env.DB.prepare(`
+      UPDATE scene_navigation_traversals SET status = 'archived' WHERE id = ?
+    `).bind(racingWinner.traversal.id).run();
+    expect(archivedRacingWinner.meta.changes).toBe(1);
+    await env.DB.prepare(`
+      UPDATE scene_navigation_traversals SET evidence_registration_sha256 = ? WHERE id = ?
+    `).bind("d".repeat(64), traversal.traversal.id).run();
+    const missingReplacementSourcePath = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ speedUnitsPerSecond: 1.4 }),
+      },
+    );
+    expect(missingReplacementSourcePath.status).toBe(422);
+    await expect(missingReplacementSourcePath.json()).resolves.toMatchObject({
+      details: { sourcePath: [expect.stringContaining("new capture frame")] },
+    });
+    const repairRegistrationReceipt = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0]],
+        }),
+      },
+    );
+    expect(repairRegistrationReceipt.status).toBe(200);
     const updateTraversalResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
       {
@@ -4050,9 +4909,38 @@ describe("Spatial Studio Worker", () => {
           manifestSha256: traversalEvidenceManifestHash,
           adapter: "open-import",
           reviewGeneration: 3,
+          registrationSha256: traversalRegistrationHash,
+          sourceToWorld: traversalRegistrationPayload.sourceToWorld,
+          sourcePath: [[-11, 0, 0], [-11, 2.8, 0], [-9, 2.8, 0]],
         },
       }),
     ]);
+    await env.DB.prepare(`
+      UPDATE scene_navigation_traversals
+      SET evidence_source_to_world_json = ?
+      WHERE id = ?
+    `).bind(
+      JSON.stringify({
+        ...traversalRegistrationPayload.sourceToWorld,
+        yawDegrees: 5,
+      }),
+      traversal.traversal.id,
+    ).run();
+    await expect(currentNavigationAuthoringState(
+      env.DB,
+      member!.organisationId,
+      projectId,
+      versionId,
+    )).rejects.toThrow("Active authored traversal records are invalid: stored=1, usable=0");
+    const repairTransformReceipt = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/navigation-traversals/${traversal.traversal.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ speedUnitsPerSecond: 1.4 }),
+      },
+    );
+    expect(repairTransformReceipt.status).toBe(200);
 
     const unsafeUnitRelabel = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/navigation-profile`,
@@ -4061,7 +4949,7 @@ describe("Spatial Studio Worker", () => {
         headers: { cookie, "content-type": "application/json" },
         body: JSON.stringify({
           versionId,
-          worldUnit: "metres",
+          worldUnit: "scene_units",
           agentRadius: 0.3,
           agentHeight: 1.75,
           eyeHeight: 1.58,
@@ -4183,7 +5071,7 @@ describe("Spatial Studio Worker", () => {
         }],
       },
       navigationProfile: {
-        worldUnit: "scene_units",
+        worldUnit: "metres",
         agentRadius: 0.3,
         agentHeight: 1.75,
         eyeHeight: 1.58,

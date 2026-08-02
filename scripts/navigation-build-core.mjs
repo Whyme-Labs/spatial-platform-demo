@@ -944,6 +944,15 @@ function canonicalOffMeshConnections(values, agent) {
       ? value.evidenceReceipt.adapter.trim()
       : "";
     const evidenceReviewGeneration = Number(value?.evidenceReceipt?.reviewGeneration);
+    const evidenceRegistrationSha256 = typeof value?.evidenceReceipt?.registrationSha256 === "string"
+      ? value.evidenceReceipt.registrationSha256.trim().toLowerCase()
+      : "";
+    const evidenceSourceToWorld = sourceToWorldTransform(value?.evidenceReceipt?.sourceToWorld);
+    const evidenceSourcePath = Array.isArray(value?.evidenceReceipt?.sourcePath) &&
+      value.evidenceReceipt.sourcePath.length >= 2 &&
+      value.evidenceReceipt.sourcePath.every(point3)
+      ? value.evidenceReceipt.sourcePath.map((point) => [...point])
+      : null;
     if (!id || ids.has(id)) {
       throw new NavigationBuildError(
         "INVALID_AUTHORED_TRAVERSAL",
@@ -997,11 +1006,22 @@ function canonicalOffMeshConnections(values, agent) {
       !evidenceAssetId || !/^[a-f0-9]{64}$/i.test(evidenceSha256) ||
       !evidenceManifestId || !/^[a-f0-9]{64}$/i.test(evidenceManifestSha256) ||
       !evidenceAdapter || !Number.isSafeInteger(evidenceReviewGeneration) ||
-      evidenceReviewGeneration < 1
+      evidenceReviewGeneration < 1 ||
+      !/^[a-f0-9]{64}$/i.test(evidenceRegistrationSha256) || !evidenceSourceToWorld ||
+      !evidenceSourcePath
     ) {
       throw new NavigationBuildError(
         "INVALID_AUTHORED_TRAVERSAL",
-        `Authored traversal ${id} requires an immutable evidence asset and accepted capture-manifest receipt`,
+        `Authored traversal ${id} requires an immutable evidence asset, accepted capture manifest, and numeric capture-to-scene registration receipt`,
+      );
+    }
+    const derivedWorldPath = evidenceSourcePath.map((point) =>
+      transformSourcePoint(point, evidenceSourceToWorld)
+    );
+    if (JSON.stringify(derivedWorldPath) !== JSON.stringify(path)) {
+      throw new NavigationBuildError(
+        "INVALID_AUTHORED_TRAVERSAL",
+        `Authored traversal ${id} world path does not match its frozen capture-frame path and registration`,
       );
     }
     for (const [name, raw, minimum, maximum] of [
@@ -1038,6 +1058,9 @@ function canonicalOffMeshConnections(values, agent) {
         manifestSha256: evidenceManifestSha256,
         adapter: evidenceAdapter,
         reviewGeneration: evidenceReviewGeneration,
+        registrationSha256: evidenceRegistrationSha256,
+        sourceToWorld: evidenceSourceToWorld,
+        sourcePath: evidenceSourcePath,
       },
     };
   });
@@ -1145,6 +1168,46 @@ function tuples(values) {
 
 function point3(value) {
   return Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+}
+
+function sourceToWorldTransform(value) {
+  if (!value || typeof value !== "object") return null;
+  if (
+    !["Y", "Z"].includes(value.sourceUpAxis) || value.worldUnit !== "metres" ||
+    !Number.isFinite(value.metresPerSourceUnit) || value.metresPerSourceUnit <= 0 ||
+    !Number.isFinite(value.yawDegrees) || !point3(value.translationMetres)
+  ) return null;
+  return {
+    sourceUpAxis: value.sourceUpAxis,
+    worldUnit: "metres",
+    metresPerSourceUnit: value.metresPerSourceUnit,
+    yawDegrees: value.yawDegrees,
+    translationMetres: [...value.translationMetres],
+  };
+}
+
+function transformSourcePoint(point, transform) {
+  const normalized = transform.sourceUpAxis === "Z"
+    ? [point[0], point[2], -point[1]]
+    : [...point];
+  const scaled = normalized.map((coordinate) =>
+    coordinate * transform.metresPerSourceUnit
+  );
+  const radians = transform.yawDegrees * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const rotated = [
+    scaled[0] * cosine + scaled[2] * sine,
+    scaled[1],
+    -scaled[0] * sine + scaled[2] * cosine,
+  ];
+  return rotated.map((coordinate, index) =>
+    cleanZero(coordinate + transform.translationMetres[index])
+  );
+}
+
+function cleanZero(value) {
+  return Object.is(value, -0) ? 0 : value;
 }
 
 function toVector(value) {

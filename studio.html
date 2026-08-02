@@ -513,7 +513,13 @@
         <label><span>Units</span><select name="coordinateUnits" required><option value="metres">Metres</option><option value="millimetres">Millimetres</option></select></label>
         <label><span>Axis convention</span><select name="axisConvention" required><option value="right-handed-y-up">Right-handed, Y up</option><option value="right-handed-z-up">Right-handed, Z up</option><option value="left-handed-y-up">Left-handed, Y up</option><option value="left-handed-z-up">Left-handed, Z up</option></select></label>
         <label><span>EPSG (optional)</span><input name="epsg" type="number" min="2000" max="999999" step="1" /></label>
-        <label class="full"><span>Registration method</span><textarea name="registrationMethod" minlength="10" maxlength="2000" required placeholder="Explain how scale, orientation, origin, and any external control were established."></textarea></label>
+        <label class="full"><span>Source coordinate-frame notes</span><textarea name="registrationMethod" minlength="10" maxlength="2000" required placeholder="Describe source units, axes, origin, known control, and anything still unknown."></textarea></label>
+        <label class="checkbox-row full"><input id="captureAttachSceneRegistration" name="attachSceneRegistration" type="checkbox" /><span>Attach a reviewed numeric capture-to-scene registration</span></label>
+        <label class="full" data-scene-registration-field hidden><span>Registration evidence</span><select id="captureRegistrationEvidence" name="registrationEvidenceAssetId"></select><small>The selected immutable asset must contain or establish the transform—for example an FJD structured E57 matrix, an XGRIDS registered point cloud, or reviewed control data. Do not attach an identity transform unless the evidence proves it.</small></label>
+        <label data-scene-registration-field hidden><span>Yaw into scene world (degrees)</span><input name="registrationYawDegrees" type="number" step="any" placeholder="Evidence-derived value" /></label>
+        <label data-scene-registration-field hidden><span>Scene translation X (metres)</span><input name="registrationTranslationX" type="number" step="any" placeholder="Evidence-derived value" /></label>
+        <label data-scene-registration-field hidden><span>Scene translation Y (metres)</span><input name="registrationTranslationY" type="number" step="any" placeholder="Evidence-derived value" /></label>
+        <label data-scene-registration-field hidden><span>Scene translation Z (metres)</span><input name="registrationTranslationZ" type="number" step="any" placeholder="Evidence-derived value" /></label>
       </div>
       <section class="capture-bundle-section" aria-labelledby="captureBundleAssetsTitle">
         <div class="section-heading compact-heading">
@@ -769,7 +775,7 @@
         <label><span>Traversal type</span><select name="traversalKind" required><option value="elevator">Elevator</option><option value="ladder">Ladder</option><option value="moving_platform">Moving platform</option></select></label>
         <label><span>Label</span><input name="label" required placeholder="East lift" /></label>
         <label class="full"><span>Accepted capture-manifest evidence</span><select id="navigationTraversalEvidenceAsset" name="evidenceReceipt" required></select></label>
-        <label class="full"><span>Controlled path (x, y, z; one feet-level point per line)</span><textarea name="path" required placeholder="1.5, 0, 2&#10;1.5, 3, 2&#10;3, 3, 2"></textarea></label>
+        <label class="full"><span>Capture-frame path (x, y, z; one feet-level point per line)</span><textarea name="sourcePath" required placeholder="1.5, 0, 2&#10;1.5, 3, 2&#10;3, 3, 2"></textarea><small>The Worker derives the scene-world path from these source coordinates and the accepted registration. Do not paste scene-world points here.</small></label>
         <label><span>Travel speed (<span id="navigationTraversalUnit">metres</span>/second)</span><input name="speedUnitsPerSecond" type="number" min="0" step="any" required /></label>
         <label class="checkbox-row"><input name="bidirectional" type="checkbox" checked /><span>Allow both directions</span></label>
         <label class="full"><span>Review receipt</span><textarea name="reviewedPurpose" required placeholder="Explain what the selected immutable asset proves and why this path is safe to traverse."></textarea></label>

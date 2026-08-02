@@ -108,6 +108,25 @@ instance.
    - reads only assets bound to the active immutable release
    - receives collision, route, room, POI, and adaptive-delivery metadata from
      the immutable release manifest
+   - records evidence-linked traversal lifecycle diagnostics only from an
+     authenticated review session; its bearer expires and renews without
+     changing the logical run id; a browser idempotency identity survives a
+     reload and is shared across tabs in one authenticated session; expired rows are retired by lifecycle enforcement, but an idle
+     open tab reconstructs the same server-derived session UUID and continues
+     its sequence from immutable events without a timed grace period; runs whose
+     release leaves its active channel remain terminally invalid because a
+     monotonic activation generation is bound into the row, token, database
+     guard, and session identity—even if that release is later restored by
+     rollback; the Worker assigns the event sequence and resolves the connection, review generation,
+     registration hash, numeric transform, and capture-frame path from the
+     frozen release rather than trusting browser metadata; these events help
+     review a physical run but cannot approve one by themselves
+   - one auth session maps deterministically to one evidence run per channel
+     activation, so concurrent tabs and storage loss converge without a client
+     identity; a separately authenticated physical device has its own run
+   - evidence ingestion and its database trigger re-check the auth session,
+     membership, and reviewer project access, so logout or access revocation is
+     immediate rather than delayed until the scene bearer expires
 5. Storage
    - raw, master, and delivery objects live in a private R2 bucket
    - D1 stores authoritative metadata, auth, and state, not 3DGS binaries
@@ -247,7 +266,7 @@ scene_version
   |-- change evidence -------> authored geometry metrics / XZ overlay / review
   |-- raw change evidence ---> registered PLY occupancy / centroid / colour / review
   |-- capture evidence ------> private pose path / room coverage / recapture review
-  |-- capture contract ------> verified assets / rights / portability / review
+  |-- capture contract ------> verified assets / rights / portability / scene registration / review
   |-- review evidence -------> comments / redactions / decisions / invitations
   |-- privacy evidence ------> scans / private frames / candidates / decisions
   \-- measurement evidence --> brief / check points / residual QA / sign-off
@@ -278,6 +297,34 @@ the structural shell; Detour remains authoritative for topology and guided
 routes. Room moves use a request/acknowledgement message so rejected cameras
 leave the host control recoverable. The Gaussian asset remains a visual layer;
 the platform does not infer collision or measurement accuracy from it.
+
+Capture contracts may bind the source capture frame to the platform's
+right-handed, Y-up metric scene frame with
+`capture-to-scene-registration-v1`. The receipt freezes the source frame id,
+the immutable evidence asset and SHA-256, the registration method, and the
+numeric up-axis/scale/yaw/translation transform. Its canonical payload receives
+its own SHA-256 before the containing manifest is hashed and reviewed. A
+capture manifest without this receipt remains useful as provenance, but it
+cannot qualify an authored traversal. Traversal authoring re-verifies both
+hashes, the current review generation, the evidence asset, and the coordinate
+frame. Traversal authoring accepts capture-frame points, derives the scene-world
+path server-side with that transform, and freezes both paths into D1, the
+authoring hash, the offline processor input, and the navigation artifact. The
+browser lifecycle event carries only the connection and phase; the signed,
+expiring review credential lets the Worker resolve the full transform and source path from the frozen
+artifact. Existing v8 and early v9 artifacts remain readable, but cannot
+acquire this qualification retroactively.
+
+This vendor-neutral seam matches available device exports rather than parsing
+vendor coordinates in the viewer. XGRIDS LCC Studio can preserve absolute RTK
+coordinates and convert reconstructed data to WGS84 or CGCS2000, while FJD
+Trion's structured E57 export includes point clouds, images, and transformation
+matrices. The current Studio flow records an operator-reviewed manual transform
+against those immutable exports. Automatic XGRIDS/FJD metadata extraction
+remains an adapter qualification gap; opaque vendor containers are not parsed
+today. Future versioned extractors will emit the same reviewed receipt:
+[XGRIDS coordinate-system documentation](https://docs.xgrids.com/en-us/06-lixel-cybercolor/01-lcc-studio/v2.0.0/05-pre-reconstruction.html),
+[FJD Trion structured E57 release note](https://www.fjdynamics.com/blog/product-updates-50/new-release-fjd-trion-model-v1-000-d-0203-515).
 
 Before a v7 build can be reviewed, the processor proves all authored anchors
 are enclosed by floor, ceiling, and walls; runs both-direction Walk-capsule and

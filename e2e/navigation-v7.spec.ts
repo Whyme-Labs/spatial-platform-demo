@@ -165,6 +165,7 @@ test("v9 carries Walk mode through an evidence-linked multi-floor elevator path"
         adapter: "xgrids-lcc",
         manifestSha256: "b".repeat(64),
         reviewGeneration: 1,
+        registrationSha256: "c".repeat(64),
       },
     }),
     expect.objectContaining({
@@ -175,6 +176,7 @@ test("v9 carries Walk mode through an evidence-linked multi-floor elevator path"
         adapter: "xgrids-lcc",
         manifestSha256: "b".repeat(64),
         reviewGeneration: 1,
+        registrationSha256: "c".repeat(64),
       },
     }),
   ]);
@@ -463,6 +465,21 @@ async function buildV8Fixture(): Promise<Awaited<ReturnType<typeof buildV7Fixtur
         manifestSha256: "b".repeat(64),
         adapter: "xgrids-lcc",
         reviewGeneration: 1,
+        registrationSha256: "c".repeat(64),
+        sourceToWorld: {
+          sourceUpAxis: "Y",
+          worldUnit: "metres",
+          metresPerSourceUnit: 1,
+          yawDegrees: 0,
+          translationMetres: [0, 0, 0],
+        },
+        sourcePath: [
+          [1.3, 0.05, 2],
+          [1.75, 0.05, 2],
+          [1.75, 3.05, 2],
+          [3.3, 3.05, 2],
+          [3.7, 3.05, 2],
+        ],
       },
     }],
   });

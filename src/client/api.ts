@@ -79,7 +79,7 @@ export function markAuthenticationSignedOut(): void {
 export async function apiFile(
   path: string,
   init: ApiRequestInit = {},
-): Promise<{ blob: Blob; fileName: string | null }> {
+): Promise<{ blob: Blob; fileName: string | null; sha256: string | null }> {
   return apiFileRequest(path, init, true);
 }
 
@@ -144,7 +144,7 @@ async function apiFileRequest(
   path: string,
   init: ApiRequestInit,
   allowRefresh: boolean,
-): Promise<{ blob: Blob; fileName: string | null }> {
+): Promise<{ blob: Blob; fileName: string | null; sha256: string | null }> {
   const method = (init.method ?? "GET").toUpperCase();
   const retries = init.retries ?? (isSafeMethod(method) ? 2 : 0);
   let attempt = 0;
@@ -171,6 +171,7 @@ async function apiFileRequest(
       return {
         blob: await response.blob(),
         fileName: attachmentFileName(response.headers.get("Content-Disposition")),
+        sha256: response.headers.get("X-Spatial-SHA256"),
       };
     } catch (error) {
       if (error instanceof ApiError) {
@@ -335,6 +336,8 @@ async function reconcileStaleRefresh(): Promise<RefreshOutcome> {
 function isProtectedApiPath(path: string): boolean {
   if (!path.startsWith("/api/")) return false;
   if (UNAUTHENTICATED_API_PATHS.has(path)) return false;
+  if (path === "/api/telemetry") return false;
+  if (path.startsWith("/api/releases/") && path.includes("/manifest")) return false;
   return !path.startsWith("/api/auth/otp/") &&
     !path.startsWith("/api/auth/oidc/");
 }

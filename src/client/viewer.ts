@@ -1,7 +1,7 @@
 import "@fontsource-variable/manrope";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import { runAction, SingleFlight } from "./action-state";
 import {
   buildFloorPlans,
@@ -228,6 +228,21 @@ type SparkRendererMessage =
     }
   | {
       source: "spatial-spark";
+      type: "authored-traversal-state";
+      connectionId: string;
+      traversalKind: "elevator" | "ladder" | "moving_platform";
+      label: string;
+      phase: "started" | "completed" | "blocked";
+      qualification: {
+        adapter: string;
+        manifestSha256: string;
+        reviewGeneration: number;
+        registrationSha256: string;
+      } | null;
+      message?: string;
+    }
+  | {
+      source: "spatial-spark";
       type: "dynamic-barrier-state";
       requestId: string;
       barrierId: string;
@@ -235,6 +250,25 @@ type SparkRendererMessage =
       accepted: boolean;
       message: string;
     };
+
+type ViewerTelemetryEvent = {
+  releaseId: string;
+  eventType:
+    | "viewer_open"
+    | "renderer_ready"
+    | "renderer_error"
+    | "time_to_first_frame"
+    | "navigation_traversal";
+  deviceProfile: string;
+  metricValue?: number;
+  metadata: Record<string, string | number | boolean | null>;
+};
+
+type ViewerTelemetrySession = {
+  sessionId: string;
+  token: string;
+  expiresAtEpochSeconds: number;
+};
 type SpatialRendererMessage = SparkRendererMessage;
 
 const byId = <T extends Element = HTMLElement>(id: string): T => {
@@ -253,6 +287,8 @@ const viewerSessionId = crypto.randomUUID();
 const activeReleaseSlug = releaseSlug();
 const viewerActions = new SingleFlight();
 let activeManifest: ReleaseManifest | null = null;
+let traversalTelemetrySession: ViewerTelemetrySession | null = null;
+let telemetryDelivery = Promise.resolve();
 let activeReview: SceneReview | null = null;
 let activeFloorPlans: FloorPlan[] = [];
 let activeFloorPlanId: string | null = null;
@@ -340,7 +376,9 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   frame.hidden = true;
   try {
     const accessToken = new URL(location.href).searchParams.get("access_token");
-    const query = accessToken ? `?access_token=${encodeURIComponent(accessToken)}` : "";
+    const query = accessToken
+      ? `?access_token=${encodeURIComponent(accessToken)}`
+      : "";
     const manifest = await api<ReleaseManifest>(`/api/releases/${encodeURIComponent(slug)}/manifest${query}`);
     activeManifest = manifest;
     if (accessToken) {
@@ -398,6 +436,13 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     } else {
       pending.reject(new Error(message.message ?? "The selected room is outside the authored walkable area."));
     }
+    return;
+  }
+  if (message.type === "authored-traversal-state") {
+    void recordTelemetry("navigation_traversal", undefined, {
+      connectionId: message.connectionId,
+      phase: message.phase,
+    });
     return;
   }
   if (message.type === "dynamic-barrier-state") {
@@ -483,7 +528,7 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
       type === "control-onboarding" || type === "control-help" ||
-      type === "dynamic-barrier-state");
+      type === "authored-traversal-state" || type === "dynamic-barrier-state");
 }
 
 function publishedRendererUrl(manifest: ReleaseManifest): URL {
@@ -1261,26 +1306,96 @@ async function shareCurrentUrl(): Promise<void> {
 }
 
 async function recordTelemetry(
-  eventType: "viewer_open" | "renderer_ready" | "renderer_error" | "time_to_first_frame",
+  eventType:
+    | "viewer_open"
+    | "renderer_ready"
+    | "renderer_error"
+    | "time_to_first_frame"
+    | "navigation_traversal",
   metricValue?: number,
   metadata: Record<string, string | number | boolean | null> = {},
 ): Promise<void> {
   if (!activeManifest) return;
-  try {
-    await api<void>("/api/telemetry", {
-      method: "POST",
-      body: JSON.stringify({
-        releaseId: activeManifest.release.id,
-        eventType,
-        sessionId: viewerSessionId,
-        deviceProfile,
-        metricValue,
-        metadata,
-      }),
-    });
-  } catch {
-    // Telemetry must never block or break the viewer.
+  const event: ViewerTelemetryEvent = {
+    releaseId: activeManifest.release.id,
+    eventType,
+    deviceProfile,
+    ...(metricValue === undefined ? {} : { metricValue }),
+    metadata,
+  };
+  if (eventType !== "navigation_traversal") {
+    try {
+      await api<void>("/api/telemetry", {
+        method: "POST",
+        body: JSON.stringify({ ...event, sessionId: viewerSessionId }),
+      });
+    } catch {
+      // General delivery metrics never block or break the published viewer.
+    }
+    return;
   }
+  if (!reviewMode) return;
+  telemetryDelivery = telemetryDelivery
+    .then(() => deliverTraversalTelemetry(event))
+    .catch((error) => {
+      console.warn("Viewer telemetry delivery failed", error);
+      if (event.eventType === "navigation_traversal" && reviewMode) {
+        showToast(
+          "Traversal evidence was not recorded. Keep this device run in VALIDATE and retry.",
+        );
+      }
+    });
+  await telemetryDelivery;
+}
+
+async function deliverTraversalTelemetry(event: ViewerTelemetryEvent): Promise<void> {
+  let session = await currentTraversalTelemetrySession();
+  const send = (candidate: ViewerTelemetrySession) => api<void>("/api/telemetry", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${candidate.token}`,
+    },
+    body: JSON.stringify({ ...event, sessionId: candidate.sessionId }),
+  });
+  try {
+    await send(session);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    session = await currentTraversalTelemetrySession(true);
+    await send(session);
+  }
+}
+
+async function currentTraversalTelemetrySession(
+  renew = false,
+): Promise<ViewerTelemetrySession> {
+  if (
+    !renew && traversalTelemetrySession &&
+    traversalTelemetrySession.expiresAtEpochSeconds > Math.floor(Date.now() / 1000)
+  ) return traversalTelemetrySession;
+  if (!activeReleaseSlug) throw new Error("The active release slug is unavailable");
+  if (!activeManifest) throw new Error("The active release manifest is unavailable");
+  const releaseId = activeManifest.release.id;
+  const requestSession = async (sessionId?: string): Promise<ViewerTelemetrySession> =>
+    api<ViewerTelemetrySession>(
+      `/api/releases/${encodeURIComponent(activeReleaseSlug)}/telemetry-session`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          releaseId,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+      },
+    );
+  const previousSessionId = traversalTelemetrySession?.sessionId;
+  try {
+    traversalTelemetrySession = await requestSession(previousSessionId);
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 410 || !previousSessionId) throw error;
+    traversalTelemetrySession = null;
+    traversalTelemetrySession = await requestSession();
+  }
+  return traversalTelemetrySession;
 }
 
 function detectDeviceProfile(): string {

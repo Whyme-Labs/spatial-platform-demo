@@ -2,6 +2,11 @@ import { expect, test, type Route } from "@playwright/test";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 test("published viewer hands startup progress to the embedded Spark loader", async ({ page }) => {
+  const telemetry: Array<Record<string, unknown>> = [];
+  let telemetrySessionIssueCount = 0;
+  let simulatedCredentialExpiry = false;
+  let simulateActivationChange = false;
+  let activationTokenRejected = false;
   await page.addInitScript(() => {
     const originalSetTimeout = window.setTimeout.bind(window);
     const scheduledTimeouts: number[] = [];
@@ -143,7 +148,71 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       },
     },
   }));
-  await page.route("**/api/releases/loading-handoff/telemetry", (route) => json(route, {}));
+  await page.route("**/api/releases/loading-handoff/telemetry-session", async (route) => {
+    telemetrySessionIssueCount += 1;
+    const request = route.request().postDataJSON() as {
+      releaseId: string;
+      sessionId?: string;
+    };
+    expect(request.releaseId).toBe("11111111-1111-4111-8111-111111111111");
+    if (telemetrySessionIssueCount === 1) {
+      expect(request.sessionId).toBeUndefined();
+    } else {
+      if (telemetrySessionIssueCount === 2 || telemetrySessionIssueCount === 3) {
+        expect(request.sessionId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      } else {
+        expect(request.sessionId).toBeUndefined();
+      }
+    }
+    if (telemetrySessionIssueCount === 3) {
+      await route.fulfill({
+        status: 410,
+        contentType: "application/json",
+        body: '{"error":"activation retired"}',
+      });
+      return;
+    }
+    const currentActivation = telemetrySessionIssueCount >= 4;
+    await json(route, {
+      sessionId: currentActivation
+        ? "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        : "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      token: currentActivation
+        ? "new-activation-telemetry-token"
+        : telemetrySessionIssueCount === 1
+          ? "signed-telemetry-token"
+          : "renewed-telemetry-token",
+      expiresAtEpochSeconds: Number.MAX_SAFE_INTEGER,
+    });
+  });
+  await page.route("**/api/telemetry", async (route) => {
+    const event = route.request().postDataJSON() as Record<string, unknown>;
+    if (event.eventType !== "navigation_traversal") {
+      expect(route.request().headers().authorization).toBeUndefined();
+      telemetry.push(event);
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (!simulatedCredentialExpiry) {
+      simulatedCredentialExpiry = true;
+      expect(route.request().headers().authorization).toBe("Bearer signed-telemetry-token");
+      await route.fulfill({ status: 401, contentType: "application/json", body: '{"error":"expired"}' });
+      return;
+    }
+    if (simulateActivationChange && !activationTokenRejected) {
+      activationTokenRejected = true;
+      expect(route.request().headers().authorization).toBe("Bearer renewed-telemetry-token");
+      await route.fulfill({ status: 401, contentType: "application/json", body: '{"error":"retired"}' });
+      return;
+    }
+    expect(route.request().headers().authorization).toBe(
+      simulateActivationChange
+        ? "Bearer new-activation-telemetry-token"
+        : "Bearer renewed-telemetry-token",
+    );
+    telemetry.push(event);
+    await route.fulfill({ status: 204 });
+  });
   await page.route("**/renderer/index.html?*", (route) => route.fulfill({
     status: 200,
     contentType: "text/html",
@@ -282,7 +351,10 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
       </html>`,
   }));
 
-  await page.goto("/s/loading-handoff", { waitUntil: "commit" });
+  await page.goto("/review/loading-handoff", { waitUntil: "commit" });
+  await expect.poll(() => page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith("spatial.traversal-run."))
+  )).toEqual([]);
 
   const parentLoader = page.locator("#loadingOverlay");
   const releaseInfo = page.locator("#releaseInfo");
@@ -335,6 +407,45 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(releaseInfo).toBeVisible();
   await expect(page.locator(".performance-chip")).toHaveCount(0);
   await expect(page.locator("#rendererStatus")).toHaveText("Scene ready");
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    for (const phase of ["started", "completed"]) {
+      parent.postMessage({
+        source: "spatial-spark",
+        type: "authored-traversal-state",
+        connectionId: "east-lift",
+        traversalKind: "elevator",
+        label: "East lift",
+        phase,
+        qualification: {
+          adapter: "xgrids-lcc",
+          manifestSha256: "b".repeat(64),
+          reviewGeneration: 3,
+          registrationSha256: "c".repeat(64),
+        },
+      }, location.origin);
+    }
+  });
+  await expect.poll(() => telemetry.filter((event) =>
+    event.eventType === "navigation_traversal"
+  )).toEqual([
+    expect.objectContaining({
+      eventType: "navigation_traversal",
+      sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      metadata: {
+        connectionId: "east-lift",
+        phase: "started",
+      },
+    }),
+    expect.objectContaining({
+      eventType: "navigation_traversal",
+      sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      metadata: {
+        connectionId: "east-lift",
+        phase: "completed",
+      },
+    }),
+  ]);
+  expect(telemetrySessionIssueCount).toBe(2);
   await rendererFrame.evaluate((element) => {
     element.dispatchEvent(new Event("load"));
   });
@@ -536,6 +647,60 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
         && !rectanglesOverlap(responsiveExploreBox, responsiveQualityBox);
     }).toBe(true);
   }
+
+  simulateActivationChange = true;
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "authored-traversal-state",
+      connectionId: "east-lift",
+      traversalKind: "elevator",
+      label: "East lift",
+      phase: "started",
+      qualification: {
+        adapter: "xgrids-lcc",
+        manifestSha256: "b".repeat(64),
+        reviewGeneration: 3,
+        registrationSha256: "c".repeat(64),
+      },
+    }, location.origin);
+  });
+  await expect.poll(() => telemetrySessionIssueCount).toBe(4);
+  await expect.poll(() => telemetry.at(-1)).toMatchObject({
+    eventType: "navigation_traversal",
+    sessionId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  });
+
+  await page.reload({ waitUntil: "commit" });
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "ready",
+      runtime: "spark",
+      version: "2.1.0",
+      timeToFirstFrameMs: 1200,
+      format: "rad",
+      splatBudget: 2_000_000,
+    }, location.origin);
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "authored-traversal-state",
+      connectionId: "east-lift",
+      traversalKind: "elevator",
+      label: "East lift",
+      phase: "completed",
+      qualification: {
+        adapter: "xgrids-lcc",
+        manifestSha256: "b".repeat(64),
+        reviewGeneration: 3,
+        registrationSha256: "c".repeat(64),
+      },
+    }, location.origin);
+  });
+  await expect.poll(() => telemetrySessionIssueCount).toBe(5);
+  await expect.poll(() => page.evaluate(() =>
+    Object.keys(localStorage).filter((key) => key.startsWith("spatial.traversal-run."))
+  )).toEqual([]);
 });
 
 test("visual-only releases do not imply a metric scale", async ({ page }) => {

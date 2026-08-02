@@ -1,3 +1,5 @@
+import type { SourceToWorldTransform } from "../shared/navigation-runtime";
+
 export const captureBundleRoles = [
   "vendor_project",
   "raw_capture",
@@ -63,6 +65,7 @@ export type CaptureBundleValidation = {
     reconstructionPortable: boolean;
     independentlyReconstructable: boolean;
     automationReady: boolean;
+    sceneRegistered: boolean;
   };
   issues: CaptureBundleValidationIssue[];
   limitations: string[];
@@ -137,6 +140,15 @@ export function validateCaptureBundle(input: {
   rights: CaptureBundleRights;
   exporterMode: "gui" | "cli" | "api" | "cloud";
   coordinateUnits: "metres" | "millimetres";
+  coordinateAxisConvention:
+    | "right-handed-y-up"
+    | "right-handed-z-up"
+    | "left-handed-y-up"
+    | "left-handed-z-up";
+  sceneRegistration?: {
+    evidenceAssetId: string;
+    sourceToWorld: SourceToWorldTransform;
+  };
   declaredLimitations: string[];
 }): CaptureBundleValidation {
   const issues: CaptureBundleValidationIssue[] = [];
@@ -237,6 +249,58 @@ export function validateCaptureBundle(input: {
     });
   }
 
+  const registrationIssueCount = issues.length;
+  if (!input.sceneRegistration) {
+    issues.push({
+      code: "scene_registration_missing",
+      severity: "warning",
+      message: "No numerical capture-to-scene transform is registered; traversal evidence cannot be physically qualified.",
+    });
+  } else {
+    const registrationAsset = input.assets.find(
+      (asset) => asset.id === input.sceneRegistration!.evidenceAssetId,
+    );
+    if (!registrationAsset) {
+      issues.push({
+        code: "scene_registration_evidence_missing",
+        severity: "blocker",
+        message: "The capture-to-scene transform must cite one immutable asset in this manifest.",
+        assetId: input.sceneRegistration.evidenceAssetId,
+      });
+    }
+    const expectedUpAxis = input.coordinateAxisConvention.endsWith("y-up") ? "Y" : "Z";
+    if (input.sceneRegistration.sourceToWorld.sourceUpAxis !== expectedUpAxis) {
+      issues.push({
+        code: "scene_registration_axis_mismatch",
+        severity: "blocker",
+        message: `The numerical transform declares ${input.sceneRegistration.sourceToWorld.sourceUpAxis}-up but the capture frame declares ${expectedUpAxis}-up.`,
+      });
+    }
+    if (input.coordinateAxisConvention.startsWith("left-handed")) {
+      issues.push({
+        code: "scene_registration_handedness_unsupported",
+        severity: "blocker",
+        message: "The current capture-to-scene transform is rigid right-handed; a left-handed capture requires an adapter-authored handedness conversion.",
+      });
+    }
+    if (input.sceneRegistration.sourceToWorld.worldUnit !== "metres") {
+      issues.push({
+        code: "scene_registration_world_unit_invalid",
+        severity: "blocker",
+        message: "A physically qualified capture must map into the scene's metric world frame.",
+      });
+    }
+    const expectedScale = input.coordinateUnits === "metres" ? 1 : 0.001;
+    if (input.sceneRegistration.sourceToWorld.metresPerSourceUnit !== expectedScale) {
+      issues.push({
+        code: "scene_registration_scale_mismatch",
+        severity: "blocker",
+        message: `The capture frame units require metresPerSourceUnit=${expectedScale}, requested ${input.sceneRegistration.sourceToWorld.metresPerSourceUnit}.`,
+      });
+    }
+  }
+  const sceneRegistered = Boolean(input.sceneRegistration) && issues.length === registrationIssueCount;
+
   const blockers = issues.filter((issue) => issue.severity === "blocker").length;
   const result = blockers
     ? "blocked"
@@ -259,6 +323,7 @@ export function validateCaptureBundle(input: {
         input.rights.redistributionConfirmed,
       independentlyReconstructable,
       automationReady,
+      sceneRegistered,
     },
     issues,
     limitations: [

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Vector3Tuple } from "../shared/navigation-runtime";
-import { isCaptureQualifiedTraversalEvidenceReceipt } from "../shared/traversal-evidence";
+import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import type {
   AuthoredTraversalFrame,
   AuthoredTraversalKind,
@@ -14,6 +14,7 @@ export type AuthoredTraversalOverlayState = {
   adapter: string;
   manifestSha256: string;
   reviewGeneration: number;
+  registrationSha256: string;
   radius: number;
   path: Vector3Tuple[];
   markerPosition: Vector3Tuple;
@@ -27,13 +28,14 @@ export function authoredTraversalOverlayState(
   if (!frame || frame.phase === "completed") return null;
   const link = links.find((candidate) => candidate.id === frame.connectionId);
   if (!link ||
-    !isCaptureQualifiedTraversalEvidenceReceipt(link.evidenceReceipt) ||
-    !isCaptureQualifiedTraversalEvidenceReceipt(frame.evidenceReceipt)) return null;
+    !isSceneRegisteredTraversalEvidenceReceipt(link.evidenceReceipt) ||
+    !isSceneRegisteredTraversalEvidenceReceipt(frame.evidenceReceipt)) return null;
   if (
     link.evidenceReceipt.manifestId !== frame.evidenceReceipt.manifestId ||
     link.evidenceReceipt.manifestSha256 !== frame.evidenceReceipt.manifestSha256 ||
     link.evidenceReceipt.adapter !== frame.evidenceReceipt.adapter ||
-    link.evidenceReceipt.reviewGeneration !== frame.evidenceReceipt.reviewGeneration
+    link.evidenceReceipt.reviewGeneration !== frame.evidenceReceipt.reviewGeneration ||
+    link.evidenceReceipt.registrationSha256 !== frame.evidenceReceipt.registrationSha256
   ) return null;
   return {
     connectionId: link.id,
@@ -42,6 +44,7 @@ export function authoredTraversalOverlayState(
     adapter: link.evidenceReceipt.adapter!,
     manifestSha256: link.evidenceReceipt.manifestSha256!,
     reviewGeneration: link.evidenceReceipt.reviewGeneration!,
+    registrationSha256: link.evidenceReceipt.registrationSha256,
     radius: link.radius,
     path: [
       [...link.startPosition],

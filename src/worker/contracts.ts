@@ -824,6 +824,22 @@ const authoredTraversalConnectionSchema = z.object({
     manifestSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
     adapter: z.string().trim().min(1).optional(),
     reviewGeneration: z.number().int().positive().optional(),
+    registrationSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+    sourceToWorld: sourceToWorldTransformSchema.optional(),
+    sourcePath: z.array(point3Schema).min(2).optional(),
+  }).superRefine((value, context) => {
+    const registrationFields = [
+      value.registrationSha256,
+      value.sourceToWorld,
+      value.sourcePath,
+    ];
+    if (registrationFields.some((field) => field === undefined) &&
+      registrationFields.some((field) => field !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "Traversal registration requires registrationSha256, sourceToWorld, and sourcePath together",
+      });
+    }
   }),
 });
 
@@ -834,18 +850,18 @@ export const navigationTraversalCreateSchema = z.object({
   versionId: z.string().uuid(),
   traversalKind: z.enum(["elevator", "ladder", "moving_platform"]),
   label: z.string().trim().min(1),
-  path: z.array(point3Schema).min(2),
+  sourcePath: z.array(point3Schema).min(2),
   bidirectional: z.boolean().default(true),
   speedUnitsPerSecond: z.number().positive(),
   reviewedPurpose: z.string().trim().min(1),
   evidenceAssetId: z.string().uuid(),
   evidenceManifestId: z.string().uuid(),
 }).superRefine((value, context) => {
-  if (value.path.some((point, index) => index > 0 &&
-    point.every((coordinate, axis) => coordinate === value.path[index - 1]![axis]))) {
+  if (value.sourcePath.some((point, index) => index > 0 &&
+    point.every((coordinate, axis) => coordinate === value.sourcePath[index - 1]![axis]))) {
     context.addIssue({
       code: "custom",
-      path: ["path"],
+      path: ["sourcePath"],
       message: "A traversal path cannot contain a zero-length segment",
     });
   }
@@ -854,7 +870,7 @@ export const navigationTraversalCreateSchema = z.object({
 export const navigationTraversalUpdateSchema = z.object({
   traversalKind: z.enum(["elevator", "ladder", "moving_platform"]).optional(),
   label: z.string().trim().min(1).optional(),
-  path: z.array(point3Schema).min(2).optional(),
+  sourcePath: z.array(point3Schema).min(2).optional(),
   bidirectional: z.boolean().optional(),
   speedUnitsPerSecond: z.number().positive().optional(),
   reviewedPurpose: z.string().trim().min(1).optional(),
@@ -864,11 +880,11 @@ export const navigationTraversalUpdateSchema = z.object({
   if (!Object.keys(value).length) {
     context.addIssue({ code: "custom", message: "At least one traversal field must be updated" });
   }
-  if (value.path?.some((point, index) => index > 0 &&
-    point.every((coordinate, axis) => coordinate === value.path![index - 1]![axis]))) {
+  if (value.sourcePath?.some((point, index) => index > 0 &&
+    point.every((coordinate, axis) => coordinate === value.sourcePath![index - 1]![axis]))) {
     context.addIssue({
       code: "custom",
-      path: ["path"],
+      path: ["sourcePath"],
       message: "A traversal path cannot contain a zero-length segment",
     });
   }
@@ -2274,6 +2290,10 @@ export const captureBundleManifestSchema = z.object({
     ]),
     epsg: z.number().int().min(2000).max(999999).nullable().optional(),
     registrationMethod: z.string().trim().min(10).max(2000),
+    sceneRegistration: z.object({
+      evidenceAssetId: z.string().uuid(),
+      sourceToWorld: sourceToWorldTransformSchema,
+    }).optional(),
   }),
   assets: z.array(z.object({
     assetId: z.string().uuid(),
@@ -2425,14 +2445,32 @@ export const releaseInputSchema = z.object({
   }
 });
 
-export const telemetrySchema = z.object({
+const telemetryBaseSchema = z.object({
   releaseId: z.string().uuid(),
-  eventType: z.enum(["viewer_open", "renderer_ready", "renderer_error", "time_to_first_frame", "unsupported_device", "session_complete"]),
-  sessionId: z.string().uuid().optional(),
   deviceProfile: z.string().max(80).optional(),
   metricValue: z.number().finite().optional(),
-  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
 });
+
+export const telemetrySchema = z.discriminatedUnion("eventType", [
+  telemetryBaseSchema.extend({
+    eventType: z.literal("navigation_traversal"),
+    sessionId: z.string().uuid(),
+    metadata: z.object({
+      connectionId: z.string().trim().min(1),
+      phase: z.enum(["started", "completed", "blocked"]),
+    }).strict(),
+  }),
+  telemetryBaseSchema.extend({
+    eventType: z.enum(["viewer_open", "renderer_ready", "renderer_error", "time_to_first_frame", "unsupported_device", "session_complete"]),
+    sessionId: z.string().uuid().optional(),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({}),
+  }),
+]);
+
+export const telemetrySessionSchema = z.object({
+  releaseId: z.string().uuid(),
+  sessionId: z.string().uuid().optional(),
+}).strict();
 
 export type AuthContext = {
   userId: string;

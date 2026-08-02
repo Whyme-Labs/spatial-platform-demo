@@ -27,13 +27,19 @@ device thermal, memory-pressure, or carrier-network tests. They prove the
 release shell, private range delivery, Spark initialization, responsive layout,
 and first rendered scene on Chromium and WebKit.
 
-Before a paid mobile SLA, repeat the matrix on at least one physical iPhone and
-one mid-range Android device while recording:
+Before a paid mobile SLA, declare the supported physical iPhone and Android
+targets, record the device/OS/browser/build identity, and repeat the matrix
+while recording:
 
-- time to first useful frame on Wi-Fi and 20 Mbps mobile shaping
+- time to first useful frame on the product's measured Wi-Fi and mobile-network profiles
 - median and 1% low frame rate during a fixed camera path
 - peak browser memory
-- thermal throttling and crash/reload rate over a ten-minute session
+- thermal throttling and crash/reload rate over a measured soak window
+
+The network profile and soak window must be recorded in
+`docs/CAPACITY_RECEIPTS.md` from the actual target hardware before either is
+made an acceptance limit. Until then they are evidence fields, not pass/fail
+thresholds.
 
 The current acceptance gate is browser compatibility. The physical-device
 performance policy remains a Milestone 4 deliverable.

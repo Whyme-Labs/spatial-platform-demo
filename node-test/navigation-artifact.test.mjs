@@ -133,9 +133,9 @@ describe("Unreal-equivalent navigation artifact", () => {
         id: "east-lift",
         traversalKind: "elevator",
         label: "East lift",
-        startPosition: [1.3, 0, 2],
-        endPosition: [3.7, 3, 2],
-        controlPoints: [[1.75, 0.05, 2], [1.75, 3.05, 2], [3.3, 3.05, 2]],
+        startPosition: [1, 0, 2],
+        endPosition: [4, 3, 2],
+        controlPoints: [[1.5, 0.05, 2], [1.5, 3.05, 2], [3.5, 3.05, 2]],
         radius: 0.22,
         bidirectional: true,
         speedUnitsPerSecond: 1.6,
@@ -150,16 +150,31 @@ describe("Unreal-equivalent navigation artifact", () => {
           manifestSha256: "b".repeat(64),
           adapter: "xgrids-lcc",
           reviewGeneration: 1,
+          registrationSha256: "c".repeat(64),
+          sourceToWorld: {
+            sourceUpAxis: "Y",
+            worldUnit: "metres",
+            metresPerSourceUnit: 1,
+            yawDegrees: 0,
+            translationMetres: [10, 0, 0],
+          },
+          sourcePath: [
+            [-9, 0, 2],
+            [-8.5, 0.05, 2],
+            [-8.5, 3.05, 2],
+            [-6.5, 3.05, 2],
+            [-6, 3, 2],
+          ],
         },
       }],
     });
 
     assert.equal(artifact.schemaVersion, "spatial-navigation-v9");
     assert.equal(artifact.offMeshConnections[0].id, "east-lift");
-    assert.deepEqual(artifact.offMeshConnections[0].requestedStartPosition, [1.3, 0, 2]);
-    assert.deepEqual(artifact.offMeshConnections[0].requestedEndPosition, [3.7, 3, 2]);
-    assert.deepEqual(artifact.offMeshConnections[0].startPosition, [1.3, 0.05, 2]);
-    assert.deepEqual(artifact.offMeshConnections[0].endPosition, [3.7, 3.05, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].requestedStartPosition, [1, 0, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].requestedEndPosition, [4, 3, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].startPosition, [1, 0.05, 2]);
+    assert.deepEqual(artifact.offMeshConnections[0].endPosition, [4, 3.05, 2]);
     assert.equal(artifact.validation.componentCount, 1);
     assert.equal(artifact.validation.destinations[0].reachable, true);
     const traversalValidation = await validateAuthoredTraversals({

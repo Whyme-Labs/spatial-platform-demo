@@ -27,6 +27,15 @@ const qualifiedLift: AuthoredTraversalLink = {
     manifestSha256: "b".repeat(64),
     adapter: "xgrids-lcc",
     reviewGeneration: 1,
+    registrationSha256: "c".repeat(64),
+    sourceToWorld: {
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    },
+    sourcePath: [[0, 0, 0], [0, 3, 0], [2, 3, 0]],
   },
 };
 
@@ -51,6 +60,7 @@ describe("authored traversal overlay contract", () => {
       adapter: "xgrids-lcc",
       manifestSha256: "b".repeat(64),
       reviewGeneration: 1,
+      registrationSha256: "c".repeat(64),
       radius: 0.3,
       path: [[0, 0, 0], [0, 3, 0], [2, 3, 0]],
       markerPosition: [0, 1.5, 0],
