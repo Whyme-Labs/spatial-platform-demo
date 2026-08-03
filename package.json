@@ -19,7 +19,7 @@
     "qa:browser:semantic-extraction": "node scripts/browser-qa-semantic-extraction.mjs",
     "qa:browser:asset-handoff": "node scripts/browser-qa-asset-handoff.mjs",
     "deploy:dry-run": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy --env production --dry-run",
-    "deploy:production": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy --env production",
+    "deploy:production": "npm run db:migrate:production && CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy --env production",
     "deploy:staging": "CLOUDFLARE_ACCOUNT_ID=1e0170aaabc90ecf5f466128d1f0466a wrangler deploy --env staging",
     "verify:staging:public": "node scripts/staging-acceptance.mjs --http-only",
     "verify:staging": "node scripts/staging-acceptance.mjs",

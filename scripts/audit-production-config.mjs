@@ -7,6 +7,9 @@ const application = JSON.parse(
 const processor = JSON.parse(
   await readFile(new URL("wrangler.processor.jsonc", repositoryRoot), "utf8"),
 );
+const packageManifest = JSON.parse(
+  await readFile(new URL("package.json", repositoryRoot), "utf8"),
+);
 
 function requireConfiguration(condition, message) {
   if (!condition) {
@@ -116,7 +119,13 @@ requireConfiguration(
   ),
   "processor production dispatch queue and dead-letter queue are missing",
 );
+requireConfiguration(
+  packageManifest.scripts?.["deploy:production"]?.startsWith(
+    "npm run db:migrate:production && ",
+  ),
+  "deploy:production must apply production D1 migrations before publishing the Worker",
+);
 
 console.log(
-  "Production configuration audit passed: canonical domain only, isolated storage, declared secrets, and guarded processor dispatch.",
+  "Production configuration audit passed: canonical domain only, isolated storage, declared secrets, migration-first deployment, and guarded processor dispatch.",
 );

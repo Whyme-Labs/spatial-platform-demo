@@ -471,13 +471,14 @@ npm run processor:cloud:staging
 npm run deploy:staging
 npm run verify:staging
 
-npm run db:migrate:production
 npm run processor:cloud:production
 npm run deploy:production
 curl --fail https://spatial.whymelabs.com/api/health
 ```
 
-Apply database migrations before code that depends on them. D1 migrations are
+`npm run deploy:production` applies production D1 migrations before it publishes
+the Worker. Do not replace it with a direct `wrangler deploy`: that would let
+application code reach production before its schema. D1 migrations are
 append-only after production deployment; do not edit an already applied file.
 The current release requires `0037_refresh_rotation_replay.sql`,
 `0038_recast_navigation_builds.sql`, and
