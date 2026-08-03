@@ -672,6 +672,10 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   });
 
   await page.reload({ waitUntil: "commit" });
+  await expect(page.frameLocator("#rendererFrame").getByRole("button", {
+    name: "Renderer ready",
+    exact: true,
+  })).toBeVisible();
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
     parent.postMessage({
       source: "spatial-spark",

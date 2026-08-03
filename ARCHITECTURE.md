@@ -171,6 +171,22 @@ one immutable release, enabling rollback without rebuilding an asset.
 Archived projects remain recoverable through the explicit Archived filter;
 their jobs and releases are omitted from current operational inventories.
 
+## Studio navigation contract
+
+The portfolio and a project workspace are distinct routes. `#projects` owns
+search, filtering, sorting, and bulk lifecycle actions. The complete project
+row is the open target and resolves to `#project/{project-id}`; project details
+never append below the portfolio. The project route owns its Overview, Scene &
+navigation, and Measurement evidence sections, so no project-specific editor
+depends on an invisible selection made in a global view. The project header
+keeps the project identity and lifecycle status visible, and Back to projects
+returns to the portfolio explicitly.
+
+Legacy `#projects/{project-id}`, `#spatial/{project-id}`, and
+`#measurement/{project-id}` bookmarks resolve into the equivalent nested
+project route. Private preview sessions remain short-lived exact-version URLs;
+their entry point is the project Overview and does not require publication.
+
 Portfolio lifecycle mutations use `project_bulk_operations` as an idempotency
 ledger. The canonical action and sorted project ID set are SHA-256 hashed and
 bound to a client operation ID. A replay returns the persisted terminal

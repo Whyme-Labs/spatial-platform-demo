@@ -23,8 +23,6 @@
           <div>
             <button class="nav-item" data-section="jobs">Processing activity</button>
             <button class="nav-item" data-section="reviews">Client review</button>
-            <button class="nav-item" data-section="spatial">Scene editor</button>
-            <button class="nav-item" data-section="measurement">Measurement evidence</button>
             <button class="nav-item" data-section="hosting">Hosting & lifecycle</button>
             <button class="nav-item" data-section="team" hidden>Team access</button>
           </div>
@@ -48,7 +46,7 @@
     </aside>
 
     <main class="studio-main">
-      <header class="studio-header">
+      <header id="studioHeader" class="studio-header">
         <div>
           <span id="viewEyebrow" class="eyebrow">CAPTURE TO PREVIEW</span>
           <h1 id="viewTitle">Upload once. Preview the processed splat. Edit only when needed.</h1>
@@ -61,6 +59,22 @@
       </header>
 
       <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
+
+      <section id="projectWorkspaceHeader" class="project-page-header" hidden>
+        <button id="backToProjects" class="project-back-button" type="button"><span aria-hidden="true">←</span> Back to projects</button>
+        <div class="project-page-heading">
+          <div>
+            <span class="eyebrow">PROJECT</span>
+            <h1 id="detailTitle"></h1>
+          </div>
+          <span id="detailStatus" class="status-pill"></span>
+        </div>
+        <nav class="project-section-nav" aria-label="Project workspace">
+          <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
+          <button id="projectSceneTab" type="button" data-project-section="scene">Scene &amp; navigation</button>
+          <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
+        </nav>
+      </section>
 
       <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
         <article class="summary-card"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
@@ -145,10 +159,6 @@
       </section>
 
       <section id="projectDetail" class="output-section" tabindex="-1" hidden>
-        <div class="section-heading">
-          <div><span class="eyebrow">SELECTED PROJECT</span><h2 id="detailTitle"></h2></div>
-          <span id="detailStatus" class="status-pill"></span>
-        </div>
         <div id="detailBody" class="project-detail-grid"></div>
       </section>
 

@@ -6,6 +6,51 @@ const projectId = "22222222-2222-4222-8222-222222222222";
 const versionId = "33333333-3333-4333-8333-333333333333";
 const auxiliaryQaVersionId = "99999999-9999-4999-8999-999999999999";
 
+test("project rows open a dedicated project workspace with nested tools", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto("/studio.html#projects");
+  const projectRow = page.locator(".project-row").filter({ hasText: "Corrected Spark room" });
+  await expect(projectRow).toBeVisible();
+  await expect(page.getByRole("button", { name: "Manage", exact: true })).toHaveCount(0);
+
+  await projectRow.click();
+
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
+  await expect(page.locator("#studioGrid")).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Corrected Spark room", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your splat preview is ready.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
+
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const layout = await page.evaluate(() => {
+      const heading = document.querySelector<HTMLElement>(".project-page-heading")?.getBoundingClientRect();
+      const navigation = document.querySelector<HTMLElement>(".project-section-nav")?.getBoundingClientRect();
+      return {
+        documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+        navigationGap: heading && navigation ? navigation.top - heading.bottom : -1,
+      };
+    });
+    expect(layout.documentOverflow, `${viewport.width}px project page overflows`).toBeLessThanOrEqual(1);
+    expect(layout.navigationGap, `${viewport.width}px project navigation overlaps its heading`).toBeGreaterThan(0);
+  }
+
+  await page.getByRole("button", { name: "Scene & navigation", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/scene$`));
+  await expect(page.getByRole("heading", { name: "Floors, rooms, doorways, POIs, routes, and privacy regions" })).toBeVisible();
+  await expect(page.locator("#projectTable")).toBeHidden();
+
+  await page.getByRole("button", { name: "Back to projects", exact: true }).click();
+  await expect(page).toHaveURL(/#projects$/);
+  await expect(page.locator("#projectTable")).toBeVisible();
+});
+
 test("release authoring resets project-specific fields and submits scene rotation", async ({ page }) => {
   let publishedBody: Record<string, unknown> | null = null;
   const pageErrors: Error[] = [];
@@ -15,7 +60,7 @@ test("release authoring resets project-specific fields and submits scene rotatio
   });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Corrected Spark room" })).toBeVisible();
 
   const openRelease = page.getByRole("button", { name: "Publish shareable URL", exact: true });
@@ -49,7 +94,7 @@ test("release authoring loads spatial guards before enabling visual rotation", a
   await mockApprovedProject(page, () => undefined, { authoredSpatial: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -63,7 +108,7 @@ test("release authoring makes visual rotation and reviewed transforms mutually e
   await mockApprovedProject(page, () => undefined, { reviewedTransform: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -92,7 +137,7 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
   await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
   await expect(page.locator("#releaseDialog")).toBeVisible();
@@ -102,7 +147,7 @@ test("processed projects lead with preview and expose automatic spatial generati
   await mockApprovedProject(page, () => undefined);
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Your splat preview is ready.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toBeVisible();
@@ -116,7 +161,7 @@ test("multi-level floor-plan review shows every level and vertical connector", a
   await mockApprovedProject(page, () => undefined, { multiLevelFloorplan: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await expect(page.getByText("2 levels", { exact: true })).toBeVisible();
   await expect(page.getByText("1 stair/ramp connector", { exact: true })).toBeVisible();
@@ -137,7 +182,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
@@ -191,7 +236,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
   await mockApprovedProject(page, () => undefined, { qualifiedTraversalEvidence: true });
 
   await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 

@@ -709,7 +709,7 @@ test.describe("studio authentication lifecycle", () => {
 
     await Promise.all(pages.map((studioPage) => studioPage.goto("/studio.html#projects")));
     await Promise.all(pages.map((studioPage) =>
-      expect(studioPage.getByRole("button", { name: "Manage" }).first()).toBeVisible()
+      expect(studioPage.getByRole("button", { name: /^Open / }).first()).toBeVisible()
     ));
 
     await Promise.all(pages.map((studioPage) => studioPage.locator("#refreshButton").click()));
@@ -759,7 +759,7 @@ test.describe("studio authentication lifecycle", () => {
       secondary.goto("/studio.html#projects"),
     ]);
     await Promise.all([primary, secondary].map((studioPage) =>
-      expect(studioPage.getByRole("button", { name: "Manage" }).first()).toBeVisible()
+      expect(studioPage.getByRole("button", { name: /^Open / }).first()).toBeVisible()
     ));
 
     await primary.locator("#refreshButton").click();

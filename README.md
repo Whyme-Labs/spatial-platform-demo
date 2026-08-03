@@ -42,6 +42,11 @@ Portable FJD / XGRIDS / open Gaussian export
 The primary Studio journey is deliberately narrower than the full operations
 surface: **Upload capture -> Process splat + floor plan + navigation -> Preview
 -> Correct or approve generated drafts (optional for visual-only sharing) -> Publish**.
+The Projects view is a portfolio only: clicking anywhere on a project row opens
+its route-addressable `#project/{project-id}` workspace. Preview and publication
+start from that page, while scene/navigation and measurement are nested project
+sections rather than contextless global tabs. A Back to projects control returns
+to the portfolio without leaving selected-project state hidden below the list.
 Creating a project, selecting a delivery template, declaring a low-level asset
 purpose, registering a capture contract, or manually starting floor-plan and
 navigation jobs are not prerequisites for the first splat preview. The Studio

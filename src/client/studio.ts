@@ -1172,7 +1172,8 @@ type ProjectBulkLifecycleResult = {
     message?: string;
   }>;
 };
-type StudioView = "projects" | "jobs" | "releases" | "reviews" | "spatial" | "measurement" | "hosting" | "team";
+type StudioView = "projects" | "project" | "jobs" | "releases" | "reviews" | "hosting" | "team";
+type ProjectSection = "overview" | "scene" | "measurement";
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -1210,6 +1211,7 @@ const state: {
   projectAdapter: string;
   projectDelivery: string;
   projectSort: ProjectViewFilter["sort"];
+  projectSection: ProjectSection;
   view: StudioView;
 } = {
   user: null,
@@ -1241,6 +1243,7 @@ const state: {
   projectAdapter: "",
   projectDelivery: "",
   projectSort: "updated_desc",
+  projectSection: "overview",
   view: "projects",
 };
 
@@ -1937,7 +1940,7 @@ function bindInterface(): void {
   updateEnterpriseLoginAvailability();
   byId("qaOpenPrivacyWorkspace").addEventListener("click", () => {
     qaDialog.close();
-    activateView("spatial");
+    activateProjectSection("scene");
   });
   const resendButton = byId<HTMLButtonElement>("resendLoginCode");
   resendButton.addEventListener("click", () => {
@@ -2505,12 +2508,24 @@ function bindInterface(): void {
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.addEventListener("click", () => {
       const section = button.dataset.section;
-      if (section === "projects" || section === "jobs" || section === "releases" || section === "reviews" || section === "spatial" || section === "measurement" || section === "hosting" || section === "team") {
-        activateView(section);
+      if (section === "projects" || section === "jobs" || section === "releases" || section === "reviews" || section === "hosting" || section === "team") {
+        activateView(section, true, "push");
       }
     });
   });
+  byId<HTMLButtonElement>("backToProjects").addEventListener("click", () => activateView("projects", true, "push"));
+  const projectSectionButtons: Array<[HTMLButtonElement, ProjectSection]> = [
+    [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
+    [byId<HTMLButtonElement>("projectSceneTab"), "scene"],
+    [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
+  ];
+  projectSectionButtons.forEach(([button, section]) => {
+    button.addEventListener("click", () => {
+      activateProjectSection(section, true, "push");
+    });
+  });
   window.addEventListener("hashchange", () => void navigateFromHash());
+  window.addEventListener("popstate", () => void navigateFromHash());
   activateView(viewFromHash(), false);
 }
 
@@ -2906,8 +2921,14 @@ function clearSsoReturnParameters(): void {
 }
 
 function viewFromHash(): StudioView {
-  const candidate = window.location.hash.slice(1).split("/", 1)[0];
-  return candidate === "jobs" || candidate === "releases" || candidate === "reviews" || candidate === "spatial" || candidate === "measurement" || candidate === "hosting" || candidate === "team"
+  const [candidate, projectId] = window.location.hash.slice(1).split("/");
+  if (
+    candidate === "project" ||
+    candidate === "spatial" ||
+    candidate === "measurement" ||
+    (candidate === "projects" && projectId)
+  ) return "project";
+  return candidate === "jobs" || candidate === "releases" || candidate === "reviews" || candidate === "hosting" || candidate === "team"
     ? candidate
     : "projects";
 }
@@ -2923,9 +2944,18 @@ function projectIdFromHash(): string | null {
 
 function hashForView(view: StudioView): string {
   const projectId = state.selected?.project.id;
-  return projectId && ["projects", "spatial", "measurement"].includes(view)
-    ? `#${view}/${encodeURIComponent(projectId)}`
-    : `#${view}`;
+  if (view === "project" && projectId) {
+    const suffix = state.projectSection === "overview" ? "" : `/${state.projectSection}`;
+    return `#project/${encodeURIComponent(projectId)}${suffix}`;
+  }
+  return `#${view}`;
+}
+
+function projectSectionFromHash(): ProjectSection {
+  const [candidate, , section] = window.location.hash.slice(1).split("/");
+  if (candidate === "spatial" || section === "scene") return "scene";
+  if (candidate === "measurement" || section === "measurement") return "measurement";
+  return "overview";
 }
 
 async function navigateFromHash(): Promise<void> {
@@ -2936,34 +2966,59 @@ async function navigateFromHash(): Promise<void> {
       selectProject(projectId, false, false)
     );
   }
+  if (view === "project") state.projectSection = projectSectionFromHash();
   activateView(view, false);
+}
+
+function activateProjectSection(
+  section: ProjectSection,
+  updateLocation = true,
+  historyMode: "replace" | "push" = "replace",
+): void {
+  if (!state.selected) {
+    activateView("projects", updateLocation);
+    return;
+  }
+  state.projectSection = section;
+  activateView("project", updateLocation, historyMode);
 }
 
 function activateView(
   view: StudioView,
   updateLocation = true,
+  historyMode: "replace" | "push" = "replace",
 ): void {
   if (isReviewer() && view !== "reviews") view = "reviews";
+  if (view === "project" && !state.selected) view = "projects";
   if (view === "team" && state.user?.role !== "platform_admin") view = "projects";
   state.view = view;
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
-    button.classList.toggle("active", button.dataset.section === view);
+    button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-project-section]").forEach((button) => {
+    const active = view === "project" && button.dataset.projectSection === state.projectSection;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
-  if (advancedNavigation) advancedNavigation.open = !["projects", "releases"].includes(view);
+  if (advancedNavigation) advancedNavigation.open = !["projects", "project", "releases"].includes(view);
   const projectsVisible = view === "projects";
+  const projectVisible = view === "project";
   const jobsVisible = view === "jobs";
+  byId("studioHeader").hidden = projectVisible;
+  byId("projectWorkspaceHeader").hidden = !projectVisible;
   byId("summaryGrid").hidden = !projectsVisible;
   byId("studioGrid").hidden = !["projects", "jobs"].includes(view);
   byId("studioGrid").classList.toggle("jobs-only", jobsVisible);
   byId("studioGrid").classList.toggle("projects-only", projectsVisible);
   byId("projectBoard").hidden = jobsVisible;
   byId("queuePanel").hidden = !jobsVisible;
-  byId("projectDetail").hidden = !projectsVisible || state.selected === null;
+  byId("projectDetail").hidden = !projectVisible || state.projectSection !== "overview";
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
-  byId("spatialWorkspace").hidden = view !== "spatial";
-  byId("measurementWorkspace").hidden = view !== "measurement";
+  byId("spatialWorkspace").hidden = !projectVisible || state.projectSection !== "scene";
+  byId("measurementWorkspace").hidden = !projectVisible || state.projectSection !== "measurement";
   byId("hostingWorkspace").hidden = view !== "hosting";
   byId("teamWorkspace").hidden = view !== "team";
   byId<HTMLButtonElement>("newProjectButton").hidden = !projectsVisible || isReviewer();
@@ -2972,6 +3027,10 @@ function activateView(
     projects: {
       eyebrow: "CAPTURE TO PREVIEW",
       title: "Upload once. Preview the processed splat. Edit only when needed.",
+    },
+    project: {
+      eyebrow: "PROJECT",
+      title: "One project, one workspace.",
     },
     jobs: {
       eyebrow: "PROCESSING OPERATIONS",
@@ -2984,14 +3043,6 @@ function activateView(
     reviews: {
       eyebrow: "CLIENT APPROVAL",
       title: "Feedback stays attached to the exact place and version.",
-    },
-    spatial: {
-      eyebrow: "SPATIAL PRODUCT",
-      title: "Turn visual reconstruction into a place people can understand.",
-    },
-    measurement: {
-      eyebrow: "MEASUREMENT EVIDENCE",
-      title: "Define tolerance, prove residuals, and state who may rely on the output.",
     },
     hosting: {
       eyebrow: "COMMERCIAL LIFECYCLE",
@@ -3006,11 +3057,11 @@ function activateView(
   byId("viewTitle").textContent = headings[view].title;
   renderJobs();
   if (view === "reviews") renderReviews();
-  if (view === "spatial") {
+  if (projectVisible && state.projectSection === "scene") {
     renderSpatial();
     void ensureProjectWorkspace("spatial");
   }
-  if (view === "measurement") {
+  if (projectVisible && state.projectSection === "measurement") {
     renderMeasurement();
     void ensureProjectWorkspace("measurement");
   }
@@ -3018,7 +3069,7 @@ function activateView(
   if (view === "team") renderTeam();
   const nextHash = hashForView(view);
   if (updateLocation && window.location.hash !== nextHash) {
-    window.history.replaceState(null, "", nextHash);
+    window.history[historyMode === "push" ? "pushState" : "replaceState"](null, "", nextHash);
   }
 }
 
@@ -3059,6 +3110,8 @@ function transitionToSignedOut(message = ""): void {
   byId("hostedBytes").textContent = "Private R2 storage";
   byId("activeReleases").textContent = "-";
   byId("projectDetail").hidden = true;
+  byId("projectWorkspaceHeader").hidden = true;
+  byId("studioHeader").hidden = false;
   clearNotice();
   resetLogin();
   byId("loginError").textContent = message;
@@ -3159,9 +3212,10 @@ async function refreshAll(): Promise<void> {
       if (requestedProjectId && state.projects.some((project) => project.id === requestedProjectId)) {
         await selectProject(requestedProjectId, false, false);
       }
+      if (requestedView === "project") state.projectSection = projectSectionFromHash();
       activateView(requestedView, false);
-      if (requestedView === "spatial" || requestedView === "measurement") {
-        await ensureProjectWorkspace(requestedView, true);
+      if (requestedView === "project" && state.projectSection !== "overview") {
+        await ensureProjectWorkspace(state.projectSection === "scene" ? "spatial" : "measurement", true);
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -4537,7 +4591,7 @@ function renderProjects(): void {
   const selectVisibleCell = element("span", "project-select-cell");
   selectVisibleCell.append(selectVisible);
   header.append(selectVisibleCell);
-  ["Project", "Source", "Stage", "Updated", ""].forEach((label) => header.append(element("span", "", label)));
+  ["Project", "Source", "Stage", "Updated"].forEach((label) => header.append(element("span", "", label)));
   for (const cell of header.children) cell.setAttribute("role", "columnheader");
   container.append(header);
   for (const project of projects) {
@@ -4555,26 +4609,31 @@ function renderProjects(): void {
       bulkLifecycleOperation = null;
       renderProjects();
     });
-    const identity = element("span", "project-identity");
+    const identityCell = element("span", "project-identity-cell");
+    const identity = element("button", "project-row-link project-identity");
+    identity.setAttribute("aria-label", `Open ${project.name}`);
     const icon = element("b", "project-icon property", project.name.slice(0, 1).toUpperCase());
     const name = element("span");
     name.append(element("strong", "", project.name), element("small", "", project.customerName ?? "Capture project"));
     identity.append(icon, name);
+    identityCell.append(identity);
     const stage = element("span");
     stage.append(element("i", `state ${statusClass(project.status)}`), document.createTextNode(humanStatus(project.status)));
-    const open = element("button", "", "Manage");
-    open.addEventListener("click", () => {
+    identity.addEventListener("click", () => {
       void runAction({
         key: `select-project:${project.id}`,
-        trigger: open,
+        trigger: identity,
         pendingLabel: "Opening…",
       }, () => selectProject(project.id));
     });
+    row.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("button, input, a, select, textarea")) return;
+      identity.click();
+    });
     const selectedCell = element("span", "project-select-cell");
     selectedCell.append(selected);
-    const openCell = element("span", "project-action-cell");
-    openCell.append(open);
-    row.append(selectedCell, identity, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)), openCell);
+    row.append(selectedCell, identityCell, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)));
     for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
@@ -7330,7 +7389,7 @@ async function loadSpatialWorkspace(projectId: string, requestedVersionId?: stri
   state.spatial = workspace;
   state.spatialProjectId = projectId;
   state.spatialVersionId = workspace.version?.id ?? null;
-  if (state.view === "spatial") renderSpatial();
+  if (state.view === "project" && state.projectSection === "scene") renderSpatial();
 }
 
 function semanticExtractionAssets(): Asset[] {
@@ -7550,7 +7609,8 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
     if (
       generation !== semanticExtractionPollGeneration ||
       state.selected?.project.id !== projectId ||
-      state.view !== "spatial"
+      state.view !== "project" ||
+      state.projectSection !== "scene"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -8206,7 +8266,8 @@ async function pollFloorplanExtraction(projectId: string, extractionId: string):
     if (
       generation !== floorplanExtractionPollGeneration ||
       state.selected?.project.id !== projectId ||
-      state.view !== "spatial"
+      state.view !== "project" ||
+      state.projectSection !== "scene"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -8810,7 +8871,8 @@ async function pollPrivacyScan(projectId: string, scanId: string): Promise<void>
     if (
       generation !== privacyScanPollGeneration ||
       state.selected?.project.id !== projectId ||
-      state.view !== "spatial"
+      state.view !== "project" ||
+      state.projectSection !== "scene"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -9361,7 +9423,8 @@ async function pollRawSceneChange(projectId: string, reportId: string): Promise<
     if (
       generation !== rawSceneChangePollGeneration ||
       state.selected?.project.id !== projectId ||
-      state.view !== "spatial"
+      state.view !== "project" ||
+      state.projectSection !== "scene"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -9991,7 +10054,7 @@ async function loadMeasurementWorkspace(projectId: string): Promise<void> {
   if (state.selected?.project.id !== projectId) return;
   state.measurement = workspace;
   state.measurementProjectId = projectId;
-  if (state.view === "measurement") renderMeasurement();
+  if (state.view === "project" && state.projectSection === "measurement") renderMeasurement();
 }
 
 async function createMeasurementBrief(form: FormData): Promise<void> {
@@ -10089,7 +10152,7 @@ async function downloadMeasurementDeliverable(deliverableId: string, fallbackFil
 async function selectProject(
   projectId: string,
   focusWorkspace = true,
-  openProjectsView = true,
+  openProjectView = true,
 ): Promise<void> {
   try {
     const detail = await api<ProjectDetail>(`/api/projects/${projectId}`);
@@ -10108,11 +10171,11 @@ async function selectProject(
     }
     state.selected = detail;
     renderProjectDetail();
-    if (openProjectsView) activateView("projects");
+    if (openProjectView) activateProjectSection("overview", true, "push");
     if (focusWorkspace) {
-      const detail = byId("projectDetail");
-      detail.scrollIntoView({ behavior: "smooth", block: "start" });
-      window.setTimeout(() => detail.focus({ preventScroll: true }), 320);
+      const header = byId("projectWorkspaceHeader");
+      header.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => byId("projectDetail").focus({ preventScroll: true }), 320);
     }
   } catch (error) {
     showNotice(errorMessage(error), "error");
@@ -10139,7 +10202,12 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
       else await loadMeasurementWorkspace(projectId);
     });
   } catch (error) {
-    if (state.selected?.project.id !== projectId || state.view !== view) return;
+    const currentSection = view === "spatial" ? "scene" : "measurement";
+    if (
+      state.selected?.project.id !== projectId ||
+      state.view !== "project" ||
+      state.projectSection !== currentSection
+    ) return;
     const retry = element("button", "quiet-button", "Retry");
     const errorState = emptyState(errorMessage(error));
     retry.addEventListener("click", () => {
@@ -10518,7 +10586,7 @@ function renderProjectDetail(): void {
       pendingLabel: "Opening evidence…",
     }, async () => {
       await loadMeasurementWorkspace(detail.project.id);
-      activateView("measurement");
+      activateProjectSection("measurement");
     });
   });
   const domainButton = element("button", "quiet-button wide", "Add custom domain");
@@ -10564,7 +10632,7 @@ function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
     pendingLabel: "Opening editor…",
   }, async () => {
     await loadSpatialWorkspace(projectId);
-    activateView("spatial");
+    activateProjectSection("scene");
   });
 }
 

@@ -20,6 +20,13 @@ and differing action states. The published-viewer gate also rejects any
 absolute Spark startup watchdog; progress continues until Spark reports ready,
 an explicit renderer error, or the operator retries.
 
+The project-workspace browser contract clicks the portfolio row itself, rejects
+the former Manage-button split pane, asserts the dedicated
+`#project/{project-id}` route, exercises nested Scene & navigation routing, and
+returns through Back to projects. It repeats the project header/navigation
+geometry at desktop, tablet, phone, and narrow-short-phone widths and fails on
+document overflow or overlapping project navigation.
+
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`
 runs the instrumented Worker suite plus browser E2E.
 
