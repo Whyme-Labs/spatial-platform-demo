@@ -16,18 +16,16 @@ Portable FJD / XGRIDS / open Gaussian export
   + registered metric point cloud for device captures
   -> automatic project creation
   -> purpose/format-aware resumable multipart R2 upload
+  -> hash-bound same-capture/same-frame registration receipt
   -> bounded capture-evidence validation or Gaussian processing
   -> immutable scene version
   -> leased/idempotent processing job
   -> automatic metric floor-plan proposal
   -> automatic structural collision + Recast/Rapier walking-map proof
-  -> render-native correction only when structural inference is ambiguous
+  -> registered-render inspection: approve as-is or mark structural corrections
   -> recooked collision + objectively accepted exact-version navigation
   -> short-lived authenticated private preview URL
   -> Spark 2.x renderer
-  -> later in-render correction of generated levels / ceilings / rooms / openings / connectors
-  -> recooked collision + automatically accepted Recast build bound to the approved floor-plan revision
-  -> optional correction of generated scene / room / navigation data
   -> operator QA approval
   -> numbered immutable release revision
   -> stable public/private release channel
@@ -70,6 +68,16 @@ after its immutable v7+ collision, JSON report, Detour binary, and navigation
 artifact pass exact-version verification. The authenticated preview carries the
 same complete runtime contract as a published release; public or customer URLs
 still require privacy review and an explicit release.
+
+The intake also requires one narrow provenance assertion: both exports must be
+direct outputs of the same capture and must retain the same registered
+right-handed Y-up metre frame. The Worker binds that declaration to the exact
+visual and geometry asset IDs, then derives and hashes the identity
+capture-to-scene transform after both assets pass integrity verification. This
+receipt unlocks private render-native inspection without forcing the operator
+through the older legal capture-manifest form or asking them to type scale,
+yaw, or translation values. Files transformed independently must use a
+measured registration instead.
 
 Hardware qualification is currently **FJD first** because FJD is the first
 capture device in the product rollout. The repository pins official P2 and V4e

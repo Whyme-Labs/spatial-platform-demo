@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   automaticNavigationLayout,
   automaticStructuralCollisionConfig,
+  structuralCollisionConfigFromReviewPlan,
 } from "../scripts/automatic-spatial-pipeline.mjs";
 import { buildAuthoredStructuralCollisionGlb } from "../scripts/authored-collision.mjs";
 import {
@@ -385,6 +386,42 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.deepEqual(lower[0].start, [0, 0]);
     assert.deepEqual(lower[0].end, [6, 0]);
     assert.equal(upper.length, 2);
+  });
+
+  it("cuts passable doors but keeps windows and unknown gaps physically blocked", () => {
+    const plan = {
+      schemaVersion: "1.0.0",
+      units: "metres",
+      coordinateFrame: "registered_y_up_metric_frame",
+      levels: [{
+        id: "ground",
+        label: "Ground",
+        elevationM: 0,
+        ceilingElevationM: 2.8,
+        rooms: [{
+          id: "room",
+          label: "Room",
+          points: [[0, 0], [6, 0], [6, 4], [0, 4]],
+        }],
+        walls: [
+          { id: "north", label: "North", start: [0, 0], end: [6, 0], thicknessM: 0.2, heightM: 2.8 },
+          { id: "east", label: "East", start: [6, 0], end: [6, 4], thicknessM: 0.2, heightM: 2.8 },
+          { id: "south", label: "South", start: [6, 4], end: [0, 4], thicknessM: 0.2, heightM: 2.8 },
+          { id: "west", label: "West", start: [0, 4], end: [0, 0], thicknessM: 0.2, heightM: 2.8 },
+        ],
+        openings: [
+          { id: "door", label: "Door", type: "door", wallId: "south", start: [2, 4], end: [3, 4], widthM: 1, heightM: 2.1 },
+          { id: "window", label: "Window", type: "window", wallId: "north", start: [2, 0], end: [3, 0], widthM: 1, heightM: 1.2 },
+          { id: "unknown", label: "Unknown", type: "unknown", wallId: "east", start: [6, 1], end: [6, 2], widthM: 1, heightM: null },
+        ],
+      }],
+      connectors: [],
+    };
+
+    const config = structuralCollisionConfigFromReviewPlan(plan);
+    assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("south")).length, 2);
+    assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("north")).length, 1);
+    assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("east")).length, 1);
   });
 
   it("fails closed when a level has no captured ceiling support", () => {

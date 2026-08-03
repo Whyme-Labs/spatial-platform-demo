@@ -46,9 +46,9 @@ describe("render-native scene authoring", () => {
     });
   });
 
-  it("requires a four-point rendered surface for a stair or ramp connector", () => {
+  it("requires a four-point rendered surface for stairs", () => {
     const threePoints: SceneAuthoringSession = {
-      mode: "connector",
+      mode: "stairs",
       requestId: "connector-1",
       points: [[0, 0, 0], [2, 0, 0], [2, 2.8, 3]],
     };
@@ -56,5 +56,18 @@ describe("render-native scene authoring", () => {
     expect(sceneAuthoringGeometry(
       appendSceneAuthoringPick(threePoints, [0, 2.8, 3]),
     ).complete).toBe(true);
+  });
+
+  it("completes a removal after one rendered pick", () => {
+    const session = appendSceneAuthoringPick({
+      mode: "remove",
+      requestId: "remove-1",
+      points: [],
+    }, [2, 0, 2]);
+    expect(sceneAuthoringGeometry(session)).toEqual({
+      kind: "remove",
+      points: [[2, 0, 2]],
+      complete: true,
+    });
   });
 });

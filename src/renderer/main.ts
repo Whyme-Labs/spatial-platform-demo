@@ -38,6 +38,10 @@ import {
   type SceneAuthoringMode,
   type SceneAuthoringSession,
 } from "./scene-authoring";
+import {
+  sceneAuthoringOverlaySegments,
+  type SceneAuthoringOverlayKind,
+} from "./scene-authoring-overlay";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -332,15 +336,24 @@ async function start(): Promise<void> {
   });
   authoringMarkers.name = "spatial-authoring-markers";
   scene.add(authoringMarkers);
+  const authoringPlanOverlay = new THREE.Group();
+  authoringPlanOverlay.name = "spatial-authoring-plan-overlay";
+  scene.add(authoringPlanOverlay);
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
+    if (Reflect.get(event.data, "type") === "set-authoring-plan") {
+      replaceSceneAuthoringOverlay(authoringPlanOverlay, Reflect.get(event.data, "plan"));
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-authoring-mode") {
       const requestId = Reflect.get(event.data, "requestId");
       const requestedMode = Reflect.get(event.data, "mode");
       const mode = requestedMode === "room" || requestedMode === "wall" ||
-          requestedMode === "opening" || requestedMode === "connector"
+          requestedMode === "door" || requestedMode === "window" ||
+          requestedMode === "stairs" || requestedMode === "ramp" ||
+          requestedMode === "remove"
         ? requestedMode
         : null;
       if (typeof requestId !== "string") return;
@@ -946,6 +959,46 @@ async function start(): Promise<void> {
   });
 
   window.addEventListener("pagehide", dispose, { once: true });
+}
+
+function replaceSceneAuthoringOverlay(group: THREE.Group, value: unknown): void {
+  for (const child of [...group.children]) {
+    group.remove(child);
+    if (child instanceof THREE.LineSegments) {
+      child.geometry.dispose();
+      if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose());
+      else child.material.dispose();
+    }
+  }
+  const byKind = new Map<SceneAuthoringOverlayKind, number[]>();
+  for (const segment of sceneAuthoringOverlaySegments(value)) {
+    const positions = byKind.get(segment.kind) ?? [];
+    positions.push(...segment.start, ...segment.end);
+    byKind.set(segment.kind, positions);
+  }
+  const colors: Record<SceneAuthoringOverlayKind, number> = {
+    room: 0xc8ff42,
+    wall: 0xf6f3e8,
+    door: 0x51e2c2,
+    window: 0x55a7ff,
+    "unknown-opening": 0xff8c6b,
+    connector: 0xffd166,
+  };
+  for (const [kind, positions] of byKind) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    const material = new THREE.LineBasicMaterial({
+      color: colors[kind],
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.92,
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.name = `spatial-authoring-${kind}`;
+    lines.renderOrder = 999;
+    group.add(lines);
+  }
 }
 
 function traversalKindLabel(kind: "elevator" | "ladder" | "moving_platform"): string {

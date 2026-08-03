@@ -267,6 +267,7 @@
         <label for="newCaptureAdapter"><span>Capture source</span><select id="newCaptureAdapter" name="captureAdapter"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD</option><option value="open-import">Portable splat</option></select></label>
         <label class="full capture-file-field" for="newCaptureAsset"><span>Portable splat export</span><input id="newCaptureAsset" name="capture" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Accepted: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
         <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Registered metric point cloud</span><input id="newCaptureGeometry" name="geometry" type="file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Required for XGRIDS/FJD automatic floor-plan and navigation generation. Use a registered Y-up metric PLY, E57, LAS, LAZ, or PTS export.</small></label>
+        <label class="full checkbox-row capture-frame-confirmation"><input name="sameCaptureFrameConfirmed" type="checkbox" required /><span>These are direct exports from the same capture and still share one registered Y-up metre coordinate frame. I did not reorient or scale either file separately.</span></label>
       </div>
       <details class="form-advanced-settings">
         <summary>Project details</summary>

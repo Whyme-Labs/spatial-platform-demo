@@ -522,6 +522,26 @@ form[aria-busy="true"] .dialog-close {
   height: 100%;
   border: 0;
 }
+.scene-authoring-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 0 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.scene-authoring-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.scene-authoring-legend-item i {
+  width: 18px;
+  height: 2px;
+  background: currentColor;
+}
+.scene-authoring-legend-item.room { color: #c8ff42; }
+.scene-authoring-legend-item.wall { color: #f6f3e8; }
+.scene-authoring-legend-item.door { color: #51e2c2; }
+.scene-authoring-legend-item.window { color: #55a7ff; }
+.scene-authoring-legend-item.unknown { color: #ff8c6b; }
+.scene-authoring-legend-item.connector { color: #ffd166; }
 .scene-authoring-toolbar {
   display: flex;
   flex-wrap: wrap;

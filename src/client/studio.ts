@@ -30,6 +30,11 @@ import {
   worldUnitSymbol,
   type WorldUnit,
 } from "../shared/world-units";
+import {
+  applyRenderNativeFloorplanCorrection,
+  type EditableFloorplan,
+  type RenderNativeCorrectionMode,
+} from "./render-native-floorplan";
 import "../../styles.css";
 
 type TurnstileWidgetOptions = {
@@ -1321,6 +1326,11 @@ let turnstileWidgetId: string | null = null;
 let turnstileLoadPromise: Promise<TurnstileApi> | null = null;
 let turnstileInitialisePromise: Promise<void> | null = null;
 let projectOperationId: string | null = null;
+let captureJourneyOperation: {
+  id: string;
+  primaryUploadOperationId: string;
+  geometryUploadOperationId: string;
+} | null = null;
 let templateOperation: { id: string; requestKey: string } | null = null;
 let savedViewOperation: { id: string; requestKey: string } | null = null;
 let portfolioImportOperationId: string | null = null;
@@ -1357,6 +1367,7 @@ let pendingUploadOperation: {
   format: string;
   purpose: CaptureAssetPurpose;
   targetVersionId: string | null;
+  captureJourneyId: string | null;
 } | null = null;
 let activeUpload: {
   id: string;
@@ -1419,13 +1430,15 @@ let sceneAuthoringWorkspace: {
   extractionId: string | null;
   revisionId: string | null;
   plan: EditableFloorplan | null;
+  history: EditableFloorplan[];
   dirty: boolean;
-  mode: "room" | "wall" | "opening" | "connector" | null;
+  mode: RenderNativeCorrectionMode | null;
   requestId: string | null;
   points: Array<[number, number, number]>;
   frame: HTMLIFrameElement;
   status: HTMLElement;
   finish: HTMLButtonElement;
+  undo: HTMLButtonElement;
   save: HTMLButtonElement;
   modeButtons: HTMLButtonElement[];
   correctionDraftOperationId: string;
@@ -3398,8 +3411,18 @@ async function createCapture(form: FormData): Promise<void> {
   if (!geometry) {
     throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
   }
+  if (form.get("sameCaptureFrameConfirmed") !== "on") {
+    throw new Error(
+      "Confirm that both exports come directly from the same capture and still share one registered Y-up metre frame.",
+    );
+  }
   const geometryPlan = geometry ? metricGeometryPlan(geometry) : null;
   projectOperationId ??= crypto.randomUUID();
+  captureJourneyOperation ??= {
+    id: crypto.randomUUID(),
+    primaryUploadOperationId: crypto.randomUUID(),
+    geometryUploadOperationId: crypto.randomUUID(),
+  };
   try {
     const result = await api<{ project: { id: string } }>("/api/projects", {
       method: "POST",
@@ -3426,6 +3449,12 @@ async function createCapture(form: FormData): Promise<void> {
       progress: byId<HTMLElement>("newProjectUploadProgress"),
       error: byId("projectError"),
       successToast: "Visual capture uploaded; adding spatial geometry",
+    }, {
+      clientOperationId: captureJourneyOperation.primaryUploadOperationId,
+      captureJourney: {
+        id: captureJourneyOperation.id,
+        sameFrameConfirmed: true,
+      },
     });
     byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
     byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
@@ -3439,8 +3468,16 @@ async function createCapture(form: FormData): Promise<void> {
       error: byId("projectError"),
       closeDialog: newProjectDialog,
       successToast: "Capture uploaded; splat, floor plan, and navigation processing started",
-    }, { targetVersionId: primary.asset.versionId });
+    }, {
+      targetVersionId: primary.asset.versionId,
+      clientOperationId: captureJourneyOperation.geometryUploadOperationId,
+      captureJourney: {
+        id: captureJourneyOperation.id,
+        sameFrameConfirmed: true,
+      },
+    });
     projectOperationId = null;
+    captureJourneyOperation = null;
     window.setTimeout(() => {
       byId<HTMLFormElement>("newProjectForm").reset();
       renderNewCaptureHelp();
@@ -7290,13 +7327,30 @@ function renderSceneAuthoringWorkspace(
   frame.allow = "fullscreen";
   stage.append(frame);
 
+  const legend = element("div", "scene-authoring-legend");
+  for (const [kind, label] of [
+    ["room", "Room outline"],
+    ["wall", "Wall"],
+    ["door", "Passable doorway"],
+    ["window", "Blocked window"],
+    ["unknown", "Unresolved opening"],
+    ["connector", "Stairs / ramp"],
+  ] as const) {
+    const item = element("span", `scene-authoring-legend-item ${kind}`);
+    item.append(element("i", ""), document.createTextNode(label));
+    legend.append(item);
+  }
+
   const toolbar = element("div", "scene-authoring-toolbar");
   const modes = [
     [null, "Inspect"],
     ["room", "Mark room"],
     ["wall", "Mark wall"],
-    ["opening", "Mark doorway"],
-    ["connector", "Mark stairs / ramp"],
+    ["door", "Mark doorway"],
+    ["window", "Mark window"],
+    ["stairs", "Mark stairs"],
+    ["ramp", "Mark ramp"],
+    ["remove", "Remove structure"],
   ] as const;
   const modeButtons = modes.map(([mode, label]) => {
     const button = element("button", mode === null ? "primary-button" : "quiet-button", label);
@@ -7306,11 +7360,15 @@ function renderSceneAuthoringWorkspace(
     return button;
   });
   modeButtons.forEach((button, index) => { if (index > 0) button.disabled = true; });
+  const undo = element("button", "quiet-button", "Undo staged change");
+  undo.type = "button";
+  undo.disabled = true;
+  undo.addEventListener("click", undoSceneAuthoringCorrection);
   const finish = element("button", "quiet-button", "Finish shape");
   finish.type = "button";
   finish.disabled = true;
   finish.addEventListener("click", finishSceneAuthoringShape);
-  const save = element("button", "primary-button", "Apply corrections and rebuild walking map");
+  const save = element("button", "primary-button", "Approve structure and build walking map");
   save.type = "button";
   save.disabled = true;
   save.addEventListener("click", () => {
@@ -7320,7 +7378,7 @@ function renderSceneAuthoringWorkspace(
       pendingLabel: "Saving and rebuilding…",
     }, submitSceneAuthoringCorrections);
   });
-  toolbar.append(finish, save);
+  toolbar.append(undo, finish, save);
 
   const reviewable = [...(spatial.floorplanExtractions ?? [])]
     .find((extraction) => extraction.status === "READY_FOR_REVIEW" && extraction.proposal_json);
@@ -7353,6 +7411,7 @@ function renderSceneAuthoringWorkspace(
     extractionId: reviewable?.id ?? null,
     revisionId,
     plan,
+    history: [],
     dirty: false,
     mode: null,
     requestId: null,
@@ -7360,6 +7419,7 @@ function renderSceneAuthoringWorkspace(
     frame,
     status,
     finish,
+    undo,
     save,
     modeButtons,
     correctionDraftOperationId: crypto.randomUUID(),
@@ -7367,9 +7427,11 @@ function renderSceneAuthoringWorkspace(
   };
   if (!plan) {
     status.textContent = "Waiting for automatic structural reconstruction";
+  } else if (reviewable) {
+    save.disabled = false;
   }
   void loadSceneAuthoringRenderable(project.id, spatial.version!.id);
-  card.append(heading, stage, toolbar);
+  card.append(heading, stage, legend, toolbar);
   return card;
 }
 
@@ -7390,6 +7452,7 @@ async function loadSceneAuthoringRenderable(projectId: string, versionId: string
         ? "Registered scene ready · inspect or mark corrections"
         : "Registered scene ready · automatic structure is still processing";
       workspace.status.dataset.tone = "ready";
+      sendSceneAuthoringPlan(workspace);
     };
     workspace.frame.src = rendererAssetUrl(response.renderable).toString();
   } catch (error) {
@@ -7400,7 +7463,7 @@ async function loadSceneAuthoringRenderable(projectId: string, versionId: string
 }
 
 function activateSceneAuthoringMode(
-  mode: "room" | "wall" | "opening" | "connector" | null,
+  mode: RenderNativeCorrectionMode | null,
 ): void {
   const workspace = sceneAuthoringWorkspace;
   if (!workspace) return;
@@ -7415,12 +7478,13 @@ function activateSceneAuthoringMode(
   workspace.points = [];
   workspace.finish.disabled = true;
   for (const [index, button] of workspace.modeButtons.entries()) {
-    const active = index === (mode === null ? 0 : mode === "room" ? 1 : mode === "wall" ? 2 : mode === "opening" ? 3 : 4);
+    const activeMode = [null, "room", "wall", "door", "window", "stairs", "ramp", "remove"][index];
+    const active = activeMode === mode;
     button.className = active ? "primary-button" : "quiet-button";
   }
   workspace.status.textContent = mode === null
     ? "Inspect mode · drag to look around"
-    : `${mode === "opening" ? "Doorway" : humanStatus(mode)} mode · click the rendered geometry`;
+    : `${sceneAuthoringModeLabel(mode)} mode · click the rendered geometry`;
   workspace.status.dataset.tone = "ready";
   workspace.frame.contentWindow?.postMessage({
     source: "spatial-host",
@@ -7453,9 +7517,11 @@ function handleSceneAuthoringRendererMessage(event: MessageEvent<unknown>): void
   if (!Array.isArray(points) || !points.every(validNumberTuple)) return;
   workspace.points = points.map((point) => [...point] as [number, number, number]);
   const complete = Reflect.get(event.data, "complete") === true;
-  workspace.finish.disabled = !complete || workspace.mode === "wall" || workspace.mode === "opening";
+  workspace.finish.disabled = !complete ||
+    workspace.mode === "wall" || workspace.mode === "door" || workspace.mode === "window" ||
+    workspace.mode === "remove";
   workspace.status.textContent = `${workspace.points.length} point${workspace.points.length === 1 ? "" : "s"} marked on the registered scene`;
-  if (complete && (workspace.mode === "wall" || workspace.mode === "opening")) {
+  if (complete && ["wall", "door", "window", "remove"].includes(workspace.mode ?? "")) {
     commitSceneAuthoringGeometry();
   }
 }
@@ -7469,72 +7535,61 @@ function commitSceneAuthoringGeometry(): void {
   const plan = workspace?.plan;
   const mode = workspace?.mode;
   if (!workspace || !plan || !mode || !workspace.points.length) return;
-  const level = plan.levels[0];
-  if (!level) return;
-  if (mode === "room") {
-    if (workspace.points.length < 3) return;
-    level.rooms.push({
-      id: crypto.randomUUID(),
-      label: `Room ${level.rooms.length + 1}`,
-      points: workspace.points.map(([x, _y, z]) => [x, z]),
-    });
-  } else if (mode === "wall") {
-    if (workspace.points.length < 2) return;
-    const template = level.walls[0];
-    if (!template) {
-      workspace.status.textContent = "The automatic proposal has no measured wall thickness or height to reuse.";
-      workspace.status.dataset.tone = "error";
-      return;
-    }
-    const [start, end] = workspace.points;
-    level.walls.push({
-      id: crypto.randomUUID(),
-      label: `Wall ${level.walls.length + 1}`,
-      start: [start![0], start![2]],
-      end: [end![0], end![2]],
-      thicknessM: template.thicknessM,
-      heightM: template.heightM,
-    });
-  } else if (mode === "opening") {
-    if (workspace.points.length < 2) return;
-    const [start, end] = workspace.points;
-    const widthM = Math.hypot(end![0] - start![0], end![2] - start![2]);
-    level.openings.push({
-      id: crypto.randomUUID(),
-      label: `Doorway ${level.openings.length + 1}`,
-      type: "door",
-      wallId: null,
-      start: [start![0], start![2]],
-      end: [end![0], end![2]],
-      widthM,
-      heightM: null,
-    });
-  } else {
-    if (workspace.points.length < 4 || plan.levels.length < 2) {
-      workspace.status.textContent = "A connector needs four rendered points and two automatically detected levels.";
-      workspace.status.dataset.tone = "error";
-      return;
-    }
-    plan.connectors.push({
-      id: crypto.randomUUID(),
-      label: `Connector ${plan.connectors.length + 1}`,
-      type: "stairs",
-      lowerLevelId: plan.levels[0]!.id,
-      upperLevelId: plan.levels[1]!.id,
-      points: workspace.points.map((point) => [...point]),
-    });
+  try {
+    const result = applyRenderNativeFloorplanCorrection(plan, mode, workspace.points);
+    workspace.history.push(plan);
+    workspace.plan = result.plan;
+    workspace.dirty = true;
+    workspace.undo.disabled = false;
+    workspace.save.disabled = false;
+    workspace.status.textContent = `${result.summary} · staged for rebuild`;
+    workspace.status.dataset.tone = "ready";
+    sendSceneAuthoringPlan(workspace);
+    activateSceneAuthoringMode(mode);
+  } catch (error) {
+    workspace.status.textContent = errorMessage(error);
+    workspace.status.dataset.tone = "error";
   }
-  workspace.dirty = true;
-  workspace.save.disabled = false;
-  workspace.status.textContent = "Correction staged · apply it to rebuild collision and navigation";
+}
+
+function undoSceneAuthoringCorrection(): void {
+  const workspace = sceneAuthoringWorkspace;
+  const prior = workspace?.history.pop();
+  if (!workspace || !prior) return;
+  workspace.plan = prior;
+  workspace.dirty = workspace.history.length > 0;
+  workspace.undo.disabled = !workspace.history.length;
+  workspace.save.disabled = !workspace.dirty && !workspace.extractionId;
+  workspace.status.textContent = workspace.dirty
+    ? "Last rendered correction undone · earlier staged changes remain"
+    : "All staged corrections undone";
   workspace.status.dataset.tone = "ready";
-  activateSceneAuthoringMode(mode);
+  sendSceneAuthoringPlan(workspace);
+}
+
+function sendSceneAuthoringPlan(workspace: NonNullable<typeof sceneAuthoringWorkspace>): void {
+  if (!workspace.plan) return;
+  workspace.frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "set-authoring-plan",
+    plan: workspace.plan,
+  }, location.origin);
+}
+
+function sceneAuthoringModeLabel(mode: RenderNativeCorrectionMode): string {
+  if (mode === "door") return "Doorway";
+  if (mode === "window") return "Window";
+  if (mode === "remove") return "Remove structure";
+  return humanStatus(mode);
 }
 
 async function submitSceneAuthoringCorrections(): Promise<void> {
   const workspace = sceneAuthoringWorkspace;
-  if (!workspace?.plan || !workspace.dirty) {
-    throw new Error("Mark at least one correction on a reviewable automatic proposal first.");
+  if (!workspace?.plan) {
+    throw new Error("Wait for the automatic structure before approving the walking map.");
+  }
+  if (!workspace.dirty && !workspace.extractionId) {
+    throw new Error("The approved structure has no staged correction to save.");
   }
   parseEditableFloorplan(JSON.stringify(workspace.plan));
   let extractionId = workspace.extractionId;
@@ -7559,7 +7614,9 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
       body: JSON.stringify({
         clientOperationId: workspace.correctionReviewOperationId,
         decision: "approve",
-        note: "Corrected against the registered Gaussian render in Spatial Studio.",
+        note: workspace.dirty
+          ? "Corrected against the registered Gaussian render in Spatial Studio."
+          : "Automatic structure inspected and approved against the registered Gaussian render in Spatial Studio.",
         plan: workspace.plan,
       }),
     },
@@ -8064,45 +8121,6 @@ function semanticExtractionWorldUnit(
   }
   return "metres";
 }
-
-type EditableFloorplan = {
-  schemaVersion: "1.0.0";
-  units: "metres";
-  coordinateFrame: "registered_y_up_metric_frame";
-  levels: Array<{
-    id: string;
-    label: string;
-    elevationM: number;
-    ceilingElevationM: number | null;
-    rooms: Array<{ id: string; label: string; points: Array<[number, number]> }>;
-    walls: Array<{
-      id: string;
-      label: string;
-      start: [number, number];
-      end: [number, number];
-      thicknessM: number;
-      heightM: number;
-    }>;
-    openings: Array<{
-      id: string;
-      label: string;
-      type: "door" | "window" | "opening" | "unknown";
-      wallId: string | null;
-      start: [number, number];
-      end: [number, number];
-      widthM: number;
-      heightM: number | null;
-    }>;
-  }>;
-  connectors: Array<{
-    id: string;
-    label: string;
-    type: "stairs" | "ramp" | "unknown";
-    lowerLevelId: string;
-    upperLevelId: string;
-    points: Array<[number, number, number]>;
-  }>;
-};
 
 function floorplanExtractionAssets(): Asset[] {
   const versionId = state.spatial?.version?.id;
@@ -12060,6 +12078,11 @@ type CompletedCaptureUpload = {
 
 type UploadOptions = {
   targetVersionId?: string;
+  clientOperationId?: string;
+  captureJourney?: {
+    id: string;
+    sameFrameConfirmed: true;
+  };
 };
 
 async function uploadAsset(
@@ -12118,16 +12141,19 @@ async function uploadAsset(
         pendingUploadOperation.fileSize === file.size &&
         pendingUploadOperation.format === format &&
         pendingUploadOperation.purpose === purpose &&
-        pendingUploadOperation.targetVersionId === targetVersionId;
+        pendingUploadOperation.targetVersionId === targetVersionId &&
+        pendingUploadOperation.captureJourneyId === (options.captureJourney?.id ?? null) &&
+        (!options.clientOperationId || pendingUploadOperation.id === options.clientOperationId);
       if (!operationMatches) {
         pendingUploadOperation = {
-          id: crypto.randomUUID(),
+          id: options.clientOperationId ?? crypto.randomUUID(),
           projectId,
           fileName: file.name,
           fileSize: file.size,
           format,
           purpose,
           targetVersionId,
+          captureJourneyId: options.captureJourney?.id ?? null,
         };
       }
       const operationId = pendingUploadOperation?.id;
@@ -12146,6 +12172,7 @@ async function uploadAsset(
             mimeType: file.type || "application/octet-stream",
             ...(targetVersionId ? { targetVersionId } : {}),
             ...(posterCamera ? { posterCamera } : {}),
+            ...(options.captureJourney ? { captureJourney: options.captureJourney } : {}),
           }),
           signal: uploadAbortController.signal,
         },

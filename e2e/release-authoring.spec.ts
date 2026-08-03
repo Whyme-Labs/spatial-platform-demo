@@ -171,6 +171,29 @@ test("multi-level floor-plan review shows every level and vertical connector", a
     name: "Inspect and correct the reconstructed structure in place",
   })).toBeVisible();
   await expect(page.getByRole("button", { name: "Mark room", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark doorway", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark window", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark stairs", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark ramp", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Remove structure", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Undo staged change", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", {
+    name: "Approve structure and build walking map",
+    exact: true,
+  })).toBeEnabled();
+  await expect(page.getByText("Passable doorway", { exact: true })).toBeVisible();
+  await expect(page.getByText("Blocked window", { exact: true })).toBeVisible();
+  const toolbar = page.locator(".scene-authoring-toolbar");
+  for (const viewport of [
+    { width: 1280, height: 720 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await toolbar.scrollIntoViewIfNeeded();
+    await expect.poll(() => toolbar.evaluate((element) =>
+      element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
   await expect(page.locator("details.spatial-advanced-workflows")).not.toHaveAttribute("open", "");
   await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
   await expect(page.getByText("2 levels", { exact: true })).toBeVisible();

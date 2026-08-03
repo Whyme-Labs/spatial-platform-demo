@@ -578,8 +578,124 @@ describe("Spatial Studio Worker", () => {
     );
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
-      error: expect.stringContaining("verified metric capture-to-scene registration"),
+      error: expect.stringContaining("no verified paired-upload frame receipt"),
     });
+  });
+
+  it("uses the immutable paired-upload receipt for render-native marking without a manual capture manifest", async () => {
+    const cookie = await login();
+    const membership = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const journeyId = crypto.randomUUID();
+    const visualAssetId = crypto.randomUUID();
+    const geometryAssetId = crypto.randomUUID();
+    const objectKey = `authoring/${membership!.organisationId}/${projectId}/${versionId}/paired.rad`;
+    const visualBytes = new Uint8Array([82, 65, 68, 9]);
+    const visualSha256 = await sha256Hex(visualBytes);
+    const geometrySha256 = "b".repeat(64);
+    await env.SPATIAL_ASSETS.put(objectKey, visualBytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Paired authoring fixture', ?, 'QA_REQUIRED', 'fjd-trion',
+          'venue-navigator', ?)
+      `).bind(
+        projectId,
+        membership!.organisationId,
+        `paired-authoring-${projectId.slice(0, 8)}`,
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?)
+      `).bind(
+        versionId,
+        projectId,
+        JSON.stringify({
+          adapter: "fjd-trion",
+          captureJourney: {
+            schemaVersion: "paired-capture-journey-v1",
+            id: journeyId,
+            captureAdapter: "fjd-trion",
+            primaryAssetId: visualAssetId,
+            geometryAssetId,
+            declaration: "same-capture-registered-y-up-metres",
+            sourceCoordinateFrameId: `capture-journey:${journeyId}`,
+            confirmedBy: membership!.userId,
+            confirmedAt: new Date().toISOString(),
+          },
+        }),
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'paired.rad',
+          'application/octet-stream', ?, ?, 'verified')
+      `).bind(
+        visualAssetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        objectKey,
+        visualBytes.byteLength,
+        visualSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'pointcloud', 'ply', ?, 'registered-room.ply',
+          'application/octet-stream', 128, ?, 'verified')
+      `).bind(
+        geometryAssetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        `raw-private/${membership!.organisationId}/${projectId}/${versionId}/${geometryAssetId}/registered-room.ply`,
+        geometrySha256,
+      ),
+    ]);
+
+    const response = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/authoring-renderable?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json<{
+      renderable: {
+        viewer: {
+          sourceToWorld: unknown;
+          captureRegistration: Record<string, unknown>;
+        };
+      };
+    }>();
+    expect(body.renderable.viewer.sourceToWorld).toEqual({
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    });
+    expect(body.renderable.viewer.captureRegistration).toMatchObject({
+      source: "paired-capture-journey",
+      journeyId,
+      primaryAssetId: visualAssetId,
+      primarySha256: visualSha256,
+      evidenceAssetId: geometryAssetId,
+      evidenceSha256: geometrySha256,
+    });
+    expect(body.renderable.viewer.captureRegistration.transformSha256)
+      .toMatch(/^[a-f0-9]{64}$/);
+    expect(body.renderable.viewer.captureRegistration.receiptSha256)
+      .toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("rejects unauthenticated tenant APIs", async () => {

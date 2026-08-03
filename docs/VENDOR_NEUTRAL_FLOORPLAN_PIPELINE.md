@@ -124,9 +124,13 @@ GET /api/projects/:projectId/spatial/floorplan-exports/:exportId/download
 
 Queue, review, correction-draft, and export mutations require stable client
 operation IDs. Lease, retry, cancel, worker failure, and completion states are
-persisted. The primary Studio surface is the registered Gaussian render. An
-operator marks rooms, walls, doorways, stairs, and ramps by raycasting that
-render; coordinates are never typed into ordinary forms. Raw extraction
+persisted. The primary Studio surface is the registered Gaussian render with
+the current rooms, walls, doors, blocked windows, unresolved openings, stairs,
+and ramps drawn over it. An operator can approve the automatic structure
+as-is, or mark rooms, walls, doors, windows, stairs, and ramps—and remove a
+wrong structural element—by raycasting that render. Marks are assigned to
+their rendered level, connectors bind their nearest lower/upper levels, and
+staged changes support undo; coordinates are never typed into ordinary forms. Raw extraction
 controls and evidence remain collapsed under Advanced diagnostics. The Studio
 disables related controls while an operation is pending, retains the staged
 plan on failure, exposes retry/cancel actions only when valid, and polls only
@@ -136,6 +140,11 @@ A navigation build produced directly from the machine proposal is a preview
 only and cannot be approved. Only the recooked build whose immutable parameters
 name the approved floor-plan revision ID and exact plan hash can enter automatic
 navigation acceptance and publication.
+
+Ordinary doors are the only classified openings that cut a passable wall gap.
+Windows and unresolved gaps remain physical barriers until the operator marks
+them as doors. This keeps an uncertain reconstruction fail-closed without
+turning furniture into structural collision.
 
 ## Open-corpus evidence
 

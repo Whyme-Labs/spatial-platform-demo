@@ -187,6 +187,12 @@ test.describe("authenticated studio UI", () => {
       "Required. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS so this capture can produce a floor plan, collision shell, and walking map.",
       { exact: true },
     )).toBeVisible();
+    const frameConfirmation = dialog.getByLabel(
+      "These are direct exports from the same capture and still share one registered Y-up metre coordinate frame. I did not reorient or scale either file separately.",
+      { exact: true },
+    );
+    await expect(frameConfirmation).toBeVisible();
+    await expect(frameConfirmation).toHaveAttribute("required", "");
     await dialog.getByRole("combobox", { name: "Capture source", exact: true }).selectOption("open-import");
     await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
     await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);

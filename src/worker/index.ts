@@ -163,6 +163,13 @@ import {
   parseCaptureSceneRegistration,
   type CaptureSceneRegistration,
 } from "../shared/capture-registration";
+import {
+  bindPairedCaptureGeometry,
+  createPairedCaptureJourney,
+  pairedCaptureIdentityTransform,
+  parsePairedCaptureJourney,
+  type PairedCaptureJourney,
+} from "../shared/paired-capture-journey";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import {
   CloudflareSaasError,
@@ -469,6 +476,7 @@ type UploadRow = {
   status: string;
   expires_at: string;
   capture_agent_credential_id: string | null;
+  capture_journey_id: string | null;
 };
 
 type AssetRow = {
@@ -5114,8 +5122,14 @@ app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context)
   if (!asset || !(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
     return conflict(context, "This version does not have a verified browser scene to author against");
   }
-  const [registrationOptions, release] = await Promise.all([
+  const [registrationOptions, pairedRegistration, release] = await Promise.all([
     qualifiedTraversalEvidenceOptions(
+      context.env.DB,
+      auth.organisationId,
+      projectId,
+      versionId,
+    ),
+    pairedCaptureAuthoringRegistration(
       context.env.DB,
       auth.organisationId,
       projectId,
@@ -5132,23 +5146,36 @@ app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context)
       viewer_config_json: string;
     }>(),
   ]);
-  const registration = registrationOptions[0];
-  if (!registration) {
+  const manifestRegistration = registrationOptions[0];
+  if (!manifestRegistration && !pairedRegistration) {
     return conflict(
       context,
-      "Render-native walking-map authoring requires an accepted capture manifest with verified metric capture-to-scene registration and traversal evidence",
+      "This version has no verified paired-upload frame receipt. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture-to-scene registration.",
     );
   }
   const storedViewer = release ? parseStoredObject(release.viewer_config_json) : {};
   const viewer = storedViewer && typeof storedViewer === "object"
     ? { ...storedViewer }
     : {};
-  Reflect.set(viewer, "sourceToWorld", registration.sourceToWorld);
-  Reflect.set(viewer, "captureRegistration", {
-    manifestId: registration.manifestId,
-    manifestSha256: registration.manifestSha256,
-    transformSha256: registration.registrationSha256,
-  });
+  const sourceToWorld = manifestRegistration?.sourceToWorld ?? pairedRegistration!.sourceToWorld;
+  Reflect.set(viewer, "sourceToWorld", sourceToWorld);
+  Reflect.set(viewer, "captureRegistration", manifestRegistration
+    ? {
+      source: "accepted-capture-manifest",
+      manifestId: manifestRegistration.manifestId,
+      manifestSha256: manifestRegistration.manifestSha256,
+      transformSha256: manifestRegistration.registrationSha256,
+    }
+    : {
+      source: "paired-capture-journey",
+      journeyId: pairedRegistration!.journeyId,
+      primaryAssetId: pairedRegistration!.primaryAssetId,
+      primarySha256: pairedRegistration!.primarySha256,
+      evidenceAssetId: pairedRegistration!.evidenceAssetId,
+      evidenceSha256: pairedRegistration!.evidenceSha256,
+      transformSha256: pairedRegistration!.registrationSha256,
+      receiptSha256: pairedRegistration!.receiptSha256,
+    });
   const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
   const sessionExpiresAt = Math.floor(Date.now() / 1000) + tokenTtl;
   const token = await signSceneToken({
@@ -7117,6 +7144,96 @@ type QualifiedTraversalEvidenceOption = {
   registrationSha256: string;
   sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
 };
+
+type PairedCaptureAuthoringRegistration = {
+  journeyId: string;
+  primaryAssetId: string;
+  primarySha256: string;
+  evidenceAssetId: string;
+  evidenceSha256: string;
+  registrationSha256: string;
+  receiptSha256: string;
+  sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
+};
+
+async function pairedCaptureAuthoringRegistration(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<PairedCaptureAuthoringRegistration | null> {
+  const version = await database.prepare(`
+    SELECT source_provenance_json
+    FROM scene_versions
+    WHERE id = ? AND project_id = ?
+  `).bind(versionId, projectId).first<{ source_provenance_json: string }>();
+  const journey = version
+    ? storedPairedCaptureJourney(version.source_provenance_json)
+    : null;
+  if (!journey?.geometryAssetId) return null;
+  const assets = await database.prepare(`
+    SELECT id, kind, sha256, integrity_status, deleted_at
+    FROM assets
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND id IN (?, ?)
+  `).bind(
+    organisationId,
+    projectId,
+    versionId,
+    journey.primaryAssetId,
+    journey.geometryAssetId,
+  ).all<{
+    id: string;
+    kind: string;
+    sha256: string | null;
+    integrity_status: string;
+    deleted_at: string | null;
+  }>();
+  const primary = assets.results.find((candidate) => candidate.id === journey.primaryAssetId);
+  const geometry = assets.results.find((candidate) => candidate.id === journey.geometryAssetId);
+  if (
+    !primary || primary.integrity_status !== "verified" || primary.deleted_at ||
+    !primary.sha256 || !/^[a-f0-9]{64}$/i.test(primary.sha256) ||
+    !geometry || geometry.kind !== "pointcloud" ||
+    geometry.integrity_status !== "verified" || geometry.deleted_at ||
+    !geometry.sha256 || !/^[a-f0-9]{64}$/i.test(geometry.sha256)
+  ) return null;
+  const registrationPayload = captureSceneRegistrationPayload({
+    schemaVersion: CAPTURE_SCENE_REGISTRATION_SCHEMA_VERSION,
+    sourceCoordinateFrameId: journey.sourceCoordinateFrameId,
+    targetCoordinateFrameId: SCENE_WORLD_COORDINATE_FRAME,
+    evidenceAssetId: geometry.id,
+    evidenceSha256: geometry.sha256,
+    method:
+      "Operator-confirmed paired export: the visual splat and registered metric point cloud are direct exports of one capture and retain the same right-handed Y-up metre frame.",
+    sourceToWorld: pairedCaptureIdentityTransform,
+  });
+  const registrationSha256 = await sha256Hex(JSON.stringify(registrationPayload));
+  const receiptPayload = {
+    schemaVersion: "paired-capture-authoring-receipt-v1",
+    journeyId: journey.id,
+    sourceCoordinateFrameId: journey.sourceCoordinateFrameId,
+    primaryAsset: {
+      id: journey.primaryAssetId,
+      sha256: primary.sha256.toLowerCase(),
+    },
+    geometryAsset: {
+      id: geometry.id,
+      sha256: geometry.sha256.toLowerCase(),
+    },
+    registrationSha256,
+  };
+  return {
+    journeyId: journey.id,
+    primaryAssetId: journey.primaryAssetId,
+    primarySha256: primary.sha256.toLowerCase(),
+    evidenceAssetId: geometry.id,
+    evidenceSha256: geometry.sha256.toLowerCase(),
+    registrationSha256,
+    receiptSha256: await sha256Hex(JSON.stringify(receiptPayload)),
+    sourceToWorld: pairedCaptureIdentityTransform,
+  };
+}
 
 async function qualifiedTraversalEvidenceOptions(
   database: D1Database,
@@ -11453,10 +11570,22 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       targetVersionId: ["Only registered metric geometry or collision geometry may attach to an existing scene version"],
     });
   }
+  if (parsed.data.captureJourney && (
+    parsed.data.targetVersionId
+      ? purpose !== "metric_point_cloud"
+      : purpose !== "gaussian_splat" && purpose !== "web_scene"
+  )) {
+    return unprocessable(context, {
+      captureJourney: [
+        "A paired capture journey may bind only the primary visual export and its registered metric point cloud",
+      ],
+    });
+  }
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
       SELECT u.id, u.project_id, u.version_id, u.asset_id, u.file_name, u.format, u.purpose,
         u.expected_size_bytes, u.part_size_bytes, u.expires_at, u.status,
+        u.capture_journey_id,
         sv.source_provenance_json
       FROM upload_sessions u
       JOIN scene_versions sv ON sv.id = u.version_id
@@ -11473,9 +11602,12 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       part_size_bytes: number;
       expires_at: string;
       status: string;
+      capture_journey_id: string | null;
       source_provenance_json: string;
     }>();
     if (existing) {
+      const existingJourney = storedPairedCaptureJourney(existing.source_provenance_json);
+      const requestJourney = parsed.data.captureJourney;
       if (
         existing.project_id !== project.id ||
         existing.file_name !== safeFileName(parsed.data.fileName) ||
@@ -11483,6 +11615,11 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         existing.purpose !== purpose ||
         existing.expected_size_bytes !== parsed.data.sizeBytes ||
         (parsed.data.targetVersionId && existing.version_id !== parsed.data.targetVersionId) ||
+        (requestJourney && (
+          !existingJourney || existingJourney.id !== requestJourney.id ||
+          existing.capture_journey_id !== requestJourney.id
+        )) ||
+        (!requestJourney && existing.capture_journey_id !== null) ||
         JSON.stringify(storedPosterCamera(existing.source_provenance_json) ?? null) !==
           JSON.stringify(parsed.data.posterCamera ?? null)
       ) {
@@ -11512,16 +11649,17 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
 
   let versionId = crypto.randomUUID();
   let versionNumber: number | null = null;
+  let targetCaptureJourney: PairedCaptureJourney | null = null;
   const auxiliaryAttachment = Boolean(parsed.data.targetVersionId);
   if (parsed.data.targetVersionId) {
     const targetVersion = await context.env.DB.prepare(`
-      SELECT sv.id, sv.status
+      SELECT sv.id, sv.status, sv.source_provenance_json
       FROM scene_versions sv
       WHERE sv.id = ? AND sv.project_id = ?
     `).bind(
       parsed.data.targetVersionId,
       project.id,
-    ).first<{ id: string; status: string }>();
+    ).first<{ id: string; status: string; source_provenance_json: string }>();
     if (
       !targetVersion ||
       !["INGESTED", "QA_REQUIRED", "APPROVED", "PUBLISHED", "PROCESSING_FAILED"].includes(targetVersion.status)
@@ -11533,6 +11671,24 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       });
     }
     versionId = targetVersion.id;
+    targetCaptureJourney = storedPairedCaptureJourney(targetVersion.source_provenance_json);
+    if (purpose === "metric_point_cloud" && (
+      Boolean(targetCaptureJourney) !== Boolean(parsed.data.captureJourney) ||
+      (targetCaptureJourney && parsed.data.captureJourney &&
+        targetCaptureJourney.id !== parsed.data.captureJourney.id)
+    )) {
+      return unprocessable(context, {
+        captureJourney: [
+          "Registered geometry must carry the same paired-capture journey receipt as its visual export",
+        ],
+      });
+    }
+    if (purpose === "metric_point_cloud" && targetCaptureJourney?.geometryAssetId) {
+      return context.json({
+        error:
+          `Paired capture journey ${targetCaptureJourney.id} already binds geometry asset ${targetCaptureJourney.geometryAssetId}; create a new immutable version for a different export`,
+      }, 409);
+    }
   } else {
     const versionNumberRow = await context.env.DB.prepare(
       "SELECT COALESCE(MAX(version_number), 0) + 1 AS next_number FROM scene_versions WHERE project_id = ?",
@@ -11560,6 +11716,15 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   try {
     const uploadStatements: D1PreparedStatement[] = [];
     if (!auxiliaryAttachment) {
+      const captureJourney = parsed.data.captureJourney
+        ? createPairedCaptureJourney({
+          request: parsed.data.captureJourney,
+          captureAdapter: project.capture_adapter as CaptureAdapterId,
+          primaryAssetId: assetId,
+          confirmedBy: uploadPrincipalUserId(principal),
+          confirmedAt: new Date().toISOString(),
+        })
+        : null;
       uploadStatements.push(context.env.DB.prepare(`
         INSERT INTO scene_versions
           (id, project_id, version_number, status, source_provenance_json,
@@ -11574,6 +11739,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
           importedAt: new Date().toISOString(),
           ...(credentialId ? { captureAgentCredentialId: credentialId } : {}),
           ...(parsed.data.posterCamera ? { posterCamera: parsed.data.posterCamera } : {}),
+          ...(captureJourney ? { captureJourney } : {}),
         }),
         uploadPrincipalUserId(principal),
         credentialId,
@@ -11585,8 +11751,8 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
           (id, organisation_id, project_id, version_id, asset_id, object_key,
             r2_upload_id, file_name, format, purpose, mime_type,
             expected_size_bytes, part_size_bytes, sha256, status, expires_at, created_by,
-            client_operation_id, capture_agent_credential_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)
+            client_operation_id, capture_agent_credential_id, capture_journey_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?)
       `).bind(
         uploadSessionId,
         organisationId,
@@ -11606,6 +11772,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         uploadPrincipalUserId(principal),
         parsed.data.clientOperationId ?? null,
         credentialId,
+        parsed.data.captureJourney?.id ?? null,
       ),
     );
     if (!auxiliaryAttachment) {
@@ -11710,6 +11877,40 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
   for (const part of storedParts.results) {
     if (supplied.get(part.part_number) !== part.etag) return validationError(context, { parts: [`ETag mismatch for part ${part.part_number}`] });
   }
+  let pairedCaptureBoundProvenance: string | null = null;
+  if (upload.purpose === "metric_point_cloud" && upload.capture_journey_id) {
+    const targetVersion = await context.env.DB.prepare(`
+      SELECT source_provenance_json
+      FROM scene_versions
+      WHERE id = ? AND project_id = ?
+    `).bind(upload.version_id, upload.project_id).first<{
+      source_provenance_json: string;
+    }>();
+    const targetJourney = targetVersion
+      ? storedPairedCaptureJourney(targetVersion.source_provenance_json)
+      : null;
+    if (!targetJourney || targetJourney.id !== upload.capture_journey_id) {
+      return conflict(
+        context,
+        `Paired capture journey ${upload.capture_journey_id} no longer matches immutable scene version ${upload.version_id}`,
+      );
+    }
+    if (targetJourney.geometryAssetId && targetJourney.geometryAssetId !== upload.asset_id) {
+      return conflict(
+        context,
+        `Paired capture journey ${targetJourney.id} already binds geometry asset ${targetJourney.geometryAssetId}; requested ${upload.asset_id}`,
+      );
+    }
+    const parsedProvenance = parseStoredObject(targetVersion!.source_provenance_json);
+    const provenance = parsedProvenance && typeof parsedProvenance === "object" &&
+        !Array.isArray(parsedProvenance)
+      ? { ...parsedProvenance }
+      : {};
+    pairedCaptureBoundProvenance = JSON.stringify({
+      ...provenance,
+      captureJourney: bindPairedCaptureGeometry(targetJourney, upload.asset_id),
+    });
+  }
   const multipart = context.env.SPATIAL_ASSETS.resumeMultipartUpload(upload.object_key, upload.r2_upload_id);
   let object: R2Object;
   try {
@@ -11771,6 +11972,13 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       idempotencyKey,
     ),
   ];
+  if (pairedCaptureBoundProvenance) {
+    completionStatements.push(context.env.DB.prepare(`
+      UPDATE scene_versions
+      SET source_provenance_json = ?, updated_at = datetime('now')
+      WHERE id = ? AND project_id = ?
+    `).bind(pairedCaptureBoundProvenance, upload.version_id, upload.project_id));
+  }
   if (!auxiliaryAttachment) {
     completionStatements.splice(2, 0,
       context.env.DB.prepare("UPDATE scene_versions SET status = 'INGESTED', updated_at = datetime('now') WHERE id = ?").bind(upload.version_id),
@@ -19241,6 +19449,13 @@ function storedPosterCamera(value: string): unknown {
   return provenance && typeof provenance === "object"
     ? Reflect.get(provenance, "posterCamera")
     : undefined;
+}
+
+function storedPairedCaptureJourney(value: string): PairedCaptureJourney | null {
+  const provenance = parseStoredObject(value);
+  return provenance && typeof provenance === "object"
+    ? parsePairedCaptureJourney(Reflect.get(provenance, "captureJourney"))
+    : null;
 }
 
 function isFloorplanRevisionSequenceConflict(error: unknown): boolean {

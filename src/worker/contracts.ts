@@ -363,6 +363,10 @@ export const uploadInputSchema = z.object({
   mimeType: z.string().trim().min(1).max(120),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   posterCamera: uploadPosterCameraSchema.optional(),
+  captureJourney: z.object({
+    id: z.string().uuid(),
+    sameFrameConfirmed: z.literal(true),
+  }).strict().optional(),
 });
 
 export const uploadCompleteSchema = z.object({

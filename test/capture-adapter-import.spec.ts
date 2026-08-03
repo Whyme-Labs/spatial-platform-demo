@@ -208,6 +208,7 @@ describe("capture adapter evidence ingestion", () => {
       format: string;
       purpose: string;
       targetVersionId?: string;
+      captureJourney?: { id: string; sameFrameConfirmed: true };
     }) => {
       const created = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
         method: "POST",
@@ -220,6 +221,7 @@ describe("capture adapter evidence ingestion", () => {
           purpose: input.purpose,
           mimeType: "application/octet-stream",
           ...(input.targetVersionId ? { targetVersionId: input.targetVersionId } : {}),
+          ...(input.captureJourney ? { captureJourney: input.captureJourney } : {}),
         }),
       });
       expect(created.status).toBe(201);
@@ -248,11 +250,41 @@ describe("capture adapter evidence ingestion", () => {
       };
     };
 
+    const captureJourney = {
+      id: crypto.randomUUID(),
+      sameFrameConfirmed: true as const,
+    };
     const visual = await uploadBytes({
       bytes: new Uint8Array([0x52, 0x41, 0x44, 0x01]),
       fileName: "capture.rad",
       format: "rad",
       purpose: "web_scene",
+      captureJourney,
+    });
+    const unpairedGeometry = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          targetVersionId: visual.upload.versionId,
+          fileName: "unpaired-room.ply",
+          sizeBytes: 128,
+          format: "ply",
+          purpose: "metric_point_cloud",
+          mimeType: "application/octet-stream",
+        }),
+      },
+    );
+    expect(unpairedGeometry.status).toBe(422);
+    await expect(unpairedGeometry.json()).resolves.toMatchObject({
+      error: "Request cannot be applied",
+      details: {
+        captureJourney: [expect.stringContaining(
+          "Registered geometry must carry the same paired-capture journey receipt",
+        )],
+      },
     });
     const metricBytes = new TextEncoder().encode(
       "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n",
@@ -263,8 +295,25 @@ describe("capture adapter evidence ingestion", () => {
       format: "ply",
       purpose: "metric_point_cloud",
       targetVersionId: visual.upload.versionId,
+      captureJourney,
     });
     expect(geometry.upload.versionId).toBe(visual.upload.versionId);
+    const pairedVersion = await env.DB.prepare(`
+      SELECT source_provenance_json
+      FROM scene_versions
+      WHERE id = ?
+    `).bind(visual.upload.versionId).first<{ source_provenance_json: string }>();
+    expect(JSON.parse(pairedVersion?.source_provenance_json ?? "{}")).toMatchObject({
+      captureJourney: {
+        schemaVersion: "paired-capture-journey-v1",
+        id: captureJourney.id,
+        captureAdapter: "xgrids-lcc",
+        primaryAssetId: visual.upload.assetId,
+        geometryAssetId: geometry.upload.assetId,
+        declaration: "same-capture-registered-y-up-metres",
+        sourceCoordinateFrameId: `capture-journey:${captureJourney.id}`,
+      },
+    });
 
     const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
       method: "POST",

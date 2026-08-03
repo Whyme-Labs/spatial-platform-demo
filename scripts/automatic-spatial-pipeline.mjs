@@ -169,7 +169,9 @@ export function structuralCollisionConfigFromReviewPlan(plan) {
       },
       evidence: { levelKey: level.id },
     }))),
-    openings: plan.levels.flatMap((level) => level.openings.map((opening) => ({
+    openings: plan.levels.flatMap((level) => level.openings
+      .filter((opening) => opening.type === "door" || opening.type === "opening")
+      .map((opening) => ({
       openingKey: opening.id,
       elevationM: level.elevationM,
       widthM: opening.widthM,
@@ -182,7 +184,7 @@ export function structuralCollisionConfigFromReviewPlan(plan) {
         ],
       },
       evidence: { levelKey: level.id },
-    }))),
+      }))),
     connectors: plan.connectors.map((connector) => ({
       connectorKey: connector.id,
       geometry: { type: "polygon", points: connector.points },
