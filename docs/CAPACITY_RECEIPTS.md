@@ -250,3 +250,53 @@ disposable Wrangler R2 emulator. The gate rejected the otherwise visible frame,
 recorded the exact response, and still removed all temporary state. The next
 run served 45/45 valid ranges. This is retained as a local-emulator reliability
 observation; it must not be hidden by retrying or weakening the all-range gate.
+
+## FJD production private-upload receipt
+
+Last measured: 2026-08-03
+
+The official P2 Horse sample was uploaded only to private production storage for
+compatibility qualification. Project
+`87c7ab8e-6e61-4552-9ac9-cef577210f33` remains at `QA_REQUIRED`; its release
+count is zero. Do not approve or publish it without a redistribution grant.
+
+Wrangler 4.114.0 rejected a direct upload of the 536,812,164-byte PLY before
+writing it and reported its measured CLI ceiling explicitly:
+
+```text
+Wrangler only supports uploading files up to 300 MiB in size
+fjd-p2-horse-gaussian.ply is 512 MiB in size
+```
+
+The production capture-agent path returned `partSizeBytes=10485760`, so the
+source traversed 52 resumable parts. Multipart completion recorded the exact
+536,812,164-byte source and its pinned
+`5146b69324c30fcf0946013a92b70d47eed825586a38756dc6f7d8613a9d5b65`
+SHA-256. The one-project transfer credential was revoked after completion and
+has one `capture_agent.revoke` audit event.
+
+Cloud processing job `c36777a5-42bd-494f-98f3-7b647d0718f3` succeeded and
+verified four project assets:
+
+| Asset | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Source PLY | 536,812,164 | `5146b69324c30fcf0946013a92b70d47eed825586a38756dc6f7d8613a9d5b65` |
+| Browser RAD | 141,378,928 | `4793be46500e4dafb66afeaf2771804a474e2d366aa37ec63c66fff19921f1ed` |
+| Poster PNG | 152,568 | `fc39f23d076a559681998840fc654b693377acae349ee38104c4b3bb6d36e884` |
+| QA report | 1,512 | `a71529cec376fd8a604dbea9909eb86762ceaa8fcfb7de44a65f2e06b4c98404` |
+
+The companion `.fjdata` and the locally qualified RAD were also stored under
+private, content-addressed `qualification/fjd/p2-horse/` R2 keys. Full remote
+reads reproduced their local SHA-256 values:
+
+```text
+e83fba620ac6a40f252d9d22818477eedc2bd82eb957eaf08511ac5c7c600489  capture.fjdata
+ced83c79802465ca02be33e50907219a0270f4ca3ae87da66f4695a191ff50b3  scene.rad
+```
+
+Immediately after completion, Studio reported 61 tracked assets and 2.4 GiB of
+private project storage. `wrangler r2 bucket info` still reported the earlier
+69-object, 1.92-GB bucket aggregate, so bucket aggregate statistics are not an
+acceptance receipt immediately after writes. Exact multipart completion,
+database asset records, and full remote hash reads are the authoritative
+receipts for this operation.

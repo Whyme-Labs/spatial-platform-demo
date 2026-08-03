@@ -7,8 +7,11 @@ Last measured: 2026-08-03
 The FJD-first qualification lane now exercises genuine vendor exports through
 the pinned Gaussian and companion `.fjdata`, the production `fjd-trion`
 adapter, Spark conversion, a real Chrome render, and the point-cloud decoder.
-The official bytes are test inputs only: the E2E creates no release, writes no
-cloud storage, and deletes its isolated local D1/R2 state at teardown.
+The local E2E remains isolated: it creates no release, writes no cloud storage,
+and deletes its local D1/R2 state at teardown. A separate, operator-authorized
+production qualification uploaded the P2 Horse PLY to a private FJD project on
+2026-08-03; that project has zero releases and must not be published without a
+redistribution grant.
 
 | Gate | Result | Receipt |
 | --- | --- | --- |
@@ -18,6 +21,7 @@ cloud storage, and deletes its isolated local D1/R2 state at teardown.
 | Metric coordinate registration | Blocked | PDAL reports unknown horizontal units and no spatial reference; LAS coordinate scale fields are storage quantisation, not proof of metres. |
 | Spark RAD build compatibility | Passed | `npm run corpus:fjd:qualify` makes the pinned Spark CLI decode the complete PLY and build a RAD with a valid container signature; its exact receipt is written to `.cache/fjd-sample-corpus/reports/qualification.json`. |
 | Private Studio FJD import | Passed locally | The exact 536,812,164-byte PLY traversed the isolated Worker, production `fjd-trion` adapter, multipart upload, lease, quality RAD build, poster attachment, and authenticated private preview. |
+| Private production upload | Passed | Project `87c7ab8e-6e61-4552-9ac9-cef577210f33` accepted the exact PLY through 52 resumable parts; cloud job `c36777a5-42bd-494f-98f3-7b647d0718f3` verified the source and generated a RAD, poster, and QA report. The project remains `QA_REQUIRED` with zero releases. |
 | Spark browser render | Passed locally | Headless Chrome loaded the signed 141,351,968-byte RAD using HTTP 206 ranges with no page, console, renderer, or HTTP errors. The measured frame had luminance range 222 and 155 quantised colour buckets. |
 | Shared visual/geometry frame | Blocked | P2 Horse and V4e interior are different captures; no transform registers them. |
 | Automatic walkable scene | Blocked | Requires an indoor FJD capture containing both the portable visual and metric structural geometry in one declared frame. |
@@ -65,9 +69,13 @@ The manifest currently declares one explicit qualification case,
 them as different captures. If another case is added, `qualify` refuses to pick
 the first one silently and requires `--case=<qualification-case-id>`.
 
-All downloaded and derived bytes live under `.cache/fjd-sample-corpus`, which
-is ignored by Git. Do not copy them into `public/`, R2, a release, or a Git
-artifact without written permission from the dataset owner.
+Local downloaded and derived bytes live under `.cache/fjd-sample-corpus`, which
+is ignored by Git. The private production qualification is the sole recorded
+cloud exception: it stores the P2 source and generated derivatives without a
+release, while content-addressed private R2 keys retain the companion `.fjdata`
+and local RAD receipt. Do not copy these bytes into `public/`, a release, a Git
+artifact, or any publicly reachable bucket without written permission from the
+dataset owner. Exact production receipts are in `docs/CAPACITY_RECEIPTS.md`.
 
 ## Exact input pins
 

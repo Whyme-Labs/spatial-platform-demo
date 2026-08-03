@@ -12,8 +12,9 @@ later:
   Gaussian PLY validation, Spark RAD building, and result lineage. It pairs
   scanner raw data and external video with a Gaussian PLY result, but it is an
   object capture rather than an indoor navigation test. A separate local-only
-  Studio adapter/browser E2E now passes; the bytes must never be published or
-  rehosted without a redistribution grant.
+  Studio adapter/browser E2E now passes. An operator-authorized private
+  production qualification also passed on 2026-08-03, but the bytes must never
+  be published or publicly rehosted without a redistribution grant.
 - Use FJD **Building** or the V4e **interior** LAS for point-cloud and indicative
   floor-plan processing. Neither is paired with a 3DGS visual result in its
   published folder, so it cannot prove visual-to-collision registration.
@@ -27,8 +28,9 @@ later:
 
 Neither vendor sample location presents a dataset-specific redistribution
 licence. The inspected XGRIDS descriptor says the model is all-rights-reserved.
-Keep these downloads in a private, ignored qualification cache; do not commit,
-mirror, or publish their bytes without written permission.
+Keep local downloads in a private, ignored qualification cache. The one
+production exception is private and release-free; do not commit, publicly
+mirror, or publish vendor bytes without written permission.
 
 ## Qualification matrix
 
