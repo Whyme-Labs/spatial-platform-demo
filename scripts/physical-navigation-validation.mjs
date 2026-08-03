@@ -1,5 +1,11 @@
 import RAPIER from "@dimforge/rapier3d-compat";
 import { importNavigationArtifact, NavigationBuildError } from "./navigation-build-core.mjs";
+import {
+  pointInHorizontalSurface2,
+  pointOnRing2,
+  ring2,
+  triangulateHorizontalSurface,
+} from "./horizontal-surface.mjs";
 
 let initialization;
 
@@ -388,34 +394,40 @@ function validateStructuralBoundaryTopology(artifact) {
   }
   const candidateLoops = [...groupedBarriers.values()]
     .flatMap((barriers) => planarBarrierLoops(barriers));
-  const floorComponents = rectangleComponents(geometry.floorRectangles);
+  const floorSurfaces = structuralHorizontalSurfaces(geometry, "floor");
+  const ceilingSurfaces = structuralHorizontalSurfaces(geometry, "ceiling");
+  const floorComponents = surfaceComponents(floorSurfaces);
   const acceptedLoops = new Map();
   for (const component of floorComponents) {
-    for (const rectangle of component) {
-      const center = [
-        (rectangle.min[0] + rectangle.max[0]) / 2,
-        (rectangle.min[1] + rectangle.max[1]) / 2,
-      ];
+    for (const surface of component) {
+      const center = horizontalSurfaceInteriorPoint(surface);
       const containingLoops = candidateLoops
-        .filter((loop) => Math.abs(loop.minY - rectangle.elevation) <= 0.1 &&
+        .filter((loop) => Math.abs(loop.minY - surface.elevation) <= 0.1 &&
           pointInPolygon2(center, loop.points))
         .sort((left, right) => Math.abs(signedPolygonArea2(left.points)) -
           Math.abs(signedPolygonArea2(right.points)));
       if (!containingLoops.length) {
         throw structuralFailure(
-          rectangle.id,
+          surface.id,
           "Reviewed floor component is not enclosed by a structural boundary loop",
           { center },
         );
       }
       const loop = containingLoops[0];
+      const floorTriangles = horizontalSurfaceTriangles2(surface);
+      if (floorTriangles.some((triangle) => !triangleContainedInRing(triangle, loop.points))) {
+        throw structuralFailure(
+          surface.id,
+          "Reviewed floor extends outside its structural boundary loop",
+        );
+      }
       acceptedLoops.set(loop.key, loop);
-      const coveredByCeiling = geometry.ceilingRectangles.some((ceiling) =>
-        ceiling.elevation > rectangle.elevation &&
-        center[0] > ceiling.min[0] - 1e-6 && center[0] < ceiling.max[0] + 1e-6 &&
-        center[1] > ceiling.min[1] - 1e-6 && center[1] < ceiling.max[1] + 1e-6);
+      const coveredByCeiling = floorTriangles.every((triangle) =>
+        ceilingSurfaces.some((ceiling) =>
+          ceiling.elevation > surface.elevation &&
+          triangleContainedInHorizontalSurface(triangle, ceiling)));
       if (!coveredByCeiling) {
-        throw structuralFailure(rectangle.id, "Reviewed floor has no explicit ceiling coverage");
+        throw structuralFailure(surface.id, "Reviewed floor has no explicit ceiling coverage");
       }
     }
   }
@@ -643,7 +655,7 @@ async function validateDynamicBarrierState({
       const axisIndex = axis === "x" ? 0 : 2;
       const center = barrier.min.map((coordinate, index) => (coordinate + barrier.max[index]) / 2);
       const floorElevation = floorElevationAt(
-        artifact.structuralGeometry?.floorRectangles ?? [],
+        structuralHorizontalSurfaces(artifact.structuralGeometry, "floor"),
         [center[0], center[2]],
       );
       if (floorElevation === null) {
@@ -716,12 +728,10 @@ async function validateDynamicBarrierState({
   return probes;
 }
 
-function floorElevationAt(rectangles, point) {
-  const elevations = rectangles
-    .filter((rectangle) =>
-      point[0] >= rectangle.min[0] - 1e-6 && point[0] <= rectangle.max[0] + 1e-6 &&
-      point[1] >= rectangle.min[1] - 1e-6 && point[1] <= rectangle.max[1] + 1e-6)
-    .map((rectangle) => rectangle.elevation);
+function floorElevationAt(surfaces, point) {
+  const elevations = surfaces
+    .filter((surface) => pointInHorizontalSurface(point, surface))
+    .map((surface) => surface.elevation);
   return elevations.length ? Math.max(...elevations) : null;
 }
 
@@ -798,8 +808,99 @@ function point2Key(point) {
   return `${round(Number(point[0]))},${round(Number(point[1]))}`;
 }
 
-function rectangleComponents(rectangles) {
-  const remaining = new Set(rectangles.map((_, index) => index));
+function structuralHorizontalSurfaces(geometry, label) {
+  if (!geometry) return [];
+  const authored = geometry[`${label}Surfaces`];
+  if (Array.isArray(authored) && authored.length) {
+    return authored.map((surface) => ({
+      id: surface.id,
+      elevation: surface.points[0][1],
+      points: surface.points.map((point) => [...point]),
+      holes: (surface.holes ?? []).map((hole) => hole.map((point) => [...point])),
+    }));
+  }
+  return (geometry[`${label}Rectangles`] ?? []).map((rectangle) => ({
+    id: rectangle.id,
+    elevation: rectangle.elevation,
+    points: [
+      [rectangle.min[0], rectangle.elevation, rectangle.min[1]],
+      [rectangle.min[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.min[1]],
+    ],
+    holes: [],
+  }));
+}
+
+function horizontalSurfaceInteriorPoint(surface) {
+  const triangulation = triangulateHorizontalSurface(surface);
+  let selected = null;
+  for (let index = 0; index < triangulation.indices.length; index += 3) {
+    const triangle = triangulation.indices.slice(index, index + 3)
+      .map((pointIndex) => triangulation.points2[pointIndex]);
+    const area = Math.abs(signedPolygonArea2(triangle));
+    if (!selected || area > selected.area) {
+      selected = {
+        area,
+        point: [
+          triangle.reduce((sum, point) => sum + point[0], 0) / 3,
+          triangle.reduce((sum, point) => sum + point[1], 0) / 3,
+        ],
+      };
+    }
+  }
+  return selected.point;
+}
+
+function horizontalSurfaceTriangles2(surface) {
+  const triangulation = triangulateHorizontalSurface(surface);
+  const triangles = [];
+  for (let index = 0; index < triangulation.indices.length; index += 3) {
+    triangles.push(triangulation.indices.slice(index, index + 3)
+      .map((pointIndex) => triangulation.points2[pointIndex]));
+  }
+  return triangles;
+}
+
+function triangleContainedInRing(triangle, boundary) {
+  if (triangle.some((point) =>
+    !pointInPolygon2(point, boundary) && !pointOnRing2(point, boundary))) return false;
+  return !polygonSegments(triangle).some(([start, end]) =>
+    polygonSegments(boundary).some(([boundaryStart, boundaryEnd]) =>
+      segmentsStrictlyCross2(start, end, boundaryStart, boundaryEnd)));
+}
+
+function triangleContainedInHorizontalSurface(triangle, surface) {
+  if (triangle.some((point) => !pointInHorizontalSurface2(point, surface, true))) return false;
+  const triangleEdges = polygonSegments(triangle);
+  const surfaceRings = [ring2(surface.points), ...(surface.holes ?? []).map(ring2)];
+  if (triangleEdges.some(([start, end]) =>
+    surfaceRings.some((surfaceRing) => polygonSegments(surfaceRing)
+      .some(([surfaceStart, surfaceEnd]) =>
+        segmentsStrictlyCross2(start, end, surfaceStart, surfaceEnd))))) return false;
+  return !(surface.holes ?? []).some((hole) => ring2(hole).some((point) =>
+    pointInPolygon2(point, triangle) && !pointOnRing2(point, triangle)));
+}
+
+function segmentsStrictlyCross2(a, b, c, d) {
+  const first = orientation2(a, b, c);
+  const second = orientation2(a, b, d);
+  const third = orientation2(c, d, a);
+  const fourth = orientation2(c, d, b);
+  const epsilon = 1e-6;
+  if ([first, second, third, fourth].some((value) => Math.abs(value) <= epsilon)) {
+    return false;
+  }
+  return (first > 0) !== (second > 0) && (third > 0) !== (fourth > 0);
+}
+
+function orientation2(a, b, c) {
+  return (b[0] - a[0]) * (c[1] - a[1]) -
+    (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+function surfaceComponents(surfaces) {
+  const remaining = new Set(surfaces.map((_, index) => index));
   const components = [];
   while (remaining.size) {
     const seed = remaining.values().next().value;
@@ -808,10 +909,10 @@ function rectangleComponents(rectangles) {
     const component = [];
     while (queue.length) {
       const index = queue.shift();
-      const rectangle = rectangles[index];
-      component.push(rectangle);
+      const surface = surfaces[index];
+      component.push(surface);
       for (const candidate of [...remaining]) {
-        if (rectanglesTouch(rectangle, rectangles[candidate])) {
+        if (surfacesTouch(surface, surfaces[candidate])) {
           remaining.delete(candidate);
           queue.push(candidate);
         }
@@ -822,10 +923,39 @@ function rectangleComponents(rectangles) {
   return components;
 }
 
-function rectanglesTouch(first, second) {
-  return Math.abs(first.elevation - second.elevation) <= 0.05 &&
-    first.min[0] <= second.max[0] + 1e-6 && first.max[0] >= second.min[0] - 1e-6 &&
-    first.min[1] <= second.max[1] + 1e-6 && first.max[1] >= second.min[1] - 1e-6;
+function surfacesTouch(first, second) {
+  if (Math.abs(first.elevation - second.elevation) > 0.05) return false;
+  const firstRing = ring2(first.points);
+  const secondRing = ring2(second.points);
+  if (firstRing.some((point) => pointInHorizontalSurface(point, second)) ||
+    secondRing.some((point) => pointInHorizontalSurface(point, first))) return true;
+  return polygonSegments(firstRing).some(([firstStart, firstEnd]) =>
+    polygonSegments(secondRing).some(([secondStart, secondEnd]) =>
+      segmentsIntersect2(firstStart, firstEnd, secondStart, secondEnd)));
+}
+
+function polygonSegments(points) {
+  return points.map((point, index) => [point, points[(index + 1) % points.length]]);
+}
+
+function segmentsIntersect2(a, b, c, d) {
+  const cross = (first, second, third) =>
+    (second[0] - first[0]) * (third[1] - first[1]) -
+    (second[1] - first[1]) * (third[0] - first[0]);
+  const values = [cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b)];
+  if (values.some((value) => Math.abs(value) <= 1e-6)) {
+    return [a, b].some((point) => pointOnSegment2(point, c, d)) ||
+      [c, d].some((point) => pointOnSegment2(point, a, b));
+  }
+  return (values[0] > 0) !== (values[1] > 0) && (values[2] > 0) !== (values[3] > 0);
+}
+
+function pointOnSegment2(point, start, end) {
+  return distanceToSegment2(point, start, end) <= 1e-6;
+}
+
+function pointInHorizontalSurface(point, surface) {
+  return pointInHorizontalSurface2(point, surface);
 }
 
 function pointInPolygon2(point, polygon) {

@@ -947,6 +947,16 @@ export const navigationArtifactSchema = z.object({
       max: z.tuple([z.number().finite(), z.number().finite()]),
       elevation: z.number().finite(),
     })).min(1).max(2000),
+    floorSurfaces: z.array(z.object({
+      id: z.string().min(1).max(120),
+      points: z.array(point3Schema).min(3),
+      holes: z.array(z.array(point3Schema).min(3)),
+    })).min(1).optional(),
+    ceilingSurfaces: z.array(z.object({
+      id: z.string().min(1).max(120),
+      points: z.array(point3Schema).min(3),
+      holes: z.array(z.array(point3Schema).min(3)),
+    })).min(1).optional(),
     barrierSegments: z.array(z.object({
       id: z.string().min(1).max(120),
       start: z.tuple([z.number().finite(), z.number().finite()]),
@@ -1549,6 +1559,42 @@ export const navigationArtifactSchema = z.object({
     const ceilingIds = new Set(value.structuralGeometry.ceilingRectangles.map((surface) => surface.id));
     const barrierIds = new Set(value.structuralGeometry.barrierSegments.map((barrier) => barrier.id));
     const authoredDynamicIds = value.structuralGeometry.dynamicBarrierIds;
+    const floorSurfaceIds = new Set(
+      value.structuralGeometry.floorSurfaces?.map((surface) => surface.id) ?? [],
+    );
+    const ceilingSurfaceIds = new Set(
+      value.structuralGeometry.ceilingSurfaces?.map((surface) => surface.id) ?? [],
+    );
+    const nonHorizontalSurface = [
+      ...(value.structuralGeometry.floorSurfaces ?? []),
+      ...(value.structuralGeometry.ceilingSurfaces ?? []),
+    ].some((surface) => {
+      const elevation = surface.points[0]![1];
+      return [surface.points, ...surface.holes].flat().some((point) =>
+        Math.abs(point[1] - elevation) > 0.000001);
+    });
+    const surfaceBoundsMismatch = (
+      surfaces: typeof value.structuralGeometry.floorSurfaces,
+      rectangles: typeof value.structuralGeometry.floorRectangles,
+    ) => {
+      if (!surfaces) return false;
+      const rectanglesById = new Map(rectangles.map((rectangle) => [rectangle.id, rectangle]));
+      return surfaces.length !== rectangles.length || surfaces.some((surface) => {
+        const rectangle = rectanglesById.get(surface.id);
+        if (!rectangle) return true;
+        const min = [
+          Math.min(...surface.points.map((point) => point[0])),
+          Math.min(...surface.points.map((point) => point[2])),
+        ];
+        const max = [
+          Math.max(...surface.points.map((point) => point[0])),
+          Math.max(...surface.points.map((point) => point[2])),
+        ];
+        return Math.abs(rectangle.elevation - surface.points[0]![1]) > 0.000001 ||
+          min.some((coordinate, axis) => Math.abs(coordinate - rectangle.min[axis]!) > 0.000001) ||
+          max.some((coordinate, axis) => Math.abs(coordinate - rectangle.max[axis]!) > 0.000001);
+      });
+    };
     if (
       floorIds.size !== value.structuralGeometry.floorRectangles.length ||
       ceilingIds.size !== value.structuralGeometry.ceilingRectangles.length ||
@@ -1556,6 +1602,17 @@ export const navigationArtifactSchema = z.object({
         surface.min.some((coordinate, axis) => coordinate >= surface.max[axis]!)) ||
       value.structuralGeometry.ceilingRectangles.some((surface) =>
         surface.min.some((coordinate, axis) => coordinate >= surface.max[axis]!)) ||
+      floorSurfaceIds.size !== (value.structuralGeometry.floorSurfaces?.length ?? 0) ||
+      ceilingSurfaceIds.size !== (value.structuralGeometry.ceilingSurfaces?.length ?? 0) ||
+      nonHorizontalSurface ||
+      surfaceBoundsMismatch(
+        value.structuralGeometry.floorSurfaces,
+        value.structuralGeometry.floorRectangles,
+      ) ||
+      surfaceBoundsMismatch(
+        value.structuralGeometry.ceilingSurfaces,
+        value.structuralGeometry.ceilingRectangles,
+      ) ||
       barrierIds.size !== value.structuralGeometry.barrierSegments.length ||
       value.structuralGeometry.barrierSegments.some((barrier) =>
         barrier.minY >= barrier.maxY ||

@@ -8,6 +8,7 @@ import {
 import { generateTiledNavMesh } from "@recast-navigation/generators";
 import { Vector3 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { horizontalSurfaceIssue } from "./horizontal-surface.mjs";
 
 const LEGACY_SCHEMA_VERSION = "spatial-navigation-v6";
 const STRUCTURAL_SCHEMA_VERSION = "spatial-navigation-v7";
@@ -224,6 +225,10 @@ function structuralGeometryReview(document) {
   }
   const floorRectangles = canonicalHorizontalRectangles(value.floorRectangles, "floor");
   const ceilingRectangles = canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling");
+  const floorSurfaces = canonicalHorizontalSurfaces(value.floorSurfaces ?? [], "floor");
+  const ceilingSurfaces = canonicalHorizontalSurfaces(value.ceilingSurfaces ?? [], "ceiling");
+  assertHorizontalSurfaceBoundsMatch(floorSurfaces, floorRectangles, "floor");
+  assertHorizontalSurfaceBoundsMatch(ceilingSurfaces, ceilingRectangles, "ceiling");
   const dynamicBarrierIds = canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier");
   const barrierSegments = canonicalBarrierSegments(value.barrierSegments);
   const connectorSurfaces = canonicalConnectorSurfaces(value.connectorSurfaces ?? []);
@@ -231,6 +236,8 @@ function structuralGeometryReview(document) {
     schemaVersion: "authored-structural-collision-v2",
     floorRectangles,
     ceilingRectangles,
+    ...(floorSurfaces.length ? { floorSurfaces } : {}),
+    ...(ceilingSurfaces.length ? { ceilingSurfaces } : {}),
     barrierSegments,
     ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
     dynamicBarrierIds,
@@ -304,6 +311,70 @@ function canonicalHorizontalRectangles(values, label) {
     ids.add(id);
     return { id, min, max, elevation };
   });
+}
+
+function canonicalHorizontalSurfaces(values, label) {
+  if (!Array.isArray(values)) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} surfaces must be an array`,
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const points = Array.isArray(value?.points) ? value.points.map(pointTuple) : [];
+    const holes = Array.isArray(value?.holes)
+      ? value.holes.map((hole) => Array.isArray(hole) ? hole.map(pointTuple) : [])
+      : [];
+    const elevation = points[0]?.[1];
+    if (
+      !id || ids.has(id) || points.length < 3 || points.some((point) => !point) ||
+      holes.some((hole) => hole.length < 3 || hole.some((point) => !point)) ||
+      !Number.isFinite(elevation)
+    ) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural ${label} surface ${id || "unknown"} is invalid`,
+      );
+    }
+    ids.add(id);
+    const surface = { id, points, holes };
+    const issue = horizontalSurfaceIssue(surface);
+    if (issue) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural ${label} surface ${id} ${issue}`,
+      );
+    }
+    return surface;
+  });
+}
+
+function assertHorizontalSurfaceBoundsMatch(surfaces, rectangles, label) {
+  if (!surfaces.length) return;
+  const byId = new Map(rectangles.map((rectangle) => [rectangle.id, rectangle]));
+  const mismatched = surfaces.find((surface) => {
+    const rectangle = byId.get(surface.id);
+    if (!rectangle) return true;
+    const min = [
+      Math.min(...surface.points.map((point) => point[0])),
+      Math.min(...surface.points.map((point) => point[2])),
+    ];
+    const max = [
+      Math.max(...surface.points.map((point) => point[0])),
+      Math.max(...surface.points.map((point) => point[2])),
+    ];
+    return Math.abs(rectangle.elevation - surface.points[0][1]) > 1e-6 ||
+      min.some((coordinate, axis) => Math.abs(coordinate - rectangle.min[axis]) > 1e-6) ||
+      max.some((coordinate, axis) => Math.abs(coordinate - rectangle.max[axis]) > 1e-6);
+  });
+  if (mismatched || rectangles.length !== surfaces.length) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} surface bounds do not match their compatibility rectangles`,
+    );
+  }
 }
 
 function canonicalConnectorSurfaces(values) {
@@ -798,10 +869,18 @@ function canonicalStructuralGeometry(value) {
     );
   }
   const connectorSurfaces = canonicalConnectorSurfaces(value.connectorSurfaces ?? []);
+  const floorSurfaces = canonicalHorizontalSurfaces(value.floorSurfaces ?? [], "floor");
+  const ceilingSurfaces = canonicalHorizontalSurfaces(value.ceilingSurfaces ?? [], "ceiling");
+  const floorRectangles = canonicalHorizontalRectangles(value.floorRectangles, "floor");
+  const ceilingRectangles = canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling");
+  assertHorizontalSurfaceBoundsMatch(floorSurfaces, floorRectangles, "floor");
+  assertHorizontalSurfaceBoundsMatch(ceilingSurfaces, ceilingRectangles, "ceiling");
   return {
     schemaVersion: "authored-structural-collision-v2",
-    floorRectangles: canonicalHorizontalRectangles(value.floorRectangles, "floor"),
-    ceilingRectangles: canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling"),
+    floorRectangles,
+    ceilingRectangles,
+    ...(floorSurfaces.length ? { floorSurfaces } : {}),
+    ...(ceilingSurfaces.length ? { ceilingSurfaces } : {}),
     barrierSegments: canonicalBarrierSegments(value.barrierSegments),
     ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
     dynamicBarrierIds: canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier"),

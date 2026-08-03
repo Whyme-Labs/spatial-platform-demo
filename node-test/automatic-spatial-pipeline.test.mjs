@@ -42,6 +42,160 @@ function roomProposal(roomKey, levelKey, elevationM) {
 }
 
 describe("automatic multi-level spatial pipeline", () => {
+  it("preserves a concave room footprint instead of inventing bounding-box floor", async () => {
+    const roomPoints = [
+      [0, 0, 0], [4, 0, 0], [4, 0, 1],
+      [1, 0, 1], [1, 0, 4], [0, 0, 4],
+    ];
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.8 }],
+      rooms: [{
+        roomKey: "l-room",
+        elevationM: 0,
+        geometry: { type: "polygon", points: roomPoints },
+        evidence: { levelKey: "level-001" },
+      }],
+      walls: roomPoints.map((point, index) => {
+        const next = roomPoints[(index + 1) % roomPoints.length];
+        return lineProposal(`wall-${index + 1}`, 0, [point[0], point[2]], [next[0], next[2]]);
+      }),
+      openings: [],
+      connectors: [],
+    };
+
+    const config = automaticStructuralCollisionConfig(report);
+    assert.deepEqual(config.floorSurfaces, [{
+      id: "auto-floor-l-room",
+      points: roomPoints,
+      holes: [],
+    }]);
+    const bytes = buildAuthoredStructuralCollisionGlb(config);
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    assert.deepEqual(geometry.structuralGeometry.floorSurfaces, config.floorSurfaces);
+    const layout = automaticNavigationLayout({
+      agent: { radius: 0.25 },
+    }, geometry);
+    assert.equal(pointInPolygon2(
+      [layout.spawn.position[0], layout.spawn.position[2]],
+      roomPoints.map(([x, _y, z]) => [x, z]),
+    ), true);
+    assert.equal(pointInPolygon2([3, 3], roomPoints.map(([x, _y, z]) => [x, z])), false);
+  });
+
+  it("creates a reachability destination for every inferred room, not only every floor", async () => {
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.8 }],
+      rooms: [
+        {
+          roomKey: "room-west",
+          elevationM: 0,
+          geometry: { type: "polygon", points: [
+            [0, 0, 0], [3, 0, 0], [3, 0, 3], [0, 0, 3],
+          ] },
+          evidence: { levelKey: "level-001" },
+        },
+        {
+          roomKey: "room-east",
+          elevationM: 0,
+          geometry: { type: "polygon", points: [
+            [3, 0, 0], [6, 0, 0], [6, 0, 3], [3, 0, 3],
+          ] },
+          evidence: { levelKey: "level-001" },
+        },
+      ],
+      walls: [
+        lineProposal("north", 0, [0, 0], [6, 0]),
+        lineProposal("east", 0, [6, 0], [6, 3]),
+        lineProposal("south", 0, [6, 3], [0, 3]),
+        lineProposal("west", 0, [0, 3], [0, 0]),
+      ],
+      openings: [],
+      connectors: [],
+    };
+    const config = automaticStructuralCollisionConfig(report);
+    const geometry = await extractCollisionGeometryFromGlb(
+      buildAuthoredStructuralCollisionGlb(config),
+    );
+    const layout = automaticNavigationLayout({ agent: { radius: 0.25 } }, geometry);
+    assert.deepEqual(
+      layout.destinations.map((destination) => destination.id),
+      ["automatic-room-room-east", "automatic-room-room-west"],
+    );
+  });
+
+  it("blocks the whole automatic build when any inferred room cannot fit the player", async () => {
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.8 }],
+      rooms: [{
+        roomKey: "narrow-room",
+        elevationM: 0,
+        geometry: { type: "polygon", points: [
+          [0, 0, 0], [0.5, 0, 0], [0.5, 0, 4], [0, 0, 4],
+        ] },
+        evidence: { levelKey: "level-001" },
+      }],
+      walls: [
+        lineProposal("north", 0, [0, 0], [0.5, 0]),
+        lineProposal("east", 0, [0.5, 0], [0.5, 4]),
+        lineProposal("south", 0, [0.5, 4], [0, 4]),
+        lineProposal("west", 0, [0, 4], [0, 0]),
+      ],
+      openings: [],
+      connectors: [],
+    };
+    const geometry = await extractCollisionGeometryFromGlb(
+      buildAuthoredStructuralCollisionGlb(automaticStructuralCollisionConfig(report)),
+    );
+
+    assert.throws(
+      () => automaticNavigationLayout({ agent: { radius: 0.25 } }, geometry),
+      (error) => error?.code === "AUTOMATIC_NAVIGATION_ROOM_CLEARANCE_UNPROVEN" &&
+        error.details?.blockedRooms?.[0]?.id === "auto-floor-narrow-room" &&
+        /agent_radius=0.25.*blocked_room_ids=auto-floor-narrow-room/.test(error.message),
+    );
+  });
+
+  it("preserves an oriented stair footprint instead of replacing it with an axis-aligned box", () => {
+    const room = [
+      [0, 0, 0], [14, 0, 0], [14, 0, 14], [0, 0, 14],
+    ];
+    const report = {
+      levels: [
+        { levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.8 },
+        { levelKey: "level-002", elevationM: 3, ceilingElevationM: 5.8 },
+      ],
+      rooms: [
+        { ...roomProposal("lower", "level-001", 0), geometry: { type: "polygon", points: room } },
+        { ...roomProposal("upper", "level-002", 3), geometry: {
+          type: "polygon",
+          points: room.map(([x, _y, z]) => [x, 3, z]),
+        } },
+      ],
+      walls: room.flatMap((point, index) => {
+        const next = room[(index + 1) % room.length];
+        return [0, 3].map((elevation) => lineProposal(
+          `wall-${elevation}-${index}`,
+          elevation,
+          [point[0], point[2]],
+          [next[0], next[2]],
+        ));
+      }),
+      openings: [],
+      connectors: [{
+        connectorKey: "diagonal-stair",
+        geometry: { type: "polygon", points: [
+          [3, 0, 5], [5, 0, 3], [9, 3, 11], [11, 3, 9],
+        ] },
+      }],
+    };
+
+    const config = automaticStructuralCollisionConfig(report);
+    const lowerHole = config.floorSurfaces.find((surface) =>
+      surface.id === "auto-floor-lower").holes[0];
+    assert.equal(new Set(lowerHole.map((point) => point[0])).size, 4);
+    assert.equal(new Set(lowerHole.map((point) => point[2])).size, 4);
+  });
+
   it("cooks stair treads and proves every inferred level is reachable", async () => {
     const report = {
       levels: [
@@ -71,8 +225,8 @@ describe("automatic multi-level spatial pipeline", () => {
     };
     const collisionConfig = automaticStructuralCollisionConfig(report);
     assert.equal(collisionConfig.connectorSurfaces.length, 19);
-    assert.ok(collisionConfig.floorRectangles.some((floor) => floor.elevation === 0));
-    assert.ok(collisionConfig.floorRectangles.some((floor) => floor.elevation === 3));
+    assert.ok(collisionConfig.floorSurfaces.some((floor) => floor.points[0][1] === 0));
+    assert.ok(collisionConfig.floorSurfaces.some((floor) => floor.points[0][1] === 3));
     const bytes = buildAuthoredStructuralCollisionGlb(collisionConfig);
     const geometry = await extractCollisionGeometryFromGlb(bytes);
     const baseConfig = {
@@ -158,7 +312,7 @@ describe("automatic multi-level spatial pipeline", () => {
     };
     const config = automaticStructuralCollisionConfig(report);
     assert.equal(config.connectorSurfaces.length, 0);
-    assert.equal(config.floorRectangles.length, 2);
+    assert.equal(config.floorSurfaces.length, 2);
     const bytes = buildAuthoredStructuralCollisionGlb(config);
     const geometry = await extractCollisionGeometryFromGlb(bytes);
     const baseConfig = {
@@ -196,7 +350,7 @@ describe("automatic multi-level spatial pipeline", () => {
         dynamicBarriers: geometry.dynamicBarriers,
       }),
       (error) => error?.code === "NAVIGATION_ACCEPTANCE_FAILED" &&
-        error.details?.unreachableDestinationIds?.includes("automatic-level-2"),
+        error.details?.unreachableDestinationIds?.includes("automatic-room-room-002"),
     );
   });
 
@@ -246,3 +400,16 @@ describe("automatic multi-level spatial pipeline", () => {
     );
   });
 });
+
+function pointInPolygon2(point, polygon) {
+  let inside = false;
+  for (let current = 0, previous = polygon.length - 1; current < polygon.length;
+    previous = current, current += 1) {
+    const a = polygon[current];
+    const b = polygon[previous];
+    const crosses = (a[1] > point[1]) !== (b[1] > point[1]) &&
+      point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / (b[1] - a[1]) + a[0];
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}

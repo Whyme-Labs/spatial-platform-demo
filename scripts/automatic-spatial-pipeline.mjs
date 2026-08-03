@@ -1,3 +1,10 @@
+import { Earcut } from "three/src/extras/Earcut.js";
+import {
+  pointInPolygon2,
+  pointOnRing2,
+  segmentsIntersect2,
+} from "./horizontal-surface.mjs";
+
 export class AutomaticSpatialPipelineError extends Error {
   constructor(code, message, {
     failureClass = "input_validation",
@@ -28,15 +35,35 @@ export function automaticStructuralCollisionConfig(report, {
     );
   }
   const levelByKey = new Map(levels.map((level) => [level.levelKey, level]));
-  const rawFloorRectangles = rooms.map((room, index) => {
-    const points = room.geometry?.points ?? [];
-    const xValues = points.map((point) => Number(point?.[0])).filter(Number.isFinite);
-    const zValues = points.map((point) => Number(point?.[2])).filter(Number.isFinite);
+  const connectorPlans = connectors.map((connector, index) => {
+    const points = connector.geometry?.points ?? [];
+    if (points.length < 3 || points.some((point) =>
+      !Array.isArray(point) || point.length !== 3 ||
+      point.some((value) => !Number.isFinite(Number(value))))) {
+      throw pipelineError(
+        "AUTOMATIC_COLLISION_CONNECTOR_INVALID",
+        `Floor-plan connector ${connector.connectorKey ?? index + 1} has no usable metric surface`,
+      );
+    }
+    return automaticConnectorTreads({
+      id: `auto-${connector.connectorKey ?? `connector-${index + 1}`}`,
+      points: points.map((point) => point.map(Number)),
+    });
+  });
+  const roomSurfaces = rooms.map((room, index) => {
+    const sourcePoints = room.geometry?.points ?? [];
+    const points = sourcePoints.map((point) => Array.isArray(point)
+      ? [Number(point[0]), Number(point[1]), Number(point[2])]
+      : []);
     const elevation = Number(room.elevationM);
-    if (!xValues.length || !zValues.length || !Number.isFinite(elevation)) {
+    if (
+      points.length < 3 || points.some((point) =>
+        point.length !== 3 || point.some((coordinate) => !Number.isFinite(coordinate))) ||
+      !Number.isFinite(elevation)
+    ) {
       throw pipelineError(
         "AUTOMATIC_COLLISION_ROOM_INVALID",
-        `Floor-plan room ${room.roomKey ?? index + 1} has no usable metric bounds`,
+        `Floor-plan room ${room.roomKey ?? index + 1} has no usable metric polygon`,
       );
     }
     const levelKey = String(room.evidence?.levelKey ?? "");
@@ -50,19 +77,26 @@ export function automaticStructuralCollisionConfig(report, {
       );
     }
     return {
-      id: `auto-floor-${room.roomKey ?? index + 1}`,
-      min: [Math.min(...xValues), Math.min(...zValues)],
-      max: [Math.max(...xValues), Math.max(...zValues)],
+      roomKey: String(room.roomKey ?? index + 1),
+      points: points.map(([x, _y, z]) => [x, elevation, z]),
       elevation,
       ceilingElevation,
     };
   });
-  const rawCeilingRectangles = rawFloorRectangles.map((floor) => ({
-    id: floor.id.replace("auto-floor-", "auto-ceiling-"),
-    min: [...floor.min],
-    max: [...floor.max],
-    elevation: floor.ceilingElevation,
-  }));
+  const floorSurfaces = roomSurfaces.map((room) => horizontalRoomSurface(
+    `auto-floor-${room.roomKey}`,
+    room.points,
+    room.elevation,
+    connectorPlans,
+    "floor",
+  ));
+  const ceilingSurfaces = roomSurfaces.map((room) => horizontalRoomSurface(
+    `auto-ceiling-${room.roomKey}`,
+    room.points.map(([x, _y, z]) => [x, room.ceilingElevation, z]),
+    room.ceilingElevation,
+    connectorPlans,
+    "ceiling",
+  ));
   const barrierSegments = walls.flatMap((wall, wallIndex) => {
     const points = wall.geometry?.points ?? [];
     const start = [Number(points[0]?.[0]), Number(points[0]?.[2])];
@@ -91,34 +125,11 @@ export function automaticStructuralCollisionConfig(report, {
       "Automatic navigation could not derive structural barrier segments",
     );
   }
-  const connectorPlans = connectors.map((connector, index) => {
-    const points = connector.geometry?.points ?? [];
-    if (points.length < 3 || points.some((point) =>
-      !Array.isArray(point) || point.length !== 3 ||
-      point.some((value) => !Number.isFinite(Number(value))))) {
-      throw pipelineError(
-        "AUTOMATIC_COLLISION_CONNECTOR_INVALID",
-        `Floor-plan connector ${connector.connectorKey ?? index + 1} has no usable metric surface`,
-      );
-    }
-    return automaticConnectorTreads({
-      id: `auto-${connector.connectorKey ?? `connector-${index + 1}`}`,
-      points: points.map((point) => point.map(Number)),
-    });
-  });
   return {
     schemaVersion: "authored-structural-collision-v2",
     provenance,
-    floorRectangles: carveAutomaticConnectorOpenings(
-      rawFloorRectangles,
-      connectorPlans,
-      "floor",
-    ),
-    ceilingRectangles: carveAutomaticConnectorOpenings(
-      rawCeilingRectangles,
-      connectorPlans,
-      "ceiling",
-    ),
+    floorSurfaces,
+    ceilingSurfaces,
     barrierSegments,
     connectorSurfaces: connectorPlans.flatMap((plan) => plan.surfaces),
     furnitureBoxes: [],
@@ -180,25 +191,36 @@ export function structuralCollisionConfigFromReviewPlan(plan) {
 }
 
 export function automaticNavigationLayout(config, geometry) {
-  const floors = geometry.structuralGeometry?.floorRectangles ?? [];
-  const ceilings = geometry.structuralGeometry?.ceilingRectangles ?? [];
+  const floors = horizontalNavigationSurfaces(geometry.structuralGeometry, "floor");
+  const ceilings = horizontalNavigationSurfaces(geometry.structuralGeometry, "ceiling");
   if (!floors.length || !ceilings.length) {
     throw pipelineError(
       "AUTOMATIC_NAVIGATION_LAYOUT_MISSING",
       "Automatic navigation requires structural floor and ceiling metadata",
     );
   }
-  const usableFloors = floors.filter((floor) =>
-    floor.max[0] - floor.min[0] >= config.agent.radius * 2.5 &&
-    floor.max[1] - floor.min[1] >= config.agent.radius * 2.5);
-  if (!usableFloors.length) {
+  const agentDiameter = config.agent.radius * 2;
+  const unusableFloors = floors.filter((floor) =>
+    floor.max[0] - floor.min[0] <= agentDiameter ||
+    floor.max[1] - floor.min[1] <= agentDiameter);
+  if (unusableFloors.length) {
     throw pipelineError(
-      "AUTOMATIC_NAVIGATION_LAYOUT_EMPTY",
-      "Automatic navigation found no player-sized structural floor region",
+      "AUTOMATIC_NAVIGATION_ROOM_CLEARANCE_UNPROVEN",
+      `Automatic navigation cannot prove every inferred room for agent_radius=${config.agent.radius}; blocked_room_ids=${unusableFloors.map((floor) => floor.id).join(",")}`,
+      {
+        agentRadius: config.agent.radius,
+        agentDiameter,
+        blockedRooms: unusableFloors.map((floor) => ({
+          id: floor.id,
+          width: floor.max[0] - floor.min[0],
+          depth: floor.max[1] - floor.min[1],
+        })),
+      },
     );
   }
+  const usableFloors = floors;
   const largestFloor = usableFloors.reduce((largest, floor) =>
-    rectangleArea(floor) > rectangleArea(largest) ? floor : largest);
+    floor.area > largest.area ? floor : largest);
   const connectorBounds = (geometry.structuralGeometry?.connectorSurfaces ?? [])
     .map((surface) => ({
       min: [
@@ -222,17 +244,18 @@ export function automaticNavigationLayout(config, geometry) {
   ];
   const spawn = {
     id: "automatic-opening",
-    position: safeRectanglePoint(largestFloor, connectorBounds, config.agent.radius),
+    position: safeSurfacePoint(largestFloor, connectorBounds),
   };
-  const destinationFloors = largestFloorPerElevation(usableFloors);
   return {
     ...config,
     bounds: [minimum, maximum],
     spawn,
-    destinations: destinationFloors.map((floor, index) => ({
-      id: `automatic-level-${index + 1}`,
-      position: safeRectanglePoint(floor, connectorBounds, config.agent.radius),
-    })),
+    destinations: [...usableFloors]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((floor) => ({
+        id: `automatic-room-${floor.id.replace(/^auto-floor-/, "")}`,
+        position: safeSurfacePoint(floor, connectorBounds),
+      })),
   };
 }
 
@@ -312,64 +335,52 @@ function automaticConnectorTreads(connector) {
     id: connector.id,
     lowerElevation,
     upperElevation,
-    hole: {
-      min: [
-        Math.min(...footprint.map((point) => point[0])),
-        Math.min(...footprint.map((point) => point[1])),
-      ],
-      max: [
-        Math.max(...footprint.map((point) => point[0])),
-        Math.max(...footprint.map((point) => point[1])),
-      ],
-    },
+    hole: { points: footprint },
     surfaces,
   };
 }
 
-function carveAutomaticConnectorOpenings(rectangles, connectors, label) {
-  let carved = rectangles;
+function horizontalRoomSurface(id, points, elevation, connectors, label) {
+  const outline = points.map(([x, _y, z]) => [x, z]);
+  const holes = [];
   for (const connector of connectors) {
-    carved = carved.flatMap((rectangle) =>
-      !automaticConnectorCrossesRectangle(rectangle, connector, label)
-        ? [rectangle]
-        : subtractAutomaticRectangle(rectangle, connector.hole, label));
+    if (!automaticConnectorCrossesElevation(elevation, connector, label)) continue;
+    const hole = connector.hole.points.map((point) => [...point]);
+    const edgesIntersect = polygonEdges(outline).some(([start, end]) =>
+      polygonEdges(hole).some(([holeStart, holeEnd]) =>
+        segmentsIntersect2(start, end, holeStart, holeEnd)));
+    const holeStrictlyInside = hole.every((point) =>
+      pointInPolygon2(point, outline) && !pointOnRing2(point, outline));
+    const disjoint = !edgesIntersect &&
+      !hole.some((point) => pointInPolygon2(point, outline)) &&
+      !outline.some((point) => pointInPolygon2(point, hole));
+    if (holeStrictlyInside) {
+      holes.push(hole.map(([x, z]) => [x, elevation, z]));
+      continue;
+    }
+    if (disjoint) continue;
+    throw pipelineError(
+      "AUTOMATIC_COLLISION_CONNECTOR_HOLE_AMBIGUOUS",
+      `Connector ${connector.id} only partially overlaps room surface ${id}; classify the landing against the registered render before rebuilding`,
+      { connectorId: connector.id, surfaceId: id },
+    );
   }
-  return carved;
+  return {
+    id,
+    points: points.map(([x, _y, z]) => [x, elevation, z]),
+    holes,
+  };
 }
 
-function automaticConnectorCrossesRectangle(rectangle, connector, label) {
+function automaticConnectorCrossesElevation(elevation, connector, label) {
   if (label === "ceiling") {
-    return rectangle.elevation > connector.lowerElevation + 0.1 &&
-      rectangle.elevation <= connector.upperElevation + 0.2;
+    return elevation > connector.lowerElevation + 0.1 &&
+      elevation <= connector.upperElevation + 0.2;
   }
   return Math.min(
-    Math.abs(rectangle.elevation - connector.lowerElevation),
-    Math.abs(rectangle.elevation - connector.upperElevation),
+    Math.abs(elevation - connector.lowerElevation),
+    Math.abs(elevation - connector.upperElevation),
   ) <= 0.2;
-}
-
-function subtractAutomaticRectangle(rectangle, hole, label) {
-  const overlap = {
-    min: [Math.max(rectangle.min[0], hole.min[0]), Math.max(rectangle.min[1], hole.min[1])],
-    max: [Math.min(rectangle.max[0], hole.max[0]), Math.min(rectangle.max[1], hole.max[1])],
-  };
-  if (overlap.min[0] >= overlap.max[0] || overlap.min[1] >= overlap.max[1]) {
-    return [rectangle];
-  }
-  const candidates = [
-    { min: rectangle.min, max: [overlap.min[0], rectangle.max[1]] },
-    { min: [overlap.max[0], rectangle.min[1]], max: rectangle.max },
-    { min: rectangle.min, max: [rectangle.max[0], overlap.min[1]] },
-    { min: [rectangle.min[0], overlap.max[1]], max: rectangle.max },
-  ].filter((candidate) =>
-    candidate.max[0] - candidate.min[0] >= 0.05 &&
-    candidate.max[1] - candidate.min[1] >= 0.05);
-  return candidates.map((candidate, index) => ({
-    id: `${rectangle.id}-${label}-cut-${index + 1}`,
-    min: candidate.min.map(Number),
-    max: candidate.max.map(Number),
-    elevation: rectangle.elevation,
-  }));
 }
 
 function splitBarrierAroundOpenings(start, end, openings, thickness, wallElevationM) {
@@ -422,58 +433,108 @@ function splitBarrierAroundOpenings(start, end, openings, thickness, wallElevati
   }));
 }
 
-function largestFloorPerElevation(floors) {
-  const byElevation = new Map();
-  for (const floor of floors) {
-    const key = Math.round(floor.elevation * 20) / 20;
-    const current = byElevation.get(key);
-    if (!current || rectangleArea(floor) > rectangleArea(current)) byElevation.set(key, floor);
+function horizontalNavigationSurfaces(structuralGeometry, label) {
+  if (!structuralGeometry) return [];
+  const surfaces = structuralGeometry[`${label}Surfaces`];
+  if (Array.isArray(surfaces) && surfaces.length) {
+    return surfaces.map((surface) => navigationSurface(surface));
   }
-  return [...byElevation.values()].sort((left, right) => left.elevation - right.elevation);
+  const rectangles = structuralGeometry[`${label}Rectangles`] ?? [];
+  return rectangles.map((rectangle) => navigationSurface({
+    id: rectangle.id,
+    points: [
+      [rectangle.min[0], rectangle.elevation, rectangle.min[1]],
+      [rectangle.min[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.min[1]],
+    ],
+    holes: [],
+  }));
 }
 
-function rectangleArea(rectangle) {
-  return (rectangle.max[0] - rectangle.min[0]) * (rectangle.max[1] - rectangle.min[1]);
+function navigationSurface(surface) {
+  const points = surface.points.map((point) => point.map(Number));
+  const holes = (surface.holes ?? []).map((hole) => hole.map((point) => point.map(Number)));
+  return {
+    id: surface.id,
+    points,
+    holes,
+    elevation: points[0][1],
+    min: [
+      Math.min(...points.map((point) => point[0])),
+      Math.min(...points.map((point) => point[2])),
+    ],
+    max: [
+      Math.max(...points.map((point) => point[0])),
+      Math.max(...points.map((point) => point[2])),
+    ],
+    area: Math.abs(polygonArea2(points.map(([x, _y, z]) => [x, z]))) -
+      holes.reduce((total, hole) => total + Math.abs(
+        polygonArea2(hole.map(([x, _y, z]) => [x, z])),
+      ), 0),
+  };
 }
 
-function safeRectanglePoint(rectangle, exclusions, radius) {
-  const insetX = Math.min(
-    Math.max(radius * 1.5, 0.3),
-    (rectangle.max[0] - rectangle.min[0]) / 2,
+function safeSurfacePoint(surface, exclusions) {
+  const rings = [surface.points, ...surface.holes];
+  const allPoints = rings.flat();
+  const holeIndices = [];
+  let offset = surface.points.length;
+  for (const hole of surface.holes) {
+    holeIndices.push(offset);
+    offset += hole.length;
+  }
+  const indices = Earcut.triangulate(
+    allPoints.flatMap(([x, _y, z]) => [x, z]),
+    holeIndices,
+    2,
   );
-  const insetZ = Math.min(
-    Math.max(radius * 1.5, 0.3),
-    (rectangle.max[1] - rectangle.min[1]) / 2,
-  );
-  const xValues = [
-    rectangle.min[0] + insetX,
-    (rectangle.min[0] + rectangle.max[0]) / 2,
-    rectangle.max[0] - insetX,
-  ];
-  const zValues = [
-    rectangle.min[1] + insetZ,
-    (rectangle.min[1] + rectangle.max[1]) / 2,
-    rectangle.max[1] - insetZ,
-  ];
-  const candidates = xValues.flatMap((x) => zValues.map((z) => [x, z]));
+  const candidates = [];
+  for (let index = 0; index < indices.length; index += 3) {
+    const triangle = indices.slice(index, index + 3).map((pointIndex) => allPoints[pointIndex]);
+    const point = [
+      triangle.reduce((sum, vertex) => sum + vertex[0], 0) / 3,
+      triangle.reduce((sum, vertex) => sum + vertex[2], 0) / 3,
+    ];
+    candidates.push({ point, area: Math.abs(polygonArea2(
+      triangle.map(([x, _y, z]) => [x, z]),
+    )) });
+  }
+  if (!candidates.length) {
+    throw pipelineError(
+      "AUTOMATIC_NAVIGATION_SURFACE_EMPTY",
+      `Automatic navigation surface ${surface.id} could not produce an interior anchor`,
+    );
+  }
   const clearance = (point, bounds) => Math.hypot(
     Math.max(bounds.min[0] - point[0], 0, point[0] - bounds.max[0]),
     Math.max(bounds.min[1] - point[1], 0, point[1] - bounds.max[1]),
   );
   const selected = candidates.sort((left, right) => {
     const leftClearance = exclusions.length
-      ? Math.min(...exclusions.map((bounds) => clearance(left, bounds)))
+      ? Math.min(...exclusions.map((bounds) => clearance(left.point, bounds)))
       : Number.POSITIVE_INFINITY;
     const rightClearance = exclusions.length
-      ? Math.min(...exclusions.map((bounds) => clearance(right, bounds)))
+      ? Math.min(...exclusions.map((bounds) => clearance(right.point, bounds)))
       : Number.POSITIVE_INFINITY;
-    return rightClearance - leftClearance;
+    return rightClearance - leftClearance || right.area - left.area;
   })[0];
-  return [selected[0], rectangle.elevation, selected[1]];
+  return [selected.point[0], surface.elevation, selected.point[1]];
+}
+
+function polygonArea2(points) {
+  return points.reduce((area, point, index) => {
+    const next = points[(index + 1) % points.length];
+    return area + point[0] * next[1] - next[0] * point[1];
+  }, 0) / 2;
 }
 
 function addAlong(origin, direction, distance) {
   return [origin[0] + direction[0] * distance, origin[1] + direction[1] * distance];
+}
+
+function polygonEdges(points) {
+  return points.map((point, index) => [point, points[(index + 1) % points.length]]);
 }
 
 function pipelineError(code, message, details = {}) {

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { Earcut } from "three/src/extras/Earcut.js";
+import { horizontalSurfaceIssue } from "./horizontal-surface.mjs";
 
 /**
  * Turns reviewed floor and connector polygons into a deliberately simple
@@ -22,9 +23,24 @@ export function triangulateAuthoredSurfaces(surfaces) {
     if (ids.has(surface.id)) throw new Error(`Duplicate authored collision surface id: ${surface.id}`);
     ids.add(surface.id);
     const points = normalizeRing(surface.points, surface.id);
+    const holes = Array.isArray(surface.holes)
+      ? surface.holes.map((hole, index) => normalizeRing(hole, `${surface.id} hole ${index + 1}`))
+      : [];
+    const rings = [points, ...holes];
     const offset = positions.length / 3;
-    positions.push(...points.flat());
-    const triangles = Earcut.triangulate(points.flatMap((point) => [point[0], point[2]]), [], 2);
+    const allPoints = rings.flat();
+    positions.push(...allPoints.flat());
+    const holeIndices = [];
+    let ringOffset = points.length;
+    for (const hole of holes) {
+      holeIndices.push(ringOffset);
+      ringOffset += hole.length;
+    }
+    const triangles = Earcut.triangulate(
+      allPoints.flatMap((point) => [point[0], point[2]]),
+      holeIndices,
+      2,
+    );
     if (triangles.length < 3) {
       throw new Error(`Authored collision surface ${surface.id} could not be triangulated`);
     }
@@ -63,19 +79,25 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
     throw new Error("Structural collision requires reviewed provenance");
   }
   const ids = new Set();
-  const floors = normalizeHorizontalRectangles(config?.floorRectangles, "floor", ids);
-  const ceilings = normalizeHorizontalRectangles(config?.ceilingRectangles, "ceiling", ids);
+  const usesFloorSurfaces = Array.isArray(config?.floorSurfaces);
+  const usesCeilingSurfaces = Array.isArray(config?.ceilingSurfaces);
+  const floors = usesFloorSurfaces
+    ? normalizeHorizontalSurfaces(config.floorSurfaces, "floor", ids)
+    : rectanglesToSurfaces(normalizeHorizontalRectangles(config?.floorRectangles, "floor", ids));
+  const ceilings = usesCeilingSurfaces
+    ? normalizeHorizontalSurfaces(config.ceilingSurfaces, "ceiling", ids)
+    : rectanglesToSurfaces(normalizeHorizontalRectangles(config?.ceilingRectangles, "ceiling", ids));
   const barriers = normalizeBarrierSegments(config?.barrierSegments, ids);
   const connectors = normalizeConnectorSurfaces(config?.connectorSurfaces ?? [], ids);
   if (!floors.length || !ceilings.length || !barriers.length) {
     throw new Error("V2 structural collision requires explicit floors, ceilings, and barriers");
   }
-  const floorGeometry = horizontalRectanglesGeometry(floors, false);
+  const floorGeometry = triangulateAuthoredSurfaces(floors);
   if (connectors.length) {
     appendGeometry(floorGeometry, triangulateAuthoredSurfaces(connectors));
   }
   const barrierGeometry = emptyGeometry();
-  appendGeometry(barrierGeometry, horizontalRectanglesGeometry(ceilings, true));
+  appendGeometry(barrierGeometry, reverseTriangleWinding(triangulateAuthoredSurfaces(ceilings)));
   appendGeometry(barrierGeometry, barrierSegmentsGeometry(barriers));
   const furniture = boxesGeometry(config?.furnitureBoxes ?? [], "furniture");
   const dynamicBarriers = normalizeDynamicBarriers(config?.dynamicBarrierBoxes ?? [], ids);
@@ -100,8 +122,10 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
     semantics,
     authoring: {
       schemaVersion: "authored-structural-collision-v2",
-      floorRectangles: floors,
-      ceilingRectangles: ceilings,
+      floorRectangles: horizontalSurfaceBounds(floors),
+      ceilingRectangles: horizontalSurfaceBounds(ceilings),
+      ...(usesFloorSurfaces ? { floorSurfaces: floors } : {}),
+      ...(usesCeilingSurfaces ? { ceilingSurfaces: ceilings } : {}),
       barrierSegments: barriers,
       connectorSurfaces: connectors,
       dynamicBarrierIds: dynamicBarriers.map((barrier) => barrier.id),
@@ -245,6 +269,52 @@ function normalizeHorizontalRectangles(values, label, ids) {
   });
 }
 
+function normalizeHorizontalSurfaces(values, label, ids) {
+  if (!Array.isArray(values) || !values.length) {
+    throw new Error(`${label} surfaces must be a non-empty array`);
+  }
+  return values.map((value) => {
+    const id = stableUniqueId(value, `${label} surface`, ids);
+    const points = normalizeRing(value?.points, id);
+    const holes = Array.isArray(value?.holes)
+      ? value.holes.map((hole, index) => normalizeRing(hole, `${id} hole ${index + 1}`))
+      : [];
+    const elevation = points[0][1];
+    const surface = { id, points, holes };
+    const issue = horizontalSurfaceIssue(surface);
+    if (issue) throw new Error(`${label} surface ${id} ${issue}`);
+    return surface;
+  });
+}
+
+function rectanglesToSurfaces(rectangles) {
+  return rectangles.map((rectangle) => ({
+    id: rectangle.id,
+    points: [
+      [rectangle.min[0], rectangle.elevation, rectangle.min[1]],
+      [rectangle.min[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.max[1]],
+      [rectangle.max[0], rectangle.elevation, rectangle.min[1]],
+    ],
+    holes: [],
+  }));
+}
+
+function horizontalSurfaceBounds(surfaces) {
+  return surfaces.map((surface) => ({
+    id: surface.id,
+    min: [
+      Math.min(...surface.points.map((point) => point[0])),
+      Math.min(...surface.points.map((point) => point[2])),
+    ],
+    max: [
+      Math.max(...surface.points.map((point) => point[0])),
+      Math.max(...surface.points.map((point) => point[2])),
+    ],
+    elevation: surface.points[0][1],
+  }));
+}
+
 function normalizeBarrierSegments(values, ids) {
   if (!Array.isArray(values)) throw new Error("barrier segments must be an array");
   return values.map((value) => {
@@ -292,19 +362,19 @@ function stableUniqueId(value, label, ids) {
   return value.id;
 }
 
-function horizontalRectanglesGeometry(rectangles, downward) {
-  const geometry = emptyGeometry();
-  for (const rectangle of rectangles) {
-    const [[x0, z0], [x1, z1]] = [rectangle.min, rectangle.max];
-    const points = [
-      [x0, rectangle.elevation, z0],
-      [x0, rectangle.elevation, z1],
-      [x1, rectangle.elevation, z1],
-      [x1, rectangle.elevation, z0],
+function reverseTriangleWinding(geometry) {
+  const reversed = {
+    positions: [...geometry.positions],
+    indices: [...geometry.indices],
+    sourceSurfaceIds: [...(geometry.sourceSurfaceIds ?? [])],
+  };
+  for (let index = 0; index < reversed.indices.length; index += 3) {
+    [reversed.indices[index + 1], reversed.indices[index + 2]] = [
+      reversed.indices[index + 2],
+      reversed.indices[index + 1],
     ];
-    appendQuad(geometry, ...(downward ? points.reverse() : points));
   }
-  return geometry;
+  return reversed;
 }
 
 function barrierSegmentsGeometry(barriers) {

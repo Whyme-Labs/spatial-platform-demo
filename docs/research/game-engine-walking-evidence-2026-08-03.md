@@ -140,17 +140,18 @@ understanding, TSDF fusion, or a watertight mesh reconstruction.
 
 ### 3. Floor plan to collision shell
 
-The automatic collision compiler currently converts each room outline to its
-axis-aligned bounding rectangle for both floor and ceiling, turns inferred wall
-lines into barrier segments, removes every matching opening gap from the wall,
-and converts an inferred stair/ramp into generated tread rectangles. Furniture
-is deliberately excluded.
+The collision compiler now preserves each reviewed room as its exact concave
+floor and ceiling polygon. Connector footprints become explicit holes and
+reviewed stair/ramp geometry becomes generated tread surfaces. In addition to
+the Recast mesh itself, the build creates a destination in every inferred room,
+so acceptance proves room-level reachability rather than only one point per
+floor. Furniture is deliberately excluded.
 
-This stage is the main correctness gap. Bounding rectangles can fill concave or
-L-shaped voids; a geometric gap can be a doorway, window, glass surface, or
-missing scan; and absent observations do not prove free space. Requiring captured
-ceiling support prevents an invented open shell but does not make the remaining
-shell reliable.
+The remaining correctness gap is upstream classification. A geometric gap can
+still be a doorway, window, glass surface, or missing scan, and absent
+observations do not prove free space. Requiring captured ceiling support and
+preserving concavity prevent two prior forms of invented geometry, but they do
+not make an ambiguous scan reliable.
 
 ### 4. Collision shell to navigation
 
@@ -229,11 +230,12 @@ registered vendor mesh, or pose-aware point-cloud reconstruction
   -> Recast + Rapier evidence
 ```
 
-The current direction—floor-plan rectangles first, collision second—is too
-lossy. Prefer a vendor-supplied registered mesh when available. For point-cloud
+The current point-cloud-to-floor-plan direction still loses volumetric evidence
+before classification, even though collision no longer inflates concave rooms.
+Prefer a vendor-supplied registered mesh when available. For point-cloud
 fallbacks, use scanner poses to distinguish observed free space from unobserved
-space, reconstruct floor/wall/ceiling surfaces, preserve concave boundaries, and
-classify doors, windows, glass, furniture, and missing coverage explicitly.
+space, reconstruct floor/wall/ceiling surfaces, and classify doors, windows,
+glass, furniture, and missing coverage explicitly.
 
 ### Permit automatic acceptance only from objective proof
 
@@ -257,9 +259,9 @@ authoring tab. No fabricated geometry and no look-around fallback are needed.
 1. **Representative vendor evidence.** The official FJD horse asset proves the
    visual adapter, not indoor structural reconstruction. A registered indoor
    FJD bundle is required before automatic acceptance has a receipt.
-2. **Structural reconstruction.** Replace bounding-room collision and gap-equals-
-   opening assumptions with pose-aware, concavity-preserving, uncertainty-aware
-   structural geometry.
+2. **Structural reconstruction.** Concave room collision and connector holes are
+   now preserved. Replace the remaining gap-equals-opening assumption with
+   pose-aware, uncertainty-aware structural classification.
 3. **Semantic transitions.** Automatically infer ordinary stairs and ramps from
    geometry; require explicit evidence for elevators, ladders, moving platforms,
    and ambiguous doors.

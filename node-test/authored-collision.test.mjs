@@ -137,6 +137,123 @@ describe("authored walkable collision", () => {
     });
   });
 
+  it("cooks exact concave structural floors without collision in the missing corner", async () => {
+    const room = [
+      [0, 0, 0], [4, 0, 0], [4, 0, 1],
+      [1, 0, 1], [1, 0, 4], [0, 0, 4],
+    ];
+    const bytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorSurfaces: [{ id: "l-floor", points: room, holes: [] }],
+      ceilingSurfaces: [{
+        id: "l-ceiling",
+        points: room.map(([x, _y, z]) => [x, 2.8, z]),
+        holes: [],
+      }],
+      barrierSegments: room.map((point, index) => {
+        const end = room[(index + 1) % room.length];
+        return {
+          id: `wall-${index + 1}`,
+          start: [point[0], point[2]],
+          end: [end[0], end[2]],
+          minY: 0,
+          maxY: 2.8,
+        };
+      }),
+      connectorSurfaces: [],
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [],
+    });
+    const decoded = await extractCollisionGeometryFromGlb(bytes);
+    const floorTriangles = [];
+    for (let index = 0; index < decoded.indices.length; index += 3) {
+      const triangleIndices = decoded.indices.slice(index, index + 3);
+      const points = triangleIndices.map((pointIndex) =>
+        decoded.positions.slice(pointIndex * 3, pointIndex * 3 + 3));
+      if (points.every((point) => Math.abs(point[1]) <= 1e-9) &&
+        triangleNormalY(decoded.positions, triangleIndices) > 0) {
+        floorTriangles.push(points);
+      }
+    }
+    const area = floorTriangles.reduce((total, triangle) => total + Math.abs(
+      triangleNormalY(triangle.flat(), [0, 1, 2]),
+    ) / 2, 0);
+    assert.equal(area, 7);
+    assert.ok(floorTriangles.every((triangle) => {
+      const centroid = [
+        triangle.reduce((sum, point) => sum + point[0], 0) / 3,
+        triangle.reduce((sum, point) => sum + point[2], 0) / 3,
+      ];
+      return centroid[0] <= 1 || centroid[1] <= 1;
+    }));
+  });
+
+  it("rejects a horizontal surface whose hole is outside its outer ring", () => {
+    assert.throws(
+      () => buildAuthoredStructuralCollisionGlb({
+        schemaVersion: "authored-structural-collision-v2",
+        provenance: "operator_reviewed",
+        floorSurfaces: [{
+          id: "floor",
+          points: [[0, 0, 0], [4, 0, 0], [4, 0, 4], [0, 0, 4]],
+          holes: [[[5, 0, 5], [6, 0, 5], [6, 0, 6], [5, 0, 6]]],
+        }],
+        ceilingSurfaces: [{
+          id: "ceiling",
+          points: [[0, 3, 0], [4, 3, 0], [4, 3, 4], [0, 3, 4]],
+          holes: [],
+        }],
+        barrierSegments: [],
+        connectorSurfaces: [],
+        dynamicBarrierBoxes: [],
+        furnitureBoxes: [],
+      }),
+      /hole 1 is not strictly contained by the outer ring/,
+    );
+  });
+
+  it("rejects a floor when the reviewed ceiling covers only part of its surface", async () => {
+    await assert.rejects(
+      validateStructuralNavigation({
+        artifact: {
+          schemaVersion: "spatial-navigation-v7",
+          agent: {
+            radius: 0.2,
+            height: 1.8,
+            eyeHeight: 1.6,
+            maxClimb: 0.1,
+            maxSlopeDegrees: 45,
+          },
+          structuralGeometry: {
+            schemaVersion: "authored-structural-collision-v2",
+            floorSurfaces: [{
+              id: "floor",
+              points: [[0, 0, 0], [6, 0, 0], [6, 0, 6], [0, 0, 6]],
+              holes: [],
+            }],
+            ceilingSurfaces: [{
+              id: "partial-ceiling",
+              points: [[0, 3, 0], [3, 3, 0], [3, 3, 6], [0, 3, 6]],
+              holes: [],
+            }],
+            barrierSegments: [
+              { id: "north", start: [0, 0], end: [6, 0], minY: 0, maxY: 3 },
+              { id: "east", start: [6, 0], end: [6, 6], minY: 0, maxY: 3 },
+              { id: "south", start: [6, 6], end: [0, 6], minY: 0, maxY: 3 },
+              { id: "west", start: [0, 6], end: [0, 0], minY: 0, maxY: 3 },
+            ],
+            dynamicBarrierIds: [],
+          },
+        },
+        positions: [],
+        indices: [],
+      }),
+      (error) => error?.code === "STRUCTURAL_NAVIGATION_ACCEPTANCE_FAILED" &&
+        /no explicit ceiling coverage/.test(error.message),
+    );
+  });
+
   it("builds one reachable navmesh across two reviewed levels and a stair surface", async () => {
     const bytes = buildAuthoredStructuralCollisionGlb({
       schemaVersion: "authored-structural-collision-v2",

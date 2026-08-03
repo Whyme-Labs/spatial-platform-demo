@@ -72,8 +72,8 @@ mutate an approved build.
 
 For the automatic floor-plan lane, a build made from an uncorrected machine
 proposal is explicitly preview-only. Approving the floor plan recooks the
-collision GLB from the corrected levels, ceilings, walls, openings, and
-connectors, then queues a new navigation build bound to the approved revision
+collision GLB from exact concave floor/ceiling polygons, connector holes,
+corrected walls, openings, and stair/ramp surfaces, then queues a new navigation build bound to the approved revision
 ID and exact plan hash. Only that revision-bound build can be accepted, and the
 Worker accepts it automatically after objective validation succeeds.
 
@@ -86,6 +86,8 @@ A build cannot be approved unless it proves:
 - every reviewed wall blocks both-direction Walk-capsule and Fly-sphere sweeps;
 - capsule corner-slide probes preserve motion without penetrating barriers;
 - every advertised room route replays in both directions;
+- every inferred room, including rooms on the same floor, owns a frozen
+  reachability destination;
 - each dynamic door is passable/open and blocked/closed in both Rapier and
   Detour; and
 - the resulting topology is connected for every advertised destination.

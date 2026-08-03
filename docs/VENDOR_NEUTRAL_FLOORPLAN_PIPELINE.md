@@ -72,6 +72,11 @@ The first production extractor uses bounded metric occupancy:
 8. require an operator to correct level/ceiling evidence, labels, polygons,
    wall geometry, opening type/associations, and connectors.
 
+Reviewed room outlines remain exact concave floor and ceiling surfaces in the
+collision GLB; they are never expanded to axis-aligned room bounds. Stair/ramp
+footprints cut explicit holes, and the navigation proof targets every inferred
+room rather than only one point per storey.
+
 Missing ceiling support does not discard the floor-plan proposal, but it blocks
 the automatic collision preview until the operator supplies reviewed evidence.
 The system never substitutes maximum wall height as an imaginary ceiling.

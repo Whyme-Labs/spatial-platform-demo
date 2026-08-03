@@ -2,6 +2,46 @@
 
 Last measured: 2026-08-02
 
+## Exact horizontal-surface tolerance
+
+Last measured: 2026-08-03
+
+The checked authored-navigation JSON corpus contains 783 finite numeric values.
+Its largest absolute scalar is 80 and its largest measured Float32 round-trip
+error is `4.196166987213701e-7`. The shared horizontal-surface validator uses
+`geometry_epsilon=1e-6`, 2.38 times that measured error, for coplanarity,
+zero-edge, intersection, and area-consistency checks. This is an input-quality
+tripwire: an otherwise valid known-good structural artifact rejected by it
+requires remeasurement and a scale-aware replacement, not a silent catch.
+
+Remeasure from the repository root with:
+
+```sh
+node - <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+let maxError = 0;
+let maxAbs = 0;
+let count = 0;
+for (const name of fs.readdirSync('assets')) {
+  if (!name.endsWith('.json')) continue;
+  let value;
+  try { value = JSON.parse(fs.readFileSync(path.join('assets', name), 'utf8')); } catch { continue; }
+  const visit = (node) => {
+    if (typeof node === 'number' && Number.isFinite(node)) {
+      count += 1;
+      maxAbs = Math.max(maxAbs, Math.abs(node));
+      maxError = Math.max(maxError, Math.abs(node - Math.fround(node)));
+    } else if (Array.isArray(node)) node.forEach(visit);
+    else if (node && typeof node === 'object') Object.values(node).forEach(visit);
+  };
+  visit(value);
+}
+console.log({ numericValues: count, maxAbsoluteCoordinateOrScalar: maxAbs,
+  maxFloat32RoundTripError: maxError });
+NODE
+```
+
 ## Browser collision proxy tripwires
 
 The checked local collision corpus contains four Home Scan GLBs. The largest
