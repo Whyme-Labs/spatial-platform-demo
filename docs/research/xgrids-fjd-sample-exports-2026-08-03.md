@@ -12,7 +12,8 @@ later:
   Gaussian PLY validation, Spark RAD building, and result lineage. It pairs
   scanner raw data and external video with a Gaussian PLY result, but it is an
   object capture rather than an indoor navigation test. A separate local-only
-  Studio adapter/browser E2E is still required.
+  Studio adapter/browser E2E now passes; the bytes must never be published or
+  rehosted without a redistribution grant.
 - Use FJD **Building** or the V4e **interior** LAS for point-cloud and indicative
   floor-plan processing. Neither is paired with a 3DGS visual result in its
   published folder, so it cannot prove visual-to-collision registration.
@@ -116,7 +117,10 @@ independently list point clouds, floor plans, mesh, 3DGS and panoramas as
 deliverables, and LAS/PLY/PTS/E57 as point-cloud formats.
 
 These samples close the basic "does genuine FJD data exist for testing?" gap.
-They do **not** close the platform's production acceptance gap: the published
+The P2 PLY and `.fjdata` now also pass the isolated `fjd-trion` import,
+quality-RAD build, private range delivery, and Chrome render lifecycle with no
+release or cloud storage. They do **not** close the platform's production
+acceptance gap: the published
 FJD indoor geometry is not paired with its visual 3DGS, while the paired Horse
 archive is not a building and contains no collision mesh.
 

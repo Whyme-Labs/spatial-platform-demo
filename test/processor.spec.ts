@@ -103,11 +103,18 @@ describe("processing agent core", () => {
   });
 
   it("validates a Gaussian PLY before invoking Spark", () => {
-    expect(validateGaussianPlyHeader(Buffer.from(gaussianHeader))).toMatchObject({
+    const bytes = Buffer.from(gaussianHeader);
+    expect(validateGaussianPlyHeader(bytes)).toMatchObject({
       format: "binary_little_endian",
       vertexCount: 42,
       sphericalHarmonicDegree: 0,
+      headerBytes: bytes.length,
     });
+  });
+
+  it("counts the complete CRLF line terminator after end_header", () => {
+    const bytes = Buffer.from(gaussianHeader.replaceAll("\n", "\r\n"));
+    expect(validateGaussianPlyHeader(bytes).headerBytes).toBe(bytes.length);
   });
 
   it("rejects a point-only PLY with a classified, non-retryable failure", () => {

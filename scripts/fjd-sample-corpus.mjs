@@ -101,16 +101,22 @@ async function inspectRemoteCorpus() {
 
 async function fetchCorpus(fixtures = manifest.fixtures) {
   for (const fixture of fixtures) {
-    const destination = fixturePath(fixture);
-    if (await exists(destination)) {
-      const metadata = await streamFileMetadata(destination);
-      assertExpected(fixture, metadata);
-      emit("fjd.fetch.cached", { fixture: fixture.id, ...metadata });
-      continue;
-    }
-    if (fixture.source.zipEntry) await extractRemoteZipEntry(fixture, destination);
-    else await downloadDirectFixture(fixture, destination);
+    await fetchFixture(fixture);
+    const companion = qualificationMetadataFixture(fixture);
+    if (companion) await fetchFixture(companion);
   }
+}
+
+async function fetchFixture(fixture) {
+  const destination = fixturePath(fixture);
+  if (await exists(destination)) {
+    const metadata = await streamFileMetadata(destination);
+    assertExpected(fixture, metadata);
+    emit("fjd.fetch.cached", { fixture: fixture.id, ...metadata });
+    return;
+  }
+  if (fixture.source.zipEntry) await extractRemoteZipEntry(fixture, destination);
+  else await downloadDirectFixture(fixture, destination);
 }
 
 async function verifyCorpus(fixtures = manifest.fixtures, qualificationCase = null) {
@@ -301,12 +307,21 @@ async function inspectRemoteFixture(fixture) {
   const entry = inspected.entries.find((candidate) => candidate.name === fixture.source.zipEntry.name);
   if (!entry) throw new Error(`${fixture.id} is missing ZIP entry ${fixture.source.zipEntry.name}`);
   assertZipEntryExpected(fixture, entry);
+  const companion = qualificationMetadataFixture(fixture);
+  const companionEntry = companion
+    ? inspected.entries.find((candidate) => candidate.name === companion.source.zipEntry.name)
+    : null;
+  if (companion && !companionEntry) {
+    throw new Error(`${fixture.id} is missing ZIP entry ${companion.source.zipEntry.name}`);
+  }
+  if (companion && companionEntry) assertZipEntryExpected(companion, companionEntry);
   return {
     ...base,
     rangeExtraction: {
       archiveEntryCount: inspected.entries.length,
       centralDirectorySizeBytes: inspected.end.centralDirectorySize,
       selectedEntry: serializableZipEntry(entry),
+      companionEntry: companionEntry ? serializableZipEntry(companionEntry) : null,
     },
   };
 }
@@ -422,12 +437,55 @@ async function verifyFixture(fixture) {
   }
   const metadata = await streamFileMetadata(path);
   assertExpected(fixture, metadata);
+  const companion = qualificationMetadataFixture(fixture);
+  let qualificationMetadata = null;
+  if (companion) {
+    const companionPath = fixturePath(companion);
+    if (!(await exists(companionPath))) {
+      throw new Error(`Missing ${companion.id}; run npm run corpus:fjd:fetch first`);
+    }
+    const companionMetadata = await streamFileMetadata(companionPath);
+    assertExpected(companion, companionMetadata);
+    const companionBytes = await readFile(companionPath);
+    const poseEvidenceMatched = companionBytes.includes(Buffer.from(
+      fixture.qualificationView.poseRecordNeedle,
+      "utf8",
+    ));
+    if (!poseEvidenceMatched) {
+      throw new Error(
+        `${companion.id} does not contain the pinned FJD camera pose receipt`,
+      );
+    }
+    qualificationMetadata = {
+      fileName: companion.fileName,
+      ...companionMetadata,
+      poseEvidenceMatched,
+    };
+  }
   return {
     id: fixture.id,
     role: fixture.role,
     fileName: fixture.fileName,
     ...metadata,
     inspection: await inspectFixtureBytes(fixture),
+    qualificationView: fixture.qualificationView ?? null,
+    qualificationMetadata,
+  };
+}
+
+function qualificationMetadataFixture(fixture) {
+  const metadata = fixture.qualificationView?.metadata;
+  if (!metadata) return null;
+  return {
+    id: `${fixture.id}-metadata`,
+    role: "qualification_metadata",
+    fileName: metadata.fileName,
+    sizeBytes: metadata.sizeBytes,
+    sha256: metadata.sha256,
+    source: {
+      ...fixture.source,
+      zipEntry: metadata.zipEntry,
+    },
   };
 }
 

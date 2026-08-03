@@ -29,10 +29,38 @@
       "sizeBytes": 536812164,
       "sha256": "5146b69324c30fcf0946013a92b70d47eed825586a38756dc6f7d8613a9d5b65",
       "inspection": {
-        "headerBytes": 1531,
+        "headerBytes": 1532,
         "vertexCount": 2164559,
         "sphericalHarmonicDegree": 3,
         "propertyCount": 62
+      },
+      "qualificationView": {
+        "sourceUpAxis": "Z",
+        "cameraPosition": [10.637473, 5.462846, 0.416062],
+        "cameraTarget": [4.819623, 5.50264, 1.324583],
+        "cameraUp": [0, 0, 1],
+        "fovDegrees": 70,
+        "rendererProfile": "explicit-budget",
+        "rendererBudgetMillions": 1.25,
+        "poseReceipt": "FJD fjdata image record 685 camera position; Gaussian position median target from SplatTransform 3.1.7",
+        "poseRecordNeedle": "685 -1.229140 10.637473 5.462846 0.416062",
+        "visualTripwires": {
+          "minimumLuminanceRange": 128,
+          "minimumColourBucketCount": 64
+        },
+        "metadata": {
+          "fileName": "fjd-p2-horse-gaussian.fjdata",
+          "sizeBytes": 9747730,
+          "sha256": "e83fba620ac6a40f252d9d22818477eedc2bd82eb957eaf08511ac5c7c600489",
+          "zipEntry": {
+            "name": "3DGS result/Nanjing Horse 3dgs_2026-01-25-10-54-33_Gaussian.fjdata",
+            "compressionMethod": 8,
+            "crc32": "9ef98aff",
+            "compressedSizeBytes": 2435997,
+            "uncompressedSizeBytes": 9747730,
+            "localHeaderOffset": 42
+          }
+        }
       }
     },
     {

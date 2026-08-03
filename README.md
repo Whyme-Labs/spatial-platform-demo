@@ -62,7 +62,10 @@ Hardware qualification is currently **FJD first** because FJD is the first
 capture device in the product rollout. The repository pins official P2 and V4e
 sample identities and provides an on-demand private qualification lane; XGRIDS
 sample integration is deliberately deferred until the FJD lane is complete.
-This priority does not change the vendor-neutral production asset contract.
+The official FJD bytes are never published or copied to cloud storage: the
+local E2E deletes its isolated Worker state after proving adapter, processor,
+private-preview, range-streaming, and Chrome rendering behavior. This priority
+does not change the vendor-neutral production asset contract.
 
 The direct production path accepts browser-ready Spark `.rad`, `.spz`, and
 `.sog` assets. Gaussian PLY and SPZ source assets can also be leased to the
@@ -342,6 +345,7 @@ npm run corpus:all
 npm run corpus:e2e:local
 npm run corpus:fjd:inspect
 npm run corpus:fjd:qualify
+npm run corpus:fjd:e2e:local
 ```
 
 This regenerates Worker types, type-checks the client and Worker, statically
@@ -373,10 +377,11 @@ provenance, and the vendor-data boundaries are recorded in
 and
 [`docs/research/open-test-corpus.md`](./docs/research/open-test-corpus.md).
 The FJD commands range-inspect the official P2 archive, selectively extract its
-Gaussian PLY without downloading the whole archive, verify a separate official
-V4e interior LAS, and build a Spark RAD compatibility artifact. Vendor bytes
-and reports remain under ignored `.cache/fjd-sample-corpus`; the exact pins,
-commands, results, rights boundary, and remaining paired-frame gap are recorded
+Gaussian PLY and companion `.fjdata` without downloading the whole archive,
+verify a separate official V4e interior LAS, build a Spark RAD compatibility
+artifact, and run a disposable local FJD-adapter/Chrome E2E. Vendor bytes and
+reports remain under ignored `.cache/fjd-sample-corpus`; the exact pins,
+commands, results, no-hosting boundary, and remaining paired-frame gap are recorded
 in [`docs/verification/fjd-sample-corpus.md`](./docs/verification/fjd-sample-corpus.md).
 
 ## Deployments

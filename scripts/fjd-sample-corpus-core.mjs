@@ -269,35 +269,7 @@ export function validateFjdSampleManifest(manifest) {
       throw new Error(`${fixture.id} must pin an exact lowercase SHA-256`);
     }
     if (fixture.source.zipEntry) {
-      const entry = fixture.source.zipEntry;
-      try {
-        assertSafeArchivePath(entry.name);
-      } catch (error) {
-        throw new Error(`${fixture.id} has invalid zipEntry path: ${error.message}`, { cause: error });
-      }
-      if (
-        !Number.isSafeInteger(fixture.source.archiveSizeBytes) ||
-        fixture.source.archiveSizeBytes <= 0 ||
-        !Number.isSafeInteger(fixture.source.archiveEntryCount) ||
-        fixture.source.archiveEntryCount <= 0 ||
-        !Number.isSafeInteger(fixture.source.centralDirectorySizeBytes) ||
-        fixture.source.centralDirectorySizeBytes <= 0 ||
-        !Number.isSafeInteger(fixture.source.centralDirectoryOffset) ||
-        fixture.source.centralDirectoryOffset < 0 ||
-        ![0, 8].includes(entry.compressionMethod) ||
-        !/^[a-f0-9]{8}$/.test(entry.crc32 ?? "") ||
-        !Number.isSafeInteger(entry.compressedSizeBytes) ||
-        entry.compressedSizeBytes <= 0 ||
-        !Number.isSafeInteger(entry.uncompressedSizeBytes) ||
-        entry.uncompressedSizeBytes <= 0 ||
-        !Number.isSafeInteger(entry.localHeaderOffset) ||
-        entry.localHeaderOffset < 0 ||
-        entry.uncompressedSizeBytes !== fixture.sizeBytes
-      ) {
-        throw new Error(
-          `${fixture.id} zipEntry must pin archive size/directory, method, CRC-32, compressed/uncompressed sizes, and local offset`,
-        );
-      }
+      validateZipEntryReceipt(fixture.id, fixture.source, fixture.source.zipEntry, fixture.sizeBytes);
     }
     if (fixture.role === "gaussian_splat") {
       const inspection = fixture.inspection;
@@ -309,6 +281,7 @@ export function validateFjdSampleManifest(manifest) {
       ) {
         throw new Error(`${fixture.id} must pin its Gaussian header inspection receipt`);
       }
+      if (fixture.qualificationView) validateQualificationView(fixture);
     }
   }
   if (!Array.isArray(manifest.qualificationCases) || manifest.qualificationCases.length === 0) {
@@ -345,6 +318,94 @@ export function validateFjdSampleManifest(manifest) {
   return manifest;
 }
 
+function validateQualificationView(fixture) {
+  const view = fixture.qualificationView;
+  const vectors = [view.cameraPosition, view.cameraTarget, view.cameraUp];
+  const vectorIsFinite = (value) =>
+    Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+  const cameraHasDirection = vectorIsFinite(view.cameraPosition) &&
+    vectorIsFinite(view.cameraTarget) &&
+    view.cameraPosition.some((coordinate, index) => coordinate !== view.cameraTarget[index]);
+  const upLengthSquared = vectorIsFinite(view.cameraUp)
+    ? view.cameraUp.reduce((sum, coordinate) => sum + coordinate ** 2, 0)
+    : 0;
+  const metadata = view.metadata;
+  const visualTripwires = view.visualTripwires;
+  if (
+    !["Y", "Z"].includes(view.sourceUpAxis) ||
+    !vectors.every(vectorIsFinite) ||
+    !cameraHasDirection ||
+    !(upLengthSquared > 0) ||
+    !Number.isFinite(view.fovDegrees) ||
+    !(view.fovDegrees > 0 && view.fovDegrees < 180) ||
+    view.rendererProfile !== "explicit-budget" ||
+    !Number.isFinite(view.rendererBudgetMillions) ||
+    !(view.rendererBudgetMillions > 0) ||
+    typeof view.poseReceipt !== "string" ||
+    !view.poseReceipt.trim() ||
+    typeof view.poseRecordNeedle !== "string" ||
+    !view.poseRecordNeedle.trim() ||
+    typeof metadata?.fileName !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._ -]*$/.test(metadata.fileName) ||
+    !Number.isSafeInteger(metadata?.sizeBytes) ||
+    metadata.sizeBytes <= 0 ||
+    !/^[a-f0-9]{64}$/.test(metadata?.sha256 ?? "") ||
+    /^0{64}$/.test(metadata?.sha256)
+  ) {
+    throw new Error(
+      `${fixture.id} qualificationView must pin finite camera vectors, source up axis, FOV, renderer profile/budget, provenance, and an exact companion receipt`,
+    );
+  }
+  if (
+    !Number.isSafeInteger(visualTripwires?.minimumLuminanceRange) ||
+    visualTripwires.minimumLuminanceRange <= 0 ||
+    visualTripwires.minimumLuminanceRange > 255 ||
+    !Number.isSafeInteger(visualTripwires?.minimumColourBucketCount) ||
+    visualTripwires.minimumColourBucketCount <= 0
+  ) {
+    throw new Error(
+      `${fixture.id} qualificationView must pin positive measured visual tripwires`,
+    );
+  }
+  validateZipEntryReceipt(
+    `${fixture.id} qualificationView`,
+    fixture.source,
+    metadata.zipEntry,
+    metadata.sizeBytes,
+  );
+}
+
+function validateZipEntryReceipt(label, source, entry, expectedSizeBytes) {
+  try {
+    assertSafeArchivePath(entry?.name);
+  } catch (error) {
+    throw new Error(`${label} has invalid zipEntry path: ${error.message}`, { cause: error });
+  }
+  if (
+    !Number.isSafeInteger(source.archiveSizeBytes) ||
+    source.archiveSizeBytes <= 0 ||
+    !Number.isSafeInteger(source.archiveEntryCount) ||
+    source.archiveEntryCount <= 0 ||
+    !Number.isSafeInteger(source.centralDirectorySizeBytes) ||
+    source.centralDirectorySizeBytes <= 0 ||
+    !Number.isSafeInteger(source.centralDirectoryOffset) ||
+    source.centralDirectoryOffset < 0 ||
+    ![0, 8].includes(entry?.compressionMethod) ||
+    !/^[a-f0-9]{8}$/.test(entry?.crc32 ?? "") ||
+    !Number.isSafeInteger(entry?.compressedSizeBytes) ||
+    entry.compressedSizeBytes <= 0 ||
+    !Number.isSafeInteger(entry?.uncompressedSizeBytes) ||
+    entry.uncompressedSizeBytes <= 0 ||
+    !Number.isSafeInteger(entry?.localHeaderOffset) ||
+    entry.localHeaderOffset < 0 ||
+    entry.uncompressedSizeBytes !== expectedSizeBytes
+  ) {
+    throw new Error(
+      `${label} zipEntry must pin archive size/directory, method, CRC-32, compressed/uncompressed sizes, and local offset`,
+    );
+  }
+}
+
 export function selectQualificationCase(manifest, requestedId) {
   const cases = manifest.qualificationCases ?? [];
   if (requestedId) {
@@ -362,6 +423,114 @@ export function selectQualificationCase(manifest, requestedId) {
     );
   }
   return cases[0];
+}
+
+export function selectFixtureForQualificationCase(manifest, qualificationCase, role) {
+  const idKey = role === "gaussian_splat"
+    ? "gaussianFixtureId"
+    : role === "metric_point_cloud"
+      ? "pointCloudFixtureId"
+      : null;
+  if (!idKey) throw new Error(`Unsupported FJD qualification fixture role: ${role}`);
+  const fixtureId = qualificationCase?.[idKey];
+  const fixture = manifest.fixtures?.find((candidate) => candidate.id === fixtureId);
+  if (!fixture || fixture.role !== role) {
+    throw new Error(
+      `${qualificationCase?.id ?? "unknown"} does not resolve ${idKey}=${fixtureId ?? "missing"} as ${role}`,
+    );
+  }
+  return fixture;
+}
+
+export function validateLocalWranglerInvocation(args, {
+  expectedPersistenceRoot,
+  expectedConfigPath,
+}) {
+  const valueAfter = (flag) => {
+    const index = args.indexOf(flag);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const evidence = {
+    localFlag: args.includes("--local"),
+    remoteFlag: args.includes("--remote"),
+    loopbackIp: valueAfter("--ip") ?? null,
+    persistenceRoot: valueAfter("--persist-to") ?? null,
+    configPath: valueAfter("--config") ?? null,
+  };
+  if (
+    args[0] !== "wrangler" ||
+    args[1] !== "dev" ||
+    !evidence.localFlag ||
+    evidence.remoteFlag ||
+    evidence.loopbackIp !== "127.0.0.1" ||
+    evidence.persistenceRoot !== expectedPersistenceRoot ||
+    evidence.configPath !== expectedConfigPath
+  ) {
+    throw new Error(
+      `FJD local Wrangler boundary failed: local=${evidence.localFlag} remote=${evidence.remoteFlag} ip=${evidence.loopbackIp} persist=${evidence.persistenceRoot} config=${evidence.configPath}`,
+    );
+  }
+  return evidence;
+}
+
+export function validateLocalStorageBindings(config) {
+  const groups = [
+    ["d1", "d1_databases"],
+    ["r2", "r2_buckets"],
+    ["kv", "kv_namespaces"],
+  ];
+  const evidence = groups.flatMap(([kind, key]) =>
+    (config?.[key] ?? []).map((binding) => ({
+      kind,
+      binding: binding.binding ?? "missing",
+      remote: binding.remote === true,
+    }))
+  );
+  const requiredBindings = ["DB", "SPATIAL_ASSETS", "AUTH_CACHE"];
+  const missing = requiredBindings.filter(
+    (binding) => !evidence.some((candidate) => candidate.binding === binding),
+  );
+  const remote = evidence.filter((candidate) => candidate.remote);
+  if (missing.length > 0 || remote.length > 0) {
+    throw new Error(
+      `FJD local storage boundary failed: missing=${missing.join(",") || "none"} remote=${remote.map((item) => item.binding).join(",") || "none"}`,
+    );
+  }
+  return evidence;
+}
+
+export function isLoopbackHttpUrl(value) {
+  const url = new URL(value);
+  return ["http:", "https:"].includes(url.protocol) && url.hostname === "127.0.0.1";
+}
+
+export function validateRadRangeResponses(responses, expectedTotalBytes) {
+  if (!Array.isArray(responses) || responses.length === 0) {
+    throw new Error("rad_range_response_count limit=1 ask=0");
+  }
+  for (const [index, response] of responses.entries()) {
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.contentRange ?? "");
+    const start = match ? Number(match[1]) : NaN;
+    const end = match ? Number(match[2]) : NaN;
+    const total = match ? Number(match[3]) : NaN;
+    const contentLength = Number(response.contentLength);
+    if (
+      response.status !== 206 ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      !Number.isSafeInteger(total) ||
+      start < 0 ||
+      end < start ||
+      end >= total ||
+      total !== expectedTotalBytes ||
+      contentLength !== end - start + 1
+    ) {
+      throw new Error(
+        `rad_range_response index=${index} expected_status=206 expected_total=${expectedTotalBytes} status=${response.status} content_range=${response.contentRange ?? "missing"} content_length=${response.contentLength ?? "missing"}`,
+      );
+    }
+  }
+  return { responseCount: responses.length, totalBytes: expectedTotalBytes };
 }
 
 export function validatePdalSummary(document, expected) {

@@ -121,11 +121,18 @@ export function validateGaussianPlyHeader(bytes) {
   for (let degree = 1; degree <= 3; degree += 1) {
     if (restCount >= 3 * ((degree + 1) ** 2 - 1)) sphericalHarmonicDegree = degree;
   }
+  const headerMarkerEnd = endOffset + "end_header".length;
+  const lineTerminatorBytes = headerBytes[headerMarkerEnd] === 0x0d &&
+    headerBytes[headerMarkerEnd + 1] === 0x0a
+    ? 2
+    : headerBytes[headerMarkerEnd] === 0x0a
+      ? 1
+      : 0;
   return {
     format,
     vertexCount,
     sphericalHarmonicDegree,
-    headerBytes: endOffset + "end_header".length,
+    headerBytes: headerMarkerEnd + lineTerminatorBytes,
     propertyCount: propertyNames.size,
   };
 }
