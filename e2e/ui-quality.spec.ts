@@ -184,9 +184,11 @@ test.describe("authenticated studio UI", () => {
       "",
     );
     await expect(dialog.getByText(
-      "Required for automatic floor-plan and navigation generation. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS from the device workflow.",
+      "Required. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS so this capture can produce a floor plan, collision shell, and walking map.",
       { exact: true },
     )).toBeVisible();
+    await dialog.getByRole("combobox", { name: "Capture source", exact: true }).selectOption("open-import");
+    await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
     await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);
     await expect(dialog.getByLabel("Start from template", { exact: true })).toHaveCount(0);
     await expect(dialog.getByText("Project details", { exact: true })).toBeVisible();

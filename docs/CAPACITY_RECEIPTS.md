@@ -177,79 +177,59 @@ Machine-readable remote, input, decoder, and output receipts are written under
 replaces a sample, Spark changes its encoding, PDAL changes its decoder, or the
 first paired indoor FJD bundle becomes available.
 
-## FJD local adapter and browser tripwires
+## FJD local adapter and strict-preview-gate tripwires
 
 Last measured: 2026-08-03
 
-The official FJD sample is a private qualification input, not a hosted demo.
-This command uses an isolated loopback Worker and deletes its exact D1/R2 state
-after the run:
+The official FJD horse sample is a private adapter/processor qualification
+input, not an indoor walking corpus or hosted demo. This command uses an
+isolated loopback Worker, creates no release, and deletes its exact D1/R2 state:
 
 ```sh
 npm run corpus:fjd:e2e:local
 ```
 
-Run `2026-08-03T05-42-10-918Z-4be9575a` passed 29 assertions. It measured:
+Current run `2026-08-03T10-02-35-458Z-e894261d` passed 16 assertions and
+measured the strict product boundary:
 
 | Receipt | Measured value |
 | --- | ---: |
-| Local Worker startup | 1,353 ms |
-| Local Worker termination | 84 ms, no `SIGKILL` escalation |
-| Slowest of 57 local API requests | 148 ms (`PUT` upload part 27) |
-| Quality RAD processing | 68,539 ms |
-| Private Chrome preview | 32,606 ms |
+| Local Worker startup | 1,161 ms |
+| Local Worker termination | 107 ms, no `SIGKILL` escalation |
+| Slowest of 57 local API requests | 129 ms (`PUT` upload part 10) |
+| FJD-to-RAD processing | 38,161 ms |
 | Input PLY | 536,812,164 bytes |
-| Input Gaussian vertices | 2,164,559 |
-| Companion `.fjdata` | 9,747,730 bytes |
 | Quality RAD | 141,351,968 bytes |
 | Poster | 328,018 bytes |
-| Signed RAD range responses | 45, all HTTP 206 |
-| Renderer qualification budget | explicit 1.25M splats |
-| Rendered luminance range | 222 |
-| Rendered 4-bit RGB colour buckets | 155 |
+| Private preview without registered walking evidence | HTTP 409 |
+| Release count | 0 |
+| Observed HTTP origins | 1, loopback only |
 
-The local API and Worker-startup tripwires are 120,000 ms. The receipts above
-put them at more than 810 times the slowest measured API request and more than
-88 times measured Worker startup. The visual-load tripwire is 180,000 ms. Four
-successful authored-camera runs measured 48,173, 25,425, 15,256, and 32,606 ms; the
-earlier auto-bounds run took 55,971 ms, so the tripwire remains more than three
-times the slowest observed load. Worker termination gets 30,000 ms before
-escalation from `SIGTERM` to `SIGKILL`, more than 357 times its measured 84 ms
-shutdown. Every timeout error names its budget, limit, and observed ask.
+The local API and Worker-startup tripwires remain 120,000 ms, more than 930
+times the measured slowest API request and 103 times measured startup. Worker
+termination gets 30,000 ms before escalation, more than 280 times the measured
+shutdown. Every timeout error names its budget, limit, and observed ask. The
+report records the Wrangler config hash, non-remote D1/R2/KV bindings,
+`--local`, loopback IP, disposable `--persist-to` directory, and the terminal
+facts `localWorkerOnly=true`, `cloudStorageUsed=false`,
+`releaseCreated=false`, and `temporaryStateRemoved=true`.
 
-The 1.25M renderer budget deliberately matches the current production
-`mobile-standard` budget, but this desktop Chrome run qualifies the explicit
-renderer budget—not mobile device selection. The E2E also requires Spark's
-visible quality label to report `1.25M splat budget`, so an ignored query value
-cannot silently fall back to 2M. This 2,164,559-vertex sample clears the visual
-tripwires at that conservative budget (222 luminance levels and 155 colour
-buckets) without assuming that every source splat must be resident. Remeasure
-this receipt when that chosen qualification budget or Spark's LoD selection
-changes.
+Historical run `2026-08-03T05-42-10-918Z-4be9575a` predates the mandatory
+walking-map gate. Its 29 assertions measured Spark compatibility only: a
+32,606 ms headless-Chrome render, 45/45 HTTP 206 RAD ranges, an explicit 1.25M
+splat budget, luminance range 222, and 155 four-bit RGB colour buckets. Those
+numbers remain useful processor/renderer evidence but are not claims about the
+current `corpus:fjd:e2e:local` command and cannot qualify a product preview.
+The preceding historical run `2026-08-03T05-38-48-511Z-d13f0f4d` also retained
+the observed disposable-R2-emulator HTTP 500 rather than hiding it with a
+retry.
 
-The first auto-bounds render was technically non-blank but visually wrong: its
-luminance range was 74 with 16 colour buckets. The `.fjdata`-backed Z-up render
-measured 222 and 155. Qualification tripwires are therefore 128 luminance
-levels and 64 colour buckets, deliberately between the measured broken and
-measured good frames. If a future valid sample touches either threshold,
-remeasure both frames and update the manifest and this receipt together.
-
-The E2E report records the exact Wrangler config hash, every non-remote D1/R2/KV
-storage binding, `--local`, loopback IP, and disposable `--persist-to`
-contract. A pre-navigation browser route aborts any non-loopback HTTP request
-before egress. The report also records the single observed HTTP origin; 45 valid
-`Content-Range` totals matching the 141,351,968-byte RAD; and
-`localWorkerOnly=true`, `cloudStorageUsed=false`, `releaseCreated=false`, and
-`temporaryStateRemoved=true`. It omits the signed content token from its
-renderer record. A run cannot pass unless every boundary check succeeds and
-release inspection observes zero releases.
-
-The immediately preceding run, `2026-08-03T05-38-48-511Z-d13f0f4d`, failed
-because one of five observed local RAD requests returned HTTP 500 from the
-disposable Wrangler R2 emulator. The gate rejected the otherwise visible frame,
-recorded the exact response, and still removed all temporary state. The next
-run served 45/45 valid ranges. This is retained as a local-emulator reliability
-observation; it must not be hidden by retrying or weakening the all-range gate.
+The remaining FJD qualification gap is explicit: obtain a redistributable,
+registered indoor FJD capture with structural geometry, then run the complete
+automatic floor-plan, collision, Detour, private-preview, and browser-walking
+lane. Until that corpus exists, the horse sample proves FJD ingestion and RAD
+generation plus correct fail-closed behavior; it does not prove FJD walking
+reconstruction.
 
 ## FJD production private-upload receipt
 

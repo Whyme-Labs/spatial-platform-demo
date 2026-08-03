@@ -299,11 +299,17 @@ async function start(): Promise<void> {
   const controls = createSpatialLookControls(canvas);
   controls.setTranslationEnabled(false);
   rendererControls = controls;
+  let visualSceneReady = false;
+  let pendingSpatialRuntimeMessage: object | null = null;
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
     if (Reflect.get(event.data, "type") === "set-spatial-runtime") {
+      if (!visualSceneReady) {
+        pendingSpatialRuntimeMessage = event.data;
+        return;
+      }
       const runtimeGeneration = ++navigationRuntimeGeneration;
       detourNavigationRuntime?.destroy();
       detourNavigationRuntime = null;
@@ -339,19 +345,29 @@ async function start(): Promise<void> {
         navigationRuntime = authoredRuntime;
         walkableBoxes = authoredBoxes;
         const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
+        if (!navigationArtifact || typeof navigationArtifact !== "object") {
+          navigationRuntime = null;
+          walkableBoxes = [];
+          walkableBoundarySource = "none";
+          fail(
+            "WALKING_MAP_REQUIRED",
+            "This scene has no approved walking map and cannot be viewed.",
+          );
+          return;
+        }
         const structuralV7 = navigationArtifact && typeof navigationArtifact === "object" &&
           ["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
             String(Reflect.get(navigationArtifact, "schemaVersion")),
           );
         const requestedMode = Reflect.get(runtimeMessage, "defaultMovementMode");
         const preserveAuthoredFlyOpening = structuralV7 && requestedMode === "fly";
-        if (navigationArtifact) walkableBoxes = [];
+        walkableBoxes = [];
         if (!walkableBoxes.length) {
           const bounds = navigationMeshBounds(authoredRuntime);
           if (bounds) walkableBoxes = [bounds];
         }
         walkableBoundarySource = "authored";
-        movementRuntimeReady = !navigationArtifact;
+        movementRuntimeReady = false;
         setMovementAvailability(controls, movementRuntimeReady);
         if (preserveAuthoredFlyOpening) {
           lastWalkablePosition = camera.position.clone();
@@ -365,15 +381,17 @@ async function start(): Promise<void> {
             : "clear route map"}`,
           "ready",
         );
-        if (navigationArtifact) {
-          setMovementAvailability(controls, false);
-          setControlStatus("Preparing verified walking map");
-          const collisionUrl = Reflect.get(event.data, "collisionUrl");
-          if (typeof collisionUrl !== "string" || !collisionUrl) {
-            setControlStatus("Look around only · verified collision proxy is unavailable");
-            return;
-          }
-          void Promise.all([
+        setMovementAvailability(controls, false);
+        setControlStatus("Preparing verified walking map");
+        const collisionUrl = Reflect.get(event.data, "collisionUrl");
+        if (typeof collisionUrl !== "string" || !collisionUrl) {
+          fail(
+            "WALKING_MAP_COLLISION_REQUIRED",
+            "This scene's approved walking map has no verified collision asset.",
+          );
+          return;
+        }
+        void Promise.all([
             import("./detour-navigation"),
             import("./physical-navigation"),
           ]).then(async ([detourModule, physicalModule]) => {
@@ -452,18 +470,21 @@ async function start(): Promise<void> {
             collisionDrivenMovement = false;
             movementRuntimeReady = false;
             setMovementAvailability(controls, false);
-            setControlStatus(
-              `Look around only · navigation artifact failed (${error instanceof Error ? error.message : "unknown error"})`,
+            fail(
+              "WALKING_MAP_VALIDATION_FAILED",
+              `The walking map failed validation: ${error instanceof Error ? error.message : "unknown error"}`,
             );
           });
-        }
       } else {
         navigationRuntime = null;
         walkableBoxes = [];
         walkableBoundarySource = "none";
         movementRuntimeReady = false;
         setMovementAvailability(controls, false);
-        setControlStatus("Look around only · no walking map");
+        fail(
+          "WALKING_MAP_REQUIRED",
+          "This scene has no approved walking map and cannot be viewed.",
+        );
       }
       return;
     }
@@ -711,7 +732,7 @@ async function start(): Promise<void> {
   }
   setMovementAvailability(controls, movementRuntimeReady);
   if (walkableBoundarySource === "none") {
-    setControlStatus("Look around only · no walking map");
+    setControlStatus("Walking map required · preview blocked", "error");
   }
   anchorCameraToWalkable(camera);
   controls.align(camera);
@@ -719,6 +740,16 @@ async function start(): Promise<void> {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
   };
+  visualSceneReady = true;
+  if (pendingSpatialRuntimeMessage) {
+    const message = pendingSpatialRuntimeMessage;
+    pendingSpatialRuntimeMessage = null;
+    window.dispatchEvent(new MessageEvent("message", {
+      data: message,
+      origin: parentOrigin,
+      source: window.parent,
+    }));
+  }
   let lastFrameAt = performance.now();
   renderer.setAnimationLoop(() => {
     const now = performance.now();
@@ -805,7 +836,7 @@ async function start(): Promise<void> {
     }
     broadcastCameraUpdate(camera);
     renderer.render(scene, camera);
-    if (!readySent) {
+    if (!readySent && movementRuntimeReady) {
       readySent = true;
       resetButton.disabled = false;
       setMovementAvailability(controls, movementRuntimeReady);
@@ -1119,20 +1150,20 @@ function setMovementAvailability(
   mobileControls.setReady(available && readySent);
   freeRoamToggle.textContent = available
     ? (mobileControls.active ? "Exit roam" : "Free roam")
-    : "Look only";
+    : "Walking required";
   freeRoamToggle.title = available
     ? "Enable touch-friendly movement"
-    : "Walking is unavailable until this scene has a navigation map";
+    : "This scene is blocked until its walking map is available";
   mobileMovementHelp.textContent = available
     ? collisionDrivenMovement && movementMode === "fly"
       ? "Drag to look · use Free roam to fly · Rise and Lower change altitude"
       : "Drag to look · use the Free roam joystick to move"
-    : "Drag to look · walking is unavailable for this scene";
+    : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
     ? collisionDrivenMovement && movementMode === "fly"
       ? "Drag to look · move through the full camera direction"
       : "Drag to look · scroll or two-finger swipe to travel"
-    : "Drag to look · walking is unavailable for this scene";
+    : "Walking map required before this scene can be viewed";
   desktopKeyboardHelp.hidden = !available;
   desktopVerticalHelp.hidden = !available || !collisionDrivenMovement || movementMode !== "fly";
   flightAltitudeControls.hidden = !available || !collisionDrivenMovement ||
@@ -1182,6 +1213,7 @@ function setProgress(progress: number, detail: string): void {
 function fail(code: string, message: string): void {
   resetButton.disabled = true;
   mobileControls.setReady(false);
+  if (rendererControls) setMovementAvailability(rendererControls, false);
   loading.classList.add("is-complete");
   loading.setAttribute("aria-hidden", "true");
   errorPanel.hidden = false;

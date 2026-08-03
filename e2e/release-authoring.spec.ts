@@ -19,7 +19,7 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
   await expect(page.locator("#studioGrid")).toBeHidden();
   await expect(page.getByRole("heading", { name: "Corrected Spark room", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Your splat preview is ready.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your walkable splat preview is ready.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
 
   for (const viewport of [
@@ -143,15 +143,19 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
   await expect(page.locator("#releaseDialog")).toBeVisible();
 });
 
-test("processed projects lead with preview and expose automatic spatial generation", async ({ page }) => {
-  await mockApprovedProject(page, () => undefined);
+test("processed splats stay blocked until their walking map is approved", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { previewReady: false });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Your splat preview is ready.", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Edit scene", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Navigation required before preview.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toBeVisible();
+  await expect(page.getByText(
+    "The splat is preserved, but it cannot be viewed until collision and navigation pass review.",
+    { exact: true },
+  )).toBeVisible();
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
   await expect(page.getByText("Floor plan", { exact: true })).toBeVisible();
   await expect(page.getByText("Geometry required", { exact: true })).toBeVisible();
@@ -260,6 +264,7 @@ async function mockApprovedProject(
     navigationBuildHistory?: boolean;
     multiLevelFloorplan?: boolean;
     qualifiedTraversalEvidence?: boolean;
+    previewReady?: boolean;
   } = {},
 ): Promise<void> {
   const project = {
@@ -394,6 +399,7 @@ async function mockApprovedProject(
             updated_at: now,
           }]
           : [],
+        previewReadyVersionIds: options.previewReady === false ? [] : [versionId],
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {

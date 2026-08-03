@@ -201,7 +201,7 @@ test.describe("spatial navigation direction", () => {
     }
   });
 
-  test("look-only scenes reject travel without disabling camera look", async ({ page }) => {
+  test("a disabled translation controller rejects travel without disabling camera rotation", async ({ page }) => {
     await page.goto("/e2e/fixtures/pointer-controls.html?translation=disabled");
     const initial = await readCameraState(page);
 

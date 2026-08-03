@@ -518,7 +518,6 @@ async function mountV7Fixture(
   await page.goto("/e2e/navigation-v7-host.html");
   await expect(page.locator("#renderer")).toBeVisible();
   const rendererFrame = page.frameLocator("#renderer");
-  await expect(rendererFrame.locator("#sparkLoading")).toBeHidden({ timeout: 15_000 });
   await page.evaluate(({ artifact, defaultMovementMode }) => {
     const renderer = document.querySelector<HTMLIFrameElement>("#renderer")?.contentWindow;
     if (!renderer) throw new Error("renderer frame is unavailable");
@@ -544,6 +543,7 @@ async function mountV7Fixture(
       defaultMovementMode,
     }, location.origin);
   }, { artifact: fixture.navigationArtifact, defaultMovementMode: defaultMode });
+  await expect(rendererFrame.locator("#sparkLoading")).toBeHidden({ timeout: 15_000 });
 }
 
 async function captureCamera(page: import("@playwright/test").Page): Promise<CameraPose> {

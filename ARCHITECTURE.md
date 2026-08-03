@@ -301,13 +301,18 @@ bounds independently from the Detour topology.
 Every new release freezes the exact semantic entities, routes, stops, navigation
 mesh, obstacles, navigation profile, approved navigation build, authoring hash,
 and byte identity of both the JSON validation report and Detour binary into an
-immutable spatial snapshot. Publication, rollback, and public-manifest delivery
-fail closed when those navigation derivatives are missing or no longer match
-their verified asset rows.
-Legacy releases without a snapshot retain their historical live-query fallback.
-After Spark reports scene readiness, the host sends the frozen runtime to the
-renderer by same-origin message. Legacy v6 movement remains constrained by the
-Detour surface and authored obstacles. V7 keyboard movement instead drives a
+immutable spatial snapshot. QA approval, publication, rollback, and
+public-manifest delivery all use one exact-package verifier and fail closed when
+the collision, report, or Detour object is missing from R2 or no longer matches
+its verified asset row.
+There is no visual-only or live-query viewer path. Private previews,
+comparisons, publication, rollback, and manifest delivery require a valid frozen
+v7+ physical-navigation artifact, its exact collision GLB, and its immutable
+JSON and Detour derivatives. Historical releases that lack that evidence are
+blocked until they are republished through the current acceptance gate.
+After Spark begins loading, the host sends the frozen runtime to the renderer
+by same-origin message. The renderer does not report ready until collision and
+Detour initialization both succeed. V7+ keyboard movement drives a
 Rapier capsule in Walk mode or a no-gravity sphere in Fly mode directly against
 the structural shell; Detour remains authoritative for topology and guided
 routes. Room moves use a request/acknowledgement message so rejected cameras

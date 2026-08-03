@@ -5,7 +5,7 @@ import { SpzWriter } from "@sparkjsdev/spark";
 // @ts-expect-error Plain ESM test fixture module has no separate declaration file.
 import { buildRecastNavigationArtifact } from "../scripts/navigation-build-core.mjs";
 
-test("initialises the frozen Detour mesh and Rapier collision proxy before enabling walking", async ({
+test("blocks a legacy v6 map instead of enabling a compatibility movement fallback", async ({
   page,
 }) => {
   const positions: number[] = [];
@@ -58,10 +58,6 @@ test("initialises the frozen Detour mesh and Rapier collision proxy before enabl
   }));
   await page.goto("/e2e/navigation-host.html");
   await expect(page.locator("#renderer")).toBeVisible();
-  await expect(page.frameLocator("#renderer").locator("#sparkLoading")).toBeHidden({
-    timeout: 15_000,
-  });
-
   await page.evaluate(({ navigationArtifact }) => {
     const renderer = document.querySelector<HTMLIFrameElement>("#renderer")?.contentWindow;
     if (!renderer) throw new Error("renderer frame is unavailable");
@@ -88,27 +84,11 @@ test("initialises the frozen Detour mesh and Rapier collision proxy before enabl
   }, { navigationArtifact: artifact });
 
   const renderer = page.frameLocator("#renderer");
-  await expect(renderer.locator("#controlStatus")).toHaveText(
-    "Walking enabled · Detour + capsule collision verified",
+  await expect(renderer.locator("#sparkErrorDetail")).toContainText(
+    "walking map failed validation",
     { timeout: 15_000 },
   );
-  await expect(renderer.locator("#controlStatus")).toHaveAttribute("data-tone", "ready");
-
-  const placed = await setCamera(page, {
-    position: [1, 1.6, 2],
-    target: [8.5, 1.6, 2],
-    up: [0, 1, 0],
-    fovDegrees: 58,
-  });
-  expect(placed.accepted).toBe(true);
-  const before = await captureCamera(page);
-  await renderer.locator("#sparkCanvas").focus();
-  await page.keyboard.down("ArrowUp");
-  await page.waitForTimeout(4_500);
-  await page.keyboard.up("ArrowUp");
-  const after = await captureCamera(page);
-  expect(after.position[0]).toBeGreaterThan(5.5);
-  expect(after.position[0] - before.position[0]).toBeGreaterThan(4);
+  await expect(renderer.locator("#sparkLoading")).toBeHidden();
 });
 
 function appendFloor(
@@ -122,58 +102,6 @@ function appendFloor(
   const offset = positions.length / 3;
   positions.push(minX, 0, minZ, minX, 0, maxZ, maxX, 0, maxZ, maxX, 0, minZ);
   indices.push(offset, offset + 1, offset + 2, offset, offset + 2, offset + 3);
-}
-
-type CameraPose = {
-  position: [number, number, number];
-  target: [number, number, number];
-  up: [number, number, number];
-  fovDegrees: number;
-};
-
-async function setCamera(
-  page: import("@playwright/test").Page,
-  cameraPose: CameraPose,
-): Promise<{ accepted: boolean; cameraPose: CameraPose }> {
-  return page.evaluate((pose) => new Promise((resolve, reject) => {
-    const renderer = document.querySelector<HTMLIFrameElement>("#renderer")?.contentWindow;
-    if (!renderer) return reject(new Error("renderer frame is unavailable"));
-    const requestId = crypto.randomUUID();
-    const timeout = window.setTimeout(() => reject(new Error("camera-set timed out")), 5_000);
-    const receive = (event: MessageEvent) => {
-      if (event.data?.source !== "spatial-spark" || event.data?.type !== "camera-set" ||
-        event.data?.requestId !== requestId) return;
-      window.clearTimeout(timeout);
-      window.removeEventListener("message", receive);
-      resolve({ accepted: Boolean(event.data.accepted), cameraPose: event.data.cameraPose });
-    };
-    window.addEventListener("message", receive);
-    renderer.postMessage(
-      { source: "spatial-host", type: "set-camera", requestId, cameraPose: pose },
-      location.origin,
-    );
-  }), cameraPose) as Promise<{ accepted: boolean; cameraPose: CameraPose }>;
-}
-
-async function captureCamera(page: import("@playwright/test").Page): Promise<CameraPose> {
-  return page.evaluate(() => new Promise((resolve, reject) => {
-    const renderer = document.querySelector<HTMLIFrameElement>("#renderer")?.contentWindow;
-    if (!renderer) return reject(new Error("renderer frame is unavailable"));
-    const requestId = crypto.randomUUID();
-    const timeout = window.setTimeout(() => reject(new Error("camera capture timed out")), 5_000);
-    const receive = (event: MessageEvent) => {
-      if (event.data?.source !== "spatial-spark" || event.data?.type !== "camera" ||
-        event.data?.requestId !== requestId) return;
-      window.clearTimeout(timeout);
-      window.removeEventListener("message", receive);
-      resolve(event.data.cameraPose);
-    };
-    window.addEventListener("message", receive);
-    renderer.postMessage(
-      { source: "spatial-host", type: "capture-camera", requestId },
-      location.origin,
-    );
-  })) as Promise<CameraPose>;
 }
 
 async function minimalSpz(): Promise<Uint8Array> {

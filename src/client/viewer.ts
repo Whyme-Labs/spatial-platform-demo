@@ -285,6 +285,7 @@ const toast = byId<HTMLElement>("toast");
 const deviceProfile = detectDeviceProfile();
 const viewerSessionId = crypto.randomUUID();
 const activeReleaseSlug = releaseSlug();
+const activePrivatePreview = privatePreviewRoute();
 const viewerActions = new SingleFlight();
 let activeManifest: ReleaseManifest | null = null;
 let traversalTelemetrySession: ViewerTelemetrySession | null = null;
@@ -313,7 +314,7 @@ const dynamicBarrierRequests = new Map<string, {
 const activeDynamicBarriers = new Map<string, boolean>();
 const reviewMode = location.pathname.startsWith("/review/");
 
-if (activeReleaseSlug) {
+if (activeReleaseSlug || activePrivatePreview) {
   document.body.className = "viewer-page";
   byId<HTMLElement>("marketingPage").hidden = true;
   byId<HTMLElement>("releaseApp").hidden = false;
@@ -351,15 +352,15 @@ async function loadPublishedRelease(): Promise<void> {
 }
 
 async function loadPublishedReleaseOnce(): Promise<void> {
-  const slug = releaseSlug();
-  if (!slug) return;
+  const slug = activeReleaseSlug;
+  if (!slug && !activePrivatePreview) return;
   for (const [requestId, pending] of dynamicBarrierRequests) {
     window.clearTimeout(pending.timeout);
     pending.reject(new Error("The scene reloaded before the door state was applied."));
     dynamicBarrierRequests.delete(requestId);
   }
   activeDynamicBarriers.clear();
-  setLoading(true, "Authorising scene release…");
+  setLoading(true, activePrivatePreview ? "Authorising private walkable preview…" : "Authorising scene release…");
   rendererReady = false;
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
@@ -379,7 +380,11 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     const query = accessToken
       ? `?access_token=${encodeURIComponent(accessToken)}`
       : "";
-    const manifest = await api<ReleaseManifest>(`/api/releases/${encodeURIComponent(slug)}/manifest${query}`);
+    const manifest = activePrivatePreview
+      ? (await api<{ manifest: ReleaseManifest }>(
+          `/api/projects/${encodeURIComponent(activePrivatePreview.projectId)}/versions/${encodeURIComponent(activePrivatePreview.versionId)}/preview`,
+        )).manifest
+      : await api<ReleaseManifest>(`/api/releases/${encodeURIComponent(slug!)}/manifest${query}`);
     activeManifest = manifest;
     if (accessToken) {
       const cleanUrl = new URL(location.href);
@@ -1256,6 +1261,15 @@ function releaseSlug(): string | null {
   return match?.[1] ?? null;
 }
 
+function privatePreviewRoute(): { projectId: string; versionId: string } | null {
+  const match = location.pathname.match(
+    /^\/preview\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/?$/i,
+  );
+  return match?.[1] && match[2]
+    ? { projectId: match[1], versionId: match[2] }
+    : null;
+}
+
 function setLoading(visible: boolean, detail = "", progress?: number): void {
   loading.classList.toggle("hidden", !visible);
   if (detail) byId("loadingDetail").textContent = detail;
@@ -1315,7 +1329,7 @@ async function recordTelemetry(
   metricValue?: number,
   metadata: Record<string, string | number | boolean | null> = {},
 ): Promise<void> {
-  if (!activeManifest) return;
+  if (!activeManifest || activePrivatePreview) return;
   const event: ViewerTelemetryEvent = {
     releaseId: activeManifest.release.id,
     eventType,

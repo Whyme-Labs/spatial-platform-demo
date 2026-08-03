@@ -282,6 +282,7 @@ type ProjectDetail = {
   jobs: Job[];
   releases: Release[];
   captureBundles: CaptureBundle[];
+  previewReadyVersionIds: string[];
 };
 type ProjectTemplate = {
   id: string;
@@ -419,7 +420,19 @@ type VersionRenderable = {
   sizeBytes: number;
   sha256: string | null;
   contentUrl: string;
+  collisionUrl: string;
   sessionExpiresAt: string;
+  spatial: Pick<
+    SpatialWorkspace,
+    | "entities"
+    | "routes"
+    | "routeStops"
+    | "collisionProxy"
+    | "navigationMesh"
+    | "obstacleProxy"
+    | "navigationProfile"
+    | "navigationArtifact"
+  >;
   viewer: {
     splatBudgetMillions?: number;
     defaultMovementMode?: "walk" | "fly";
@@ -3320,8 +3333,7 @@ function renderNewCaptureHelp(): void {
   const file = byId<HTMLInputElement>("newCaptureAsset").files?.[0];
   const geometryInput = byId<HTMLInputElement>("newCaptureGeometry");
   const geometry = geometryInput.files?.[0];
-  const vendorCapture = adapter === "xgrids-lcc" || adapter === "fjd-trion";
-  geometryInput.required = vendorCapture;
+  geometryInput.required = true;
   const source = adapter === "xgrids-lcc"
     ? "XGRIDS"
     : adapter === "fjd-trion"
@@ -3341,9 +3353,7 @@ function renderNewCaptureHelp(): void {
   byId("newCaptureHelp").textContent = message;
   byId("newCaptureGeometryHelp").textContent = geometry
     ? `${geometry.name} will be verified, then used to generate the floor plan, structural collision draft, and navigation draft automatically.`
-    : vendorCapture
-      ? "Required for automatic floor-plan and navigation generation. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS from the device workflow."
-      : "Optional. Add registered metric geometry to generate floor-plan and navigation drafts automatically.";
+    : "Required. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS so this capture can produce a floor plan, collision shell, and walking map.";
 }
 
 async function createCapture(form: FormData): Promise<void> {
@@ -3353,7 +3363,7 @@ async function createCapture(form: FormData): Promise<void> {
   const geometryFile = form.get("geometry");
   const geometry = geometryFile instanceof File && geometryFile.size > 0 ? geometryFile : null;
   const adapter = String(form.get("captureAdapter") ?? "open-import");
-  if ((adapter === "xgrids-lcc" || adapter === "fjd-trion") && !geometry) {
+  if (!geometry) {
     throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
   }
   const geometryPlan = geometry ? metricGeometryPlan(geometry) : null;
@@ -3383,26 +3393,21 @@ async function createCapture(form: FormData): Promise<void> {
       status: byId("newProjectStatus"),
       progress: byId<HTMLElement>("newProjectUploadProgress"),
       error: byId("projectError"),
-      closeDialog: geometry ? undefined : newProjectDialog,
-      successToast: geometry
-        ? "Visual capture uploaded; adding spatial geometry"
-        : "Capture uploaded; processing started",
+      successToast: "Visual capture uploaded; adding spatial geometry",
     });
-    if (geometry && geometryPlan) {
-      byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
-      byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
-      const spatialUpload = new FormData();
-      spatialUpload.set("asset", geometry);
-      spatialUpload.set("format", geometryPlan.format);
-      spatialUpload.set("purpose", geometryPlan.purpose);
-      await uploadAsset(spatialUpload, {
-        status: byId("newProjectStatus"),
-        progress: byId<HTMLElement>("newProjectUploadProgress"),
-        error: byId("projectError"),
-        closeDialog: newProjectDialog,
-        successToast: "Capture uploaded; splat, floor plan, and navigation processing started",
-      }, { targetVersionId: primary.asset.versionId });
-    }
+    byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
+    byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
+    const spatialUpload = new FormData();
+    spatialUpload.set("asset", geometry);
+    spatialUpload.set("format", geometryPlan!.format);
+    spatialUpload.set("purpose", geometryPlan!.purpose);
+    await uploadAsset(spatialUpload, {
+      status: byId("newProjectStatus"),
+      progress: byId<HTMLElement>("newProjectUploadProgress"),
+      error: byId("projectError"),
+      closeDialog: newProjectDialog,
+      successToast: "Capture uploaded; splat, floor plan, and navigation processing started",
+    }, { targetVersionId: primary.asset.versionId });
     projectOperationId = null;
     window.setTimeout(() => {
       byId<HTMLFormElement>("newProjectForm").reset();
@@ -6180,15 +6185,16 @@ function renderVersionComparison(comparison: VersionComparison): void {
       comparisonFrameReady[side] = true;
       elements.frame.hidden = true;
       elements.empty.hidden = false;
-      elements.empty.textContent = "No verified Spark web derivative is attached to this version. Approval history remains available below.";
+      elements.empty.textContent = "This version cannot be compared until both its verified web scene and approved walking package are available.";
       elements.retry.hidden = true;
-      setComparisonSideStatus(side, "Evidence only", "");
+      setComparisonSideStatus(side, "Comparison blocked", "error");
       continue;
     }
     elements.empty.hidden = true;
     elements.frame.hidden = false;
     elements.retry.hidden = true;
     setComparisonSideStatus(side, "Starting Spark…", "");
+    elements.frame.onload = () => sendVersionSpatialRuntime(elements.frame, renderable);
     elements.frame.src = versionRendererUrl(renderable).toString();
     elements.frame.dataset.generation = String(comparisonGeneration);
     comparisonFrameTimeouts[side] = window.setTimeout(() => {
@@ -6199,6 +6205,43 @@ function renderVersionComparison(comparison: VersionComparison): void {
     }, 25_000);
   }
   finishComparisonLoadingIfSettled();
+}
+
+function sendVersionSpatialRuntime(
+  frame: HTMLIFrameElement,
+  renderable: VersionRenderable,
+): void {
+  const spatial = renderable.spatial;
+  const artifactNavMesh = spatial.navigationArtifact
+    ? Reflect.get(spatial.navigationArtifact, "navMesh")
+    : null;
+  const navigationMesh = artifactNavMesh && typeof artifactNavMesh === "object"
+    ? {
+        version: "recast-debug-triangles-v6",
+        vertices: Reflect.get(artifactNavMesh, "vertices"),
+        indices: Reflect.get(artifactNavMesh, "indices"),
+        sourceEntityIds: [],
+      }
+    : spatial.navigationMesh;
+  const doorwayEntityIds = new Set(
+    spatial.entities
+      .filter((entity) => entity.kind === "doorway")
+      .map((entity) => entity.id),
+  );
+  frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "set-spatial-runtime",
+    collisionBoxes: spatial.collisionProxy.boxes,
+    navigationMesh,
+    obstacleBoxes: spatial.obstacleProxy.boxes,
+    doorwayBoxes: spatial.collisionProxy.boxes.filter((box) =>
+      doorwayEntityIds.has(box.entityId)
+    ),
+    navigationProfile: spatial.navigationProfile,
+    navigationArtifact: spatial.navigationArtifact,
+    collisionUrl: renderable.collisionUrl,
+    defaultMovementMode: renderable.viewer?.defaultMovementMode ?? "walk",
+  }, location.origin);
 }
 
 function versionRendererUrl(renderable: VersionRenderable): URL {
@@ -6392,6 +6435,7 @@ function resetComparisonFrames(): void {
     clearComparisonFrameTimeout(side);
     comparisonFrameReady[side] = false;
     const elements = comparisonSideElements(side);
+    elements.frame.onload = null;
     elements.frame.removeAttribute("src");
     elements.frame.hidden = true;
     elements.empty.hidden = false;
@@ -10237,8 +10281,10 @@ async function createVersionPreview(versionId: string): Promise<VersionRenderabl
 async function openVersionPreview(versionId: string): Promise<void> {
   const previewWindow = window.open("about:blank", "_blank");
   try {
-    const renderable = await createVersionPreview(versionId);
-    const url = versionRendererUrl(renderable).toString();
+    await createVersionPreview(versionId);
+    const projectId = state.selected?.project.id;
+    if (!projectId) throw new Error("Open a project before preparing its preview.");
+    const url = privatePreviewPageUrl(projectId, versionId).toString();
     if (previewWindow) previewWindow.location.replace(url);
     else window.open(url, "_blank", "noopener");
   } catch (error) {
@@ -10251,9 +10297,18 @@ async function copyVersionPreviewUrl(versionId: string): Promise<void> {
   if (!navigator.clipboard?.writeText) {
     throw new Error("Clipboard access is unavailable. Open the preview and copy its address instead.");
   }
-  const renderable = await createVersionPreview(versionId);
-  await navigator.clipboard.writeText(versionRendererUrl(renderable).toString());
+  await createVersionPreview(versionId);
+  const projectId = state.selected?.project.id;
+  if (!projectId) throw new Error("Open a project before preparing its preview.");
+  await navigator.clipboard.writeText(privatePreviewPageUrl(projectId, versionId).toString());
   showToast("Private preview URL copied");
+}
+
+function privatePreviewPageUrl(projectId: string, versionId: string): URL {
+  return new URL(
+    `/preview/${encodeURIComponent(projectId)}/${encodeURIComponent(versionId)}`,
+    location.origin,
+  );
 }
 
 function renderProjectDetail(): void {
@@ -10283,7 +10338,9 @@ function renderProjectDetail(): void {
   const floorplanJob = detail.jobs.find((job) => job.job_type === "floorplan.extract-v1") ?? null;
   const navigationJob = detail.jobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
   const floorplanReady = floorplanJob?.state === "SUCCEEDED";
-  const navigationReady = navigationJob?.state === "SUCCEEDED";
+  const navigationReady = Boolean(
+    renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
+  );
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
 
   const journey = element("section", "project-journey");
@@ -10291,14 +10348,22 @@ function renderProjectDetail(): void {
   const journeyCopy = element("div");
   journeyCopy.append(
     element("span", "eyebrow", "CAPTURE JOURNEY"),
-    element("h3", "", renderableVersion ? "Your splat preview is ready." : "From capture result to browser preview."),
+    element(
+      "h3",
+      "",
+      renderableVersion
+        ? navigationReady
+          ? "Your walkable splat preview is ready."
+          : "Navigation required before preview."
+        : "From capture result to browser preview.",
+    ),
     element(
       "p",
       "muted-copy",
       renderableVersion
         ? navigationReady
-          ? "The visual splat, floor-plan proposal, and navigation draft were generated automatically. Review or correct them before publishing a walkable release."
-          : "The visual splat is ready to inspect while floor-plan and navigation generation continue automatically from the registered geometry."
+          ? "The visual splat, verified collision, and approved walking map are ready for review."
+          : "The splat is preserved, but it cannot be viewed until collision and navigation pass review."
         : activeJob
           ? `${humanStatus(activeJob.job_type)} is ${humanStatus(activeJob.state).toLowerCase()}: ${activeJob.progress_message ?? `${activeJob.progress}% complete`}.`
           : failedJob
@@ -10314,7 +10379,7 @@ function renderProjectDetail(): void {
     upload.disabled = detail.project.status === "ARCHIVED";
     upload.addEventListener("click", openUploadDialog);
     journeyActions.append(upload);
-  } else if (renderableVersion) {
+  } else if (renderableVersion && navigationReady) {
     const preview = element("button", "primary-button", "Open private preview");
     preview.addEventListener("click", () => {
       void runAction({
@@ -10334,6 +10399,12 @@ function renderProjectDetail(): void {
     const editScene = element("button", "quiet-button", "Edit scene");
     editScene.addEventListener("click", () => openSceneEditor(detail.project.id, editScene));
     journeyActions.append(preview, copy, editScene);
+  } else if (renderableVersion) {
+    const completeNavigation = element("button", "primary-button", "Complete walking map");
+    completeNavigation.addEventListener("click", () => {
+      openSceneEditor(detail.project.id, completeNavigation);
+    });
+    journeyActions.append(completeNavigation);
   } else {
     const refresh = element("button", "quiet-button", "Refresh processing status");
     refresh.addEventListener("click", () => {
@@ -10374,17 +10445,28 @@ function renderProjectDetail(): void {
         : navigationJob ? "blocked" : floorplanReady ? "waiting" : "waiting",
       navigationReady ? "Draft ready" : navigationJob ? humanStatus(navigationJob.state) : "Follows floor plan",
     ),
-    projectJourneyStep("5", "Preview", renderableVersion ? "complete" : "waiting", renderableVersion ? "Private URL ready" : "Waiting for scene"),
+    projectJourneyStep(
+      "5",
+      "Preview",
+      navigationReady ? "complete" : renderableVersion ? "blocked" : "waiting",
+      navigationReady ? "Walkable URL ready" : renderableVersion ? "Walking map required" : "Waiting for scene",
+    ),
   );
   journey.append(journeyHeading, steps);
 
   const sharing = detailCard("Preview and sharing");
   sharing.classList.add("project-sharing-card");
-  if (renderableVersion) {
+  if (renderableVersion && navigationReady) {
     sharing.append(element(
       "p",
       "muted-copy",
       "Private preview URLs are short-lived operator sessions. Public or customer-facing URLs are created only after privacy review and publication.",
+    ));
+  } else if (renderableVersion) {
+    sharing.append(element(
+      "p",
+      "muted-copy",
+      "Preview and publication remain blocked until this exact version has approved collision and navigation artifacts.",
     ));
   }
   if (activeRelease) {
@@ -10398,7 +10480,7 @@ function renderProjectDetail(): void {
   }
   const latestVersion = detail.versions[0];
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
-  if (latestVersion?.status === "QA_REQUIRED") {
+  if (latestVersion?.status === "QA_REQUIRED" && navigationReady) {
     const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
     qaButton.addEventListener("click", () => {
       void runAction({
@@ -10409,7 +10491,7 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion) {
+  if (releasableVisualVersion && navigationReady) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({
@@ -12281,6 +12363,7 @@ function openReviewerDialog(projectId?: string): void {
       jobs: [],
       releases: [],
       captureBundles: [],
+      previewReadyVersionIds: [],
     };
   }
   reviewerOperationId = crypto.randomUUID();

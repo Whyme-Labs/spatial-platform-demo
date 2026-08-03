@@ -14,7 +14,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
 import ts from "typescript";
 import {
   isLoopbackHttpUrl,
@@ -24,12 +23,7 @@ import {
   validateFjdSampleManifest,
   validateLocalStorageBindings,
   validateLocalWranglerInvocation,
-  validateRadRangeResponses,
 } from "./fjd-sample-corpus-core.mjs";
-import {
-  analysePosterSample,
-  posterSampleIsReady,
-} from "./poster-quality.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = join(repositoryRoot, "test", "vendor-corpus", "fjd-manifest.json");
@@ -37,17 +31,14 @@ const wranglerConfigPath = join(repositoryRoot, "wrangler.jsonc");
 const cacheRoot = join(repositoryRoot, ".cache", "fjd-sample-corpus");
 const upstreamRoot = join(cacheRoot, "upstream");
 const reportsRoot = join(cacheRoot, "reports");
-const screenshotsRoot = join(cacheRoot, "screenshots");
 const runId = `${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
 const reportPath = join(reportsRoot, `local-platform-e2e-${runId}.json`);
-const screenshotPath = join(screenshotsRoot, `local-platform-e2e-${runId}.png`);
 const workerLogPath = join(reportsRoot, `local-platform-e2e-worker-${runId}.log`);
 const processorLogPath = join(reportsRoot, `local-platform-e2e-processor-${runId}.jsonl`);
 const temporaryRoot = await mkdtemp(join(tmpdir(), "spatial-fjd-e2e-"));
 const persistenceRoot = join(temporaryRoot, "wrangler-state");
 const localApiTripwireMilliseconds = 120_000;
 const localWorkerStartupTripwireMilliseconds = 120_000;
-const localVisualTripwireMilliseconds = 180_000;
 const localWorkerTerminationTripwireMilliseconds = 30_000;
 
 const report = {
@@ -73,10 +64,7 @@ const report = {
   privatePreview: null,
 };
 
-await Promise.all([
-  mkdirSecure(reportsRoot),
-  mkdirSecure(screenshotsRoot),
-]);
+await mkdirSecure(reportsRoot);
 
 let workerProcess = null;
 let workerLogs = "";
@@ -294,30 +282,26 @@ try {
     processorEvents,
   };
 
-  const preview = await api(
-    `/api/projects/${created.project.id}/versions/${uploaded.upload.versionId}/preview`,
-    { session },
-  );
-  recordAssertion("the private preview resolves the verified RAD", preview.renderable.assetId === webAsset?.id);
-  const browserEvidence = await verifyPrivatePreview(preview.renderable, qualificationView);
-  report.privatePreview = browserEvidence;
-  const radRangeReceipt = validateRadRangeResponses(
-    browserEvidence.sceneResponses,
-    webAsset.size_bytes,
-  );
-  report.privatePreview.radRangeReceipt = radRangeReceipt;
+  const previewPath =
+    `/api/projects/${created.project.id}/versions/${uploaded.upload.versionId}/preview`;
+  const previewStartedAt = performance.now();
+  const previewResponse = await fetchWithTripwire(`${origin}${previewPath}`, {
+    headers: { accept: "application/json", cookie: cookieHeader(session) },
+  }, "fjd_local_api_ms", localApiTripwireMilliseconds);
+  recordApiTiming("GET", previewPath, previewStartedAt);
+  const previewError = await previewResponse.json();
+  report.privatePreview = {
+    blocked: true,
+    status: previewResponse.status,
+    error: previewError.error ?? null,
+  };
   recordAssertion(
-    "every signed RAD response is a valid byte range for the verified asset",
-    radRangeReceipt.responseCount === browserEvidence.sceneResponses.length,
+    "the product refuses a visual-only FJD preview without registered geometry",
+    previewResponse.status === 409 &&
+      String(previewError.error ?? "").includes("approved collision and navigation"),
   );
-  recordAssertion(
-    "Spark reports the exact pinned renderer budget",
-    browserEvidence.quality === `${qualificationView.rendererBudgetMillions}M splat budget`,
-  );
-  const browserStayedOnLoopback = browserEvidence.nonLoopbackRequests.length === 0;
-  recordAssertion("every browser HTTP request stays on loopback", browserStayedOnLoopback);
   report.executionBoundary.observedHttpOrigins = [
-    ...new Set([...observedFetchOrigins, ...browserEvidence.requestOrigins]),
+    ...new Set(observedFetchOrigins),
   ].sort();
   const allObservedOriginsAreLoopback = report.executionBoundary.observedHttpOrigins.every(
     (candidate) => new URL(candidate).hostname === "127.0.0.1",
@@ -330,7 +314,6 @@ try {
     ) &&
     new URL(origin).hostname === "127.0.0.1" &&
     processorStartedEvent?.origin === origin &&
-    browserStayedOnLoopback &&
     allObservedOriginsAreLoopback,
   );
   report.executionBoundary.cloudStorageUsed = !report.executionBoundary.localWorkerOnly;
@@ -338,22 +321,6 @@ try {
     "the qualification uses only isolated local Worker storage",
     report.executionBoundary.localWorkerOnly && !report.executionBoundary.cloudStorageUsed,
   );
-  recordAssertion("Spark hides its loading indicator after rendering", browserEvidence.loadingHidden);
-  recordAssertion("Spark reports no renderer error", browserEvidence.errorHidden);
-  recordAssertion("Spark creates a visible WebGL canvas", browserEvidence.canvas.width > 0 && browserEvidence.canvas.height > 0);
-  recordAssertion("the rendered FJD frame contains measured visual signal", browserEvidence.visualSampleReady);
-  assertMinimumReceipt("the FJD frame clears its luminance-range tripwire", {
-    minimum: qualificationView.visualTripwires.minimumLuminanceRange,
-    actual: browserEvidence.visualSample.luminanceRange,
-  });
-  assertMinimumReceipt("the FJD frame clears its colour-bucket tripwire", {
-    minimum: qualificationView.visualTripwires.minimumColourBucketCount,
-    actual: browserEvidence.visualSample.colourBucketCount,
-  });
-  recordAssertion("the private preview retrieves the signed RAD", browserEvidence.sceneResponses.length > 0);
-  recordAssertion("the private preview has no page errors", browserEvidence.pageErrors.length === 0);
-  recordAssertion("the private preview has no console errors", browserEvidence.consoleErrors.length === 0);
-  recordAssertion("the private preview has no failed HTTP responses", browserEvidence.failedResponses.length === 0);
 } catch (error) {
   report.failure = {
     message: error instanceof Error ? error.message : String(error),
@@ -399,7 +366,6 @@ try {
     passed: report.passed,
     assertionCount: report.assertions.length,
     reportPath,
-    screenshotPath: report.privatePreview ? screenshotPath : null,
     failure: report.failure?.message ?? null,
   })}\n`);
   if (!report.passed) process.exitCode = 1;
@@ -456,183 +422,6 @@ async function uploadFile({ projectId, sourcePath, fileName, sizeBytes, sha256, 
     asset: completion.asset,
     job: completion.job,
   }));
-}
-
-async function verifyPrivatePreview(renderable, qualificationView) {
-  const sourceToWorld = {
-    sourceUpAxis: qualificationView.sourceUpAxis,
-    worldUnit: "scene_units",
-    metresPerSourceUnit: 1,
-    yawDegrees: 0,
-    translationMetres: [0, 0, 0],
-  };
-  const cameraPosition = sourcePointToWorld(
-    qualificationView.cameraPosition,
-    qualificationView.sourceUpAxis,
-  );
-  const cameraTarget = sourcePointToWorld(
-    qualificationView.cameraTarget,
-    qualificationView.sourceUpAxis,
-  );
-  const cameraUp = sourceDirectionToWorld(
-    qualificationView.cameraUp,
-    qualificationView.sourceUpAxis,
-  );
-  const rendererUrl = new URL("/renderer/index.html", origin);
-  rendererUrl.searchParams.set("content", renderable.contentUrl);
-  rendererUrl.searchParams.set("format", renderable.format);
-  rendererUrl.searchParams.set("budget", String(qualificationView.rendererBudgetMillions));
-  rendererUrl.searchParams.set("sourceToWorld", JSON.stringify(sourceToWorld));
-  rendererUrl.searchParams.set("camera", cameraPosition.join(","));
-  rendererUrl.searchParams.set("target", cameraTarget.join(","));
-  rendererUrl.searchParams.set("up", cameraUp.join(","));
-  rendererUrl.searchParams.set("fov", String(qualificationView.fovDegrees));
-  const browser = await chromium.launch({
-    channel: "chrome",
-    headless: true,
-    args: ["--enable-webgl", "--ignore-gpu-blocklist", "--use-angle=swiftshader"],
-  });
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
-    reducedMotion: "reduce",
-  });
-  const pageErrors = [];
-  const consoleErrors = [];
-  const failedResponses = [];
-  const sceneResponses = [];
-  const requestOrigins = new Set();
-  const nonLoopbackRequests = [];
-  await context.route("**/*", async (route) => {
-    const requestUrl = new URL(route.request().url());
-    if (
-      ["http:", "https:"].includes(requestUrl.protocol) &&
-      !isLoopbackHttpUrl(requestUrl.toString())
-    ) {
-      nonLoopbackRequests.push({ origin: requestUrl.origin, path: requestUrl.pathname });
-      await route.abort("blockedbyclient");
-      return;
-    }
-    await route.continue();
-  });
-  const page = await context.newPage();
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  page.on("request", (request) => {
-    const requestUrl = new URL(request.url());
-    if (!["http:", "https:"].includes(requestUrl.protocol)) return;
-    requestOrigins.add(requestUrl.origin);
-  });
-  page.on("response", (response) => {
-    if (response.status() >= 400) {
-      failedResponses.push({
-        status: response.status(),
-        path: new URL(response.url()).pathname,
-      });
-    }
-    if (response.url().includes("/comparison-asset/")) {
-      const headers = response.headers();
-      sceneResponses.push({
-        status: response.status(),
-        contentLength: headers["content-length"] ?? null,
-        contentRange: headers["content-range"] ?? null,
-      });
-    }
-  });
-  try {
-    const startedAt = performance.now();
-    await withPlaywrightTripwire(
-      "fjd_renderer_navigation_ms",
-      localWorkerStartupTripwireMilliseconds,
-      () => page.goto(rendererUrl.toString(), {
-        waitUntil: "domcontentloaded",
-        timeout: localWorkerStartupTripwireMilliseconds,
-      }),
-    );
-    await withPlaywrightTripwire(
-      "fjd_spark_loading_ms",
-      localVisualTripwireMilliseconds,
-      () => page.locator("#sparkLoading").waitFor({
-        state: "hidden",
-        timeout: localVisualTripwireMilliseconds,
-      }),
-    );
-    const visualSample = await waitForVisualSample(page);
-    const loadingHidden = await page.locator("#sparkLoading").evaluate((element) => element.hidden);
-    const errorHidden = await page.locator("#sparkError").evaluate((element) => element.hidden);
-    const canvas = await page.locator("#sparkCanvas").evaluate((element) => ({
-      width: element instanceof HTMLCanvasElement ? element.width : 0,
-      height: element instanceof HTMLCanvasElement ? element.height : 0,
-      clientWidth: element instanceof HTMLElement ? element.clientWidth : 0,
-      clientHeight: element instanceof HTMLElement ? element.clientHeight : 0,
-    }));
-    await page.screenshot({ path: screenshotPath, fullPage: true });
-    return {
-      rendererPath: rendererUrl.pathname,
-      sourceToWorld,
-      camera: {
-        position: cameraPosition,
-        target: cameraTarget,
-        up: cameraUp,
-        fovDegrees: qualificationView.fovDegrees,
-      },
-      elapsedMilliseconds: Math.round(performance.now() - startedAt),
-      title: await page.title(),
-      quality: await page.locator("#sparkQuality").innerText(),
-      rendererProfile: qualificationView.rendererProfile,
-      rendererBudgetMillions: qualificationView.rendererBudgetMillions,
-      loadingHidden,
-      errorHidden,
-      canvas,
-      visualSample,
-      visualSampleReady: posterSampleIsReady(visualSample),
-      pageErrors,
-      consoleErrors,
-      failedResponses,
-      sceneResponses,
-      requestOrigins: [...requestOrigins].sort(),
-      nonLoopbackRequests,
-      screenshotPath,
-    };
-  } finally {
-    await browser.close();
-  }
-}
-
-function sourcePointToWorld(point, sourceUpAxis) {
-  if (sourceUpAxis === "Y") return [...point];
-  return [point[0], point[2], -point[1]];
-}
-
-function sourceDirectionToWorld(direction, sourceUpAxis) {
-  return sourcePointToWorld(direction, sourceUpAxis);
-}
-
-async function waitForVisualSample(page) {
-  const startedAt = performance.now();
-  let latest = null;
-  while (performance.now() - startedAt <= localVisualTripwireMilliseconds) {
-    const pixels = await page.locator("#sparkCanvas").evaluate(async (canvas) => {
-      if (!(canvas instanceof HTMLCanvasElement)) return [];
-      await new Promise((resolveFrame) => requestAnimationFrame(() => resolveFrame()));
-      const sample = document.createElement("canvas");
-      sample.width = 96;
-      sample.height = 54;
-      const context = sample.getContext("2d", { willReadFrequently: true });
-      if (!context) return [];
-      context.drawImage(canvas, 0, 0, sample.width, sample.height);
-      return Array.from(context.getImageData(0, 0, sample.width, sample.height).data);
-    });
-    if (pixels.length > 0) {
-      latest = analysePosterSample(Uint8ClampedArray.from(pixels));
-      if (posterSampleIsReady(latest)) return latest;
-    }
-    await delay(250);
-  }
-  throw new Error(
-    `fjd_visual_signal_ms limit=${localVisualTripwireMilliseconds} ask=${Math.round(performance.now() - startedAt)} latest=${JSON.stringify(latest)}`,
-  );
 }
 
 function startWorker({ port, persistenceRoot: statePath }) {
@@ -744,22 +533,6 @@ async function waitForWorker(child, workerOrigin) {
   throw new Error(
     `local_worker_startup_ms limit=${localWorkerStartupTripwireMilliseconds} ask=${Math.round(performance.now() - startedAt)}`,
   );
-}
-
-async function withPlaywrightTripwire(name, limitMilliseconds, operation) {
-  const startedAt = performance.now();
-  try {
-    return await operation();
-  } catch (error) {
-    if (error?.name !== "TimeoutError") throw error;
-    const askMilliseconds = Math.max(
-      limitMilliseconds,
-      Math.round(performance.now() - startedAt),
-    );
-    throw new Error(`${name} limit=${limitMilliseconds} ask=${askMilliseconds}`, {
-      cause: error,
-    });
-  }
 }
 
 async function fetchWithTripwire(url, options, name, limitMilliseconds) {

@@ -78,7 +78,11 @@ viewports. It fails when:
 8. Playwright E2E;
 9. Cloudflare production deployment dry run.
 
-The v7 release gate treats navigation as immutable production evidence. A build
+The v7+ view gate treats navigation as immutable production evidence. Private
+preview, immutable-version comparison, publication, rollback, and manifest
+delivery all fail closed before Spark can be viewed when the exact-version
+collision or walking-map derivatives are absent. The renderer reports ready
+only after Detour and Rapier initialize; there is no camera-only mode. A build
 must prove room-anchor enclosure, both-direction Walk/Fly wall sweeps, capsule
 corner sliding, room-route replay, and open/closed door parity before Studio can
 approve it or a movement-enabled release can be published.

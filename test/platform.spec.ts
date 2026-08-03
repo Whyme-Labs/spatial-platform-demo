@@ -253,6 +253,7 @@ describe("Spatial Studio Worker", () => {
   it("serves direct static entry points through the Worker security middleware", async () => {
     for (const path of [
       "/studio.html",
+      "/preview/project-fixture/version-fixture",
       "/images/spatial-hero.webp",
       "/renderer/index.html",
     ]) {
@@ -1627,64 +1628,20 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/projects/${project.id}/versions/${secondVersionId}/preview`,
       { headers: { cookie: reviewerCookie } },
     );
-    expect(previewResponse.status).toBe(200);
+    expect(previewResponse.status).toBe(409);
     expect(previewResponse.headers.get("cache-control")).toBe("private, no-store");
-    const preview = await previewResponse.json<{
-      version: { id: string; number: number; status: string };
-      renderable: { versionId: string; assetId: string; contentUrl: string; sessionExpiresAt: string };
-    }>();
-    expect(preview).toMatchObject({
-      version: { id: secondVersionId, number: 2, status: "QA_REQUIRED" },
-      renderable: { versionId: secondVersionId, assetId: rightAssetId },
+    await expect(previewResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("approved collision and navigation"),
     });
-    expect(preview.renderable.contentUrl).toContain(
-      `/comparison-asset/${project.id}/${secondVersionId}/${rightAssetId}/right.rad?token=`,
-    );
-    expect(Date.parse(preview.renderable.sessionExpiresAt)).toBeGreaterThan(Date.now());
 
     const comparisonResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/versions/compare?left=${versionId}&right=${secondVersionId}`,
       { headers: { cookie: reviewerCookie } },
     );
-    expect(comparisonResponse.status).toBe(200);
-    const comparison = await comparisonResponse.json<{
-      versions: Array<{ id: string; version_number: number }>;
-      renderables: Array<{
-        versionId: string;
-        assetId: string;
-        format: string;
-        contentUrl: string;
-        sessionExpiresAt: string;
-      }>;
-    }>();
-    expect(comparison).toMatchObject({
-      versions: [
-        { id: versionId, version_number: 1 },
-        { id: secondVersionId, version_number: 2 },
-      ],
-      renderables: [
-        { versionId, assetId: leftAssetId, format: "rad" },
-        { versionId: secondVersionId, assetId: rightAssetId, format: "rad" },
-      ],
-      reviewDecisionHistory: [{
-        version_id: versionId,
-        decision: "changes_requested",
-        note: "Approve after the redaction request is resolved.",
-      }],
+    expect(comparisonResponse.status).toBe(409);
+    await expect(comparisonResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("both selected versions need approved v7+ collision and navigation"),
     });
-    const leftRenderable = comparison.renderables[0]!;
-    expect(leftRenderable.contentUrl).toContain(`/comparison-asset/${project.id}/${versionId}/${leftAssetId}/left.rad?token=`);
-    expect(Date.parse(leftRenderable.sessionExpiresAt)).toBeGreaterThan(Date.now());
-    const leftRange = await exports.default.fetch(new URL(leftRenderable.contentUrl, origin), {
-      headers: { range: "bytes=1-3" },
-    });
-    expect(leftRange.status).toBe(206);
-    expect(Array.from(new Uint8Array(await leftRange.arrayBuffer()))).toEqual([2, 3, 4]);
-
-    const substitutedAsset = new URL(leftRenderable.contentUrl, origin);
-    substitutedAsset.pathname = substitutedAsset.pathname.replace(leftAssetId, rightAssetId);
-    const substitutionResponse = await exports.default.fetch(substitutedAsset);
-    expect(substitutionResponse.status).toBe(401);
 
     const themeResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/theme`,
@@ -1940,13 +1897,15 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/versions/${completed.asset.versionId}/approve`,
       approvalRequest,
     );
-    expect(approvalResponse.status).toBe(200);
+    expect(approvalResponse.status).toBe(409);
+    await expect(approvalResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("QA approval blocked"),
+    });
     const repeatedApprovalResponse = await exports.default.fetch(
       `${origin}/api/versions/${completed.asset.versionId}/approve`,
       approvalRequest,
     );
-    expect(repeatedApprovalResponse.status).toBe(200);
-    await expect(repeatedApprovalResponse.json()).resolves.toMatchObject({ idempotent: true });
+    expect(repeatedApprovalResponse.status).toBe(409);
 
     for (const [slug, initialCamera] of [
       ["invalid-camera-target", {
@@ -2022,7 +1981,7 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(unknownProvisionalEvidence.status).toBe(409);
+    expect(unknownProvisionalEvidence.status).toBe(400);
 
     const provisionalEvidenceId = crypto.randomUUID();
     const provisionalEvidenceJobId = crypto.randomUUID();
@@ -2090,7 +2049,7 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(mismatchedProvisionalEvidence.status).toBe(422);
+    expect(mismatchedProvisionalEvidence.status).toBe(400);
     const mismatchedNavigationUnit = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -2108,7 +2067,7 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(mismatchedNavigationUnit.status).toBe(409);
+    expect(mismatchedNavigationUnit.status).toBe(400);
     const provisionalProfile = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
       {
@@ -2142,29 +2101,10 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(provenProvisionalRelease.status).toBe(201);
-    const provisionalManifest = await exports.default.fetch(
-      `${origin}/api/releases/proven-provisional-release/manifest`,
-    );
-    expect(provisionalManifest.status).toBe(200);
-    await expect(provisionalManifest.json()).resolves.toMatchObject({
-      viewer: {
-        sourceToWorld: {
-          worldUnit: "scene_units",
-        },
-      },
-      spatial: {
-        navigationProfile: {
-          worldUnit: "scene_units",
-        },
-      },
+    expect(provenProvisionalRelease.status).toBe(400);
+    await expect(provenProvisionalRelease.json()).resolves.toMatchObject({
+      details: { project: [expect.stringContaining("no approved scene version")] },
     });
-    await env.DB.batch([
-      env.DB.prepare("DELETE FROM release_channels WHERE slug = ?")
-        .bind("proven-provisional-release"),
-      env.DB.prepare("DELETE FROM releases WHERE project_id = ? AND viewer_config_json LIKE ?")
-        .bind(project.id, '%"Proven provisional release"%'),
-    ]);
     const restoreMetricProfile = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/navigation-profile`,
       {
@@ -2239,9 +2179,9 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(disconnectedReleaseResponse.status).toBe(409);
+    expect(disconnectedReleaseResponse.status).toBe(400);
     await expect(disconnectedReleaseResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("2 disconnected navigation components"),
+      details: { project: [expect.stringContaining("no approved scene version")] },
     });
     const archiveDisconnectedEntity = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities/${disconnectedEntity.entity.id}`,
@@ -2286,7 +2226,7 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(misalignedRotationResponse.status).toBe(409);
+    expect(misalignedRotationResponse.status).toBe(400);
 
     const missingVerifiedNavigation = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
@@ -2303,9 +2243,9 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(missingVerifiedNavigation.status).toBe(409);
+    expect(missingVerifiedNavigation.status).toBe(400);
     await expect(missingVerifiedNavigation.json()).resolves.toMatchObject({
-      error: expect.stringContaining("build and approve a Recast + Rapier navigation artifact"),
+      details: { project: [expect.stringContaining("no approved scene version")] },
     });
 
     const collisionAssetId = crypto.randomUUID();
@@ -2585,6 +2525,7 @@ describe("Spatial Studio Worker", () => {
       },
     });
     expect(v7ArtifactContract.success).toBe(true);
+    if (!v7ArtifactContract.success) throw new Error("V7 fixture failed its contract");
     let telemetryNavigationArtifact: unknown = null;
     if (v7ArtifactContract.success && v7ArtifactContract.data.structuralValidation) {
       const planarBoundaryArtifact = structuredClone(v7ArtifactContract.data);
@@ -2837,9 +2778,89 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(unsupportedFlyRelease.status).toBe(409);
+    expect(unsupportedFlyRelease.status).toBe(400);
     await expect(unsupportedFlyRelease.json()).resolves.toMatchObject({
-      error: expect.stringContaining("requires an approved v7 structural-shell navigation artifact"),
+      details: { project: [expect.stringContaining("no approved scene version")] },
+    });
+
+    const navigationReportKey =
+      `reports-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/navigation.json`;
+    const navigationDetourKey =
+      `delivery-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/navigation.bin`;
+    await Promise.all([
+      env.SPATIAL_ASSETS.put(navigationReportKey, new Uint8Array(2048), {
+        customMetadata: { sha256: navigationReportSha256 },
+      }),
+      env.SPATIAL_ASSETS.put(navigationDetourKey, new Uint8Array(64), {
+        customMetadata: { sha256: navigationDetourSha256 },
+      }),
+      env.DB.prepare(`
+        UPDATE scene_navigation_builds SET artifact_json = ? WHERE id = ?
+      `).bind(JSON.stringify(v7ArtifactContract.data), navigationBuildId).run(),
+    ]);
+
+    const walkableApprovalResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(walkableApprovalResponse.status).toBe(200);
+    const repeatedWalkableApprovalResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(repeatedWalkableApprovalResponse.status).toBe(200);
+    await expect(repeatedWalkableApprovalResponse.json()).resolves.toMatchObject({
+      idempotent: true,
+    });
+
+    const privatePreviewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/versions/${completed.asset.versionId}/preview`,
+      { headers: { cookie } },
+    );
+    expect(privatePreviewResponse.status).toBe(200);
+    const privatePreview = await privatePreviewResponse.json<{
+      manifest: { scene: { collisionUrl: string } };
+    }>();
+    expect(privatePreview).toMatchObject({
+      manifest: {
+        scene: {
+          collisionUrl: expect.stringContaining(`/${collisionAssetId}/fixture.collision.glb`),
+        },
+        spatial: {
+          navigationArtifact: { schemaVersion: "spatial-navigation-v7" },
+        },
+      },
+    });
+    const privateCollisionResponse = await exports.default.fetch(
+      new URL(privatePreview.manifest.scene.collisionUrl, origin),
+    );
+    expect(privateCollisionResponse.status).toBe(200);
+    expect(new Uint8Array(await privateCollisionResponse.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4]),
+    );
+
+    await env.SPATIAL_ASSETS.delete(navigationReportKey);
+    const missingNavigationObjectRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "missing-navigation-object",
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Missing navigation object",
+            measurementDisclaimer: "Visual experience only.",
+          },
+        }),
+      },
+    );
+    expect(missingNavigationObjectRelease.status).toBe(409);
+    await expect(missingNavigationObjectRelease.json()).resolves.toMatchObject({
+      error: expect.stringContaining("must all be present and verified"),
+    });
+    await env.SPATIAL_ASSETS.put(navigationReportKey, new Uint8Array(2048), {
+      customMetadata: { sha256: navigationReportSha256 },
     });
 
     const releaseResponse = await exports.default.fetch(
@@ -3643,7 +3664,7 @@ describe("Spatial Studio Worker", () => {
     });
     expect(manifest.spatial.navigationMesh.indices).toHaveLength(12);
     expect(manifest.spatial.navigationArtifact).toMatchObject({
-      schemaVersion: "spatial-navigation-v6",
+      schemaVersion: "spatial-navigation-v7",
       source: { assetId: collisionAssetId },
       physicalValidation: { passed: true, routeCount: 2 },
     });
@@ -3680,7 +3701,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(mismatchedCollisionManifest.status).toBe(409);
     await expect(mismatchedCollisionManifest.json()).resolves.toMatchObject({
-      error: expect.stringContaining("frozen collision asset failed integrity verification"),
+      error: expect.stringContaining("not all present and verified"),
     });
     await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
       .bind(collisionSha256, collisionAssetId).run();
@@ -3692,10 +3713,22 @@ describe("Spatial Studio Worker", () => {
     );
     expect(mismatchedNavigationManifest.status).toBe(409);
     await expect(mismatchedNavigationManifest.json()).resolves.toMatchObject({
-      error: expect.stringContaining("navigation derivative failed integrity verification"),
+      error: expect.stringContaining("not all present and verified"),
     });
     await env.DB.prepare("UPDATE assets SET sha256 = ? WHERE id = ?")
       .bind(navigationDetourSha256, navigationDetourAssetId).run();
+
+    await env.SPATIAL_ASSETS.delete(navigationDetourKey);
+    const missingNavigationObjectManifest = await exports.default.fetch(
+      `${origin}/api/releases/publishable-apartment/manifest`,
+    );
+    expect(missingNavigationObjectManifest.status).toBe(409);
+    await expect(missingNavigationObjectManifest.json()).resolves.toMatchObject({
+      error: expect.stringContaining("not all present and verified"),
+    });
+    await env.SPATIAL_ASSETS.put(navigationDetourKey, new Uint8Array(64), {
+      customMetadata: { sha256: navigationDetourSha256 },
+    });
 
     const archiveSnapshotEntity = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/spatial/entities/${snapshotEntity.entity.id}`,
@@ -3801,6 +3834,23 @@ describe("Spatial Studio Worker", () => {
     expect(blockedArchive.status).toBe(409);
     await expect(blockedArchive.json()).resolves.toMatchObject({
       error: "Revoke the active release before archiving this project",
+    });
+
+    await env.SPATIAL_ASSETS.delete(navigationReportKey);
+    const blockedRollbackResponse = await exports.default.fetch(
+      `${origin}/api/release-channels/publishable-apartment/rollback`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ releaseId: release.release.id }),
+      },
+    );
+    expect(blockedRollbackResponse.status).toBe(409);
+    await expect(blockedRollbackResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("not all present and verified"),
+    });
+    await env.SPATIAL_ASSETS.put(navigationReportKey, new Uint8Array(2048), {
+      customMetadata: { sha256: navigationReportSha256 },
     });
 
     const rollbackResponse = await exports.default.fetch(
@@ -5743,7 +5793,10 @@ describe("Spatial Studio Worker", () => {
         body: JSON.stringify(approvalBody),
       },
     );
-    expect(approved.status).toBe(200);
+    expect(approved.status).toBe(409);
+    await expect(approved.json()).resolves.toMatchObject({
+      error: expect.stringContaining("QA approval blocked"),
+    });
   });
 
   it("enforces retention in R2 and records an auditable lifecycle run", async () => {

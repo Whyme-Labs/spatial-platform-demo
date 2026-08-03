@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { SpzWriter } from "@sparkjsdev/spark";
 
 test.describe("touch-first Spark controls", () => {
   test.use({
@@ -135,7 +136,7 @@ test.describe("touch-first Spark controls", () => {
     await expect(page.locator("#sparkViewport")).not.toHaveClass(/free-roam-active/);
   });
 
-  test("keeps releases without authored navigation in an explicit look-only mode", async ({
+  test("blocks releases without the required walking map", async ({
     page,
   }) => {
     await page.route("**/asset/test-scene.spz", (route) =>
@@ -162,20 +163,21 @@ test.describe("touch-first Spark controls", () => {
       }));
     });
 
-    const lookOnly = page.getByRole("button", { name: "Look only" });
-    await expect(lookOnly).toBeVisible();
-    await expect(lookOnly).toBeDisabled();
-    await expect(lookOnly).toHaveAttribute(
+    const walkingRequired = page.getByRole("button", { name: "Walking required" });
+    await expect(walkingRequired).toBeVisible();
+    await expect(walkingRequired).toBeDisabled();
+    await expect(walkingRequired).toHaveAttribute(
       "title",
-      "Walking is unavailable until this scene has a navigation map",
+      "This scene is blocked until its walking map is available",
     );
 
     await page.getByRole("button", { name: "Controls" }).click();
     await expect(page.locator("#mobileMovementHelp")).toHaveText(
-      "Drag to look · walking is unavailable for this scene",
+      "Walking map required before this scene can be viewed",
     );
     await expect(page.locator("#mobileMovementHelp")).toBeVisible();
     await expect(page.locator("#desktopKeyboardHelp")).toHaveAttribute("hidden", "");
+    await expect(page.getByText(/Look around only/)).toHaveCount(0);
   });
 });
 
@@ -241,20 +243,16 @@ test("hides the diagnostic runtime badge when the renderer is embedded", async (
   });
 });
 
-test("summarizes authored walking readiness without exposing mesh jargon", async ({ page }) => {
+test("rejects a partial walking runtime without exposing mesh jargon", async ({ page }) => {
+  const scene = await minimalSpz();
   await page.route("**/asset/test-scene.spz", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/octet-stream",
-      body: "invalid-spz-fixture",
+      body: Buffer.from(scene),
     })
   );
   await page.goto("/renderer/index.html?content=/asset/test-scene.spz&format=spz");
-  await expect(page.getByText(
-    "The spatial scene could not be rendered.",
-    { exact: true },
-  )).toBeVisible();
-
   await page.evaluate(() => {
     window.dispatchEvent(new MessageEvent("message", {
       data: {
@@ -285,10 +283,11 @@ test("summarizes authored walking readiness without exposing mesh jargon", async
   });
 
   const status = page.locator("#controlStatus");
-  await expect(status).toHaveText("Walking enabled · 1 obstacle mapped");
-  await expect(status).toHaveAttribute("data-tone", "ready");
+  await expect(page.locator("#sparkErrorDetail")).toHaveText(
+    "This scene has no approved walking map and cannot be viewed.",
+  );
   await expect(status).not.toContainText("triangles");
-  await expect(page.getByRole("button", { name: "Reset view" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
   const controlsButton = page.getByRole("button", { name: "Controls" });
   await expect(controlsButton).toBeVisible();
   await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();
@@ -316,6 +315,19 @@ test("summarizes authored walking readiness without exposing mesh jargon", async
   await expect(page.locator("#controlHelp")).toBeHidden();
   await expect(status).toBeVisible();
 });
+
+async function minimalSpz(): Promise<Uint8Array> {
+  const writer = new SpzWriter({ numSplats: 4, shDegree: 0, flagAntiAlias: false });
+  const centres = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]] as const;
+  centres.forEach(([x, y, z], index) => {
+    writer.setCenter(index, x, y, z);
+    writer.setAlpha(index, 1);
+    writer.setRgb(index, 0.5, 0.5, 0.5);
+    writer.setScale(index, -2, -2, -2);
+    writer.setQuat(index, 0, 0, 0, 1);
+  });
+  return writer.finalize();
+}
 
 test("keeps renderer status and controls separated in a compact fine-pointer viewport", async ({
   page,

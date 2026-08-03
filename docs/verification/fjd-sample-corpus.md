@@ -6,7 +6,7 @@ Last measured: 2026-08-03
 
 The FJD-first qualification lane now exercises genuine vendor exports through
 the pinned Gaussian and companion `.fjdata`, the production `fjd-trion`
-adapter, Spark conversion, a real Chrome render, and the point-cloud decoder.
+adapter, Spark conversion, the strict private-preview gate, and the point-cloud decoder.
 The local E2E remains isolated: it creates no release, writes no cloud storage,
 and deletes its local D1/R2 state at teardown. A separate, operator-authorized
 production qualification uploaded the P2 Horse PLY to a private FJD project on
@@ -20,15 +20,15 @@ redistribution grant.
 | Point-cloud decoding | Passed | Pinned PDAL 2.9.2 decodes all 3,851,558 V4e interior LAS points and agrees with the file header's bounds. |
 | Metric coordinate registration | Blocked | PDAL reports unknown horizontal units and no spatial reference; LAS coordinate scale fields are storage quantisation, not proof of metres. |
 | Spark RAD build compatibility | Passed | `npm run corpus:fjd:qualify` makes the pinned Spark CLI decode the complete PLY and build a RAD with a valid container signature; its exact receipt is written to `.cache/fjd-sample-corpus/reports/qualification.json`. |
-| Private Studio FJD import | Passed locally | The exact 536,812,164-byte PLY traversed the isolated Worker, production `fjd-trion` adapter, multipart upload, lease, quality RAD build, poster attachment, and authenticated private preview. |
+| Private Studio FJD import | Visual processing passed; current preview blocked by design | The exact 536,812,164-byte PLY traversed the isolated Worker, production `fjd-trion` adapter, multipart upload, lease, quality RAD build, and poster attachment. Its earlier visual-only browser smoke is retained as processor evidence, but the current product correctly refuses to mint a preview without registered geometry and an approved walking map. |
 | Private production upload | Passed | Project `87c7ab8e-6e61-4552-9ac9-cef577210f33` accepted the exact PLY through 52 resumable parts; cloud job `c36777a5-42bd-494f-98f3-7b647d0718f3` verified the source and generated a RAD, poster, and QA report. The project remains `QA_REQUIRED` with zero releases. |
-| Spark browser render | Passed locally | Headless Chrome loaded the signed 141,351,968-byte RAD using HTTP 206 ranges with no page, console, renderer, or HTTP errors. The measured frame had luminance range 222 and 155 quantised colour buckets. |
+| Historical Spark visual smoke | Retained as processor evidence only | Before the strict walking-map gate, headless Chrome loaded the signed 141,351,968-byte RAD using HTTP 206 ranges with no page, console, renderer, or HTTP errors. That receipt still proves Spark compatibility, but current product code will not repeat a visual-only preview. |
 | Shared visual/geometry frame | Blocked | P2 Horse and V4e interior are different captures; no transform registers them. |
 | Automatic walkable scene | Blocked | Requires an indoor FJD capture containing both the portable visual and metric structural geometry in one declared frame. |
 | Public redistribution | Blocked | The official sample page provides downloads but no dataset-specific redistribution grant. |
 
-Passing source, Gaussian, Studio lifecycle, browser, point-cloud-decoder, and
-Spark-build gates proves the portable FJD Gaussian path works end to end. It
+Passing source, Gaussian, Studio ingestion, point-cloud-decoder, and Spark-build
+gates proves the portable FJD Gaussian processing path. It
 does not turn unregistered or unrelated samples into a collision proxy, floor
 plan, or navigable release. The Horse scene is outdoors and the V4e interior is
 a different capture, so neither can qualify automatic indoor navigation.
@@ -60,9 +60,12 @@ a machine-readable report. Qualification also runs the real LAS through the
 pinned processor image's `readers.las` decoder and compares PDAL's file size,
 point count, and bounds with the independently parsed LAS header.
 `e2e:local` then creates a disposable local project, imports the PLY through the
-real FJD adapter, runs the processing agent, opens the private RAD in Chrome
-from the `.fjdata`-backed camera, asserts that no release exists, and removes
-the exact temporary Worker state directory.
+real FJD adapter, runs the processing agent, proves the private-preview API
+rejects the resulting visual derivative because this horse sample has no
+registered indoor collision/navigation package, asserts that no release
+exists, and removes the exact temporary Worker state directory. The historical
+Spark/Chrome smoke remains a processor compatibility receipt only; it is not
+part of the current product-preview command.
 
 The manifest currently declares one explicit qualification case,
 `p2-horse-v4e-tool-compatibility`, which binds these two fixtures and labels

@@ -339,13 +339,10 @@ export function controlledMovementReachedTarget(
 function parseRecoveryBounds(artifact: unknown): Record<PhysicalMovementMode, RecoveryBounds> {
   if (!artifact || typeof artifact !== "object") throw new Error("Movement profiles are missing");
   const profiles = Reflect.get(artifact, "movementProfiles");
-  if (!profiles || typeof profiles !== "object") {
-    const fallback = fallbackRecoveryBounds(artifact);
-    return { walk: fallback, fly: fallback };
-  }
+  if (!profiles || typeof profiles !== "object") throw new Error("Movement profiles are missing");
   return {
-    walk: recoveryBoundsFor(Reflect.get(profiles, "walk"), artifact),
-    fly: recoveryBoundsFor(Reflect.get(profiles, "fly"), artifact),
+    walk: recoveryBoundsFor(Reflect.get(profiles, "walk"), "walk"),
+    fly: recoveryBoundsFor(Reflect.get(profiles, "fly"), "fly"),
   };
 }
 
@@ -371,7 +368,7 @@ function parseDynamicBarriers(artifact: unknown): DynamicBarrier[] {
   });
 }
 
-function recoveryBoundsFor(profile: unknown, artifact: unknown): RecoveryBounds {
+function recoveryBoundsFor(profile: unknown, mode: PhysicalMovementMode): RecoveryBounds {
   if (profile && typeof profile === "object") {
     const raw = Reflect.get(profile, "recoveryBounds");
     if (Array.isArray(raw) && raw.length === 2) {
@@ -382,27 +379,7 @@ function recoveryBoundsFor(profile: unknown, artifact: unknown): RecoveryBounds 
       }
     }
   }
-  return fallbackRecoveryBounds(artifact);
-}
-
-function fallbackRecoveryBounds(artifact: unknown): RecoveryBounds {
-  const raw = artifact && typeof artifact === "object" ? Reflect.get(artifact, "bounds") : null;
-  if (!Array.isArray(raw) || raw.length !== 2) throw new Error("Movement recovery bounds are missing");
-  const minimum = finitePoint(raw[0]);
-  const maximum = finitePoint(raw[1]);
-  if (!minimum || !maximum) throw new Error("Movement recovery bounds are invalid");
-  const rawAgent = artifact && typeof artifact === "object" ? Reflect.get(artifact, "agent") : null;
-  const agentHeight = rawAgent && typeof rawAgent === "object"
-    ? Number(Reflect.get(rawAgent, "height"))
-    : Number.NaN;
-  // v6 froze only floor/navmesh bounds. Its walk camera lives at eye height
-  // above that range, so derive a conservative vertical recovery volume while
-  // retaining the authored horizontal limits. v7 supplies exact per-mode bounds.
-  if (Number.isFinite(agentHeight) && agentHeight > 0) {
-    minimum[1] -= agentHeight;
-    maximum[1] += agentHeight * 2;
-  }
-  return [minimum, maximum];
+  throw new Error(`${mode} movement recovery bounds are missing or invalid`);
 }
 
 function insideBounds(position: Vector3Tuple, [minimum, maximum]: RecoveryBounds): boolean {

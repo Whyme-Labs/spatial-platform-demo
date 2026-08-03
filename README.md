@@ -20,12 +20,13 @@ Portable FJD / XGRIDS / open Gaussian export
   -> immutable scene version
   -> leased/idempotent processing job
   -> automatic metric floor-plan proposal
-  -> automatic structural collision + Recast preview when captured shell evidence is complete
+  -> automatic structural collision + Recast/Rapier walking-map build
+  -> exact-version collision/navigation approval
   -> short-lived authenticated private preview URL
   -> Spark 2.x renderer
   -> operator correction of generated levels / ceilings / rooms / openings / connectors
   -> recooked collision + Recast build bound to the approved floor-plan revision
-  -> optional approval of generated scene / room / navigation data
+  -> optional correction of generated scene / room / navigation data
   -> operator QA approval
   -> numbered immutable release revision
   -> stable public/private release channel
@@ -40,8 +41,9 @@ Portable FJD / XGRIDS / open Gaussian export
 ```
 
 The primary Studio journey is deliberately narrower than the full operations
-surface: **Upload capture -> Process splat + floor plan + navigation -> Preview
--> Correct or approve generated drafts (optional for visual-only sharing) -> Publish**.
+surface: **Upload visual + registered geometry -> Process splat + floor plan +
+navigation -> Approve the walking map -> Preview -> Correct generated drafts when
+needed -> Publish**.
 The Projects view is a portfolio only: clicking anywhere on a project row opens
 its route-addressable `#project/{project-id}` workspace. Preview and publication
 start from that page, while scene/navigation and measurement are nested project
@@ -49,27 +51,30 @@ sections rather than contextless global tabs. A Back to projects control returns
 to the portfolio without leaving selected-project state hidden below the list.
 Creating a project, selecting a delivery template, declaring a low-level asset
 purpose, registering a capture contract, or manually starting floor-plan and
-navigation jobs are not prerequisites for the first splat preview. The Studio
-creates the project with safe defaults, automatically queues spatial drafts
-from registered geometry, and exposes correction, QA, measurement, review,
-hosting, and custom-domain modules only as post-preview or advanced operations.
+navigation jobs are not separate prerequisites. Studio creates the project with
+safe defaults and automatically queues visual, floor-plan, collision, and
+navigation work from the two required registered inputs. It does not expose a
+visual-only preview: correction, QA, measurement, review, hosting, and
+custom-domain modules remain downstream of the exact-version walking-map gate.
 
-XGRIDS and FJD intake requires both a portable Gaussian result (`PLY`, `SPZ`,
+Every primary intake, including open imports, requires both a portable Gaussian result (`PLY`, `SPZ`,
 `SOG`, `SPLAT`, `KSPLAT`) or browser-ready Spark `RAD`, and a registered metric
 point cloud (`PLY`, `E57`, `LAS`, `LAZ`, or `PTS`) for automatic floor-plan and
 navigation generation. Native `XBIN`, `LCC`, and `FJDSLAM` projects can still be
 preserved as private supporting evidence, but they cannot truthfully enter the
-automatic preview lane without portable exports. A processed version can be opened before publication through
-an authenticated, short-lived exact-asset preview session; public or customer
-URLs still require privacy review and an explicit release.
+automatic preview lane without portable exports. A processed version can be opened before publication only
+after its immutable v7+ collision, JSON report, Detour binary, and navigation
+artifact pass exact-version verification. The authenticated preview carries the
+same complete runtime contract as a published release; public or customer URLs
+still require privacy review and an explicit release.
 
 Hardware qualification is currently **FJD first** because FJD is the first
 capture device in the product rollout. The repository pins official P2 and V4e
 sample identities and provides an on-demand private qualification lane; XGRIDS
 sample integration is deliberately deferred until the FJD lane is complete.
 The local FJD E2E never publishes or copies bytes to cloud storage: it deletes
-its isolated Worker state after proving adapter, processor, private-preview,
-range-streaming, and Chrome rendering behavior. A separate operator-authorized
+its isolated Worker state after proving adapter and processor compatibility and
+then proving the visual-only result is blocked at the private-preview gate. A separate operator-authorized
 production qualification stores the P2 sample privately with zero releases;
 it is not a public demo and does not change the vendor-neutral production asset
 contract.
@@ -386,7 +391,7 @@ and
 The FJD commands range-inspect the official P2 archive, selectively extract its
 Gaussian PLY and companion `.fjdata` without downloading the whole archive,
 verify a separate official V4e interior LAS, build a Spark RAD compatibility
-artifact, and run a disposable local FJD-adapter/Chrome E2E. Local vendor bytes
+artifact, and run a disposable local FJD-adapter/strict-preview-gate E2E. Local vendor bytes
 and reports remain under ignored `.cache/fjd-sample-corpus`; the exact pins,
 commands, isolated-E2E boundary, private production qualification receipt, and
 remaining paired-frame gap are recorded
