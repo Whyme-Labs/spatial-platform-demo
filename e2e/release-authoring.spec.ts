@@ -148,17 +148,45 @@ test("processed splats stay blocked until their walking map is approved", async 
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Navigation required before preview.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Registered structural geometry is required.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh processing status", exact: true })).toBeVisible();
   await expect(page.getByText(
-    "The splat is preserved, but it cannot be viewed until collision and navigation pass review.",
+    "The visual is preserved, but it has no registered structural source from which collision and walking proof can be generated safely.",
     { exact: true },
   )).toBeVisible();
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
   await expect(page.getByText("Floor plan", { exact: true })).toBeVisible();
   await expect(page.getByText("Geometry required", { exact: true })).toBeVisible();
+});
+
+test("walking evidence builds automatically without exposing routine authoring", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, {
+    previewReady: false,
+    walkingState: "building",
+  });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Building and verifying the walking map.", exact: true })).toBeVisible();
+  await expect(page.getByText(/No routine navigation setup is required\.$/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh walking-map progress", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review structural exceptions", exact: true })).toHaveCount(0);
+});
+
+test("automatic reconstruction exposes only unresolved structural exceptions", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, {
+    previewReady: false,
+    walkingState: "exception",
+  });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Structural exceptions need review.", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review structural exceptions", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
 });
 
 test("multi-level floor-plan review shows every level and vertical connector", async ({ page }) => {
@@ -296,6 +324,7 @@ async function mockApprovedProject(
     multiLevelFloorplan?: boolean;
     qualifiedTraversalEvidence?: boolean;
     previewReady?: boolean;
+    walkingState?: "building" | "exception";
   } = {},
 ): Promise<void> {
   const project = {
@@ -408,8 +437,38 @@ async function mockApprovedProject(
               sha256: "a".repeat(64),
             }]
             : []),
+          ...(options.walkingState
+            ? [{
+              id: "34343434-3434-4434-8434-343434343434",
+              version_id: versionId,
+              kind: "pointcloud",
+              format: "ply",
+              file_name: "registered-building.ply",
+              size_bytes: 32768,
+              integrity_status: "verified",
+              sha256: "c".repeat(64),
+            }]
+            : []),
         ],
-        jobs: [],
+        jobs: options.walkingState === "building"
+          ? [{
+            id: "45454545-4545-4454-8454-454545454545",
+            version_id: versionId,
+            job_type: "floorplan.extract-v1",
+            state: "RUNNING",
+            progress: 56,
+            progress_message: "Classifying structural surfaces",
+          }]
+          : options.walkingState === "exception"
+            ? [{
+              id: "56565656-5656-4565-8565-565656565656",
+              version_id: versionId,
+              job_type: "floorplan.extract-v1",
+              state: "SUCCEEDED",
+              progress: 100,
+              progress_message: "Structural proposal ready",
+            }]
+            : [],
         releases: [],
         captureBundles: options.qualifiedTraversalEvidence
           ? [{

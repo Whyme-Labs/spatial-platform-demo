@@ -5122,14 +5122,8 @@ app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context)
   if (!asset || !(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
     return conflict(context, "This version does not have a verified browser scene to author against");
   }
-  const [registrationOptions, pairedRegistration, release] = await Promise.all([
-    qualifiedTraversalEvidenceOptions(
-      context.env.DB,
-      auth.organisationId,
-      projectId,
-      versionId,
-    ),
-    pairedCaptureAuthoringRegistration(
+  const [sceneRegistration, release] = await Promise.all([
+    qualifiedSceneRegistration(
       context.env.DB,
       auth.organisationId,
       projectId,
@@ -5146,8 +5140,7 @@ app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context)
       viewer_config_json: string;
     }>(),
   ]);
-  const manifestRegistration = registrationOptions[0];
-  if (!manifestRegistration && !pairedRegistration) {
+  if (!sceneRegistration) {
     return conflict(
       context,
       "This version has no verified paired-upload frame receipt. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture-to-scene registration.",
@@ -5157,25 +5150,8 @@ app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context)
   const viewer = storedViewer && typeof storedViewer === "object"
     ? { ...storedViewer }
     : {};
-  const sourceToWorld = manifestRegistration?.sourceToWorld ?? pairedRegistration!.sourceToWorld;
-  Reflect.set(viewer, "sourceToWorld", sourceToWorld);
-  Reflect.set(viewer, "captureRegistration", manifestRegistration
-    ? {
-      source: "accepted-capture-manifest",
-      manifestId: manifestRegistration.manifestId,
-      manifestSha256: manifestRegistration.manifestSha256,
-      transformSha256: manifestRegistration.registrationSha256,
-    }
-    : {
-      source: "paired-capture-journey",
-      journeyId: pairedRegistration!.journeyId,
-      primaryAssetId: pairedRegistration!.primaryAssetId,
-      primarySha256: pairedRegistration!.primarySha256,
-      evidenceAssetId: pairedRegistration!.evidenceAssetId,
-      evidenceSha256: pairedRegistration!.evidenceSha256,
-      transformSha256: pairedRegistration!.registrationSha256,
-      receiptSha256: pairedRegistration!.receiptSha256,
-    });
+  Reflect.set(viewer, "sourceToWorld", sceneRegistration.sourceToWorld);
+  Reflect.set(viewer, "captureRegistration", sceneRegistration.receipt);
   const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
   const sessionExpiresAt = Math.floor(Date.now() / 1000) + tokenTtl;
   const token = await signSceneToken({
@@ -5243,18 +5219,16 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     return conflict(context, "This version does not have a verified browser scene yet");
   }
   context.header("Cache-Control", "private, no-store");
-  const navigation = await approvedNavigationPreview(
+  const navigationQualification = await qualifyNavigationPreview(
     context.env,
     access.auth.organisationId,
     access.project.id,
     version.id,
   );
-  if (!navigation) {
-    return conflict(
-      context,
-      "This version needs approved collision and navigation before a private preview can be opened",
-    );
+  if (!navigationQualification.ready) {
+    return conflict(context, navigationQualification.message);
   }
+  const navigation = navigationQualification.value;
   const releaseConfig = await context.env.DB.prepare(`
     SELECT viewer_config_json
     FROM releases
@@ -5291,6 +5265,8 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     title: access.project.name,
     measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
     ...storedViewer,
+    sourceToWorld: navigation.registration.sourceToWorld,
+    captureRegistration: navigation.registration.receipt,
   };
   return context.json({
     version: {
@@ -5471,6 +5447,9 @@ app.get("/api/projects/:projectId/versions/compare", async (context) => {
       expiresAt: sessionExpiresAt,
     }, context.env.SESSION_PEPPER);
     const releaseConfig = releaseConfigs.find((candidate) => candidate.version_id === version.id);
+    const storedViewer = releaseConfig
+      ? parseStoredObject(releaseConfig.viewer_config_json)
+      : {};
     return {
       versionId: version.id,
       assetId: asset.id,
@@ -5482,14 +5461,18 @@ app.get("/api/projects/:projectId/versions/compare", async (context) => {
       contentUrl: `/comparison-asset/${access.project.id}/${version.id}/${asset.id}/${encodeURIComponent(asset.file_name)}?token=${encodeURIComponent(token)}`,
       collisionUrl: `/comparison-asset/${access.project.id}/${version.id}/${navigation.collisionAsset.id}/${encodeURIComponent(navigation.collisionAsset.file_name)}?token=${encodeURIComponent(collisionToken)}`,
       sessionExpiresAt: new Date(sessionExpiresAt * 1000).toISOString(),
-      viewer: releaseConfig ? parseStoredObject(releaseConfig.viewer_config_json) : null,
+      viewer: {
+        ...(storedViewer && typeof storedViewer === "object" ? storedViewer : {}),
+        sourceToWorld: navigation.registration.sourceToWorld,
+        captureRegistration: navigation.registration.receipt,
+      },
       spatial: navigation.spatial,
     };
   }))).filter((value) => value !== null);
   if (renderables.length !== 2) {
     return conflict(
       context,
-      "Comparison blocked: both selected versions need approved v7+ collision and navigation artifacts",
+      "Comparison blocked: both selected versions need verified capture registration plus approved v7+ collision and navigation artifacts",
     );
   }
   return context.json({
@@ -7156,6 +7139,11 @@ type PairedCaptureAuthoringRegistration = {
   sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
 };
 
+type QualifiedSceneRegistration = {
+  sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
+  receipt: Record<string, unknown>;
+};
+
 async function pairedCaptureAuthoringRegistration(
   database: D1Database,
   organisationId: string,
@@ -7232,6 +7220,44 @@ async function pairedCaptureAuthoringRegistration(
     registrationSha256,
     receiptSha256: await sha256Hex(JSON.stringify(receiptPayload)),
     sourceToWorld: pairedCaptureIdentityTransform,
+  };
+}
+
+async function qualifiedSceneRegistration(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<QualifiedSceneRegistration | null> {
+  const [manifestRegistrations, pairedRegistration] = await Promise.all([
+    qualifiedTraversalEvidenceOptions(database, organisationId, projectId, versionId),
+    pairedCaptureAuthoringRegistration(database, organisationId, projectId, versionId),
+  ]);
+  const manifestRegistration = manifestRegistrations[0];
+  if (manifestRegistration) {
+    return {
+      sourceToWorld: manifestRegistration.sourceToWorld,
+      receipt: {
+        source: "accepted-capture-manifest",
+        manifestId: manifestRegistration.manifestId,
+        manifestSha256: manifestRegistration.manifestSha256,
+        transformSha256: manifestRegistration.registrationSha256,
+      },
+    };
+  }
+  if (!pairedRegistration) return null;
+  return {
+    sourceToWorld: pairedRegistration.sourceToWorld,
+    receipt: {
+      source: "paired-capture-journey",
+      journeyId: pairedRegistration.journeyId,
+      primaryAssetId: pairedRegistration.primaryAssetId,
+      primarySha256: pairedRegistration.primarySha256,
+      evidenceAssetId: pairedRegistration.evidenceAssetId,
+      evidenceSha256: pairedRegistration.evidenceSha256,
+      transformSha256: pairedRegistration.registrationSha256,
+      receiptSha256: pairedRegistration.receiptSha256,
+    },
   };
 }
 
@@ -14123,16 +14149,16 @@ app.post("/api/versions/:versionId/approve", async (context) => {
   }>();
   if (!version) return notFound(context, "Version not found");
   if (version.status === "APPROVED" || version.status === "PUBLISHED") {
-    const approvedWalkingPackage = await approvedNavigationPreview(
+    const walkingQualification = await qualifyNavigationPreview(
       context.env,
       auth.organisationId,
       version.project_id,
       version.id,
     );
-    if (!approvedWalkingPackage) {
+    if (!walkingQualification.ready) {
       return conflict(
         context,
-        "QA approval is no longer valid: rebuild and approve v7+ collision plus Recast navigation for this exact scene version",
+        `QA approval is no longer valid: ${walkingQualification.message}`,
       );
     }
     const prior = parseStoredObject(version.manifest_json ?? "{}");
@@ -14189,16 +14215,16 @@ app.post("/api/versions/:versionId/approve", async (context) => {
       `Privacy review has ${unresolvedCandidates} unresolved automated candidate(s) and ${unresolvedRegions} unresolved spatial region(s)`,
     );
   }
-  const approvedWalkingPackage = await approvedNavigationPreview(
+  const walkingQualification = await qualifyNavigationPreview(
     context.env,
     auth.organisationId,
     version.project_id,
     version.id,
   );
-  if (!approvedWalkingPackage) {
+  if (!walkingQualification.ready) {
     return conflict(
       context,
-      "QA approval blocked: build and approve v7+ collision plus Recast navigation for this exact scene version",
+      `QA approval blocked: ${walkingQualification.message}`,
     );
   }
   const report = {
@@ -14306,6 +14332,24 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     `).bind(auth.organisationId, project.id, approved.id).first<{ id: string }>();
     posterAssetId = generatedPoster?.id ?? null;
   }
+  const sceneRegistration = await qualifiedSceneRegistration(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+    approved.id,
+  );
+  if (!sceneRegistration) {
+    return conflict(
+      context,
+      "Publication blocked: this scene has no verified capture-to-scene registration. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture registration.",
+    );
+  }
+  if (hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees)) {
+    return conflict(
+      context,
+      "Publication blocked: a registered walkable scene cannot rotate only its visual layer. Correct the shared capture-to-scene transform instead.",
+    );
+  }
   if (parsed.data.viewerConfig.sourceToWorld) {
     const evidence = await context.env.DB.prepare(`
       SELECT id, status, review_decision, parameters_json
@@ -14348,7 +14392,21 @@ app.post("/api/projects/:projectId/releases", async (context) => {
         ],
       });
     }
+    if (
+      JSON.stringify(sceneRegistration.sourceToWorld) !== JSON.stringify(releaseTransform)
+    ) {
+      return unprocessable(context, {
+        sourceToWorldEvidenceId: [
+          "The release transform differs from the verified registration shared by the visual scene and walking evidence",
+        ],
+      });
+    }
   }
+  const releaseViewerConfig = {
+    ...parsed.data.viewerConfig,
+    sourceToWorld: sceneRegistration.sourceToWorld,
+    captureRegistration: sceneRegistration.receipt,
+  };
   const spatialSnapshot = await captureSpatialSnapshot(
     context.env.DB,
     auth.organisationId,
@@ -14382,7 +14440,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     );
   }
   if (
-    hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees) &&
+    hasNonIdentitySceneRotation(releaseViewerConfig.sceneRotationDegrees) &&
     hasAuthoredSpatialRuntime(spatialSnapshot)
   ) {
     return conflict(
@@ -14397,7 +14455,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       : undefined,
   );
   const releaseWorldUnit = parseWorldUnit(
-    parsed.data.viewerConfig.sourceToWorld?.worldUnit,
+    releaseViewerConfig.sourceToWorld.worldUnit,
   );
   if (navigationWorldUnit !== releaseWorldUnit) {
     return conflict(
@@ -14420,14 +14478,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   }
   if (
     navigationWorldUnit === "scene_units" &&
-    parsed.data.viewerConfig.measurementDisclaimer !== PROVISIONAL_MEASUREMENT_DISCLAIMER
+    releaseViewerConfig.measurementDisclaimer !== PROVISIONAL_MEASUREMENT_DISCLAIMER
   ) {
     return conflict(
       context,
       "Provisional releases must use the platform-authored non-measurement warning",
     );
   }
-  const viewerConfigJson = JSON.stringify(parsed.data.viewerConfig);
+  const viewerConfigJson = JSON.stringify(releaseViewerConfig);
   const spatialSnapshotJson = JSON.stringify(spatialSnapshot);
   if (parsed.data.accessPolicy !== "token") {
     const duplicateRelease = await context.env.DB.prepare(`
@@ -20428,14 +20486,33 @@ async function captureSpatialSnapshot(
 type ApprovedNavigationPreview = {
   spatial: Record<string, unknown>;
   collisionAsset: AssetRow;
+  registration: QualifiedSceneRegistration;
 };
 
-async function approvedNavigationPreview(
+type NavigationPreviewQualification =
+  | { ready: true; value: ApprovedNavigationPreview }
+  | { ready: false; code: "scene_registration_missing" | "walking_package_missing"; message: string };
+
+async function qualifyNavigationPreview(
   env: Env,
   organisationId: string,
   projectId: string,
   versionId: string,
-): Promise<ApprovedNavigationPreview | null> {
+): Promise<NavigationPreviewQualification> {
+  const registration = await qualifiedSceneRegistration(
+    env.DB,
+    organisationId,
+    projectId,
+    versionId,
+  );
+  if (!registration) {
+    return {
+      ready: false,
+      code: "scene_registration_missing",
+      message:
+        "This version has no verified capture-to-scene registration. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture registration before building or approving walking evidence.",
+    };
+  }
   const spatial = await captureSpatialSnapshot(
     env.DB,
     organisationId,
@@ -20449,7 +20526,33 @@ async function approvedNavigationPreview(
     versionId,
     spatial,
   );
-  return verified ? { spatial, collisionAsset: verified.collisionAsset } : null;
+  if (!verified) {
+    return {
+      ready: false,
+      code: "walking_package_missing",
+      message:
+        "This version needs the exact approved structural collision, Recast navigation, Detour reachability report, and Rapier movement proof before preview.",
+    };
+  }
+  return {
+    ready: true,
+    value: { spatial, collisionAsset: verified.collisionAsset, registration },
+  };
+}
+
+async function approvedNavigationPreview(
+  env: Env,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<ApprovedNavigationPreview | null> {
+  const qualification = await qualifyNavigationPreview(
+    env,
+    organisationId,
+    projectId,
+    versionId,
+  );
+  return qualification.ready ? qualification.value : null;
 }
 
 async function verifiedPhysicalNavigation(

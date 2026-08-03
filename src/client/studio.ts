@@ -10710,6 +10710,14 @@ function renderProjectDetail(): void {
     renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
   );
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
+  const automaticWalkingWorkActive = Boolean(
+    activeJob && ["asset.evidence-validate", "floorplan.extract-v1", "navigation.build-v1"]
+      .includes(activeJob.job_type),
+  );
+  const walkingExceptionReviewReady = Boolean(
+    renderableVersion && hasMetricGeometry && floorplanReady && !navigationReady &&
+    !automaticWalkingWorkActive && !failedJob,
+  );
 
   const journey = element("section", "project-journey");
   const journeyHeading = element("div", "project-journey-heading");
@@ -10722,7 +10730,13 @@ function renderProjectDetail(): void {
       renderableVersion
         ? navigationReady
           ? "Your walkable splat preview is ready."
-          : "Navigation required before preview."
+          : automaticWalkingWorkActive
+            ? "Building and verifying the walking map."
+            : walkingExceptionReviewReady
+              ? "Structural exceptions need review."
+              : hasMetricGeometry
+                ? "Walking-map processing needs attention."
+                : "Registered structural geometry is required."
         : "From capture result to browser preview.",
     ),
     element(
@@ -10731,7 +10745,13 @@ function renderProjectDetail(): void {
       renderableVersion
         ? navigationReady
           ? "The visual splat, verified collision, and approved walking map are ready for review."
-          : "The splat is preserved, but it cannot be viewed until collision and navigation pass review."
+          : automaticWalkingWorkActive
+            ? `${humanStatus(activeJob!.job_type)} is ${humanStatus(activeJob!.state).toLowerCase()}: ${activeJob!.progress_message ?? `${activeJob!.progress}% complete`}. No routine navigation setup is required.`
+            : walkingExceptionReviewReady
+              ? "Automatic reconstruction found structure that cannot be accepted from geometry alone. Inspect only the highlighted gaps or connectors on the render; collision and walking proof rebuild automatically after correction."
+              : failedJob
+                ? `Automatic walking-map processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
+                : "The visual is preserved, but it has no registered structural source from which collision and walking proof can be generated safely."
         : activeJob
           ? `${humanStatus(activeJob.job_type)} is ${humanStatus(activeJob.state).toLowerCase()}: ${activeJob.progress_message ?? `${activeJob.progress}% complete`}.`
           : failedJob
@@ -10767,12 +10787,35 @@ function renderProjectDetail(): void {
     const editScene = element("button", "quiet-button", "Edit scene");
     editScene.addEventListener("click", () => openSceneEditor(detail.project.id, editScene));
     journeyActions.append(preview, copy, editScene);
-  } else if (renderableVersion) {
-    const completeNavigation = element("button", "primary-button", "Complete walking map");
-    completeNavigation.addEventListener("click", () => {
-      openSceneEditor(detail.project.id, completeNavigation);
+  } else if (renderableVersion && automaticWalkingWorkActive) {
+    const refresh = element("button", "quiet-button", "Refresh walking-map progress");
+    refresh.addEventListener("click", () => {
+      void runAction({
+        key: `refresh-project:${detail.project.id}`,
+        trigger: refresh,
+        pendingLabel: "Refreshing…",
+      }, async () => {
+        await refreshAll();
+        await selectProject(detail.project.id, false, false);
+      });
     });
-    journeyActions.append(completeNavigation);
+    journeyActions.append(refresh);
+  } else if (renderableVersion && walkingExceptionReviewReady) {
+    const reviewExceptions = element("button", "primary-button", "Review structural exceptions");
+    reviewExceptions.addEventListener("click", () => {
+      openSceneEditor(detail.project.id, reviewExceptions);
+    });
+    journeyActions.append(reviewExceptions);
+  } else if (renderableVersion && failedJob) {
+    const retry = element("button", "primary-button", "Retry automatic processing");
+    retry.addEventListener("click", () => {
+      void runAction({
+        key: `retry-job:${failedJob.id}`,
+        trigger: retry,
+        pendingLabel: "Queueing retry…",
+      }, () => retryJob(failedJob));
+    });
+    journeyActions.append(retry);
   } else {
     const refresh = element("button", "quiet-button", "Refresh processing status");
     refresh.addEventListener("click", () => {
@@ -10811,13 +10854,19 @@ function renderProjectDetail(): void {
       navigationReady ? "complete" : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
         ? "current"
         : navigationJob ? "blocked" : floorplanReady ? "waiting" : "waiting",
-      navigationReady ? "Draft ready" : navigationJob ? humanStatus(navigationJob.state) : "Follows floor plan",
+      navigationReady ? "Proof accepted" : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
     ),
     projectJourneyStep(
       "5",
       "Preview",
       navigationReady ? "complete" : renderableVersion ? "blocked" : "waiting",
-      navigationReady ? "Walkable URL ready" : renderableVersion ? "Walking map required" : "Waiting for scene",
+      navigationReady
+        ? "Walkable URL ready"
+        : walkingExceptionReviewReady
+          ? "Review highlighted exceptions"
+          : renderableVersion
+            ? "Waiting for verified walking package"
+            : "Waiting for scene",
     ),
   );
   journey.append(journeyHeading, steps);
@@ -10834,7 +10883,7 @@ function renderProjectDetail(): void {
     sharing.append(element(
       "p",
       "muted-copy",
-      "Preview and publication remain blocked until this exact version has approved collision and navigation artifacts.",
+      "Preview and publication remain blocked until this exact version has a verified visual-to-structure registration plus approved collision, Recast/Detour navigation, and Rapier movement proof.",
     ));
   }
   if (activeRelease) {

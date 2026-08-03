@@ -438,7 +438,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(previewResponse.status).toBe(409);
     await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("approved collision and navigation"),
+      error: expect.stringContaining("approved structural collision"),
     });
 
     const sourceJobId = crypto.randomUUID();
@@ -2054,7 +2054,7 @@ describe("Spatial Studio Worker", () => {
     expect(previewResponse.status).toBe(409);
     expect(previewResponse.headers.get("cache-control")).toBe("private, no-store");
     await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("approved collision and navigation"),
+      error: expect.stringContaining("no verified capture-to-scene registration"),
     });
 
     const comparisonResponse = await exports.default.fetch(
@@ -2063,7 +2063,7 @@ describe("Spatial Studio Worker", () => {
     );
     expect(comparisonResponse.status).toBe(409);
     await expect(comparisonResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("both selected versions need approved v7+ collision and navigation"),
+      error: expect.stringContaining("verified capture registration plus approved v7+ collision and navigation"),
     });
 
     const themeResponse = await exports.default.fetch(
@@ -3222,11 +3222,66 @@ describe("Spatial Studio Worker", () => {
       `).bind(JSON.stringify(v7ArtifactContract.data), navigationBuildId).run(),
     ]);
 
+    const unregisteredWalkableApprovalResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(unregisteredWalkableApprovalResponse.status).toBe(409);
+    await expect(unregisteredWalkableApprovalResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("verified capture-to-scene registration"),
+    });
+
+    const pairedJourneyId = crypto.randomUUID();
+    const pairedGeometryAssetId = crypto.randomUUID();
+    const pairedVisualSha256 = await sha256Hex(sceneBytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE assets SET sha256 = ? WHERE id = ? AND version_id = ?
+      `).bind(
+        pairedVisualSha256,
+        completed.asset.id,
+        completed.asset.versionId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'pointcloud', 'ply', ?, 'registered-room.ply',
+          'application/octet-stream', 128, ?, 'verified')
+      `).bind(
+        pairedGeometryAssetId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        `raw-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/${pairedGeometryAssetId}/registered-room.ply`,
+        "9".repeat(64),
+      ),
+      env.DB.prepare(`
+        UPDATE scene_versions SET source_provenance_json = ? WHERE id = ?
+      `).bind(JSON.stringify({
+        adapter: "open-import",
+        captureJourney: {
+          schemaVersion: "paired-capture-journey-v1",
+          id: pairedJourneyId,
+          captureAdapter: "open-import",
+          primaryAssetId: completed.asset.id,
+          geometryAssetId: pairedGeometryAssetId,
+          declaration: "same-capture-registered-y-up-metres",
+          sourceCoordinateFrameId: `capture-journey:${pairedJourneyId}`,
+          confirmedBy: provisionalEvidenceOwner!.created_by,
+          confirmedAt: new Date().toISOString(),
+        },
+      }), completed.asset.versionId),
+    ]);
+
     const walkableApprovalResponse = await exports.default.fetch(
       `${origin}/api/versions/${completed.asset.versionId}/approve`,
       approvalRequest,
     );
-    expect(walkableApprovalResponse.status).toBe(200);
+    expect(
+      walkableApprovalResponse.status,
+      JSON.stringify(await walkableApprovalResponse.clone().json()),
+    ).toBe(200);
     const repeatedWalkableApprovalResponse = await exports.default.fetch(
       `${origin}/api/versions/${completed.asset.versionId}/approve`,
       approvalRequest,

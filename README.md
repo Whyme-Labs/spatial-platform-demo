@@ -64,10 +64,14 @@ point cloud (`PLY`, `E57`, `LAS`, `LAZ`, or `PTS`) for automatic floor-plan and
 navigation generation. Native `XBIN`, `LCC`, and `FJDSLAM` projects can still be
 preserved as private supporting evidence, but they cannot truthfully enter the
 automatic preview lane without portable exports. A processed version can be opened before publication only
-after its immutable v7+ collision, JSON report, Detour binary, and navigation
-artifact pass exact-version verification. The authenticated preview carries the
-same complete runtime contract as a published release; public or customer URLs
-still require privacy review and an explicit release.
+after its immutable visual-to-structure registration receipt, v7+ collision,
+JSON report, Detour binary, and navigation artifact pass exact-version
+verification. The authenticated preview carries the same complete runtime
+contract as a published release; public or customer URLs still require privacy
+review and an explicit release. QA, comparison, and publication repeat the
+registration check, and publication freezes the verified transform and receipt
+with the walking artifacts rather than trusting a separately entered visual
+transform.
 
 The intake also requires one narrow provenance assertion: both exports must be
 direct outputs of the same capture and must retain the same registered
@@ -326,6 +330,13 @@ early navigation preview, but that preview is not approvable. Floor-plan
 approval recooks collision from the corrected level, ceiling, wall, opening,
 and connector data and queues a new build cryptographically bound to the
 approved revision ID and plan hash.
+
+The game-engine boundary and remaining FJD automation gap are documented in
+[`docs/research/unreal-game-walkability-primary-source-review-2026-08-03.md`](./docs/research/unreal-game-walkability-primary-source-review-2026-08-03.md).
+Recast/Detour and Rapier already cover the same navigation-versus-capsule split
+used by Unreal. The unresolved upstream work is preserving FJD structural
+classification and scan/pose evidence well enough to accept unambiguous
+collision automatically; a raw splat is never treated as physics.
 
 The processor reads `WORKER_API_TOKEN` from the environment. Use
 `npm run processor:once` for a single lease attempt or deployment smoke. It does

@@ -331,11 +331,11 @@ Command:
 npm run check
 ```
 
-The paired-capture receipt and render-native correction tranche completed the
+The registered-scene walking-proof and automatic-journey tranche completed the
 entire local production gate with 216 Worker/domain tests across 42 files, 41
-navigation and migration contracts, and 61 Playwright scenarios. Instrumented
-coverage measured 69.28% statements, 56.92% branches, 83.69% functions, and
-76.02% lines. The same command also passed generated types, TypeScript,
+navigation and migration contracts, and 63 Playwright scenarios. Instrumented
+coverage measured 69.24% statements, 56.72% branches, 83.64% functions, and
+75.95% lines. The same command also passed generated types, TypeScript,
 action/control/config audits, the production build, and a Cloudflare production
 deployment dry run. Remeasure this receipt whenever those reported counts or
 coverage values are changed in readiness documentation.
