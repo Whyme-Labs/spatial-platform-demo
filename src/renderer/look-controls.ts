@@ -45,6 +45,7 @@ export class SpatialNavigationControls {
     fly: DEFAULT_BOOST_MULTIPLIER,
   };
   private translationEnabled = true;
+  private lookEnabled = true;
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -119,6 +120,11 @@ export class SpatialNavigationControls {
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     this.clearKeyboardState();
+  }
+
+  setLookEnabled(enabled: boolean): void {
+    this.lookEnabled = enabled;
+    if (!enabled) this.suspend();
   }
 
   setKeyboardKeyState(code: string, pressed: boolean): void {
@@ -202,6 +208,7 @@ export class SpatialNavigationControls {
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
+    if (!this.lookEnabled) return;
     if (event.pointerType === "mouse") {
       if (event.button !== 0) return;
       this.beginLook(event);

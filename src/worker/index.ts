@@ -66,6 +66,7 @@ import {
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
   floorplanExtractionReviewSchema,
+  floorplanCorrectionDraftSchema,
   floorplanExportSchema,
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
@@ -5075,6 +5076,108 @@ app.patch("/api/projects/:projectId/reviews/comments/:commentId", async (context
   return context.json({ comment: result });
 });
 
+app.get("/api/projects/:projectId/spatial/authoring-renderable", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  const projectId = context.req.param("projectId");
+  const versionId = context.req.query("versionId")?.trim();
+  if (!versionId) return validationError(context, { versionId: ["Choose an immutable scene version"] });
+  const project = await scopedProject(context.env.DB, auth.organisationId, projectId);
+  if (!project) return notFound(context, "Project not found");
+  const version = await context.env.DB.prepare(`
+    SELECT id, version_number, status
+    FROM scene_versions
+    WHERE id = ? AND project_id = ?
+  `).bind(versionId, projectId).first<{
+    id: string;
+    version_number: number;
+    status: string;
+  }>();
+  if (!version) return notFound(context, "Scene version not found");
+  const asset = await context.env.DB.prepare(`
+    SELECT id, format, file_name, mime_type, object_key, size_bytes, sha256
+    FROM assets
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND kind = 'web' AND integrity_status = 'verified' AND deleted_at IS NULL
+      AND format IN ('rad', 'spz', 'sog')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).bind(auth.organisationId, projectId, versionId).first<{
+    id: string;
+    format: "rad" | "spz" | "sog";
+    file_name: string;
+    mime_type: string;
+    object_key: string;
+    size_bytes: number;
+    sha256: string | null;
+  }>();
+  if (!asset || !(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
+    return conflict(context, "This version does not have a verified browser scene to author against");
+  }
+  const [registrationOptions, release] = await Promise.all([
+    qualifiedTraversalEvidenceOptions(
+      context.env.DB,
+      auth.organisationId,
+      projectId,
+      versionId,
+    ),
+    context.env.DB.prepare(`
+      SELECT viewer_config_json
+      FROM releases
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND revoked_at IS NULL
+      ORDER BY published_at DESC
+      LIMIT 1
+    `).bind(auth.organisationId, projectId, versionId).first<{
+      viewer_config_json: string;
+    }>(),
+  ]);
+  const registration = registrationOptions[0];
+  if (!registration) {
+    return conflict(
+      context,
+      "Render-native walking-map authoring requires an accepted capture manifest with verified metric capture-to-scene registration and traversal evidence",
+    );
+  }
+  const storedViewer = release ? parseStoredObject(release.viewer_config_json) : {};
+  const viewer = storedViewer && typeof storedViewer === "object"
+    ? { ...storedViewer }
+    : {};
+  Reflect.set(viewer, "sourceToWorld", registration.sourceToWorld);
+  Reflect.set(viewer, "captureRegistration", {
+    manifestId: registration.manifestId,
+    manifestSha256: registration.manifestSha256,
+    transformSha256: registration.registrationSha256,
+  });
+  const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const sessionExpiresAt = Math.floor(Date.now() / 1000) + tokenTtl;
+  const token = await signSceneToken({
+    releaseId: comparisonAssetTokenScope(projectId, versionId, asset.id),
+    expiresAt: sessionExpiresAt,
+  }, context.env.SESSION_PEPPER);
+  context.header("Cache-Control", "private, no-store");
+  return context.json({
+    version: {
+      id: version.id,
+      number: version.version_number,
+      status: version.status,
+    },
+    renderable: {
+      purpose: "spatial-authoring",
+      versionId,
+      assetId: asset.id,
+      format: asset.format,
+      fileName: asset.file_name,
+      mimeType: asset.mime_type,
+      sizeBytes: asset.size_bytes,
+      sha256: asset.sha256,
+      contentUrl: `/comparison-asset/${projectId}/${versionId}/${asset.id}/${encodeURIComponent(asset.file_name)}?token=${encodeURIComponent(token)}`,
+      sessionExpiresAt: new Date(sessionExpiresAt * 1000).toISOString(),
+      viewer,
+    },
+  });
+});
+
 app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) => {
   const access = await requireReviewProject(context, context.req.param("projectId"));
   if (access instanceof Response) return access;
@@ -9360,6 +9463,143 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
 });
 
 app.post(
+  "/api/projects/:projectId/spatial/floorplan-revisions/:revisionId/correction-drafts",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    const parsed = floorplanCorrectionDraftSchema.safeParse(await readJson(context));
+    if (!parsed.success) return validationError(context, parsed.error.flatten());
+    const projectId = context.req.param("projectId");
+    const project = await scopedProject(context.env.DB, auth.organisationId, projectId);
+    if (!project) return notFound(context, "Project not found");
+    const source = await context.env.DB.prepare(`
+      SELECT revision.id AS revision_id, revision.version_id, revision.plan_json,
+        revision.plan_hash, revision.source_proposal_hash,
+        revision.status AS revision_status,
+        extraction.id AS extraction_id, extraction.input_asset_id,
+        extraction.normalizer, extraction.parameters_json,
+        extraction.source_evidence_json, extraction.proposal_json,
+        extraction.proposal_hash, extraction.report_asset_id
+      FROM floorplan_revisions revision
+      JOIN floorplan_extraction_runs extraction ON extraction.id = revision.extraction_id
+      WHERE revision.id = ? AND revision.project_id = ?
+        AND revision.organisation_id = ?
+    `).bind(
+      context.req.param("revisionId"),
+      projectId,
+      auth.organisationId,
+    ).first<{
+      revision_id: string;
+      version_id: string;
+      plan_json: string;
+      plan_hash: string;
+      source_proposal_hash: string;
+      revision_status: string;
+      extraction_id: string;
+      input_asset_id: string;
+      normalizer: string;
+      parameters_json: string;
+      source_evidence_json: string;
+      proposal_json: string | null;
+      proposal_hash: string;
+      report_asset_id: string | null;
+    }>();
+    if (!source || source.revision_status !== "approved") {
+      return conflict(context, "Only the current approved floor-plan revision can be corrected");
+    }
+    const extractionId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const requestHash = await sha256Hex(JSON.stringify({
+      revisionId: source.revision_id,
+      planHash: source.plan_hash,
+    }));
+    const existing = await context.env.DB.prepare(`
+      SELECT id, status, request_hash FROM floorplan_extraction_runs
+      WHERE organisation_id = ? AND project_id = ? AND client_operation_id = ?
+    `).bind(
+      auth.organisationId,
+      projectId,
+      parsed.data.clientOperationId,
+    ).first<{ id: string; status: string; request_hash: string }>();
+    if (existing) {
+      if (existing.request_hash !== requestHash) {
+        return conflict(
+          context,
+          "This operation ID was already used for a different floor-plan correction",
+        );
+      }
+      return context.json({ extraction: existing, idempotent: true });
+    }
+    const parameters = parseStoredObject(source.parameters_json);
+    const sourceEvidence = parseStoredObject(source.source_evidence_json);
+    await context.env.DB.batch([
+      context.env.DB.prepare(`
+        INSERT INTO processing_jobs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_type,
+          processor_version, idempotency_key, state, progress, progress_message,
+          completed_at
+        ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
+          'spatial-studio/render-native-correction-v1', ?, 'SUCCEEDED', 100,
+          'Approved plan opened for render-native correction', datetime('now'))
+      `).bind(
+        jobId,
+        auth.organisationId,
+        projectId,
+        source.version_id,
+        source.input_asset_id,
+        `render-native-floorplan-correction:${source.revision_id}:${parsed.data.clientOperationId}`,
+      ),
+      context.env.DB.prepare(`
+        INSERT INTO floorplan_extraction_runs (
+          id, organisation_id, project_id, version_id, input_asset_id, job_id,
+          method, normalizer, status, parameters_json, source_evidence_json,
+          proposal_json, proposal_hash, report_asset_id, client_operation_id,
+          request_hash, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, 'render-native-floorplan-correction-v1', ?,
+          'READY_FOR_REVIEW', ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        extractionId,
+        auth.organisationId,
+        projectId,
+        source.version_id,
+        source.input_asset_id,
+        jobId,
+        source.normalizer,
+        JSON.stringify({
+          ...(parameters && typeof parameters === "object" ? parameters : {}),
+          automaticPipeline: true,
+          correctionOfRevisionId: source.revision_id,
+          correctionOfPlanHash: source.plan_hash,
+        }),
+        JSON.stringify({
+          ...(sourceEvidence && typeof sourceEvidence === "object" ? sourceEvidence : {}),
+          correctionOfRevisionId: source.revision_id,
+          correctionOfPlanHash: source.plan_hash,
+        }),
+        source.proposal_json ?? source.plan_json,
+        source.source_proposal_hash,
+        source.report_asset_id,
+        parsed.data.clientOperationId,
+        requestHash,
+        auth.userId,
+      ),
+    ]);
+    await audit(
+      context,
+      auth,
+      "spatial.floorplan_revision.correction_draft",
+      "floorplan_extraction",
+      extractionId,
+      { revisionId: source.revision_id, planHash: source.plan_hash },
+    );
+    return context.json({
+      extraction: { id: extractionId, status: "READY_FOR_REVIEW" },
+    }, 201);
+  },
+);
+
+app.post(
   "/api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review",
   async (context) => {
     const auth = await requireOperator(context);
@@ -12296,7 +12536,8 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       a.sha256 AS input_sha256, sv.status AS version_status,
       us.purpose AS input_purpose, us.created_by AS input_created_by,
       nb.authoring_hash AS navigation_authoring_hash,
-      nb.parameters_json AS navigation_parameters_json
+      nb.parameters_json AS navigation_parameters_json,
+      nb.created_by AS navigation_created_by
     FROM processing_jobs j
     JOIN assets a ON a.id = j.input_asset_id AND a.organisation_id = j.organisation_id
     JOIN scene_versions sv ON sv.id = j.version_id AND sv.project_id = j.project_id
@@ -12322,6 +12563,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     version_status: string;
     navigation_authoring_hash: string | null;
     navigation_parameters_json: string | null;
+    navigation_created_by: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
   if (job.job_type === "registered-scene-change-v1") {
@@ -12439,17 +12681,102 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   if (navigationArtifact) {
     const navmeshAsset = outputSummary.find((output) => output.kind === "navmesh");
     const reportAsset = outputSummary.find((output) => output.kind === "report");
+    const navigationParameters = parseStoredObject(job.navigation_parameters_json ?? "");
+    const automaticAcceptanceCandidate = approvedFloorplanNavigationCanAutoAccept(
+      navigationParameters,
+    );
+    let automaticAcceptance = {
+      approved: false,
+      reason: "Automatic acceptance is not available for a proposal-only or manual navigation build.",
+    };
+    if (automaticAcceptanceCandidate) {
+      const automaticLayout = Reflect.get(navigationParameters as object, "automaticLayout") as object;
+      const floorplanRevisionId = String(Reflect.get(automaticLayout, "floorplanRevisionId"));
+      const revision = await context.env.DB.prepare(`
+        SELECT status, plan_hash
+        FROM floorplan_revisions
+        WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+      `).bind(
+        floorplanRevisionId,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+      ).first<{ status: string; plan_hash: string }>();
+      let currentAuthoringHash: string | null = null;
+      let currentAuthoringError: string | null = null;
+      try {
+        currentAuthoringHash = (await currentNavigationAuthoringState(
+          context.env.DB,
+          job.organisation_id,
+          job.project_id,
+          job.version_id,
+        )).authoringHash;
+      } catch (error) {
+        currentAuthoringError = error instanceof Error ? error.message : String(error);
+      }
+      automaticAcceptance = currentAuthoringError
+        ? {
+          approved: false,
+          reason: `Automatic acceptance blocked: current navigation authoring is invalid: ${currentAuthoringError}`,
+        }
+        : approvedFloorplanNavigationAcceptanceDecision({
+          parameters: navigationParameters,
+          revision: revision
+            ? { status: revision.status, planHash: revision.plan_hash }
+            : null,
+          frozenAuthoringHash: job.navigation_authoring_hash,
+          currentAuthoringHash,
+        });
+    }
     navigationStatements.push(context.env.DB.prepare(`
       UPDATE scene_navigation_builds
-      SET status = 'READY_FOR_REVIEW', artifact_json = ?, navmesh_asset_id = ?,
-        report_asset_id = ?, updated_at = datetime('now')
+      SET status = ?, artifact_json = ?, navmesh_asset_id = ?,
+        report_asset_id = ?,
+        reviewed_by = CASE WHEN ? THEN ? ELSE reviewed_by END,
+        review_note = CASE WHEN ? THEN ? ELSE review_note END,
+        reviewed_at = CASE WHEN ? THEN datetime('now') ELSE reviewed_at END,
+        updated_at = datetime('now')
       WHERE job_id = ? AND status IN ('QUEUED', 'PROCESSING')
     `).bind(
+      automaticAcceptance.approved ? "APPROVED" : "READY_FOR_REVIEW",
       JSON.stringify(navigationArtifact),
       navmeshAsset?.id ?? null,
       reportAsset?.id ?? null,
+      automaticAcceptance.approved ? 1 : 0,
+      job.navigation_created_by,
+      automaticAcceptanceCandidate ? 1 : 0,
+      automaticAcceptance.reason,
+      automaticAcceptance.approved ? 1 : 0,
       job.id,
     ));
+    if (automaticAcceptance.approved && job.navigation_created_by) {
+      navigationStatements.push(context.env.DB.prepare(`
+        INSERT INTO audit_events (
+          id, organisation_id, actor_user_id, action, resource_type, resource_id,
+          request_id, metadata_json
+        )
+        SELECT ?, ?, ?, 'spatial.navigation_build.auto_accept',
+          'scene_navigation_build', id, ?, ?
+        FROM scene_navigation_builds WHERE job_id = ?
+      `).bind(
+        crypto.randomUUID(),
+        job.organisation_id,
+        job.navigation_created_by,
+        context.get("requestId"),
+        JSON.stringify({
+          jobId: job.id,
+          versionId: job.version_id,
+          validation: [
+            "navigation-artifact-schema",
+            "recast-reachability",
+            "rapier-physical",
+            "structural-shell",
+            "authoring-hash",
+          ],
+        }),
+        job.id,
+      ));
+    }
   }
   const completionStatements: D1PreparedStatement[] = [
     ...assetStatements,
@@ -18854,6 +19181,59 @@ export function navigationArtifactMatchesFrozenConnections(
     parsedArtifact.data.offMeshConnections,
     parsedArtifact.data.schemaVersion === "spatial-navigation-v9",
   )) === JSON.stringify(comparable(parsedConnections.data, false));
+}
+
+export function approvedFloorplanNavigationCanAutoAccept(parameters: unknown): boolean {
+  if (!parameters || typeof parameters !== "object") return false;
+  const automaticLayout = Reflect.get(parameters, "automaticLayout");
+  if (!automaticLayout || typeof automaticLayout !== "object") return false;
+  return (
+    Reflect.get(automaticLayout, "schemaVersion") === "automatic-floorplan-layout-v2" &&
+    typeof Reflect.get(automaticLayout, "floorplanExtractionId") === "string" &&
+    typeof Reflect.get(automaticLayout, "floorplanRevisionId") === "string" &&
+    /^[a-f0-9]{64}$/i.test(String(Reflect.get(automaticLayout, "planHash") ?? ""))
+  );
+}
+
+export function approvedFloorplanNavigationAcceptanceDecision(input: {
+  parameters: unknown;
+  revision: { status: string; planHash: string } | null;
+  frozenAuthoringHash: string | null;
+  currentAuthoringHash: string | null;
+}): { approved: boolean; reason: string } {
+  if (!approvedFloorplanNavigationCanAutoAccept(input.parameters)) {
+    return {
+      approved: false,
+      reason: "Automatic acceptance is not available for a proposal-only or manual navigation build.",
+    };
+  }
+  const automaticLayout = Reflect.get(input.parameters as object, "automaticLayout") as object;
+  const expectedPlanHash = String(Reflect.get(automaticLayout, "planHash"));
+  if (!input.revision || input.revision.status !== "approved") {
+    return {
+      approved: false,
+      reason: "Automatic acceptance blocked: the source floor-plan revision is no longer current and approved.",
+    };
+  }
+  if (input.revision.planHash !== expectedPlanHash) {
+    return {
+      approved: false,
+      reason: `Automatic acceptance blocked: expected_plan_hash=${expectedPlanHash}, asked_plan_hash=${input.revision.planHash}.`,
+    };
+  }
+  if (
+    !input.frozenAuthoringHash || !input.currentAuthoringHash ||
+    input.frozenAuthoringHash !== input.currentAuthoringHash
+  ) {
+    return {
+      approved: false,
+      reason: `Automatic acceptance blocked: expected_authoring_hash=${input.frozenAuthoringHash ?? "missing"}, asked_authoring_hash=${input.currentAuthoringHash ?? "missing"}.`,
+    };
+  }
+  return {
+    approved: true,
+    reason: "Automatically accepted after schema, Recast reachability, Rapier physical, structural, revision, and authoring-hash validation passed.",
+  };
 }
 
 function storedPosterCamera(value: string): unknown {

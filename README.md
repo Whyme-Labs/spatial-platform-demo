@@ -20,12 +20,13 @@ Portable FJD / XGRIDS / open Gaussian export
   -> immutable scene version
   -> leased/idempotent processing job
   -> automatic metric floor-plan proposal
-  -> automatic structural collision + Recast/Rapier walking-map build
-  -> exact-version collision/navigation approval
+  -> automatic structural collision + Recast/Rapier walking-map proof
+  -> render-native correction only when structural inference is ambiguous
+  -> recooked collision + objectively accepted exact-version navigation
   -> short-lived authenticated private preview URL
   -> Spark 2.x renderer
-  -> operator correction of generated levels / ceilings / rooms / openings / connectors
-  -> recooked collision + Recast build bound to the approved floor-plan revision
+  -> later in-render correction of generated levels / ceilings / rooms / openings / connectors
+  -> recooked collision + automatically accepted Recast build bound to the approved floor-plan revision
   -> optional correction of generated scene / room / navigation data
   -> operator QA approval
   -> numbered immutable release revision
@@ -42,8 +43,10 @@ Portable FJD / XGRIDS / open Gaussian export
 
 The primary Studio journey is deliberately narrower than the full operations
 surface: **Upload visual + registered geometry -> Process splat + floor plan +
-navigation -> Approve the walking map -> Preview -> Correct generated drafts when
-needed -> Publish**.
+navigation -> Correct ambiguous structure on the render when needed -> Preview ->
+Publish**. A final navigation build bound to an approved floor-plan revision is
+accepted automatically only after its Recast, Rapier, topology, collision, and
+source-hash contracts pass; proposal-only builds remain non-publishable.
 The Projects view is a portfolio only: clicking anywhere on a project row opens
 its route-addressable `#project/{project-id}` workspace. Preview and publication
 start from that page, while scene/navigation and measurement are nested project

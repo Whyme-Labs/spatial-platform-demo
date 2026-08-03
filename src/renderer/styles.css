@@ -57,6 +57,10 @@ button {
   box-shadow: inset 0 0 0 2px #d4ff58;
 }
 
+#sparkCanvas[data-authoring-mode]:not([data-authoring-mode=""]) {
+  cursor: crosshair;
+}
+
 .spark-loading,
 .spark-error {
   position: absolute;

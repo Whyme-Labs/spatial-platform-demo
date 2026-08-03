@@ -63,15 +63,19 @@ Studio creates a version-bound build request. The processor then:
 7. completes the build with exact tool versions, hashes, byte sizes, tuning,
    source identity, authoring hash, and bounded timing evidence.
 
-The build remains `READY_FOR_REVIEW` until an operator approves it. Retuning or
-changing authoring creates different evidence; it cannot silently mutate an
-approved build.
+Manually queued builds remain `READY_FOR_REVIEW` until an operator approves
+them. A build created from an approved immutable floor-plan revision advances
+directly to `APPROVED` only after the same schema, Recast reachability, Rapier
+movement, structural shell, source hash, and authoring-hash checks pass.
+Retuning or changing authoring creates different evidence; it cannot silently
+mutate an approved build.
 
 For the automatic floor-plan lane, a build made from an uncorrected machine
 proposal is explicitly preview-only. Approving the floor plan recooks the
 collision GLB from the corrected levels, ceilings, walls, openings, and
 connectors, then queues a new navigation build bound to the approved revision
-ID and exact plan hash. Only that revision-bound build can be approved.
+ID and exact plan hash. Only that revision-bound build can be accepted, and the
+Worker accepts it automatically after objective validation succeeds.
 
 ## Required validation
 

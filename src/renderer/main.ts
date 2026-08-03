@@ -32,6 +32,12 @@ import {
   AuthoredTraversalOverlay,
 } from "./authored-traversal-overlay";
 import type { AuthoredTraversalFrame } from "./authored-traversal";
+import {
+  appendSceneAuthoringPick,
+  sceneAuthoringGeometry,
+  type SceneAuthoringMode,
+  type SceneAuthoringSession,
+} from "./scene-authoring";
 
 declare const __SPATIAL_E2E__: boolean;
 
@@ -146,6 +152,22 @@ type RendererMessage =
       type: "control-help";
       visible: boolean;
       height: number;
+    }
+  | {
+      source: "spatial-spark";
+      type: "authoring-mode";
+      requestId: string;
+      mode: SceneAuthoringMode | null;
+      accepted: boolean;
+    }
+  | {
+      source: "spatial-spark";
+      type: "authoring-pick";
+      requestId: string;
+      mode: SceneAuthoringMode;
+      point: Vector3Tuple;
+      points: Vector3Tuple[];
+      complete: boolean;
     };
 
 const byId = <T extends HTMLElement>(id: string): T => {
@@ -242,6 +264,7 @@ let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
 let lastBroadcastDirection: THREE.Vector3 | null = null;
+let sceneAuthoringSession: SceneAuthoringSession | null = null;
 
 bindChrome();
 void start().catch((error: unknown) => {
@@ -301,10 +324,40 @@ async function start(): Promise<void> {
   rendererControls = controls;
   let visualSceneReady = false;
   let pendingSpatialRuntimeMessage: object | null = null;
+  const authoringMarkers = new THREE.Group();
+  const authoringMarkerGeometry = new THREE.SphereGeometry(0.045, 12, 8);
+  const authoringMarkerMaterial = new THREE.MeshBasicMaterial({
+    color: 0xc8ff42,
+    depthTest: false,
+  });
+  authoringMarkers.name = "spatial-authoring-markers";
+  scene.add(authoringMarkers);
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
+    if (Reflect.get(event.data, "type") === "set-authoring-mode") {
+      const requestId = Reflect.get(event.data, "requestId");
+      const requestedMode = Reflect.get(event.data, "mode");
+      const mode = requestedMode === "room" || requestedMode === "wall" ||
+          requestedMode === "opening" || requestedMode === "connector"
+        ? requestedMode
+        : null;
+      if (typeof requestId !== "string") return;
+      sceneAuthoringSession = mode ? { mode, requestId, points: [] } : null;
+      authoringMarkers.clear();
+      controls.setLookEnabled(!mode);
+      controls.setTranslationEnabled(mode ? false : movementRuntimeReady);
+      canvas.dataset.authoringMode = mode ?? "";
+      post({
+        source: "spatial-spark",
+        type: "authoring-mode",
+        requestId,
+        mode,
+        accepted: requestedMode === null || mode !== null,
+      });
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-spatial-runtime") {
       if (!visualSceneReady) {
         pendingSpatialRuntimeMessage = event.data;
@@ -712,6 +765,40 @@ async function start(): Promise<void> {
   }
   splatMesh = mesh;
   scene.add(mesh);
+  canvas.addEventListener("pointerdown", (event) => {
+    if (!sceneAuthoringSession || event.button !== 0 || !rendererCamera || !splatMesh) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) return;
+    const pointer = new THREE.Vector2(
+      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+      -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+    );
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(pointer, rendererCamera);
+    const hit = raycaster.intersectObject(splatMesh, true)[0];
+    if (!hit) return;
+    const point = hit.point.toArray() as Vector3Tuple;
+    sceneAuthoringSession = appendSceneAuthoringPick(sceneAuthoringSession, point);
+    const geometry = sceneAuthoringGeometry(sceneAuthoringSession);
+    const marker = new THREE.Mesh(
+      authoringMarkerGeometry,
+      authoringMarkerMaterial,
+    );
+    marker.position.copy(hit.point);
+    marker.renderOrder = 1000;
+    authoringMarkers.add(marker);
+    post({
+      source: "spatial-spark",
+      type: "authoring-pick",
+      requestId: sceneAuthoringSession.requestId,
+      mode: sceneAuthoringSession.mode,
+      point,
+      points: geometry.points,
+      complete: geometry.complete,
+    });
+  });
 
   resizeObserver = new ResizeObserver(() => resize(renderer, camera));
   resizeObserver.observe(canvas);

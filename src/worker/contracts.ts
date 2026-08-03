@@ -2112,6 +2112,10 @@ export const floorplanExtractionReviewSchema = z.object({
   }
 });
 
+export const floorplanCorrectionDraftSchema = z.object({
+  clientOperationId: z.string().uuid(),
+});
+
 export const floorplanExportSchema = z.object({
   clientOperationId: z.string().uuid(),
   formats: z.array(z.enum(["svg", "pdf", "dxf"])).min(1).max(3)

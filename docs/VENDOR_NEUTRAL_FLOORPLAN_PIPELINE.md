@@ -106,6 +106,10 @@ POST /api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review
            -> new hash-bound navigation build
   rejected -> no revision
 
+POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/correction-drafts
+  -> idempotent READY_FOR_REVIEW correction workspace based on the approved revision
+  -> render-native marks use the normal immutable review and recook path
+
 POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/exports
   -> SVG/PDF/DXF assets, idempotent per operation and revision/format
 
@@ -113,16 +117,20 @@ GET /api/projects/:projectId/spatial/floorplan-exports/:exportId/download
   -> tenant-authorised private object response
 ```
 
-Queue, review, and export mutations require stable client operation IDs.
-Lease, retry, cancel, worker failure, and completion states are persisted. The
-Studio disables related controls while an operation is pending, retains the
-operator's inputs on failure, exposes retry/cancel actions only when valid,
-and polls only while an extraction is active.
+Queue, review, correction-draft, and export mutations require stable client
+operation IDs. Lease, retry, cancel, worker failure, and completion states are
+persisted. The primary Studio surface is the registered Gaussian render. An
+operator marks rooms, walls, doorways, stairs, and ramps by raycasting that
+render; coordinates are never typed into ordinary forms. Raw extraction
+controls and evidence remain collapsed under Advanced diagnostics. The Studio
+disables related controls while an operation is pending, retains the staged
+plan on failure, exposes retry/cancel actions only when valid, and polls only
+while an extraction is active.
 
 A navigation build produced directly from the machine proposal is a preview
 only and cannot be approved. Only the recooked build whose immutable parameters
-name the approved floor-plan revision ID and exact plan hash can enter the
-navigation approval and publication path.
+name the approved floor-plan revision ID and exact plan hash can enter automatic
+navigation acceptance and publication.
 
 ## Open-corpus evidence
 

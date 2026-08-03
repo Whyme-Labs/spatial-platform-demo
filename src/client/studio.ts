@@ -452,6 +452,19 @@ type VersionRenderable = {
     };
   } | null;
 };
+type SceneAuthoringRenderable = Pick<
+  VersionRenderable,
+  | "versionId"
+  | "assetId"
+  | "format"
+  | "fileName"
+  | "mimeType"
+  | "sizeBytes"
+  | "sha256"
+  | "contentUrl"
+  | "sessionExpiresAt"
+  | "viewer"
+> & { purpose: "spatial-authoring" };
 type VersionComparison = {
   requested: { left: string; right: string };
   versions: Array<Version & {
@@ -1400,6 +1413,24 @@ let comparisonProjectId: string | null = null;
 let comparisonVersions: Version[] = [];
 let comparisonGeneration = 0;
 let comparisonSyncAt = 0;
+let sceneAuthoringWorkspace: {
+  projectId: string;
+  versionId: string;
+  extractionId: string | null;
+  revisionId: string | null;
+  plan: EditableFloorplan | null;
+  dirty: boolean;
+  mode: "room" | "wall" | "opening" | "connector" | null;
+  requestId: string | null;
+  points: Array<[number, number, number]>;
+  frame: HTMLIFrameElement;
+  status: HTMLElement;
+  finish: HTMLButtonElement;
+  save: HTMLButtonElement;
+  modeButtons: HTMLButtonElement[];
+  correctionDraftOperationId: string;
+  correctionReviewOperationId: string;
+} | null = null;
 const comparisonFrameReady = { left: false, right: false };
 const comparisonFrameTimeouts: { left: number | null; right: number | null } = {
   left: null,
@@ -2506,6 +2537,7 @@ function bindInterface(): void {
     });
   }
   window.addEventListener("message", handleComparisonRendererMessage);
+  window.addEventListener("message", handleSceneAuthoringRendererMessage);
   versionComparisonDialog.addEventListener("close", resetVersionComparison);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
@@ -6245,6 +6277,13 @@ function sendVersionSpatialRuntime(
 }
 
 function versionRendererUrl(renderable: VersionRenderable): URL {
+  return rendererAssetUrl(renderable);
+}
+
+function rendererAssetUrl(renderable: Pick<
+  VersionRenderable,
+  "contentUrl" | "format" | "viewer"
+>): URL {
   const url = new URL("/renderer/index.html", location.origin);
   url.searchParams.set("content", renderable.contentUrl);
   url.searchParams.set("format", renderable.format);
@@ -6529,6 +6568,7 @@ function renderSpatial(): void {
     versionSelect,
   );
   container.append(versionControl);
+  container.append(renderSceneAuthoringWorkspace(project, spatial));
   const hierarchy = element("article", "workspace-card-large");
   hierarchy.append(
     element("span", "eyebrow", `VERSION ${spatial.version.version_number}`),
@@ -7207,7 +7247,12 @@ function renderSpatial(): void {
     }, saveDefaultDeliveryPolicy);
   });
   delivery.append(savePolicy);
-  container.append(
+  const advanced = document.createElement("details");
+  advanced.className = "spatial-advanced-workflows";
+  const advancedSummary = document.createElement("summary");
+  advancedSummary.textContent = "Advanced evidence and diagnostics";
+  const advancedGrid = element("div", "workspace-grid spatial-advanced-grid");
+  advancedGrid.append(
     hierarchy,
     semanticExtraction,
     renderFloorplanWorkflow(project, spatial),
@@ -7216,6 +7261,311 @@ function renderSpatial(): void {
     assurance,
     delivery,
   );
+  advanced.append(advancedSummary, advancedGrid);
+  container.append(advanced);
+}
+
+function renderSceneAuthoringWorkspace(
+  project: Project,
+  spatial: SpatialWorkspace,
+): HTMLElement {
+  const card = element("article", "workspace-card-large scene-authoring-workspace");
+  const heading = element("div", "scene-authoring-heading");
+  const copy = element("div");
+  copy.append(
+    element("span", "eyebrow", "RENDER-NATIVE WALKING MAP"),
+    element("h3", "", "Inspect and correct the reconstructed structure in place"),
+    element(
+      "p",
+      "muted-copy",
+      "Automatic geometry is the baseline. Mark only incorrect or missing rooms, walls, doorways, stairs, and ramps directly on this immutable render.",
+    ),
+  );
+  const status = element("span", "scene-authoring-status", "Opening registered scene…");
+  heading.append(copy, status);
+
+  const stage = element("div", "scene-authoring-stage");
+  const frame = document.createElement("iframe");
+  frame.title = `Spatial authoring for ${project.name}`;
+  frame.allow = "fullscreen";
+  stage.append(frame);
+
+  const toolbar = element("div", "scene-authoring-toolbar");
+  const modes = [
+    [null, "Inspect"],
+    ["room", "Mark room"],
+    ["wall", "Mark wall"],
+    ["opening", "Mark doorway"],
+    ["connector", "Mark stairs / ramp"],
+  ] as const;
+  const modeButtons = modes.map(([mode, label]) => {
+    const button = element("button", mode === null ? "primary-button" : "quiet-button", label);
+    button.type = "button";
+    button.addEventListener("click", () => activateSceneAuthoringMode(mode));
+    toolbar.append(button);
+    return button;
+  });
+  modeButtons.forEach((button, index) => { if (index > 0) button.disabled = true; });
+  const finish = element("button", "quiet-button", "Finish shape");
+  finish.type = "button";
+  finish.disabled = true;
+  finish.addEventListener("click", finishSceneAuthoringShape);
+  const save = element("button", "primary-button", "Apply corrections and rebuild walking map");
+  save.type = "button";
+  save.disabled = true;
+  save.addEventListener("click", () => {
+    void runAction({
+      key: `save-render-authoring:${spatial.version!.id}`,
+      trigger: save,
+      pendingLabel: "Saving and rebuilding…",
+    }, submitSceneAuthoringCorrections);
+  });
+  toolbar.append(finish, save);
+
+  const reviewable = [...(spatial.floorplanExtractions ?? [])]
+    .find((extraction) => extraction.status === "READY_FOR_REVIEW" && extraction.proposal_json);
+  let plan: EditableFloorplan | null = null;
+  let revisionId: string | null = null;
+  if (reviewable?.proposal_json) {
+    try {
+      plan = floorplanProposalToEditablePlan(reviewable.proposal_json);
+    } catch (error) {
+      status.textContent = errorMessage(error);
+      status.dataset.tone = "error";
+    }
+  } else {
+    const approved = (spatial.floorplanRevisions ?? []).find(
+      (revision) => revision.status === "approved",
+    );
+    if (approved) {
+      revisionId = approved.id;
+      try {
+        plan = parseEditableFloorplan(approved.plan_json);
+      } catch (error) {
+        status.textContent = errorMessage(error);
+        status.dataset.tone = "error";
+      }
+    }
+  }
+  sceneAuthoringWorkspace = {
+    projectId: project.id,
+    versionId: spatial.version!.id,
+    extractionId: reviewable?.id ?? null,
+    revisionId,
+    plan,
+    dirty: false,
+    mode: null,
+    requestId: null,
+    points: [],
+    frame,
+    status,
+    finish,
+    save,
+    modeButtons,
+    correctionDraftOperationId: crypto.randomUUID(),
+    correctionReviewOperationId: crypto.randomUUID(),
+  };
+  if (!plan) {
+    status.textContent = "Waiting for automatic structural reconstruction";
+  }
+  void loadSceneAuthoringRenderable(project.id, spatial.version!.id);
+  card.append(heading, stage, toolbar);
+  return card;
+}
+
+async function loadSceneAuthoringRenderable(projectId: string, versionId: string): Promise<void> {
+  const workspace = sceneAuthoringWorkspace;
+  if (!workspace || workspace.projectId !== projectId || workspace.versionId !== versionId) return;
+  try {
+    const response = await api<{ renderable: SceneAuthoringRenderable }>(
+      `/api/projects/${projectId}/spatial/authoring-renderable?versionId=${encodeURIComponent(versionId)}`,
+    );
+    if (sceneAuthoringWorkspace !== workspace) return;
+    workspace.frame.onload = () => {
+      if (sceneAuthoringWorkspace !== workspace) return;
+      workspace.modeButtons.forEach((button, index) => {
+        if (index > 0) button.disabled = !workspace.plan;
+      });
+      workspace.status.textContent = workspace.plan
+        ? "Registered scene ready · inspect or mark corrections"
+        : "Registered scene ready · automatic structure is still processing";
+      workspace.status.dataset.tone = "ready";
+    };
+    workspace.frame.src = rendererAssetUrl(response.renderable).toString();
+  } catch (error) {
+    if (sceneAuthoringWorkspace !== workspace) return;
+    workspace.status.textContent = errorMessage(error);
+    workspace.status.dataset.tone = "error";
+  }
+}
+
+function activateSceneAuthoringMode(
+  mode: "room" | "wall" | "opening" | "connector" | null,
+): void {
+  const workspace = sceneAuthoringWorkspace;
+  if (!workspace) return;
+  if (mode && !workspace.plan) {
+    workspace.status.textContent = "Automatic structural reconstruction must produce a plan before corrections can be marked.";
+    workspace.status.dataset.tone = "error";
+    return;
+  }
+  const requestId = crypto.randomUUID();
+  workspace.mode = mode;
+  workspace.requestId = requestId;
+  workspace.points = [];
+  workspace.finish.disabled = true;
+  for (const [index, button] of workspace.modeButtons.entries()) {
+    const active = index === (mode === null ? 0 : mode === "room" ? 1 : mode === "wall" ? 2 : mode === "opening" ? 3 : 4);
+    button.className = active ? "primary-button" : "quiet-button";
+  }
+  workspace.status.textContent = mode === null
+    ? "Inspect mode · drag to look around"
+    : `${mode === "opening" ? "Doorway" : humanStatus(mode)} mode · click the rendered geometry`;
+  workspace.status.dataset.tone = "ready";
+  workspace.frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "set-authoring-mode",
+    requestId,
+    mode,
+  }, location.origin);
+}
+
+function handleSceneAuthoringRendererMessage(event: MessageEvent<unknown>): void {
+  const workspace = sceneAuthoringWorkspace;
+  if (
+    !workspace || event.origin !== location.origin ||
+    event.source !== workspace.frame.contentWindow ||
+    !event.data || typeof event.data !== "object" ||
+    Reflect.get(event.data, "source") !== "spatial-spark"
+  ) return;
+  const type = Reflect.get(event.data, "type");
+  if (type === "progress") {
+    workspace.status.textContent = String(Reflect.get(event.data, "detail") ?? "Loading registered scene");
+    return;
+  }
+  if (type === "error") {
+    workspace.status.textContent = String(Reflect.get(event.data, "message") ?? "The registered scene could not be loaded.");
+    workspace.status.dataset.tone = "error";
+    return;
+  }
+  if (type !== "authoring-pick" || Reflect.get(event.data, "requestId") !== workspace.requestId) return;
+  const points = Reflect.get(event.data, "points");
+  if (!Array.isArray(points) || !points.every(validNumberTuple)) return;
+  workspace.points = points.map((point) => [...point] as [number, number, number]);
+  const complete = Reflect.get(event.data, "complete") === true;
+  workspace.finish.disabled = !complete || workspace.mode === "wall" || workspace.mode === "opening";
+  workspace.status.textContent = `${workspace.points.length} point${workspace.points.length === 1 ? "" : "s"} marked on the registered scene`;
+  if (complete && (workspace.mode === "wall" || workspace.mode === "opening")) {
+    commitSceneAuthoringGeometry();
+  }
+}
+
+function finishSceneAuthoringShape(): void {
+  commitSceneAuthoringGeometry();
+}
+
+function commitSceneAuthoringGeometry(): void {
+  const workspace = sceneAuthoringWorkspace;
+  const plan = workspace?.plan;
+  const mode = workspace?.mode;
+  if (!workspace || !plan || !mode || !workspace.points.length) return;
+  const level = plan.levels[0];
+  if (!level) return;
+  if (mode === "room") {
+    if (workspace.points.length < 3) return;
+    level.rooms.push({
+      id: crypto.randomUUID(),
+      label: `Room ${level.rooms.length + 1}`,
+      points: workspace.points.map(([x, _y, z]) => [x, z]),
+    });
+  } else if (mode === "wall") {
+    if (workspace.points.length < 2) return;
+    const template = level.walls[0];
+    if (!template) {
+      workspace.status.textContent = "The automatic proposal has no measured wall thickness or height to reuse.";
+      workspace.status.dataset.tone = "error";
+      return;
+    }
+    const [start, end] = workspace.points;
+    level.walls.push({
+      id: crypto.randomUUID(),
+      label: `Wall ${level.walls.length + 1}`,
+      start: [start![0], start![2]],
+      end: [end![0], end![2]],
+      thicknessM: template.thicknessM,
+      heightM: template.heightM,
+    });
+  } else if (mode === "opening") {
+    if (workspace.points.length < 2) return;
+    const [start, end] = workspace.points;
+    const widthM = Math.hypot(end![0] - start![0], end![2] - start![2]);
+    level.openings.push({
+      id: crypto.randomUUID(),
+      label: `Doorway ${level.openings.length + 1}`,
+      type: "door",
+      wallId: null,
+      start: [start![0], start![2]],
+      end: [end![0], end![2]],
+      widthM,
+      heightM: null,
+    });
+  } else {
+    if (workspace.points.length < 4 || plan.levels.length < 2) {
+      workspace.status.textContent = "A connector needs four rendered points and two automatically detected levels.";
+      workspace.status.dataset.tone = "error";
+      return;
+    }
+    plan.connectors.push({
+      id: crypto.randomUUID(),
+      label: `Connector ${plan.connectors.length + 1}`,
+      type: "stairs",
+      lowerLevelId: plan.levels[0]!.id,
+      upperLevelId: plan.levels[1]!.id,
+      points: workspace.points.map((point) => [...point]),
+    });
+  }
+  workspace.dirty = true;
+  workspace.save.disabled = false;
+  workspace.status.textContent = "Correction staged · apply it to rebuild collision and navigation";
+  workspace.status.dataset.tone = "ready";
+  activateSceneAuthoringMode(mode);
+}
+
+async function submitSceneAuthoringCorrections(): Promise<void> {
+  const workspace = sceneAuthoringWorkspace;
+  if (!workspace?.plan || !workspace.dirty) {
+    throw new Error("Mark at least one correction on a reviewable automatic proposal first.");
+  }
+  parseEditableFloorplan(JSON.stringify(workspace.plan));
+  let extractionId = workspace.extractionId;
+  if (!extractionId) {
+    if (!workspace.revisionId) {
+      throw new Error("The registered scene has no approved floor-plan revision to correct.");
+    }
+    const draft = await api<{ extraction: { id: string } }>(
+      `/api/projects/${workspace.projectId}/spatial/floorplan-revisions/${workspace.revisionId}/correction-drafts`,
+      {
+        method: "POST",
+        body: JSON.stringify({ clientOperationId: workspace.correctionDraftOperationId }),
+      },
+    );
+    extractionId = draft.extraction.id;
+    workspace.extractionId = extractionId;
+  }
+  await api(
+    `/api/projects/${workspace.projectId}/spatial/floorplan-extractions/${extractionId}/review`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: workspace.correctionReviewOperationId,
+        decision: "approve",
+        note: "Corrected against the registered Gaussian render in Spatial Studio.",
+        plan: workspace.plan,
+      }),
+    },
+  );
+  showToast("Corrections saved; collision and navigation rebuild queued");
+  await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {

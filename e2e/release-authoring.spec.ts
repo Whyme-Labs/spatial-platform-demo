@@ -167,6 +167,12 @@ test("multi-level floor-plan review shows every level and vertical connector", a
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await expect(page.getByRole("heading", {
+    name: "Inspect and correct the reconstructed structure in place",
+  })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark room", exact: true })).toBeVisible();
+  await expect(page.locator("details.spatial-advanced-workflows")).not.toHaveAttribute("open", "");
+  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
   await expect(page.getByText("2 levels", { exact: true })).toBeVisible();
   await expect(page.getByText("1 stair/ramp connector", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Correct and review plan", exact: true }).click();
@@ -188,6 +194,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
@@ -242,6 +249,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
   const dialog = page.locator("#navigationTraversalDialog");

@@ -275,6 +275,313 @@ describe("Spatial Studio Worker", () => {
     expect(response.status).toBe(404);
   });
 
+  it("gives operators a signed render-native authoring scene without weakening preview walking gates", async () => {
+    const cookie = await login();
+    const membership = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const manifestId = crypto.randomUUID();
+    const manifestAssetId = crypto.randomUUID();
+    const objectKey = `authoring/${membership!.organisationId}/${projectId}/${versionId}/scene.rad`;
+    const bytes = new Uint8Array([82, 65, 68, 1, 2, 3, 4]);
+    const assetSha256 = await sha256Hex(bytes);
+    const registrationPayload = {
+      schemaVersion: "capture-to-scene-registration-v1",
+      sourceCoordinateFrameId: "authoring-y-up",
+      targetCoordinateFrameId: "scene-world-right-handed-y-up-metres",
+      evidenceAssetId: assetId,
+      evidenceSha256: assetSha256,
+      method: "Test fixture keeps the immutable render and scene world in one metric frame.",
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "metres",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
+    };
+    const registrationSha256 = await sha256Hex(JSON.stringify(registrationPayload));
+    const canonicalManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId,
+      project: { id: projectId, captureAdapter: "fjd-trion" },
+      version: { id: versionId, versionNumber: 1 },
+      coordinateFrame: {
+        id: "authoring-y-up",
+        units: "metres",
+        axisConvention: "right-handed-y-up",
+        epsg: null,
+        registrationMethod: registrationPayload.method,
+      },
+      sceneRegistration: {
+        ...registrationPayload,
+        transformSha256: registrationSha256,
+      },
+      assets: [{
+        id: assetId,
+        roles: ["traversal_evidence"],
+        sha256: assetSha256,
+      }],
+    });
+    const manifestSha256 = await sha256Hex(canonicalManifest);
+    await env.SPATIAL_ASSETS.put(objectKey, bytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Render authoring fixture', ?, 'QA_REQUIRED', 'fjd-trion',
+          'venue-navigator', ?)
+      `).bind(
+        projectId,
+        membership!.organisationId,
+        `render-authoring-${projectId.slice(0, 8)}`,
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, membership!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'scene.rad',
+          'application/octet-stream', ?, ?, 'verified')
+      `).bind(
+        assetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        objectKey,
+        bytes.byteLength,
+        assetSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+          'capture-bundle-manifest.json', 'application/json', ?, ?, 'verified')
+      `).bind(
+        manifestAssetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        `reports-private/${membership!.organisationId}/${projectId}/${versionId}/capture-bundle-manifest.json`,
+        new TextEncoder().encode(canonicalManifest).byteLength,
+        manifestSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'fjd-trion', 'fjd-trion', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        manifestId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "a".repeat(64),
+        manifestAssetId,
+        manifestSha256,
+        canonicalManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        membership!.userId,
+        "Accepted registered authoring fixture.",
+        membership!.userId,
+      ),
+    ]);
+
+    const authoringResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/authoring-renderable?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(authoringResponse.status).toBe(200);
+    expect(authoringResponse.headers.get("cache-control")).toBe("private, no-store");
+    const authoring = await authoringResponse.json<{
+      renderable: {
+        versionId: string;
+        assetId: string;
+        contentUrl: string;
+        purpose: string;
+        viewer: { sourceToWorld: unknown; captureRegistration: { transformSha256: string } };
+      };
+    }>();
+    expect(authoring.renderable).toMatchObject({
+      versionId,
+      assetId,
+      purpose: "spatial-authoring",
+    });
+    expect(authoring.renderable.viewer).toMatchObject({
+      sourceToWorld: registrationPayload.sourceToWorld,
+      captureRegistration: { transformSha256: registrationSha256 },
+    });
+    const assetResponse = await exports.default.fetch(
+      new URL(authoring.renderable.contentUrl, origin),
+    );
+    expect(assetResponse.status).toBe(200);
+    expect(new Uint8Array(await assetResponse.arrayBuffer())).toEqual(bytes);
+
+    const previewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/versions/${versionId}/preview`,
+      { headers: { cookie } },
+    );
+    expect(previewResponse.status).toBe(409);
+    await expect(previewResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("approved collision and navigation"),
+    });
+
+    const sourceJobId = crypto.randomUUID();
+    const sourceExtractionId = crypto.randomUUID();
+    const revisionId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO processing_jobs
+          (id, organisation_id, project_id, version_id, input_asset_id, job_type,
+            processor_version, idempotency_key, state, progress)
+        VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1', 'fixture', ?, 'SUCCEEDED', 100)
+      `).bind(
+        sourceJobId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        assetId,
+        `source-floorplan-${sourceJobId}`,
+      ),
+      env.DB.prepare(`
+        INSERT INTO floorplan_extraction_runs
+          (id, organisation_id, project_id, version_id, input_asset_id, job_id,
+            method, normalizer, status, parameters_json, source_evidence_json,
+            proposal_json, proposal_hash, client_operation_id, request_hash,
+            created_by, reviewed_by, review_decision, review_note,
+            review_client_operation_id, review_request_hash, review_response_json,
+            reviewed_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'metric-pointcloud-floorplan-v2', 'native-ply-v1',
+          'REVIEWED', '{"automaticPipeline":true}', '{}', '{}', ?, ?, ?, ?, ?,
+          'approve', 'Fixture source review.', ?, ?, '{}', datetime('now'))
+      `).bind(
+        sourceExtractionId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        assetId,
+        sourceJobId,
+        "a".repeat(64),
+        crypto.randomUUID(),
+        "b".repeat(64),
+        membership!.userId,
+        membership!.userId,
+        crypto.randomUUID(),
+        "c".repeat(64),
+      ),
+      env.DB.prepare(`
+        INSERT INTO floorplan_revisions
+          (id, organisation_id, project_id, version_id, extraction_id,
+            revision_number, plan_json, plan_hash, source_proposal_hash,
+            review_note, created_by)
+        VALUES (?, ?, ?, ?, ?, 1, '{}', ?, ?, 'Fixture approved plan.', ?)
+      `).bind(
+        revisionId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        sourceExtractionId,
+        "d".repeat(64),
+        "a".repeat(64),
+        membership!.userId,
+      ),
+    ]);
+    const draftOperationId = crypto.randomUUID();
+    const correctionDraftResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/floorplan-revisions/${revisionId}/correction-drafts`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ clientOperationId: draftOperationId }),
+      },
+    );
+    expect(correctionDraftResponse.status).toBe(201);
+    const correctionDraft = await correctionDraftResponse.json<{
+      extraction: { id: string; status: string };
+    }>();
+    expect(correctionDraft.extraction.status).toBe("READY_FOR_REVIEW");
+    const correctionReplay = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/floorplan-revisions/${revisionId}/correction-drafts`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ clientOperationId: draftOperationId }),
+      },
+    );
+    expect(correctionReplay.status).toBe(200);
+    await expect(correctionReplay.json()).resolves.toMatchObject({
+      extraction: { id: correctionDraft.extraction.id },
+      idempotent: true,
+    });
+  });
+
+  it("blocks render-native marking when the scene has no verified metric registration", async () => {
+    const cookie = await login();
+    const membership = await env.DB.prepare(`
+      SELECT organisation_id AS organisationId, user_id AS userId
+      FROM memberships ORDER BY created_at LIMIT 1
+    `).first<{ organisationId: string; userId: string }>();
+    const projectId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const objectKey = `authoring/${membership!.organisationId}/${projectId}/${versionId}/unregistered.rad`;
+    await env.SPATIAL_ASSETS.put(objectKey, new Uint8Array([82, 65, 68, 8]));
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Unregistered authoring fixture', ?, 'QA_REQUIRED', 'fjd-trion',
+          'venue-navigator', ?)
+      `).bind(
+        projectId,
+        membership!.organisationId,
+        `unregistered-authoring-${projectId.slice(0, 8)}`,
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
+      `).bind(versionId, projectId, membership!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, integrity_status)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'unregistered.rad',
+          'application/octet-stream', 4, 'verified')
+      `).bind(
+        assetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        objectKey,
+      ),
+    ]);
+
+    const response = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/authoring-renderable?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("verified metric capture-to-scene registration"),
+    });
+  });
+
   it("rejects unauthenticated tenant APIs", async () => {
     const response = await exports.default.fetch(`${origin}/api/dashboard`);
     expect(response.status).toBe(401);
