@@ -165,6 +165,33 @@ multi-level detection, stair and ramp inference, and multi-level Recast
 navigation. It stays private cache only — the dealer portal publishes no
 licence, and FJD's own FAQ gates sample data behind an email request for
 review.
+
+### Multi-level extraction does not hold on this capture
+
+Running `extractMetricFloorPlan` over the school is the first time the
+multi-level lane has met real stairs, and it does not recover them.
+
+Ground truth, measured twice and independently of the extractor: two storeys
+about 4 m apart, 543 and 539 one-metre floor cells. The extractor returned a
+**single** level at 2.4 m covering 287 m² with 13 rooms, 754 walls, 118
+openings, and **no connectors** — no second storey and no stair. Hinting the
+lower floor does not recover it either: an elevation hint of -1.8 m yields one
+room of 3.6 m², and -1.6 m is rejected outright as `INSUFFICIENT_ROOM_SUPPORT`.
+It reported 53 credible horizontal layers and selected one that is neither
+floor.
+
+Two caveats keep this indicative rather than a formal disqualification. PDAL is
+absent from this workstation, so the LAS was converted to a Y-up PLY directly
+rather than through the production normaliser, and the cloud was subsampled
+1-in-8 to 15.6 M points. Both differ from the container path.
+
+The extractor is deliberately left untouched. Its grid, height bands, wall
+coverage, room area, and opening width carry fixed values that
+`docs/research/game-engine-walking-evidence-2026-08-03.md` already warns must
+not become policy until measured against a registered corpus. Tuning them
+against a single capture would replace an untested assumption with an
+overfitted one. What this run establishes is the measurement that a fix has to
+satisfy: two storeys, ~540 m² each, joined by a stair.
 - No sample ships E57, SPZ, SOG, SPLAT, mesh, classified output, or imagery.
 - No dataset-specific licence exists. The only governing text is the store's
   Shopify terms, which withhold reproduction and redistribution rights, so the
