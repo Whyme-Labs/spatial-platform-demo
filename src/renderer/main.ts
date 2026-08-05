@@ -1575,11 +1575,16 @@ function noteMovementResistance(
   resolved: Vector3Tuple | null,
   deltaSeconds: number,
 ): void {
-  const requested = Math.hypot(desired[0] - origin[0], desired[2] - origin[2]);
-  const achieved = resolved
-    ? Math.hypot(resolved[0] - origin[0], resolved[2] - origin[2])
+  const requestedX = desired[0] - origin[0];
+  const requestedZ = desired[2] - origin[2];
+  const requested = Math.hypot(requestedX, requestedZ);
+  // Measure progress along the requested heading rather than raw displacement:
+  // a capsule leaning on a wall keeps sliding sideways, which reads as motion
+  // while the walker gets nowhere it asked to go.
+  const advanced = requested > BLOCKED_MOVEMENT_EPSILON_METRES && resolved
+    ? ((resolved[0] - origin[0]) * requestedX + (resolved[2] - origin[2]) * requestedZ) / requested
     : 0;
-  if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES || achieved > requested * 0.25) {
+  if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES || advanced > requested * 0.25) {
     blockedMovementSeconds = 0;
     if (blockedMovementHintShown) {
       blockedMovementHintShown = false;
