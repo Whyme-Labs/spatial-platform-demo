@@ -129,11 +129,16 @@ close the paired gap:
   points, 30.4 x 46.8 x 5.3 m), is genuinely multi-room — 1 m-cell occupancy
   fills 24.9 % of its bounding box — but is single storey and unfurnished, and
   carries no splat.
-- **No public FJD sample is multi-floor.** The V4e interior is a tall single
-  level with a partial mezzanine: only 17 % of cells shared between the
-  0.3-2.2 m and 4.4-6.0 m bands show a solid intervening slab, and its 20 m
-  header Z extent comes from under 2 % outlier points. `Building` is an
-  exterior walk whose trajectory climbs 1.63 m over 7.2 minutes.
+- **No public FJD sample is multi-floor.** Measured directly from the pinned
+  `fjd-v4e-interior.las` over 1 m cells: the 0.2-2.6 m band occupies 956 cells
+  while the 4.4-6.2 m band occupies 171, so the upper level covers only 17.9 %
+  of the lower footprint, and 54 % of the 126 cells occupied in both bands show
+  an intervening 3.3-4.2 m slab. That is a partial mezzanine or gallery over a
+  tall single level, not a second storey, and its 20 m header Z extent is
+  outlier-driven. `Building` is an exterior walk whose trajectory climbs 1.63 m
+  over 7.2 minutes. Two independent sweeps disagreed on this file — one read
+  the two Z bands as two storeys — so the footprint ratio above was recomputed
+  from the pinned bytes rather than taken from either report.
 - No sample ships E57, SPZ, SOG, SPLAT, mesh, classified output, or imagery.
 - No dataset-specific licence exists. The only governing text is the store's
   Shopify terms, which withhold reproduction and redistribution rights, so the
