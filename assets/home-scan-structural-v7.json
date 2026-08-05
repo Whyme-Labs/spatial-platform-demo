@@ -28,76 +28,914 @@
     "limitations": "Scene units are not measurements. Surfaces are conservative, axis-aligned gameplay boundaries reviewed against the visual asset; they are not surveyed building geometry and do not certify construction, clearance, accessibility, or boundary facts."
   },
   "floorRectangles": [
-    { "id": "floor-main-room", "min": [-0.6, -4.0], "max": [9.1, 0.8], "elevation": 0.15 },
-    { "id": "floor-main-side-threshold", "min": [-3.0, -1.7], "max": [0.2, 0.1], "elevation": 0.15 },
-    { "id": "floor-side-room-a", "min": [-4.4, -1.2], "max": [-2.1, 1.1], "elevation": 0.15 },
-    { "id": "floor-side-threshold", "min": [-6.5, -1.4], "max": [-3.6, 0.4], "elevation": 0.15 },
-    { "id": "floor-side-room-b", "min": [-8.1, -2.4], "max": [-5.5, 0.9], "elevation": 0.15 },
-    { "id": "floor-main-west-threshold", "min": [-0.2, -2.7], "max": [1.0, -1.8], "elevation": 0.15 },
-    { "id": "floor-west-spine", "min": [-0.15, -10.8], "max": [0.8, -2.2], "elevation": 0.15 },
-    { "id": "floor-central-furniture-pass-through", "min": [0.0, -9.9], "max": [4.9, -7.3], "elevation": 0.15 },
-    { "id": "floor-far-room-threshold", "min": [-0.2, -11.6], "max": [1.2, -10.3], "elevation": 0.15 },
-    { "id": "floor-far-room", "min": [0.3, -13.0], "max": [5.5, -10.7], "elevation": 0.15 }
+    {
+      "id": "floor-main-room",
+      "min": [
+        -0.6,
+        -4.0
+      ],
+      "max": [
+        9.1,
+        0.8
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-main-side-threshold",
+      "min": [
+        -3.0,
+        -1.7
+      ],
+      "max": [
+        0.2,
+        0.1
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-side-room-a",
+      "min": [
+        -4.4,
+        -1.2
+      ],
+      "max": [
+        -2.1,
+        1.1
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-side-threshold",
+      "min": [
+        -6.5,
+        -1.4
+      ],
+      "max": [
+        -3.6,
+        0.4
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-side-room-b",
+      "min": [
+        -8.1,
+        -2.4
+      ],
+      "max": [
+        -5.5,
+        0.9
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-main-west-threshold",
+      "min": [
+        -0.2,
+        -2.7
+      ],
+      "max": [
+        1.0,
+        -1.8
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-west-spine",
+      "min": [
+        -0.15,
+        -10.8
+      ],
+      "max": [
+        0.8,
+        -2.2
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-central-furniture-pass-through",
+      "min": [
+        0.0,
+        -9.9
+      ],
+      "max": [
+        4.9,
+        -7.3
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-far-room-threshold",
+      "min": [
+        -0.2,
+        -11.6
+      ],
+      "max": [
+        1.2,
+        -10.3
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-far-room",
+      "min": [
+        0.3,
+        -13.0
+      ],
+      "max": [
+        5.5,
+        -10.7
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-kitchen-threshold",
+      "min": [
+        5.45,
+        -4.3
+      ],
+      "max": [
+        6.65,
+        -4.0
+      ],
+      "elevation": 0.15
+    },
+    {
+      "id": "floor-kitchen",
+      "min": [
+        5.0,
+        -8.3
+      ],
+      "max": [
+        9.1,
+        -4.3
+      ],
+      "elevation": 0.15
+    }
   ],
   "ceilingRectangles": [
-    { "id": "ceiling-main-room", "min": [-0.6, -4.0], "max": [9.1, 0.8], "elevation": 3.0 },
-    { "id": "ceiling-main-side-threshold", "min": [-3.0, -1.7], "max": [0.2, 0.1], "elevation": 3.0 },
-    { "id": "ceiling-side-room-a", "min": [-4.4, -1.2], "max": [-2.1, 1.1], "elevation": 3.0 },
-    { "id": "ceiling-side-threshold", "min": [-6.5, -1.4], "max": [-3.6, 0.4], "elevation": 3.0 },
-    { "id": "ceiling-side-room-b", "min": [-8.1, -2.4], "max": [-5.5, 0.9], "elevation": 3.0 },
-    { "id": "ceiling-main-west-threshold", "min": [-0.2, -2.7], "max": [1.0, -1.8], "elevation": 3.0 },
-    { "id": "ceiling-west-spine", "min": [-0.15, -10.8], "max": [0.8, -2.2], "elevation": 3.0 },
-    { "id": "ceiling-central-furniture-pass-through", "min": [0.0, -9.9], "max": [4.9, -7.3], "elevation": 3.0 },
-    { "id": "ceiling-far-room-threshold", "min": [-0.2, -11.6], "max": [1.2, -10.3], "elevation": 3.0 },
-    { "id": "ceiling-far-room", "min": [0.3, -13.0], "max": [5.5, -10.7], "elevation": 3.0 }
+    {
+      "id": "ceiling-main-room",
+      "min": [
+        -0.6,
+        -4.0
+      ],
+      "max": [
+        9.1,
+        0.8
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-main-side-threshold",
+      "min": [
+        -3.0,
+        -1.7
+      ],
+      "max": [
+        0.2,
+        0.1
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-side-room-a",
+      "min": [
+        -4.4,
+        -1.2
+      ],
+      "max": [
+        -2.1,
+        1.1
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-side-threshold",
+      "min": [
+        -6.5,
+        -1.4
+      ],
+      "max": [
+        -3.6,
+        0.4
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-side-room-b",
+      "min": [
+        -8.1,
+        -2.4
+      ],
+      "max": [
+        -5.5,
+        0.9
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-main-west-threshold",
+      "min": [
+        -0.2,
+        -2.7
+      ],
+      "max": [
+        1.0,
+        -1.8
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-west-spine",
+      "min": [
+        -0.15,
+        -10.8
+      ],
+      "max": [
+        0.8,
+        -2.2
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-central-furniture-pass-through",
+      "min": [
+        0.0,
+        -9.9
+      ],
+      "max": [
+        4.9,
+        -7.3
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-far-room-threshold",
+      "min": [
+        -0.2,
+        -11.6
+      ],
+      "max": [
+        1.2,
+        -10.3
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-far-room",
+      "min": [
+        0.3,
+        -13.0
+      ],
+      "max": [
+        5.5,
+        -10.7
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-kitchen-threshold",
+      "min": [
+        5.45,
+        -4.3
+      ],
+      "max": [
+        6.65,
+        -4.0
+      ],
+      "elevation": 3.0
+    },
+    {
+      "id": "ceiling-kitchen",
+      "min": [
+        5.0,
+        -8.3
+      ],
+      "max": [
+        9.1,
+        -4.3
+      ],
+      "elevation": 3.0
+    }
   ],
   "barrierSegments": [
-    { "id": "wall-01", "start": [-8.1, -2.4], "end": [-8.1, 0.9], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-02", "start": [-5.5, -2.4], "end": [-5.5, -1.4], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-03", "start": [-5.5, 0.4], "end": [-5.5, 0.9], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-04", "start": [-3.6, -1.4], "end": [-3.6, -1.2], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-05", "start": [-4.4, 0.4], "end": [-4.4, 1.1], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-06", "start": [-3.0, -1.7], "end": [-3.0, -1.2], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-07", "start": [-2.1, 0.1], "end": [-2.1, 1.1], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-08", "start": [-0.6, -4.0], "end": [-0.6, -1.7], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-09", "start": [-0.6, 0.1], "end": [-0.6, 0.8], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-10", "start": [-0.2, -11.6], "end": [-0.2, -10.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-11", "start": [-0.15, -10.3], "end": [-0.15, -4.0], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-12", "start": [0.3, -13.0], "end": [0.3, -11.6], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-13", "start": [0.8, -10.3], "end": [0.8, -9.9], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-14", "start": [0.8, -7.3], "end": [0.8, -4.0], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-15", "start": [1.2, -10.7], "end": [1.2, -10.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-16", "start": [4.9, -9.9], "end": [4.9, -7.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-17", "start": [5.5, -13.0], "end": [5.5, -10.7], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-18", "start": [9.1, -4.0], "end": [9.1, 0.8], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-19", "start": [-8.1, -2.4], "end": [-5.5, -2.4], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-20", "start": [-8.1, 0.9], "end": [-5.5, 0.9], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-21", "start": [-5.5, -1.4], "end": [-3.6, -1.4], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-22", "start": [-5.5, 0.4], "end": [-4.4, 0.4], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-23", "start": [-4.4, 1.1], "end": [-2.1, 1.1], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-24", "start": [-3.6, -1.2], "end": [-3.0, -1.2], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-25", "start": [-3.0, -1.7], "end": [-0.6, -1.7], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-26", "start": [-2.1, 0.1], "end": [-0.6, 0.1], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-27", "start": [-0.6, -4.0], "end": [-0.15, -4.0], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-28", "start": [0.8, -4.0], "end": [9.1, -4.0], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-29", "start": [-0.6, 0.8], "end": [9.1, 0.8], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-30", "start": [-0.2, -11.6], "end": [0.3, -11.6], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-31", "start": [-0.2, -10.3], "end": [-0.15, -10.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-32", "start": [0.8, -10.3], "end": [1.2, -10.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-33", "start": [0.3, -13.0], "end": [5.5, -13.0], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-34", "start": [0.8, -9.9], "end": [4.9, -9.9], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-35", "start": [0.8, -7.3], "end": [4.9, -7.3], "minY": 0.15, "maxY": 3.0 },
-    { "id": "wall-36", "start": [1.2, -10.7], "end": [5.5, -10.7], "minY": 0.15, "maxY": 3.0 }
+    {
+      "id": "wall-01",
+      "start": [
+        -8.1,
+        -2.4
+      ],
+      "end": [
+        -8.1,
+        0.9
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-02",
+      "start": [
+        -5.5,
+        -2.4
+      ],
+      "end": [
+        -5.5,
+        -1.4
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-03",
+      "start": [
+        -5.5,
+        0.4
+      ],
+      "end": [
+        -5.5,
+        0.9
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-04",
+      "start": [
+        -3.6,
+        -1.4
+      ],
+      "end": [
+        -3.6,
+        -1.2
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-05",
+      "start": [
+        -4.4,
+        0.4
+      ],
+      "end": [
+        -4.4,
+        1.1
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-06",
+      "start": [
+        -3.0,
+        -1.7
+      ],
+      "end": [
+        -3.0,
+        -1.2
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-07",
+      "start": [
+        -2.1,
+        0.1
+      ],
+      "end": [
+        -2.1,
+        1.1
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-08",
+      "start": [
+        -0.6,
+        -4.0
+      ],
+      "end": [
+        -0.6,
+        -1.7
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-09",
+      "start": [
+        -0.6,
+        0.1
+      ],
+      "end": [
+        -0.6,
+        0.8
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-10",
+      "start": [
+        -0.2,
+        -11.6
+      ],
+      "end": [
+        -0.2,
+        -10.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-11",
+      "start": [
+        -0.15,
+        -10.3
+      ],
+      "end": [
+        -0.15,
+        -4.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-12",
+      "start": [
+        0.3,
+        -13.0
+      ],
+      "end": [
+        0.3,
+        -11.6
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-13",
+      "start": [
+        0.8,
+        -10.3
+      ],
+      "end": [
+        0.8,
+        -9.9
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-14",
+      "start": [
+        0.8,
+        -7.3
+      ],
+      "end": [
+        0.8,
+        -4.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-15",
+      "start": [
+        1.2,
+        -10.7
+      ],
+      "end": [
+        1.2,
+        -10.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-16",
+      "start": [
+        4.9,
+        -9.9
+      ],
+      "end": [
+        4.9,
+        -7.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-17",
+      "start": [
+        5.5,
+        -13.0
+      ],
+      "end": [
+        5.5,
+        -10.7
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-18",
+      "start": [
+        9.1,
+        -4.0
+      ],
+      "end": [
+        9.1,
+        0.8
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-19",
+      "start": [
+        -8.1,
+        -2.4
+      ],
+      "end": [
+        -5.5,
+        -2.4
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-20",
+      "start": [
+        -8.1,
+        0.9
+      ],
+      "end": [
+        -5.5,
+        0.9
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-21",
+      "start": [
+        -5.5,
+        -1.4
+      ],
+      "end": [
+        -3.6,
+        -1.4
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-22",
+      "start": [
+        -5.5,
+        0.4
+      ],
+      "end": [
+        -4.4,
+        0.4
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-23",
+      "start": [
+        -4.4,
+        1.1
+      ],
+      "end": [
+        -2.1,
+        1.1
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-24",
+      "start": [
+        -3.6,
+        -1.2
+      ],
+      "end": [
+        -3.0,
+        -1.2
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-25",
+      "start": [
+        -3.0,
+        -1.7
+      ],
+      "end": [
+        -0.6,
+        -1.7
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-26",
+      "start": [
+        -2.1,
+        0.1
+      ],
+      "end": [
+        -0.6,
+        0.1
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-27",
+      "start": [
+        -0.6,
+        -4.0
+      ],
+      "end": [
+        -0.15,
+        -4.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-28",
+      "start": [
+        0.8,
+        -4.0
+      ],
+      "end": [
+        5.45,
+        -4.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-29",
+      "start": [
+        -0.6,
+        0.8
+      ],
+      "end": [
+        9.1,
+        0.8
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-30",
+      "start": [
+        -0.2,
+        -11.6
+      ],
+      "end": [
+        0.3,
+        -11.6
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-31",
+      "start": [
+        -0.2,
+        -10.3
+      ],
+      "end": [
+        -0.15,
+        -10.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-32",
+      "start": [
+        0.8,
+        -10.3
+      ],
+      "end": [
+        1.2,
+        -10.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-33",
+      "start": [
+        0.3,
+        -13.0
+      ],
+      "end": [
+        5.5,
+        -13.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-34",
+      "start": [
+        0.8,
+        -9.9
+      ],
+      "end": [
+        4.9,
+        -9.9
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-35",
+      "start": [
+        0.8,
+        -7.3
+      ],
+      "end": [
+        4.9,
+        -7.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-36",
+      "start": [
+        1.2,
+        -10.7
+      ],
+      "end": [
+        5.5,
+        -10.7
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-37",
+      "start": [
+        6.65,
+        -4.0
+      ],
+      "end": [
+        9.1,
+        -4.0
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-38",
+      "start": [
+        5.45,
+        -4.0
+      ],
+      "end": [
+        5.45,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-39",
+      "start": [
+        6.65,
+        -4.0
+      ],
+      "end": [
+        6.65,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-40",
+      "start": [
+        5.0,
+        -4.3
+      ],
+      "end": [
+        5.45,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-41",
+      "start": [
+        6.65,
+        -4.3
+      ],
+      "end": [
+        9.1,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-42",
+      "start": [
+        5.0,
+        -8.3
+      ],
+      "end": [
+        5.0,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-43",
+      "start": [
+        9.1,
+        -8.3
+      ],
+      "end": [
+        9.1,
+        -4.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    },
+    {
+      "id": "wall-44",
+      "start": [
+        5.0,
+        -8.3
+      ],
+      "end": [
+        9.1,
+        -8.3
+      ],
+      "minY": 0.15,
+      "maxY": 3.0
+    }
   ],
   "dynamicBarrierBoxes": [
-    { "id": "door-main-west", "min": [-0.15, 0.15, -3.9], "max": [0.8, 3.0, -3.78], "defaultActive": false },
-    { "id": "door-far-room", "min": [-0.15, 0.15, -10.68], "max": [0.8, 3.0, -10.56], "defaultActive": false }
+    {
+      "id": "door-main-west",
+      "min": [
+        -0.15,
+        0.15,
+        -3.9
+      ],
+      "max": [
+        0.8,
+        3.0,
+        -3.78
+      ],
+      "defaultActive": false
+    },
+    {
+      "id": "door-far-room",
+      "min": [
+        -0.15,
+        0.15,
+        -10.68
+      ],
+      "max": [
+        0.8,
+        3.0,
+        -10.56
+      ],
+      "defaultActive": false
+    }
   ],
   "furnitureBoxes": [
     {
       "id": "central-sofa-appearance-footprint",
-      "min": [0.0, 0.15, -9.9],
-      "max": [4.9, 1.35, -7.3],
+      "min": [
+        0.0,
+        0.15,
+        -9.9
+      ],
+      "max": [
+        4.9,
+        1.35,
+        -7.3
+      ],
       "classification": "FURNITURE",
       "effect": "ignored"
     }
@@ -120,13 +958,59 @@
     "minimumRegionSizeVoxels": 2,
     "mergeRegionSizeVoxels": 8
   },
-  "bounds": [[-8.5, 0.0, -13.5], [9.5, 0.6, 1.5]],
-  "spawn": { "id": "opening", "position": [3.433, 0.15, -2.433] },
+  "bounds": [
+    [
+      -8.5,
+      0.0,
+      -13.5
+    ],
+    [
+      9.5,
+      0.6,
+      1.5
+    ]
+  ],
+  "spawn": {
+    "id": "opening",
+    "position": [
+      3.433,
+      0.15,
+      -2.433
+    ]
+  },
   "destinations": [
-    { "id": "main-room", "position": [3.0, 0.15, -2.0] },
-    { "id": "far-room", "position": [3.0, 0.15, -12.0] },
-    { "id": "side-room-a", "position": [-3.5, 0.15, -0.3] },
-    { "id": "side-room-b", "position": [-6.25, 0.15, -1.95] }
+    {
+      "id": "main-room",
+      "position": [
+        3.0,
+        0.15,
+        -2.0
+      ]
+    },
+    {
+      "id": "far-room",
+      "position": [
+        3.0,
+        0.15,
+        -12.0
+      ]
+    },
+    {
+      "id": "side-room-a",
+      "position": [
+        -3.5,
+        0.15,
+        -0.3
+      ]
+    },
+    {
+      "id": "side-room-b",
+      "position": [
+        -6.25,
+        0.15,
+        -1.95
+      ]
+    }
   ],
   "offMeshConnections": [],
   "obstacleBoxes": []
