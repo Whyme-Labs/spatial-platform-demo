@@ -201,6 +201,19 @@ describe("Unreal-equivalent navigation artifact", () => {
       (error) => error?.code === "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED" &&
         /deviated/.test(error.message),
     );
+    await assert.rejects(
+      validateAuthoredTraversals({
+        artifact,
+        positions,
+        indices,
+        obstacleBoxes: [{
+          min: [1.5, 1, 1.5],
+          max: [2, 2, 2.5],
+        }],
+      }),
+      (error) => error?.code === "AUTHORED_TRAVERSAL_ACCEPTANCE_FAILED" &&
+        /deviated/.test(error.message),
+    );
     const runtime = await importNavigationArtifact(artifact);
     try {
       const path = runtime.path([1, 0, 1], [4, 3, 3]);

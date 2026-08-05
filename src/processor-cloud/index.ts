@@ -11,8 +11,18 @@ type ProcessorCloudEnvironment = {
   WORKER_API_TOKEN: string;
   PROCESSOR_MAX_CHANGE_INPUT_MIB: string;
   PROCESSOR_MAX_JOB_RUNTIME_MINUTES: string;
+  PROCESSOR_MAX_POINTCLOUD_INPUT_MIB?: string;
+  PROCESSOR_POLL_SECONDS?: string;
+  PROCESSOR_HEARTBEAT_SECONDS?: string;
 };
 
+// Must exceed PROCESSOR_MAX_JOB_RUNTIME_MINUTES (180). This lane starts the
+// container with an entrypoint and never fetches it, and @cloudflare/containers
+// only renews the activity window on start/fetch, so the alarm treats
+// `sleepAfter` as a wall-clock cap on a running job rather than an idle window:
+// a shorter value stops the container mid-job. Idle instances are not the reason
+// this value is large — the `--once` entrypoint exits on its own and releases
+// the instance slot without waiting for this timeout.
 export const PROCESSOR_CONTAINER_IDLE_TIMEOUT = "4h";
 
 export class SpatialProcessorContainer extends Container {
@@ -69,6 +79,9 @@ const worker = {
             workerApiToken: env.WORKER_API_TOKEN,
             maximumChangeInputMib: env.PROCESSOR_MAX_CHANGE_INPUT_MIB,
             maximumJobRuntimeMinutes: env.PROCESSOR_MAX_JOB_RUNTIME_MINUTES,
+            maximumPointcloudInputMib: env.PROCESSOR_MAX_POINTCLOUD_INPUT_MIB,
+            pollSeconds: env.PROCESSOR_POLL_SECONDS,
+            heartbeatSeconds: env.PROCESSOR_HEARTBEAT_SECONDS,
           }, dispatch.jobId),
           enableInternet: true,
         });

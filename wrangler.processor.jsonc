@@ -13,7 +13,10 @@
   "vars": {
     "APP_ORIGIN": "http://host.docker.internal:8787",
     "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
-    "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+    "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180",
+    "PROCESSOR_MAX_POINTCLOUD_INPUT_MIB": "1024",
+    "PROCESSOR_POLL_SECONDS": "10",
+    "PROCESSOR_HEARTBEAT_SECONDS": "60"
   },
   "containers": [
     {
@@ -60,7 +63,10 @@
       "vars": {
         "APP_ORIGIN": "https://spatial-studio-staging.swmengappdev.workers.dev",
         "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
-        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180",
+        "PROCESSOR_MAX_POINTCLOUD_INPUT_MIB": "1024",
+        "PROCESSOR_POLL_SECONDS": "10",
+        "PROCESSOR_HEARTBEAT_SECONDS": "60"
       },
       "containers": [
         {
@@ -102,7 +108,10 @@
       "vars": {
         "APP_ORIGIN": "https://spatial.whymelabs.com",
         "PROCESSOR_MAX_CHANGE_INPUT_MIB": "1024",
-        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180"
+        "PROCESSOR_MAX_JOB_RUNTIME_MINUTES": "180",
+        "PROCESSOR_MAX_POINTCLOUD_INPUT_MIB": "1024",
+        "PROCESSOR_POLL_SECONDS": "10",
+        "PROCESSOR_HEARTBEAT_SECONDS": "60"
       },
       "containers": [
         {

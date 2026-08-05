@@ -85,6 +85,7 @@ export async function validateAuthoredTraversals({
   artifact,
   positions,
   indices,
+  obstacleBoxes = [],
 }) {
   if (!["spatial-navigation-v8", "spatial-navigation-v9"].includes(artifact?.schemaVersion) ||
     !Array.isArray(artifact.offMeshConnections) || !artifact.offMeshConnections.length) {
@@ -121,7 +122,7 @@ export async function validateAuthoredTraversals({
           agent,
           positions,
           indices,
-          obstacleBoxes: activeDynamicBarriers,
+          obstacleBoxes: [...obstacleBoxes, ...activeDynamicBarriers],
         });
       } catch (error) {
         const cause = error instanceof Error ? error.message : String(error);

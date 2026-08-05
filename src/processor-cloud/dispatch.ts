@@ -7,6 +7,9 @@ export type ProcessorRuntimeConfiguration = {
   workerApiToken: string;
   maximumChangeInputMib: string;
   maximumJobRuntimeMinutes: string;
+  maximumPointcloudInputMib?: string;
+  pollSeconds?: string;
+  heartbeatSeconds?: string;
 };
 
 const jobIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -35,6 +38,15 @@ export function processorEnvironment(
     PROCESSOR_JOB_ID: jobId,
     PROCESSOR_MAX_CHANGE_INPUT_MIB: configuration.maximumChangeInputMib,
     PROCESSOR_MAX_JOB_RUNTIME_MINUTES: configuration.maximumJobRuntimeMinutes,
+    ...(configuration.maximumPointcloudInputMib
+      ? { PROCESSOR_MAX_POINTCLOUD_INPUT_MIB: configuration.maximumPointcloudInputMib }
+      : {}),
+    ...(configuration.pollSeconds
+      ? { PROCESSOR_POLL_SECONDS: configuration.pollSeconds }
+      : {}),
+    ...(configuration.heartbeatSeconds
+      ? { PROCESSOR_HEARTBEAT_SECONDS: configuration.heartbeatSeconds }
+      : {}),
     PROCESSOR_CHROME_PATH: "/usr/bin/chromium",
     SPARK_BUILD_LOD_BIN: "/usr/local/bin/spark-build-lod",
   };

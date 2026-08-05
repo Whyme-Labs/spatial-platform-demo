@@ -4,6 +4,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -34,6 +35,15 @@ import {
   validateEvidenceAsset,
   validateGaussianPlyHeader,
 } from "./processing-agent-core.mjs";
+import {
+  E57_HEADER_BYTES,
+  e57StructureLimitations,
+  e57StructureSummary,
+  e57XmlPhysicalSpan,
+  extractE57Structure,
+  parseE57Header,
+  readE57XmlSection,
+} from "./e57-structure-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifestRelativePath = "test/vendor-corpus/fjd-manifest.json";
@@ -72,12 +82,16 @@ switch (command) {
       await qualifyCorpus(qualificationCase, fixtures);
     }
     break;
+  case "e57":
+    await inspectCorpusE57();
+    break;
   default:
     console.log(`Usage:
   npm run corpus:fjd:inspect
   npm run corpus:fjd:fetch
   npm run corpus:fjd:verify
   npm run corpus:fjd:qualify [-- --case=<qualification-case-id>]
+  npm run corpus:fjd:e57:inspect
 
 Official FJD bytes are downloaded into ignored .cache storage. The source page
 does not grant redistribution rights, so fixtures and derived assets must not be
@@ -213,6 +227,118 @@ async function qualifyCorpus(qualificationCase, fixtures) {
     radBytes: radMetadata.sizeBytes,
     automaticWalkableScene: gates.automaticWalkableScene,
   });
+}
+
+// ASTM E57 is a public container standard, so any structured export already in
+// the local corpus can be read for its scan poses, image records, and
+// point-field inventory. When no such file exists the lane must say so rather
+// than imply a reading it never performed.
+async function inspectCorpusE57() {
+  const searchRoots = [
+    { id: "fjd-sample-corpus", path: cacheRoot },
+    { id: "open-corpus", path: join(repositoryRoot, ".cache", "open-corpus") },
+  ];
+  const candidates = [];
+  for (const root of searchRoots) {
+    for (const file of await findE57Files(root.path)) {
+      candidates.push({ corpus: root.id, path: file });
+    }
+  }
+  const readings = [];
+  for (const candidate of candidates) readings.push(await readCorpusE57(candidate));
+  const readCount = readings.filter((reading) => reading.status === "structure_read").length;
+  const report = {
+    schemaVersion: "whymelabs.fjd-e57-structure-inventory.v1",
+    measuredAt: new Date().toISOString(),
+    method: "e57-structure-parser-v1",
+    standard: "ASTM E2807 E57 public container structure",
+    searchedRoots: searchRoots.map((root) => ({
+      id: root.id,
+      path: root.path.slice(repositoryRoot.length + 1),
+    })),
+    status: candidates.length === 0
+      ? "blocked_missing_registered_indoor_corpus"
+      : readCount === candidates.length
+      ? "structures_read"
+      : "structures_partially_read",
+    fileCount: candidates.length,
+    readCount,
+    files: readings,
+    limitations: [
+      ...e57StructureLimitations,
+      "No registered indoor FJD E57 has been supplied, so the exported dimensions and pose records this lane would qualify remain unobserved.",
+    ],
+  };
+  await writeJson(join(reportsRoot, "e57-structure-inventory.json"), report);
+  emit("fjd.e57.completed", {
+    status: report.status,
+    fileCount: report.fileCount,
+    readCount: report.readCount,
+  });
+}
+
+async function findE57Files(root, depth = 0) {
+  if (depth > 6 || !(await exists(root))) return [];
+  const found = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const candidate = join(root, entry.name);
+    if (entry.isDirectory()) found.push(...await findE57Files(candidate, depth + 1));
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith(".e57")) found.push(candidate);
+  }
+  return found.sort();
+}
+
+async function readCorpusE57(candidate) {
+  const relativePath = candidate.path.slice(repositoryRoot.length + 1);
+  const metadata = await streamFileMetadata(candidate.path);
+  try {
+    const structure = await readE57StructureFromFile(candidate.path);
+    return {
+      corpus: candidate.corpus,
+      path: relativePath,
+      ...metadata,
+      status: "structure_read",
+      summary: e57StructureSummary(structure),
+      header: structure.header,
+      coordinateMetadata: structure.coordinateMetadata,
+      data3D: structure.data3D,
+      images2D: structure.images2D,
+    };
+  } catch (error) {
+    return {
+      corpus: candidate.corpus,
+      path: relativePath,
+      ...metadata,
+      status: "structure_unreadable",
+      code: error?.code ?? "E57_STRUCTURE_UNREADABLE",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+// Only the 48-byte header and the CRC-paged XML section are read; a structured
+// E57 can carry gigabytes of point payload that this inventory never loads.
+async function readE57StructureFromFile(path) {
+  const handle = await open(path, "r");
+  try {
+    const headerBytes = Buffer.alloc(E57_HEADER_BYTES);
+    const headerRead = await handle.read(headerBytes, 0, E57_HEADER_BYTES, 0);
+    if (headerRead.bytesRead !== E57_HEADER_BYTES) {
+      throw new Error(`E57 header requires ${E57_HEADER_BYTES} bytes, read ${headerRead.bytesRead}`);
+    }
+    const header = parseE57Header(headerBytes);
+    const span = e57XmlPhysicalSpan(header);
+    const sectionBytes = Buffer.alloc(span.physicalLength);
+    const sectionRead = await handle.read(sectionBytes, 0, span.physicalLength, span.physicalStart);
+    if (sectionRead.bytesRead !== span.physicalLength) {
+      throw new Error(
+        `E57 XML section requires ${span.physicalLength} bytes, read ${sectionRead.bytesRead}`,
+      );
+    }
+    return extractE57Structure(header, readE57XmlSection(header, sectionBytes, span.physicalStart));
+  } finally {
+    await handle.close();
+  }
 }
 
 function qualificationLimitation(qualificationCase, pointCloudDecoder) {

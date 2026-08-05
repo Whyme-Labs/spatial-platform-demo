@@ -6,7 +6,7 @@ import {
 import { PROCESSOR_CONTAINER_IDLE_TIMEOUT } from "../src/processor-cloud";
 
 describe("Cloud processor dispatch", () => {
-  it("keeps a one-shot processor alive for the bounded job runtime", () => {
+  it("recycles a finished one-shot processor instead of hoarding an instance slot", () => {
     expect(PROCESSOR_CONTAINER_IDLE_TIMEOUT).toBe("4h");
   });
 
@@ -35,5 +35,26 @@ describe("Cloud processor dispatch", () => {
     });
     expect(environment).not.toHaveProperty("R2_ACCESS_KEY_ID");
     expect(environment).not.toHaveProperty("R2_SECRET_ACCESS_KEY");
+    expect(environment).not.toHaveProperty("PROCESSOR_MAX_POINTCLOUD_INPUT_MIB");
+    expect(environment).not.toHaveProperty("PROCESSOR_POLL_SECONDS");
+    expect(environment).not.toHaveProperty("PROCESSOR_HEARTBEAT_SECONDS");
+  });
+
+  it("passes the configured point-cloud, poll, and heartbeat limits through to the container", () => {
+    const jobId = "123e4567-e89b-42d3-a456-426614174000";
+    const environment = processorEnvironment({
+      appOrigin: "https://spatial.whymelabs.com",
+      workerApiToken: "worker-secret",
+      maximumChangeInputMib: "1024",
+      maximumJobRuntimeMinutes: "180",
+      maximumPointcloudInputMib: "2048",
+      pollSeconds: "5",
+      heartbeatSeconds: "30",
+    }, jobId);
+    expect(environment).toMatchObject({
+      PROCESSOR_MAX_POINTCLOUD_INPUT_MIB: "2048",
+      PROCESSOR_POLL_SECONDS: "5",
+      PROCESSOR_HEARTBEAT_SECONDS: "30",
+    });
   });
 });

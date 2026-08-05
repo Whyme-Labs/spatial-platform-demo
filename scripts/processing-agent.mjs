@@ -30,6 +30,15 @@ import {
 } from "./physical-navigation-validation.mjs";
 import { buildAuthoredStructuralCollisionGlb } from "./authored-collision.mjs";
 import {
+  E57_HEADER_BYTES,
+  e57StructureSummary,
+  e57XmlPhysicalSpan,
+  extractE57Structure,
+  parseE57Header,
+  readE57XmlSection,
+  serializeE57StructureReport,
+} from "./e57-structure-core.mjs";
+import {
   automaticNavigationLayout as buildAutomaticNavigationLayout,
   automaticStructuralCollisionConfig as buildAutomaticStructuralCollisionConfig,
 } from "./automatic-spatial-pipeline.mjs";
@@ -183,10 +192,17 @@ async function processNextJob() {
   const workDirectory = await mkdtemp(join(tmpdir(), `spatial-${job.id}-`));
   let heartbeatTimer;
   let heartbeatFailure = null;
+  let stageProgress = 2;
+  let stageMessage = "Spatial processing is starting";
+  const reportProgress = async (progress, message) => {
+    stageProgress = progress;
+    stageMessage = message;
+    return heartbeat(job.id, lease.leaseToken, progress, message);
+  };
 
   try {
     heartbeatTimer = setInterval(() => {
-      void heartbeat(job.id, lease.leaseToken, 40, "Spatial processing is running")
+      void heartbeat(job.id, lease.leaseToken, stageProgress, stageMessage)
         .catch((error) => {
           heartbeatFailure = error;
           log("processor.heartbeat_failed", { jobId: job.id, error: safeMessage(error) });
@@ -200,11 +216,12 @@ async function processNextJob() {
         lease.leaseToken,
         workDirectory,
         () => heartbeatFailure,
+        reportProgress,
       );
       return { claimed: true, jobId: job.id, state: "SUCCEEDED", ...result };
     }
 
-    await heartbeat(job.id, lease.leaseToken, 3, "Downloading immutable source");
+    await reportProgress(3, "Downloading immutable source");
     const sourcePath = join(workDirectory, job.input.fileName);
     const download = await downloadSource(job, lease.leaseToken, sourcePath);
     if (download.sizeBytes !== job.input.sizeBytes) {
@@ -244,7 +261,7 @@ async function processNextJob() {
           },
         );
       }
-      await heartbeat(job.id, lease.leaseToken, 24, "Normalizing vendor point cloud to metric PLY");
+      await reportProgress(24, "Normalizing vendor point cloud to metric PLY");
       const normalized = await normalizeMetricPointCloud({
         sourcePath,
         sourceFormat: String(job.input.format).toLowerCase(),
@@ -253,7 +270,7 @@ async function processNextJob() {
         pdalBinary: configuration.pdalBinary,
         timeoutMs: configuration.maxRuntimeMs,
       });
-      await heartbeat(job.id, lease.leaseToken, 48, "Building bounded metric occupancy");
+      await reportProgress(48, "Building bounded metric occupancy");
       const sourceBytes = await readFile(normalized.path);
       const signature = parsePlySceneSignature(sourceBytes, {
         voxelSizeM: Math.max(0.025, Math.min(
@@ -262,7 +279,7 @@ async function processNextJob() {
         )),
         maximumSamplePoints: Number(job.floorplanConfig.maximumSamplePoints),
       });
-      await heartbeat(job.id, lease.leaseToken, 70, "Deriving reviewable rooms, walls, and openings");
+      await reportProgress(70, "Deriving reviewable rooms, walls, and openings");
       const report = extractMetricFloorPlan(signature, {
         gridSizeM: Number(job.floorplanConfig.gridSizeM),
         floorBandM: Number(job.floorplanConfig.floorBandM),
@@ -298,11 +315,11 @@ async function processNextJob() {
         encoding: "utf8",
         mode: 0o600,
       });
-      await heartbeat(job.id, lease.leaseToken, 88, "Uploading immutable floor-plan proposal");
+      await reportProgress(88, "Uploading immutable floor-plan proposal");
       const output = await uploadOutput(job, lease.leaseToken, "report", reportPath, "application/json");
       let collisionOutput = null;
       if (job.floorplanConfig.automaticPipeline === true) {
-        await heartbeat(job.id, lease.leaseToken, 92, "Building automatic structural collision draft");
+        await reportProgress(92, "Building automatic structural collision draft");
         try {
           const collisionPath = join(
             workDirectory,
@@ -401,7 +418,7 @@ async function processNextJob() {
           { failureClass: "input_validation", retryable: false },
         );
       }
-      await heartbeat(job.id, lease.leaseToken, 25, "Decoding canonical collision GLB");
+      await reportProgress(25, "Decoding canonical collision GLB");
       const collisionBytes = await readFile(sourcePath);
       let geometry;
       let artifact;
@@ -410,7 +427,7 @@ async function processNextJob() {
         const navigationConfig = job.navigationBuildConfig.automaticLayout
           ? buildAutomaticNavigationLayout(job.navigationBuildConfig, geometry)
           : job.navigationBuildConfig;
-        await heartbeat(job.id, lease.leaseToken, 48, "Building radius-cleared tiled Recast mesh");
+        await reportProgress(48, "Building radius-cleared tiled Recast mesh");
         artifact = await buildRecastNavigationArtifact({
           ...navigationConfig,
           positions: geometry.positions,
@@ -430,7 +447,7 @@ async function processNextJob() {
             sha256: download.sha256,
           },
         });
-        await heartbeat(job.id, lease.leaseToken, 65, "Replaying every route with a Rapier capsule");
+        await reportProgress(65, "Replaying every route with a Rapier capsule");
         artifact.physicalValidation = await validatePhysicalNavigation({
           artifact,
           positions: geometry.positions,
@@ -475,7 +492,7 @@ async function processNextJob() {
         encoding: "utf8",
         mode: 0o600,
       });
-      await heartbeat(job.id, lease.leaseToken, 82, "Uploading frozen Detour and reachability evidence");
+      await reportProgress(82, "Uploading frozen Detour and reachability evidence");
       const navmeshOutput = await uploadOutput(
         job,
         lease.leaseToken,
@@ -540,7 +557,7 @@ async function processNextJob() {
           { failureClass: "configuration", retryable: false },
         );
       }
-      await heartbeat(job.id, lease.leaseToken, 35, "Building bounded registered PLY occupancy");
+      await reportProgress(35, "Building bounded registered PLY occupancy");
       const sourceBytes = await readFile(sourcePath);
       const sourceToWorld = job.semanticConfig.sourceToWorld &&
         typeof job.semanticConfig.sourceToWorld === "object"
@@ -556,7 +573,7 @@ async function processNextJob() {
         )) / metresPerSourceUnit,
         maximumSamplePoints: Number(job.semanticConfig.maximumSamplePoints),
       });
-      await heartbeat(job.id, lease.leaseToken, 68, "Extracting reviewable walkable polygons");
+      await reportProgress(68, "Extracting reviewable walkable polygons");
       const report = extractWalkableSemanticCandidates(signature, {
         gridSizeM: Number(job.semanticConfig.gridSizeM),
         floorBandM: Number(job.semanticConfig.floorBandM),
@@ -583,7 +600,7 @@ async function processNextJob() {
         encoding: "utf8",
         mode: 0o600,
       });
-      await heartbeat(job.id, lease.leaseToken, 86, "Uploading immutable semantic evidence");
+      await reportProgress(86, "Uploading immutable semantic evidence");
       const output = await uploadOutput(job, lease.leaseToken, "report", reportPath, "application/json");
       if (heartbeatFailure) throw heartbeatFailure;
       const computeDurationMs = Math.round(performance.now() - jobStartedAt);
@@ -628,7 +645,7 @@ async function processNextJob() {
     }
 
     if (job.jobType === "asset.evidence-validate") {
-      await heartbeat(job.id, lease.leaseToken, 45, "Validating immutable capture evidence");
+      await reportProgress(45, "Validating immutable capture evidence");
       const validation = await validateEvidenceSource(
         sourcePath,
         job.input.format,
@@ -640,12 +657,7 @@ async function processNextJob() {
       let posterPath;
       let posterMetadata;
       if (posterRenderer) {
-        await heartbeat(
-          job.id,
-          lease.leaseToken,
-          65,
-          "Rendering Spark RAD poster",
-        );
+        await reportProgress(65, "Rendering Spark RAD poster");
         posterPath = join(workDirectory, "poster.png");
         await generateSparkPoster(
           sourcePath,
@@ -654,6 +666,68 @@ async function processNextJob() {
           posterCamera,
         );
         posterMetadata = await fileMetadata(posterPath);
+      }
+      // ASTM E57 is a public container standard, so its scan poses, bounds,
+      // point-field inventory, and image records can be preserved as evidence
+      // instead of being reduced to unlabelled points. A structure read that
+      // fails must never block preservation of the immutable bytes.
+      let structureReportPath;
+      let structureMetadata;
+      let structureSummary = null;
+      let structureEvidence = { attempted: false, status: "not_applicable" };
+      if (job.input.format === "e57") {
+        await reportProgress(70, "Reading E57 container structure");
+        try {
+          const structure = await readE57Structure(sourcePath);
+          structureReportPath = join(workDirectory, "e57-structure.json");
+          await writeFile(structureReportPath, serializeE57StructureReport(structure));
+          structureMetadata = await fileMetadata(structureReportPath);
+          structureSummary = {
+            status: "structure_read",
+            ...e57StructureSummary(structure),
+            reportSha256: structureMetadata.sha256,
+          };
+          structureEvidence = {
+            attempted: true,
+            status: "structure_read",
+            schemaVersion: structure.schemaVersion,
+            method: structure.method,
+            reportSha256: structureMetadata.sha256,
+            scanCount: structure.summary.scanCount,
+            imageCount: structure.summary.imageCount,
+            hasPerScanPoses: structure.summary.hasPerScanPoses,
+            vendorFieldNames: structure.summary.vendorFieldNames,
+            limitations: structure.limitations,
+          };
+        } catch (error) {
+          structureReportPath = undefined;
+          structureMetadata = undefined;
+          structureEvidence = {
+            attempted: true,
+            status: "structure_unreadable",
+            code: error?.code ?? "E57_STRUCTURE_UNREADABLE",
+            reason: safeMessage(error),
+            limitation:
+              "The bounded file-signature check still preserves these bytes; no scan pose, image, or point-field evidence could be read from this container.",
+          };
+          // The bytes are still preserved and still complete the job. The gap
+          // is declared rather than hidden behind a silent magic-check pass.
+          structureSummary = {
+            status: "structure_unreadable",
+            method: "e57-structure-parser-v1",
+            scanCount: 0,
+            imageCount: 0,
+            hasPerScanPoses: false,
+            vendorFieldNames: [],
+            reportSha256: null,
+            reason: structureEvidence.reason,
+          };
+          log("processor.e57_structure_unreadable", {
+            jobId: job.id,
+            code: structureEvidence.code,
+            reason: structureEvidence.reason,
+          });
+        }
       }
       const report = {
         schemaVersion: "1.0.0",
@@ -689,11 +763,15 @@ async function processNextJob() {
             },
           }
           : {}),
+        ...(structureEvidence.attempted ? { containerStructure: structureEvidence } : {}),
         checks: {
           sourceBytesVerified: true,
           sourceHashVerified: job.input.sha256 ? true : "not_supplied",
           boundedSignatureChecked: true,
           semanticValidation: false,
+          ...(structureEvidence.attempted
+            ? { containerStructure: structureEvidence.status }
+            : {}),
           ...(posterRenderer
             ? {
               posterRenderedBy: posterRenderer,
@@ -705,7 +783,7 @@ async function processNextJob() {
         },
         generatedAt: new Date().toISOString(),
       };
-      await heartbeat(job.id, lease.leaseToken, 92, "Recording evidence integrity result");
+      await reportProgress(92, "Recording evidence integrity result");
       const outputs = [];
       if (posterPath) {
         outputs.push(await uploadOutput(
@@ -716,7 +794,17 @@ async function processNextJob() {
           "image/png",
         ));
       }
+      if (structureReportPath) {
+        outputs.push(await uploadOutput(
+          job,
+          lease.leaseToken,
+          "report",
+          structureReportPath,
+          "application/json",
+        ));
+      }
       const outputBytes = outputs.reduce((total, output) => total + output.sizeBytes, 0);
+      if (heartbeatFailure) throw heartbeatFailure;
       const computeDurationMs = Math.round(performance.now() - jobStartedAt);
       const completion = await fetchJson(`/api/worker/jobs/${job.id}/complete`, {
         method: "POST",
@@ -727,6 +815,7 @@ async function processNextJob() {
             : "Immutable capture evidence passed bounded integrity validation",
           outputs,
           report,
+          ...(structureSummary ? { captureScanStructure: structureSummary } : {}),
           evidence: {
             processorVersion,
             computeDurationMs,
@@ -737,6 +826,9 @@ async function processNextJob() {
               node: process.version,
               processor: "0.11.0",
               validator: "bounded-file-signature-v1",
+              ...(structureEvidence.attempted
+                ? { e57Structure: "e57-structure-parser-v1" }
+                : {}),
               ...(posterRenderer
                 ? {
                   renderer: posterRenderer,
@@ -760,7 +852,7 @@ async function processNextJob() {
       return { claimed: true, jobId: job.id, state: "SUCCEEDED" };
     }
 
-    await heartbeat(job.id, lease.leaseToken, 12, "Validating Gaussian source");
+    await reportProgress(12, "Validating Gaussian source");
     const sourceValidation = await validateSource(sourcePath, job.input.format);
     const preparedSource = await prepareSparkSource(
       sourcePath,
@@ -770,7 +862,7 @@ async function processNextJob() {
       configuration.splatTransformBinary,
       configuration.maxRuntimeMs,
     );
-    await heartbeat(job.id, lease.leaseToken, 20, "Building Spark quality RAD LoD");
+    await reportProgress(20, "Building Spark quality RAD LoD");
     const radPath = await buildSparkRad(
       preparedSource.path,
       job.input.format,
@@ -781,7 +873,39 @@ async function processNextJob() {
     if (heartbeatFailure) throw heartbeatFailure;
     const radMetadata = await fileMetadata(radPath);
 
-    await heartbeat(job.id, lease.leaseToken, 72, "Rendering Spark scene poster");
+    let compactSpzPath = null;
+    let compactSpzMetadata = null;
+    if (job.input.format === "ply") {
+      await reportProgress(60, "Writing compact SPZ release");
+      const candidateSpzPath = join(
+        workDirectory,
+        `${basename(preparedSource.path, extname(preparedSource.path))}-compact.spz`,
+      );
+      try {
+        await runProcess(
+          configuration.splatTransformBinary,
+          [preparedSource.path, candidateSpzPath],
+          configuration.maxRuntimeMs,
+          {
+            tool: "SplatTransform",
+            event: "splat.compact_spz",
+            startCode: "SPLAT_COMPACT_START_FAILED",
+            failureCode: "SPLAT_COMPACT_FAILED",
+            timeoutCode: "SPLAT_COMPACT_TIMEOUT",
+            failureClass: "conversion",
+          },
+        );
+        await access(candidateSpzPath);
+        compactSpzPath = candidateSpzPath;
+        compactSpzMetadata = await fileMetadata(candidateSpzPath);
+      } catch (error) {
+        // The compact SPZ derivative is optional evidence: the Spark RAD stays
+        // the canonical web scene, so a compaction failure must not fail the job.
+        log("processor.compact_spz_skipped", { jobId: job.id, error: safeMessage(error) });
+      }
+    }
+
+    await reportProgress(72, "Rendering Spark scene poster");
     const posterPath = join(workDirectory, "poster.png");
     await generateSparkPoster(
       radPath,
@@ -814,6 +938,15 @@ async function processNextJob() {
       },
       derivatives: {
         web: { fileName: basename(radPath), sizeBytes: radMetadata.sizeBytes, sha256: radMetadata.sha256 },
+        ...(compactSpzMetadata
+          ? {
+            compact: {
+              fileName: basename(compactSpzPath),
+              sizeBytes: compactSpzMetadata.sizeBytes,
+              sha256: compactSpzMetadata.sha256,
+            },
+          }
+          : {}),
         poster: { fileName: basename(posterPath), sizeBytes: posterMetadata.sizeBytes, sha256: posterMetadata.sha256 },
       },
       rendering: {
@@ -835,14 +968,18 @@ async function processNextJob() {
     await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
     const reportMetadata = await fileMetadata(reportPath);
 
-    await heartbeat(job.id, lease.leaseToken, 82, "Uploading immutable derivatives");
+    await reportProgress(82, "Uploading immutable derivatives");
     const outputs = [];
     outputs.push(await uploadOutput(job, lease.leaseToken, "web", radPath, "application/octet-stream"));
+    if (compactSpzPath) {
+      outputs.push(await uploadOutput(job, lease.leaseToken, "portable", compactSpzPath, "application/octet-stream"));
+    }
     outputs.push(await uploadOutput(job, lease.leaseToken, "poster", posterPath, "image/png"));
     outputs.push(await uploadOutput(job, lease.leaseToken, "report", reportPath, "application/json"));
     const outputBytes = outputs.reduce((total, output) => total + output.sizeBytes, 0);
+    if (heartbeatFailure) throw heartbeatFailure;
 
-    await heartbeat(job.id, lease.leaseToken, 96, "Registering derivatives and QA report");
+    await reportProgress(96, "Registering derivatives and QA report");
     const computeDurationMs = Math.round(performance.now() - jobStartedAt);
     const completion = await fetchJson(`/api/worker/jobs/${job.id}/complete`, {
       method: "POST",
@@ -898,7 +1035,7 @@ async function processNextJob() {
   }
 }
 
-async function processRegisteredSceneChange(job, leaseToken, workDirectory, heartbeatFailure) {
+async function processRegisteredSceneChange(job, leaseToken, workDirectory, heartbeatFailure, reportProgress) {
   if (!job.secondaryInput || !job.changeReportId || !job.changeConfig) {
     throw new ProcessingAgentError(
       "CHANGE_JOB_INCOMPLETE",
@@ -912,12 +1049,12 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
     candidateSizeBytes: Number(job.secondaryInput.sizeBytes),
     maximumInputBytes: configuration.maximumChangeInputBytes,
   });
-  await heartbeat(job.id, leaseToken, 3, "Downloading registered baseline");
+  await reportProgress(3, "Downloading registered baseline");
   const baselinePath = join(workDirectory, `baseline-${job.input.fileName}`);
   const baselineDownload = await downloadSource(job, leaseToken, baselinePath);
   verifyDownloadedInput(job.input, baselineDownload, "baseline");
 
-  await heartbeat(job.id, leaseToken, 16, "Downloading registered candidate");
+  await reportProgress(16, "Downloading registered candidate");
   const candidatePath = join(workDirectory, `candidate-${job.secondaryInput.fileName}`);
   const candidateDownload = await downloadSource(
     { ...job, input: job.secondaryInput },
@@ -926,7 +1063,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
   );
   verifyDownloadedInput(job.secondaryInput, candidateDownload, "candidate");
 
-  await heartbeat(job.id, leaseToken, 34, "Building bounded registered-scene signatures");
+  await reportProgress(34, "Building bounded registered-scene signatures");
   const [baselineBytes, candidateBytes] = await Promise.all([
     readFile(baselinePath),
     readFile(candidatePath),
@@ -941,7 +1078,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
   let report;
   const registrationMode = String(job.changeConfig.registrationMode ?? "declared");
   if (registrationMode === "automatic_rigid") {
-    await heartbeat(job.id, leaseToken, 58, "Estimating bounded yaw and translation");
+    await reportProgress(58, "Estimating bounded yaw and translation");
     const registrationResult = automaticallyRegisterSceneSignatures({
       baseline,
       candidate,
@@ -1000,7 +1137,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         generatedAt: new Date().toISOString(),
       };
     } else {
-      await heartbeat(job.id, leaseToken, 70, "Comparing registered occupancy, centroids, and mean colour");
+      await reportProgress(70, "Comparing registered occupancy, centroids, and mean colour");
       report = compareRegisteredScenes({
         baseline,
         candidate: registeredCandidate,
@@ -1013,7 +1150,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
       report.registration = registration;
     }
   } else {
-    await heartbeat(job.id, leaseToken, 66, "Comparing declared registered occupancy, centroids, and mean colour");
+    await reportProgress(66, "Comparing declared registered occupancy, centroids, and mean colour");
     report = compareRegisteredScenes({
       baseline,
       candidate,
@@ -1056,10 +1193,10 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
     encoding: "utf8",
     mode: 0o600,
   });
-  await heartbeat(job.id, leaseToken, 82, "Uploading immutable change evidence");
+  await reportProgress(82, "Uploading immutable change evidence");
   const output = await uploadOutput(job, leaseToken, "report", reportPath, "application/json");
   const computeDurationMs = Math.round(performance.now() - jobStartedAt);
-  await heartbeat(job.id, leaseToken, 96, "Registering raw-scene evidence");
+  await reportProgress(96, "Registering raw-scene evidence");
   await fetchJson(`/api/worker/jobs/${job.id}/scene-change-complete`, {
     method: "POST",
     body: JSON.stringify({
@@ -1358,6 +1495,46 @@ async function validateEvidenceSource(sourcePath, format, purpose) {
   }
 }
 
+// Only the 48-byte header and the CRC-paged XML section are ever read. A
+// structured E57 can carry gigabytes of point payload; none of it is loaded to
+// recover the scan poses, image records, and point-field inventory.
+async function readE57Structure(sourcePath) {
+  const handle = await open(sourcePath, "r");
+  try {
+    const headerBytes = Buffer.alloc(E57_HEADER_BYTES);
+    const headerRead = await handle.read(headerBytes, 0, E57_HEADER_BYTES, 0);
+    if (headerRead.bytesRead !== E57_HEADER_BYTES) {
+      throw new ProcessingAgentError(
+        "INVALID_E57_HEADER",
+        `E57 header requires ${E57_HEADER_BYTES} bytes, read ${headerRead.bytesRead}`,
+        { failureClass: "input_validation", retryable: false },
+      );
+    }
+    const header = parseE57Header(headerBytes);
+    const span = e57XmlPhysicalSpan(header);
+    const sectionBytes = Buffer.alloc(span.physicalLength);
+    const sectionRead = await handle.read(
+      sectionBytes,
+      0,
+      span.physicalLength,
+      span.physicalStart,
+    );
+    if (sectionRead.bytesRead !== span.physicalLength) {
+      throw new ProcessingAgentError(
+        "INVALID_E57_XML_SECTION",
+        `E57 XML section requires ${span.physicalLength} bytes, read ${sectionRead.bytesRead}`,
+        { failureClass: "input_validation", retryable: false },
+      );
+    }
+    return extractE57Structure(
+      header,
+      readE57XmlSection(header, sectionBytes, span.physicalStart),
+    );
+  } finally {
+    await handle.close();
+  }
+}
+
 async function readBufferedSogArchive(sourcePath) {
   const sourceStat = await stat(sourcePath);
   if (sourceStat.size > maximumBufferedSogBytes) {
@@ -1468,6 +1645,10 @@ async function fetchWithRetry(path, init = {}, { allowNoContent = false } = {}) 
   const url = path.startsWith("http://") || path.startsWith("https://")
     ? path
     : `${configuration.origin}${path}`;
+  // Every per-job route sits under /api/worker/jobs/<jobId>/ and is authorised
+  // by the lease token, so a 403 there means the lease was reclaimed or
+  // expired, not that this processor is misconfigured.
+  const leaseScopedRoute = /^\/api\/worker\/jobs\/[^/]+\//.test(new URL(url).pathname);
   const headers = new Headers(init.headers);
   headers.set("Authorization", `Bearer ${configuration.workerToken}`);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
@@ -1477,6 +1658,13 @@ async function fetchWithRetry(path, init = {}, { allowNoContent = false } = {}) 
       const response = await fetch(url, { ...init, headers });
       if (response.ok || (allowNoContent && response.status === 204)) return response;
       const message = await response.text();
+      if (response.status === 403 && leaseScopedRoute) {
+        throw new ProcessingAgentError(
+          "PROCESSOR_LEASE_REJECTED",
+          `Platform API rejected the job lease with 403: ${message.slice(0, 1000)}`,
+          { failureClass: "lease", retryable: true, details: { status: 403 } },
+        );
+      }
       if (response.status < 500 && response.status !== 429) {
         throw new ProcessingAgentError(
           "PROCESSOR_API_REJECTED",
@@ -1599,9 +1787,9 @@ async function generateSparkPoster(
         { timeout: 90_000, polling: 500 },
       );
     } catch (readinessError) {
-      // A Spark SOG/SPZ decode can occupy the browser main thread beyond the
-      // Playwright clock. Accept the first completed frame only when its
-      // measured signal, luminance, and colour diversity pass the same gate.
+      // Loading a large Spark RAD scene can occupy the browser main thread
+      // beyond the Playwright clock. Accept the first completed frame only when
+      // its measured signal, luminance, and colour diversity pass the same gate.
       const readinessAtTimeout = await page.evaluate(() => ({
         ready: document.body.dataset.ready === "true",
         stats: window.posterStats ?? null,
