@@ -14,7 +14,10 @@ two application token types:
 Cloudflare Email Sending delivers both text and HTML OTP messages from
 `login@whymelabs.com`. OTP challenges expire after ten minutes, allow at most
 five attempts, and are consumed atomically in D1. Responses are deliberately
-generic so the endpoint does not disclose which emails are authorised.
+generic so the endpoint does not disclose which emails are authorised, and
+email delivery plus KV suppression writes run after the response via
+`waitUntil` so response timing is identical for authorised and unknown
+addresses.
 
 Every OTP request and resend also requires a fresh Cloudflare Turnstile token.
 The browser widget uses action `otp_request`; the Worker validates the
@@ -29,8 +32,29 @@ only as a Worker secret.
 Organisation team invitations use the same verified email identity boundary,
 but do not make membership active when an administrator merely types an email.
 The D1 membership remains `invited` until a valid, unexpired invitation is
-accepted by a successful OTP verification. Expired invitations are revoked by
-the scheduled lifecycle Worker.
+accepted. A successful OTP verification accepts pending invitations silently
+only for an account that holds no active membership in any organisation — an
+unambiguous first-time onboarding, capped at a bounded number of invitations per
+sign-in. An account that already belongs to an organisation is never enrolled
+silently: its invitations stay `pending`, are returned as `pendingInvitations`
+on the login and `/api/auth/session` responses, and are answered explicitly
+through `POST /api/team/invitations/:invitationId/accept` or `/decline`. Both
+are authenticated, membership-state guarded, rate limited, and audited. This
+closes the path where a platform administrator could pre-create an invited
+membership for an arbitrary email and capture that account's default workspace
+on its next sign-in. Expired invitations are revoked by the scheduled lifecycle
+Worker.
+
+Studio surfaces those pending invitations directly after sign-in and on every
+workspace screen, in the `#pendingInvitationsPanel` section above the workspace
+summary. Each entry names the organisation, the offered role, and when the
+invitation was issued and expires, with Accept and Decline actions that run
+through the shared action-state handler (single-flight key, pending label,
+inline error target). Accepting refreshes the membership inventory through the
+existing `refreshAll()` machinery, so the new organisation appears in the
+workspace switcher without moving the current session out of its organisation;
+declining removes the entry only. The panel disappears once no invitation is
+awaiting an answer.
 
 ## Enterprise OIDC
 

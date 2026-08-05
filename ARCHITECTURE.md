@@ -254,9 +254,41 @@ unattended uploads share immutable-byte, ETag, integrity, and lifecycle
 controls rather than creating a second storage path.
 
 Each upload session persists its part size. Existing 25 MiB sessions retain
-their original byte boundaries across releases; new source uploads use 10 MiB
-parts to bound retry cost and request duration without changing R2 multipart
-integrity.
+their original byte boundaries across releases. New source uploads start at
+10 MiB parts to bound retry cost and request duration, and scale the boundary
+up (rounded to whole MiB, capped at the Worker's 95 MiB part ceiling) whenever
+the declared size would otherwise need more than 9,500 parts, because R2 refuses
+to complete a multipart upload beyond 10,000 parts.
+
+Studio streams the selected file through an incremental SHA-256 before it asks
+for an upload session, so the declared fingerprint describes the exact bytes the
+browser is about to send rather than a value typed by an operator. A resumed
+session re-streams the same file and refuses to finalise when the fingerprint no
+longer matches the one the session was created with. A file that cannot be read
+for hashing still uploads, without a declared digest.
+
+Part bodies are streamed into R2 through a counting fixed-length boundary, so
+`upload_parts.size_bytes` records bytes the Worker observed rather than a
+client-declared `Content-Length`. At completion the Worker asserts the finished
+R2 object size against the session's declared size, then establishes the digest
+of record itself: an object at or below `SERVER_HASH_MAX_BYTES` (2 GiB by
+default, sized to cover known vendor Gaussian masters) is streamed through
+`crypto.DigestStream` and recorded with
+`assets.integrity_source = 'server_verified'`. A client-declared SHA-256 that
+contradicts the computed digest quarantines the asset as
+`integrity_status = 'failed'`, retires the session, and creates no processing
+job. Above the size bound a declared digest is recorded as `client_declared`
+and stays `pending`; with no declared digest the hash stays NULL. A processor
+report may only fill a NULL digest (`processor_reported`) — it can never
+overwrite a stored hash, and a contradicting report fails the completion with
+409. Operator manual completion records `operator_manual` and never manufactures
+a `verified` integrity claim of its own.
+
+Expired OPEN upload sessions are retired by lifecycle enforcement: the R2
+multipart upload is aborted, the session moves to `ABORTED`, and an
+`upload_session_expired` lifecycle action is recorded. Project archival ignores
+sessions that are already expired, so an abandoned upload can no longer block
+archival forever.
 
 Spark RAD releases use the same private R2 bucket as compact SPZ and SOG
 releases. Protected delivery uses short-lived signed URLs and private caching.
@@ -282,6 +314,7 @@ scene_version
   |-- change evidence -------> authored geometry metrics / XZ overlay / review
   |-- raw change evidence ---> registered PLY occupancy / centroid / colour / review
   |-- capture evidence ------> private pose path / room coverage / recapture review
+  |-- container structure ---> public E57 scan poses / images / vendor field names
   |-- capture contract ------> verified assets / rights / portability / scene registration / review
   |-- review evidence -------> comments / redactions / decisions / invitations
   |-- privacy evidence ------> scans / private frames / candidates / decisions
@@ -311,13 +344,32 @@ v7+ physical-navigation artifact, its exact collision GLB, and its immutable
 JSON and Detour derivatives. Historical releases that lack that evidence are
 blocked until they are republished through the current acceptance gate.
 After Spark begins loading, the host sends the frozen runtime to the renderer
-by same-origin message. The renderer does not report ready until collision and
+by same-origin message, exactly once per scene load: the renderer cannot reach
+ready before that payload has rebuilt physics and navigation, so a second send
+would only discard live movement state and re-download the collision GLB. The
+payload may carry `detourUrl` and `navMeshUrl` instead of inline bytes; the
+renderer streams those same-origin release assets before initialising and falls
+back to whatever the payload inlined, so published releases keep working
+unchanged. The renderer does not report ready until collision and
 Detour initialization both succeed. V7+ keyboard movement drives a
 Rapier capsule in Walk mode or a no-gravity sphere in Fly mode directly against
 the structural shell; Detour remains authoritative for topology and guided
 routes. Room moves use a request/acknowledgement message so rejected cameras
 leave the host control recoverable. The Gaussian asset remains a visual layer;
 the platform does not infer collision or measurement accuracy from it.
+
+Movement integrates the measured frame delta rather than a fixed step, so
+physics does not depend on the display refresh rate. A stationary primary click
+upgrades desktop look to pointer lock; a drag keeps the existing capture-based
+path, a denied lock keeps drag-look working, and a browser-native unlock
+discards pending locked deltas instead of applying them as one jump. A hidden
+tab stops the render loop and physics entirely and resets the frame clock on
+return, so a backgrounded viewer neither burns GPU time nor resumes by
+integrating the whole hidden interval as a single step. A lost WebGL context
+halts the loop and reports `WEBGL_CONTEXT_LOST` to the host; because Spark's GPU
+resources cannot be rebuilt in place, a restored context reports a distinct
+`WEBGL_CONTEXT_RESTORE_RELOAD_REQUIRED` failure the host turns into a reload
+affordance rather than pretending the scene recovered.
 
 Capture contracts may bind the source capture frame to the platform's
 right-handed, Y-up metric scene frame with
@@ -429,6 +481,23 @@ an open endpoint loop remain explicit evidence. The result can recommend a
 recapture; it does not prove image sharpness, exposure, occlusion coverage,
 SLAM correctness, or final reconstruction quality.
 
+Public container structure is a separate read-only evidence lane on the
+`asset.evidence-validate` job. ASTM E57 (E2807) is a published container
+standard, so the leased processor reads its 48-byte header, CRC-32C-paged XML
+section, per-scan poses, bounds, point-field inventory, image records, and
+coordinate metadata without decoding a single point, image, or mesh payload.
+`capture_scan_structures` keeps only the bounded summary — method, status, scan
+and image counts, whether per-scan poses exist, and the vendor extension field
+names recorded verbatim — while the full reading is an immutable private R2
+`report` asset. A successful reading must cite that derivative by SHA-256 in the
+same completion, and an unreadable container may report no scan, image, or pose
+evidence at all. A capture-completeness report may optionally cite one reading
+from its own version, which binds a pose-path claim to the exact exported scan
+poses it describes. Vendor classification and mesh semantics are never parsed,
+so no structural claim derives from a reading; a vendor's classified mesh or
+segmentation sidecar is preserved under the `vendor_semantic_mesh` upload
+purpose as evidence and never becomes collision or navigation geometry.
+
 Capture-bundle manifests define the normalisation boundary before any
 vendor-specific reconstruction adapter. D1 binds the project adapter, exact
 immutable version, request hash/idempotency, readiness result, manifest hash,
@@ -475,10 +544,36 @@ separate licensed-professional sign-off record.
 6. on error, `POST /api/worker/jobs/{id}/fail` with a stable failure class
 
 Expired leases can be reclaimed. Attempts are bounded; terminal failures become
-`FAILED` or `DEAD_LETTER`. Completion verifies lease ownership and R2 output
-existence, checks input/output byte evidence, and atomically moves the version
-to `QA_REQUIRED`. Operators can cancel active work or retry terminal failures
-without creating duplicate assets.
+`FAILED` or `DEAD_LETTER`. A `lease` failure class is always retryable — a
+reclaimed lease is transient infrastructure state, not a configuration defect.
+Every per-job route is authorised by the lease token, so the agent classifies a
+403 on any `/api/worker/jobs/{id}/…` path as `PROCESSOR_LEASE_REJECTED` with
+failure class `lease` instead of the permanent `configuration` class it applies
+to other 4xx answers; a job whose lease was stolen is therefore requeued rather
+than dead-lettered as a deployment defect.
+Every completion route first commits the lease-guarded job transition as a
+standalone compare-and-set and returns 409 with no side effects when the lease
+was reclaimed, so a stolen lease can never leave assets, QA reports, or version
+flips behind a job row owned by another worker. Completion verifies lease
+ownership and R2 output existence, checks input/output byte evidence, and moves
+the version to `QA_REQUIRED`. Heartbeats raise progress monotonically
+(`MAX(progress, reported)`), so a periodic agent report cannot walk a job
+backwards. Navigation builds keep the full artifact only in
+`scene_navigation_builds.artifact_json`; `processing_jobs.output_json` stores a
+summary of counts, hashes, and derivative references.
+
+The minutely scheduled pass stamps `processing_jobs.dispatched_at` when it
+enqueues and skips rows dispatched inside a ten-minute backoff window, replacing
+the previous per-minute re-enqueue storm; project asset copies use the same
+stamp. The same pass reaps jobs still in `LEASED`/`RUNNING` whose lease expired
+after exhausting `max_attempts` and moves them to `DEAD_LETTER` with a
+`lease_expired` failure class, so they surface in the failure dashboard instead
+of sitting invisible.
+
+Operators can cancel active work or retry terminal failures without creating
+duplicate assets. Operator retries reset `attempt_count` but increment a
+persisted `retry_count` capped at five; beyond that the retry route returns 409
+with `retry_limit_exhausted` so `DEAD_LETTER` stays terminal.
 
 The shipped agent pins the official Spark 2.1.0 `build-lod` implementation and
 uses its quality LoD method for production RAD derivatives. It also renders a
@@ -491,6 +586,32 @@ shell, Rapier collision profiles, Detour topology, validation probes, and exact
 derivative hashes to the immutable release snapshot. Rich automatic wall/object
 geometry extraction remains behind the adapter boundary.
 
+Heartbeat progress is real per-stage state, not a fixed cadence over a constant
+value: each stage records its percentage and message, the periodic heartbeat
+resends the current stage, and the Worker raises stored progress monotonically.
+Authored-traversal validation replays each allowed direction against the
+build's configured `obstacleBoxes` together with the currently active dynamic
+barriers, so a traversal cannot be accepted through space an obstacle occupies.
+
+The Container image is the deployment unit for that agent, and its contents are
+a contract rather than a convention. A Node test parses the `Dockerfile` and
+asserts that every local module reachable from the `processing-agent.mjs` import
+graph is copied into the image, so a new `scripts/*.mjs` dependency cannot ship a
+container that fails at first `import`. Runtime dependencies the agent imports
+directly, including `fflate` for the compressed container lanes, are declared in
+`processor/package.json` rather than inherited from the repository root.
+`NODE_OPTIONS=--max-old-space-size=6144` bounds V8 inside the 8 GiB
+`standard-3` instance so a large in-memory point cloud fails as a classified job
+error instead of an opaque OOM kill. `PROCESSOR_MAX_POINTCLOUD_INPUT_MIB`,
+`PROCESSOR_POLL_SECONDS`, and `PROCESSOR_HEARTBEAT_SECONDS` are optional on the
+processor Worker and are forwarded into the Container only when configured, so
+an unset variable leaves the agent's own default in place. The Container's
+`sleepAfter` window is four hours and must remain above the 180-minute accepted
+job runtime: the dispatch lane starts the entrypoint rather than fetching the
+Container, and the activity window is renewed only by start/fetch, so for this
+lane it caps a running job rather than an idle one. Instance slots are released
+by the `--once` entrypoint exiting, not by this window.
+
 ## Renderer and formats
 
 - quality/archive master: Gaussian PLY
@@ -499,11 +620,29 @@ geometry extraction remains behind the adapter boundary.
 - portable derivative: SPZ
 - optional vendor derivative: LCC2
 
+Only two of those are produced here. The processor builds the Spark RAD, and for
+a Gaussian **PLY** source it also writes one compact `.spz` with the pinned
+SplatTransform 3.1.7 (NGSP v4, the writer's default container) and registers it
+as asset kind `portable`. SPZ compaction is deliberately non-fatal: a failure is
+logged, the derivative is omitted from the QA report and the output list, and
+the job still succeeds on the RAD, poster, and report. Publication selects a
+verified asset of kind `web`, so a `portable` SPZ is an interchange and archive
+artifact and never silently becomes the published scene. That matches the
+processor's own source validation, where an NGSP v4 SPZ is normalised before
+Spark reads it. The processor never emits SOG. A compact SPZ or SOG release
+exists only because an operator uploaded a browser-ready asset for it.
+
 The viewer packages `@sparkjsdev/spark` and Three.js into the deployment. Spark
 is the only scene renderer. Its iframe receives only an authorized release URL,
-format, and device-aware splat budget, never an R2 credential. Spark requires
-WebGL2 and reports progress, first-frame readiness, and failures to the release
-shell through a same-origin message contract.
+format, and device-aware splat budget, never an R2 credential. The splat budget
+is an operator choice only when the release explicitly recorded one; a release
+published without one carries `viewer.splatBudgetMillions: null` so the shell
+selects from the project delivery policy and the detected device profile. Spark
+requires WebGL2 and reports progress, first-frame readiness, and failures to the
+release shell through a same-origin message contract. Until the renderer reports
+its first frame the shell covers the viewport with the release poster behind the
+progress copy, and a load that reports no progress at all for ninety seconds is
+replaced by a retryable error instead of an endless spinner.
 
 The authenticated comparison workspace requests two immutable version IDs and
 receives fresh, short-lived renderables rather than stored public URLs. Each
@@ -521,17 +660,59 @@ currently claimed.
 
 - tenant IDs are enforced in every operator-side project query
 - release slugs are globally unique and cannot be reassigned across tenants or
-  projects
+  projects; a publish whose channel upsert loses that guard concurrently is
+  compensated (release row deleted, version/project state restored) and answered
+  409 instead of returning a 201 behind a URL that never activated
+- control-plane invariants are enforced by the mutation itself, not by a
+  preceding read: demoting or revoking the final active `platform_admin` is
+  conditional on a surviving peer in the same statement, a project may hold at
+  most one non-terminal hosting subscription (partial unique index), and a
+  release number collision retries the sequence instead of surfacing a 500
+- the highest-stakes routes (billing, team role/revocation, publish, rollback,
+  revoke) carry their audit INSERT inside the same D1 batch as the mutation, so
+  a committed control-plane change cannot exist without its evidence row
 - OTPs, refresh tokens, release tokens, and worker lease tokens are stored only
   as hashes
 - access JWTs use ES256 with `kid`, issuer/audience/time validation, JWKS
   publication, overlapping signing-key rotation, and D1-backed revocation
 - secrets are Cloudflare Worker secrets
-- JSON request bodies are bounded
+- JSON request bodies are bounded (1 MiB default, 24 MiB on processing-job
+  completion routes) and rejected with typed `invalid_json` (400) or
+  `request_body_too_large` (413) responses instead of opaque server errors
+- browser writes must declare the canonical `APP_ORIGIN` (or a verified custom
+  viewer domain); `Sec-Fetch-Site` is honoured when `Origin` is absent, and
+  header-free non-browser clients fall through to bearer-credential checks
+- auth refresh, OTP, OIDC, release-manifest, team-invitation, upload-session,
+  telemetry, and health endpoints sit behind authoritative D1 rate limits whose
+  429 responses carry the real window in `Retry-After`
+- OTP delivery and suppression writes run after the response in both the
+  authorised and unknown-email branches, so response timing does not enumerate
+  accounts
+- denied requests (401/403/429) emit a bounded structured `request.denied` log
+  event, and `/api/health` reports per-dependency D1/KV/R2 probe status
 - upload part sizes and final byte counts are reconciled
 - asset filenames are canonicalized and must match their declared Spark format
 - comparison tokens cannot be replayed against a different project, version,
   asset, or filename and never expose an R2 object key
+- scene tokens are bound to a D1 `scene_render_sessions` row (soft expiry plus a
+  24 h hard ceiling). `/asset/` verifies the HMAC and the session row, backed by
+  a 60 s per-isolate cache so ranged reads do not hit D1 per request. The
+  manifest publishes `integrity.sessionRenewalPath`, and `POST
+  /api/scene-sessions/renew` — authenticated by the scene token itself and rate
+  limited per address and per session — extends the session up to that ceiling.
+  Tokens issued before renewable sessions carry no `sessionId` and keep
+  validating on the signature alone until they lapse. The published viewer reads
+  that expiry, renews at roughly sixty percent of the remaining lifetime while
+  the tab is visible, stops at the hard ceiling, and replaces the scene with a
+  session-expired panel plus a reload action rather than letting paged reads
+  fail as unexplained 401s
+- both `/public-asset/` and `/asset/` serve through the edge Cache API. The key
+  is immutable asset identity (`assetId` plus etag or sha256) and never contains
+  a token: the token and its session are verified on every request before the
+  cache is consulted, and the browser-facing directive for a protected asset
+  stays `private, max-age=1800, immutable` while only the edge copy is shared.
+  A first ranged read of a paged scene warms the whole object into the edge once
+  (up to 128 MiB) so later page ranges are sliced from cache instead of R2
 - CSP, permissions policy, frame policy, MIME sniffing protection, and
   structured audit events are enabled
 
@@ -542,10 +723,13 @@ authoritative D1 policy:
 
 - expire reviewer invitations and dated releases
 - mark hosting subscriptions past due or expired
+- abort and retire expired open upload sessions so R2 multipart uploads and
+  project archival are never orphaned
 - archive configured projects and revoke their active releases
 - delete due R2 objects only when no legal hold applies
 - preserve D1 tombstones and action records for every deletion
-- send an operator digest and record notification success or failure
+- send exactly one operator digest per run (the digest carries the whole run's
+  global summary) and record its success or failure once
 
 The manual lifecycle action uses the same implementation. A restore drill reads
 a bounded range from a retained R2 object and records the result. This proves

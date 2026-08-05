@@ -9,8 +9,8 @@ only when the public behavior at its relevant seam is covered and the complete
 | Layer | Public seam | Command | Current scope |
 | --- | --- | --- | --- |
 | Unit | Pure modules and bounded adapters | `npm run test:unit` | Action state, capture formats, paired-frame receipts, render-native floor-plan corrections/overlays, geometry and floor-plan logic, navigation triangles/obstacles/transitions, evidence-linked traversal overlays, coordinate transforms, OIDC helpers, processor validation, privacy detection, Turnstile verification |
-| Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows |
-| Navigation contracts | Offline build, movement evidence, and receipt migration | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, deterministic physical-runtime probes, and legacy receipt backfill/atomicity |
+| Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows, and the public E57 container-structure evidence lane |
+| Navigation contracts | Offline build, movement evidence, receipt migration, and the processor image | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, deterministic physical-runtime probes, legacy receipt backfill/atomicity, the public ASTM E57 container reader, and the Container `Dockerfile` COPY graph |
 | End to end | Production browser bundle | `npm run test:e2e` | Landing and live-demo messaging, OTP pending/error/retry behavior, responsive sign-in and Turnstile, paired-capture intake, registered-render structure approval/correction controls, navigation authoring/review spacing, Spark renderer chrome, Walk/Fly input, floor plan, and the host-to-renderer navigation snapshot handoff |
 | Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
 
@@ -29,6 +29,30 @@ document overflow or overlapping project navigation.
 
 `npm test` runs all Worker unit and integration tests once. `npm run test:all`
 runs the instrumented Worker suite plus browser E2E.
+
+## Contract lanes added with the integrity and evidence work
+
+- `node-test/processor-container-image.test.mjs` parses `processor/Dockerfile`,
+  walks the local import graph from the `ENTRYPOINT` script, and fails when a
+  reachable `scripts/*.mjs` module is not copied into the image. It is a static
+  contract: it proves the image would not fail at first `import`, not that a
+  built image runs.
+- `node-test/e57-structure.test.mjs` covers the public ASTM E2807 container
+  reader against synthetic files: the standard CRC-32C check value, per-scan
+  poses, bounds, vendor field names and image representations, a page whose
+  stored CRC no longer matches, an XML section declared above the 64 MiB logical
+  bound, a non-E57 signature, and a DTD-bearing XML section. No vendor E57 is
+  read anywhere in the suite.
+- `test/capture-scan-structure.spec.ts` is the Worker-side contract: the bounded
+  reading is persisted and bound to its stored R2 report, a claimed reading that
+  cites no stored derivative is refused, an unreadable container is recorded
+  without blocking preservation of the bytes, and a pose-path claim binds only
+  to a structure reading from its own version.
+- `test/sha256-stream.spec.ts` pins the incremental client hash against the NIST
+  vectors, proves the digest is invariant across block-aligned and unaligned
+  split points, and covers blob streaming, progress, abort, and post-finalise
+  rejection. It runs under `npm test` and `npm run test:coverage`; it is not yet
+  listed in the explicit `test:unit` file set.
 
 ## Coverage
 

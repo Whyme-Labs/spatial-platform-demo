@@ -272,6 +272,14 @@ starts one deterministic Container identity for that job, passes the platform
 origin and independent worker bearer secret at runtime, and runs one exact
 lease attempt. A minute Cron reconciliation re-emits jobs still queued or whose
 lease expired, while D1's atomic lease prevents duplicate execution authority.
+That pass stamps `processing_jobs.dispatched_at` when it enqueues and skips rows
+dispatched inside a ten-minute backoff window, so a slow job is no longer
+re-enqueued every minute; project asset copies use the same stamp. The same pass
+dead-letters jobs still `LEASED`/`RUNNING` whose lease expired after
+`max_attempts` was exhausted, with failure class `lease_expired`, so a stalled
+job appears in the failure dashboard instead of sitting invisible. When
+inspecting a stuck job, read `state`, `attempt_count`, `retry_count`,
+`dispatched_at`, and `lease_expires_at` together.
 
 Build and validate the linux/amd64 image:
 
@@ -293,14 +301,32 @@ The image contains the Spark 2.1.0 source pinned to commit
 `f22236f95fdd8078f0c12e3aab479523d401daf6`, compiles `build-lod` during the
 image build, and uses distro Chromium only for the deterministic poster lane.
 The configured `standard-3` instance has 8 GiB memory and 16 GB ephemeral disk;
+the image sets `NODE_OPTIONS=--max-old-space-size=6144` so a large in-memory
+point cloud fails as a classified job error rather than an opaque OOM kill, and
 the application still enforces a 1,024 MiB maximum per raw-scene input. This is
 a CPU processing lane. Vendor reconstruction or other CUDA work must use an
 external GPU adapter while preserving the same exact-job lease contract.
 
-The Container request-idle timeout is four hours, deliberately longer than the
-maximum accepted 180-minute job runtime. Cloudflare Container activity is
-request based, so shortening this to a normal HTTP timeout can terminate a
-healthy Spark job while it computes without making Worker requests.
+The processor Worker may declare the optional passthrough variables
+`PROCESSOR_MAX_POINTCLOUD_INPUT_MIB`, `PROCESSOR_POLL_SECONDS`, and
+`PROCESSOR_HEARTBEAT_SECONDS` alongside the required `APP_ORIGIN`,
+`PROCESSOR_MAX_CHANGE_INPUT_MIB`, and `PROCESSOR_MAX_JOB_RUNTIME_MINUTES`. Each
+optional variable is forwarded into the Container only when it is set, so
+removing it from `wrangler.processor.jsonc` restores the agent's own default
+instead of injecting an empty string. `wrangler.processor.jsonc` currently
+declares all three in the default, staging, and production environments; keep
+the three environments' values aligned when tuning one.
+
+The Container `sleepAfter` window is four hours and must stay above the accepted
+180-minute `PROCESSOR_MAX_JOB_RUNTIME_MINUTES`. Cloudflare Container activity is
+request based: `@cloudflare/containers` renews the activity window on start and
+on each fetch, and this dispatch lane starts the entrypoint rather than fetching
+it, so the agent's own compute never renews it. For this lane the window is
+therefore a wall-clock cap on a running job, not an idle timeout — reducing it
+below the accepted job runtime stops a long Spark, PDAL, or Recast job
+mid-execution. Instance slots are not the reason the value is large: the
+`--once` entrypoint runs one lease attempt and exits, and a Container that has
+exited releases its slot without waiting for this window.
 
 Poster generation does not use a fixed sleep. The browser samples the Spark
 canvas until two consecutive frames contain enough non-background pixels,
@@ -328,8 +354,24 @@ drone imagery, and open import.
 
 The processor health response must report `spatial-processor/0.5.0` or newer
 before accepting these evidence jobs. A production validation should inspect
-`processing_jobs.job_type`, `assets.kind`, `assets.integrity_status`, and the
-immutable `qa_reports.report_json` limitation together.
+`processing_jobs.job_type`, `assets.kind`, `assets.integrity_status`,
+`assets.integrity_source`, and the immutable `qa_reports.report_json` limitation
+together.
+
+`assets.integrity_source` records who established the digest:
+`server_verified` (the Worker streamed the finished R2 object through
+`crypto.DigestStream` at upload completion), `client_declared` (the object
+exceeded `SERVER_HASH_MAX_BYTES` so only the uploader's declared hash exists),
+`processor_reported` (a processor filled a previously NULL digest), or
+`operator_manual` (an operator signed the job off without a digest). Tune
+`SERVER_HASH_MAX_BYTES` (default `2147483648`, 2 GiB) per environment: raising
+it hashes more uploads in-request at the cost of request duration. The bound was
+chosen against the largest pinned vendor master — the FJD P2 Gaussian PLY is
+536,812,164 bytes, which the previous 512 MiB bound cleared by only ~57 KB —
+and native SHA-256 costs under a second of CPU per 2 GiB, so the dominant cost
+is streaming the object from R2 (roughly ten to twenty seconds in-datacentre). A declared hash that
+contradicts the server-computed one leaves the asset `integrity_status =
+'failed'` with no processing job; investigate the uploader before retrying.
 
 `semantic.extract-v1` is a separate processor lane. It accepts only a verified
 source, master, or point-cloud PLY already asserted to use metres in a
@@ -505,7 +547,12 @@ unique run ID and is deleted before the command succeeds.
 3. Confirm dashboard counters load.
 4. Create a disposable project in staging.
 5. Upload a valid Gaussian PLY or SPZ, run `npm run processor:once`, confirm the
-   job reaches `SUCCEEDED` and its immutable version reaches `QA_REQUIRED`.
+   job reaches `SUCCEEDED` and its immutable version reaches `QA_REQUIRED`. For
+   a PLY source, also confirm the version carries a `portable` `spz` asset
+   beside the `web` RAD, and that `qa_reports.report_json` lists a
+   `derivatives.compact` entry. Its absence means SPZ compaction was skipped —
+   check the `processor.compact_spz_skipped` log — and is not by itself a job
+   failure.
 6. Approve QA, publish the Spark RAD release, confirm the numeric scene version
    and release revision, open it, and revoke it. Repeating an identical
    non-token publish with a new operation ID must return the active release
@@ -638,8 +685,11 @@ Scene rollback does not require a Worker deployment. Use
 - leaked capture-agent token: revoke that credential in Team immediately,
   inspect its last-use and upload/audit evidence, then create or rotate only
   after project scope is reconfirmed
-- leaked scene token: tokens expire within 30 minutes; revoke the release
-  channel for immediate denial
+- leaked scene token: tokens expire within `SCENE_SESSION_TTL_SECONDS`
+  (30 minutes by default) and can be renewed only up to their session's 24 h
+  hard ceiling; delete the `scene_render_sessions` row to cut streaming off
+  within the 60 s validation cache, or revoke the release channel for immediate
+  denial
 - bad release: revoke or point the channel to a previous release
 - failed upload: abort the multipart session; source versions are not overwritten
 - stuck worker: use the Studio cancel action, or let the lease expire and retry;

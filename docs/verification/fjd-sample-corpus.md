@@ -23,6 +23,7 @@ redistribution grant.
 | Private Studio FJD import | Visual processing passed; current preview blocked by design | The exact 536,812,164-byte PLY traversed the isolated Worker, production `fjd-trion` adapter, multipart upload, lease, quality RAD build, and poster attachment. Its earlier visual-only browser smoke is retained as processor evidence, but the current product correctly refuses to mint a preview without registered geometry and an approved walking map. |
 | Private production upload | Passed | Project `87c7ab8e-6e61-4552-9ac9-cef577210f33` accepted the exact PLY through 52 resumable parts; cloud job `c36777a5-42bd-494f-98f3-7b647d0718f3` verified the source and generated a RAD, poster, and QA report. The project remains `QA_REQUIRED` with zero releases. |
 | Historical Spark visual smoke | Retained as processor evidence only | Before the strict walking-map gate, headless Chrome loaded the signed 141,351,968-byte RAD using HTTP 206 ranges with no page, console, renderer, or HTTP errors. That receipt still proves Spark compatibility, but current product code will not repeat a visual-only preview. |
+| Structured E57 vendor semantics | Blocked | `npm run corpus:fjd:e57:inspect` finds no E57 under `.cache/fjd-sample-corpus` or `.cache/open-corpus` and writes `blocked_missing_registered_indoor_corpus` to `.cache/fjd-sample-corpus/reports/e57-structure-inventory.json`. The public ASTM container reader exists and is tested against a synthetic file, but no vendor export has been read. |
 | Shared visual/geometry frame | Blocked | P2 Horse and V4e interior are different captures; no transform registers them. |
 | Automatic walkable scene | Blocked | Requires an indoor FJD capture containing both the portable visual and metric structural geometry in one declared frame. |
 | Public redistribution | Blocked | The official sample page provides downloads but no dataset-specific redistribution grant. |
@@ -44,6 +45,7 @@ npm run corpus:fjd:inspect
 npm run corpus:fjd:fetch
 npm run corpus:fjd:verify
 npm run corpus:fjd:qualify
+npm run corpus:fjd:e57:inspect
 npm run corpus:fjd:e2e:local
 ```
 
@@ -66,6 +68,17 @@ registered indoor collision/navigation package, asserts that no release
 exists, and removes the exact temporary Worker state directory. The historical
 Spark/Chrome smoke remains a processor compatibility receipt only; it is not
 part of the current product-preview command.
+
+`e57:inspect` walks `.cache/fjd-sample-corpus` and `.cache/open-corpus` for any
+`.e57` file and reads each one through the public ASTM E2807 container reader:
+the 48-byte header, the CRC-32C-paged XML section, then per-scan poses, bounds,
+point counts, the point-field inventory including vendor extension names
+recorded verbatim, image records with their representation types, and
+coordinate metadata. It reads the header and XML section only, never the point
+payload. No E57 is currently present, so the command writes
+`blocked_missing_registered_indoor_corpus` rather than implying a reading it
+never performed. It never guesses FJD's classification or mesh schema: vendor
+field names are preserved as evidence and left undecoded.
 
 The manifest currently declares one explicit qualification case,
 `p2-horse-v4e-tool-compatibility`, which binds these two fixtures and labels
@@ -110,8 +123,10 @@ Ask FJD Trion Model export for one indoor capture containing:
 1. portable 3DGS (`PLY` preferred for the first qualification);
 2. metric LAS, E57, PLY, or mesh from the same reconstruction;
 3. units, up axis, origin, and the visual-to-geometry transform;
-4. floor/room/opening output when available; and
-5. written permission covering private processing and the intended demo.
+4. floor/room/opening output when available;
+5. a structured `E57` retaining per-scan poses and image records, plus any
+   classified mesh or segmentation sidecar the software produces; and
+6. written permission covering private processing and the intended demo.
 
 The local-only P2 adapter/browser E2E is complete. The remaining device gap is
 a same-capture indoor bundle plus a supported FJD metadata contract that can
@@ -119,3 +134,13 @@ derive axis, scale, visual-to-geometry registration, and opening camera without
 a fixture pin. That bundle is the missing receipt for automatic floor-plan,
 structural collision, Recast navigation, and publish qualification. XGRIDS is
 intentionally deferred until this FJD acceptance lane closes.
+
+The structured E57 and vendor semantic exports carry their own, narrower gap.
+The platform now preserves a classified mesh or segmentation sidecar under the
+`vendor_semantic_mesh` role and records what the public E57 container declares,
+but it decodes no FJD label vocabulary and derives no wall, floor, or ceiling
+claim from one. Closing that gap needs a registered indoor FJD export so the
+actual exported dimensions, pose records, and extension field names can be read
+instead of assumed. Until that file exists, `corpus:fjd:e57:inspect` reports
+`blocked_missing_registered_indoor_corpus` and the adapter declares the
+classification semantics as unparsed.

@@ -98,7 +98,14 @@ The direct production path accepts browser-ready Spark `.rad`, `.spz`, and
 `.sog` assets. Gaussian PLY and SPZ source assets can also be leased to the
 production processing agent, which validates the source, builds a Spark RAD LoD
 derivative, renders a poster, writes a QA report, and uploads the immutable
-outputs through the Worker. The same lease lane can compare two explicitly
+outputs through the Worker. For a Gaussian **PLY** source only, it additionally
+writes one compact `.spz` with the pinned SplatTransform 3.1.7 and uploads it as
+a `portable` asset beside the canonical RAD. That derivative is optional: a
+compaction failure is logged and skipped instead of failing the job, and because
+publication selects a verified `web` asset, the portable SPZ is an interchange
+artifact rather than the published scene. The processor never emits SOG; SOG
+reaches a release only as an operator-uploaded browser-ready asset.
+The same lease lane can compare two explicitly
 registered, verified PLY assets and retain bounded voxel-occupancy, centroid,
 mean-colour, source-byte, method, and human-review evidence. It can also inspect
 a verified PLY in either reviewed metric metres or explicitly provisional scene
@@ -130,8 +137,13 @@ Implemented:
   lifecycle records
 - private R2 source/master/delivery object storage
 - 100 GiB resumable multipart uploads with D1/R2 byte and ETag reconciliation,
-  cross-session discovery, exact-file resume, expiry handling, and explicit
-  discard
+  cross-session discovery, exact-file resume, expiry handling, explicit discard,
+  and a lifecycle reaper that aborts and retires expired open sessions
+- a Studio-computed SHA-256 declared before the upload session is created and
+  re-verified against the selected file before a resumed completion, plus
+  server-side hashing of the finished R2 object and an `assets.integrity_source`
+  provenance column, so `verified` records that the Worker hashed the stored
+  bytes rather than that a job succeeded
 - purpose-aware XGRIDS, FJD, phone, drone, and open-import ingestion that keeps
   raw capture, vendor projects, imagery, video, poses, calibration,
   trajectories, point clouds, and collision geometry out of Spark while
@@ -142,13 +154,22 @@ Implemented:
   exact-file SHA-256 plus committed multipart ETags before retry or restart
 - Turnstile-protected email OTP authentication, ES256/JWKS access tokens,
   rotating refresh sessions, immediate D1 revocation, role checks, and
-  authoritative D1 rate limits
+  authoritative D1 rate limits with honest `Retry-After` windows across
+  refresh, manifest, invitation, upload-session, and health endpoints
+- typed request-body rejection (400 invalid JSON / 413 oversized with stable
+  error codes), canonical-origin write protection, timing-safe OTP responses,
+  denied-request logging, and per-dependency D1/KV/R2 health probes
 - tenant-scoped enterprise OIDC with authorization code + PKCE, live provider
   discovery, RS256/ES256 ID-token verification, invited-account linking,
   provider session provenance, and immediate provider-disable revocation
 - admin-only organisation team inventory with expiring email invitations,
-  OTP acceptance, role changes, resend/reinvite, last-admin protection, and
-  immediate target-session invalidation
+  OTP acceptance, role changes, resend/reinvite, last-admin protection enforced
+  by the mutation itself rather than a preceding read, and immediate
+  target-session invalidation
+- explicit invitation consent: silent acceptance is limited to a first-time
+  account holding no active membership anywhere, while an account that already
+  belongs to an organisation sees its pending invitations on sign-in and answers
+  each one through an authenticated, rate-limited, audited accept or decline
 - explicit multi-organisation membership inventory and session-rotating
   workspace switching with tenant-state clearing and mobile access
 - organisation project templates, personal saved portfolio views, deterministic
@@ -181,29 +202,54 @@ Implemented:
   from measurement certification
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
-  human-review evidence in D1
+  human-review evidence in D1, optionally bound to one container structure
+  reading so the trajectory claim cites the exact exported scan poses
+- read-only public ASTM E57 container structure evidence — header, CRC-paged
+  XML, per-scan poses, image records, and vendor extension field names recorded
+  verbatim — bound to an immutable private R2 report by SHA-256, plus a
+  preserved-but-unparsed `vendor_semantic_mesh` upload role; no vendor
+  classification or mesh schema is decoded and no structural claim derives
+  from a reading
 - vendor-neutral capture-bundle contracts that bind exact verified version
   assets, exporter/hardware metadata, coordinate conventions, commercial
   rights, portability, independent-reconstruction inputs, automation readiness,
   and human disposition to an immutable private R2 manifest
 - worker bearer authentication, expiring leases, heartbeats, retries, and
-  dead-letter state
+  dead-letter state, with a compare-and-set lease guard committed before any
+  completion side effect, `dispatched_at` re-enqueue de-duplication, an
+  expired-lease reaper that dead-letters exhausted jobs, and operator retries
+  bounded by a persisted retry count
 - a pinned Spark 2.1 processing agent with byte-verified input, multipart output,
-  processor evidence, classified failure, retry, and cancellation
+  processor evidence, classified failure, retry, and cancellation; it reports
+  real per-stage heartbeat progress, treats a reclaimed lease as a retryable
+  `lease` failure rather than a permanent configuration error, and emits an
+  optional compact SPZ `portable` derivative for Gaussian PLY sources
 - immutable releases with a project-local numeric release revision, a numeric
   scene version, exact duplicate suppression, and public, unlisted, token, or
-  customer-authenticated policies; UUIDs remain internal identity keys
+  customer-authenticated policies; UUIDs remain internal identity keys. A
+  publish that loses the global slug guard concurrently is compensated and
+  answered 409 rather than returning a release behind a URL that never activated
 - recoverable project archival that removes retired work from current Projects,
   Jobs, and Releases views while retaining its immutable project history
-- short-lived signed scene sessions, HTTP range delivery, revocation, and
-  rollback
+- short-lived signed scene sessions that the viewer renews before they lapse and
+  reports as an expired session with a reload action when they cannot be
+  renewed, HTTP range delivery cached at the edge on asset identity alone,
+  revocation, and rollback
 - authenticated pre-publication version previews with short-lived exact-asset
   URLs, so operators can inspect a processed splat before optional authoring or
   release QA
 - Spark RAD, SPZ, and SOG browser delivery
 - bundled Spark 2.1 and Three.js runtime; no client-side CDN dependency
-- device-adaptive Spark budgets, guided navigation, room/POI semantics, and a
-  responsive authored-geometry floor plan with live camera position
+- device-adaptive Spark budgets whenever a release records no explicit operator
+  budget, a release poster held over the viewport until the first frame, a
+  ninety-second no-progress loading watchdog, guided navigation, room/POI
+  semantics, and a responsive authored-geometry floor plan with live camera
+  position
+- desktop pointer-lock mouse look that falls back to drag-look when the browser
+  denies or exits the lock, a render and physics loop paused entirely while the
+  tab is hidden, a frame-delta timestep so a resumed tab does not integrate the
+  hidden interval as one step, and an explicit WebGL context-loss failure with a
+  reload affordance instead of a silent black canvas
 - v7 structural collision with reviewed floor/wall/ceiling groups, furniture-
   ignoring Rapier Walk and Fly profiles, direct arrow/WASD motion, touch
   altitude controls, synchronized open/closed door barriers, Detour route
@@ -229,7 +275,9 @@ Implemented:
   that persists routing/TLS evidence and refuses DNS-only activation
 - merchant-operated manual billing with admin-only invoice issuance,
   payment-reference-required collection, explicit paid/void/past-due/
-  cancelled/expired transitions, idempotent operations, audit history, and
+  cancelled/expired transitions, idempotent operations that stay idempotent on a
+  concurrent conflict, at most one non-terminal hosting subscription per project,
+  audit history written inside the same D1 batch as the mutation, and
   fail-closed hosting activation
 - a dormant Stripe Checkout and signed-webhook adapter retained for a later
   self-service phase; it is not exposed by the current production UI and cannot
@@ -248,6 +296,14 @@ Intentionally outside the current production boundary:
   reconstruct them
 - licensed scanner-origin acceptance of the declared XGRIDS/FJD capture-bundle
   exports; the deployed contract validates preserved evidence, not vendor claims
+- decoding of vendor classification or mesh semantics. The E57 lane reads only
+  the public ASTM container and records vendor extension field names verbatim; a
+  classified mesh or segmentation sidecar is preserved as evidence and never
+  becomes collision or navigation geometry. Closing that gap needs a registered
+  indoor vendor export, which does not yet exist locally
+- compact SOG generation. The processor emits Spark RAD and, for Gaussian PLY
+  sources only, one optional compact SPZ; SOG is accepted as an operator upload
+  and served, never produced
 - scanner-native live coverage guidance and licensed-device threshold
   validation
 - full-scene privacy coverage beyond the explicitly supplied evidence frames
@@ -347,6 +403,15 @@ each input into memory after enforcing the per-input
 `PROCESSOR_MAX_CHANGE_INPUT_MIB` limit (1,024 MiB by default); increase it only
 on a processor with a measured memory budget.
 
+The Container lane forwards `PROCESSOR_MAX_POINTCLOUD_INPUT_MIB`,
+`PROCESSOR_POLL_SECONDS`, and `PROCESSOR_HEARTBEAT_SECONDS` into the image only
+when the processor Worker declares them, so an unset variable leaves the agent
+default in place. The image itself bounds V8 with
+`NODE_OPTIONS=--max-old-space-size=6144` inside the 8 GiB `standard-3` instance,
+and its `COPY` graph is asserted against the entrypoint's local import graph by
+a Node contract test, so a module reachable from `processing-agent.mjs` cannot
+be missing from the built image.
+
 ## Capture transfer agent
 
 The transfer agent preserves a completed vendor export; it does not control a
@@ -379,6 +444,7 @@ npm run corpus:all
 npm run corpus:e2e:local
 npm run corpus:fjd:inspect
 npm run corpus:fjd:qualify
+npm run corpus:fjd:e57:inspect
 npm run corpus:fjd:e2e:local
 ```
 
@@ -413,7 +479,11 @@ and
 The FJD commands range-inspect the official P2 archive, selectively extract its
 Gaussian PLY and companion `.fjdata` without downloading the whole archive,
 verify a separate official V4e interior LAS, build a Spark RAD compatibility
-artifact, and run a disposable local FJD-adapter/strict-preview-gate E2E. Local vendor bytes
+artifact, and run a disposable local FJD-adapter/strict-preview-gate E2E.
+`corpus:fjd:e57:inspect` reads any locally cached `.e57` through the public ASTM
+container reader; no vendor E57 is present, so it currently writes an explicit
+`blocked_missing_registered_indoor_corpus` receipt rather than implying a
+reading it never performed. Local vendor bytes
 and reports remain under ignored `.cache/fjd-sample-corpus`; the exact pins,
 commands, isolated-E2E boundary, private production qualification receipt, and
 remaining paired-frame gap are recorded
