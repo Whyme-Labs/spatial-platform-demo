@@ -156,6 +156,32 @@ describe("floor-plan projection", () => {
     });
   });
 
+  it("stands the destination camera above a flat extracted floor polygon", () => {
+    // Extracted rooms are flat slabs, so their vertical extent is far below a
+    // room height and their authored position sits on the floor. The pose has
+    // to be a standing eye height; a floor-level Y makes the renderer derive
+    // feet a full eye height under the navigation mesh and refuse the move.
+    const plan = buildFloorPlans([{
+      id: "room-extracted",
+      parent_id: null,
+      kind: "room" as const,
+      label: "Extracted living room",
+      position_json: JSON.stringify([3, 0.15, -2]),
+      geometry_json: JSON.stringify({
+        type: "polygon",
+        points: [
+          [1, 0.05, -4], [5, 0.05, -4], [5, 0.25, 0], [1, 0.25, 0],
+        ],
+      }),
+    }])[0]!;
+    const room = plan.rooms[0]!;
+    const pose = cameraPoseForPlanRoom(room);
+
+    expect(room.maxY - room.minY).toBeLessThan(1.7);
+    expect(pose.position[1]).toBeCloseTo(room.minY + 1.6, 6);
+    expect(pose.position[1] - room.maxY).toBeGreaterThan(1);
+  });
+
   it("keeps the destination camera inside a concave standalone walk zone", () => {
     const plans = buildFloorPlans([{
       id: "zone-concave",

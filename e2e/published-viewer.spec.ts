@@ -361,6 +361,10 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   const viewerHud = page.locator("#viewerHud");
   const rendererFrame = page.locator("#rendererFrame");
   await expect(rendererFrame).toHaveAttribute("allowfullscreen", "");
+  // Pointer lock is gated by iframe sandboxing rather than permissions policy,
+  // so the embedded renderer keeps mouse-look only while this frame stays
+  // unsandboxed; a sandbox attribute would need allow-pointer-lock.
+  await expect(rendererFrame).not.toHaveAttribute("sandbox", /.*/);
   await expect(parentLoader).toBeVisible();
   await expect(viewerHud).toBeHidden();
   await expect(releaseInfo).toBeHidden();

@@ -1,6 +1,9 @@
 export type Vector3Tuple = [number, number, number];
 
 const STANDALONE_FLOOR_PLAN_ID = "standalone-floor-zones";
+// Matches the navigation agent's eye height, which the renderer subtracts from
+// a requested room camera before projecting it onto the navigation mesh.
+const STANDING_EYE_HEIGHT_METRES = 1.6;
 
 export type FloorPlanEntity = {
   id: string;
@@ -225,11 +228,19 @@ export function locatePlanRoom(
 export function cameraPoseForPlanRoom(room: PlanRoom): RoomCameraPose {
   const verticalExtent = room.maxY - room.minY;
   const authoredY = room.authoredPosition?.[1];
+  // The renderer reads this pose as a standing camera and subtracts the agent
+  // eye height to reach the walkable surface, so the Y must be an eye height
+  // rather than a floor marker. Extracted rooms are flat floor polygons whose
+  // vertical extent is slab thickness, and their authored Y sits on that slab;
+  // trusting it there puts the derived feet a whole eye height below the
+  // navigation mesh, where projection fails and every room move is refused.
+  const authoredIsEyeLevel = typeof authoredY === "number" &&
+    authoredY - room.minY >= STANDING_EYE_HEIGHT_METRES / 2;
   const eyeY = verticalExtent >= 1.7
-    ? Math.min(room.maxY - 0.1, room.minY + 1.6)
-    : typeof authoredY === "number"
+    ? Math.min(room.maxY - 0.1, room.minY + STANDING_EYE_HEIGHT_METRES)
+    : authoredIsEyeLevel
       ? authoredY
-      : room.minY + 1.6;
+      : room.minY + STANDING_EYE_HEIGHT_METRES;
   const depth = Math.max(...room.points.map((point) => point[1])) -
     Math.min(...room.points.map((point) => point[1]));
   const cameraOffset = Math.min(1.2, Math.max(0.35, depth * 0.18));
