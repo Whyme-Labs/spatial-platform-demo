@@ -460,9 +460,9 @@ describe("authored walkable collision", () => {
     assert.equal(artifact.schemaVersion, "spatial-navigation-v7");
     assert.equal(config.schemaVersion, "authored-structural-collision-v2");
     assert.equal(config.authoring.algorithm, "operator-authored-explicit-structural-surfaces");
-    assert.equal(config.floorRectangles.length, 12);
-    assert.equal(config.ceilingRectangles.length, 12);
-    assert.equal(config.barrierSegments.length, 44);
+    assert.equal(config.floorRectangles.length, 14);
+    assert.equal(config.ceilingRectangles.length, 14);
+    assert.equal(config.barrierSegments.length, 50);
     assert.deepEqual(geometry.dynamicBarriers, config.dynamicBarrierBoxes);
     assert.deepEqual(artifact.dynamicBarriers, config.dynamicBarrierBoxes);
     assert.ok(artifact.collisionSemantics.includedGroups.includes("DYNAMIC_BARRIER"));
@@ -472,10 +472,10 @@ describe("authored walkable collision", () => {
     assert.equal(structural.passed, true);
     assert.equal(structural.anchorCount, 5);
     assert.equal(structural.probeCount, 30);
-    assert.equal(structural.boundaryCount, 44);
-    assert.equal(structural.boundaryProbeCount, 176);
-    assert.equal(structural.cornerCount, 44);
-    assert.equal(structural.cornerProbeCount, 44);
+    assert.equal(structural.boundaryCount, 50);
+    assert.equal(structural.boundaryProbeCount, 200);
+    assert.equal(structural.cornerCount, 50);
+    assert.equal(structural.cornerProbeCount, 50);
     assert.equal(structural.dynamicBarrierCount, 2);
     assert.equal(structural.dynamicBarrierProbeCount, 2);
     assert.deepEqual(structural.boundaryTopology, {
