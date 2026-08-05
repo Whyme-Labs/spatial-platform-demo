@@ -328,6 +328,8 @@ async function start(): Promise<void> {
   rendererControls = controls;
   let visualSceneReady = false;
   let pendingSpatialRuntimeMessage: object | null = null;
+  let activeSpatialRuntimeSignature: string | null = null;
+  let hydratedNavigationMeshUrl: string | null = null;
   const authoringMarkers = new THREE.Group();
   const authoringMarkerGeometry = new THREE.SphereGeometry(0.045, 12, 8);
   const authoringMarkerMaterial = new THREE.MeshBasicMaterial({
@@ -376,6 +378,43 @@ async function start(): Promise<void> {
         pendingSpatialRuntimeMessage = event.data;
         return;
       }
+      // A release may advertise its navigation mesh as a same-origin asset
+      // instead of inlining every triangle in the payload. Download it once,
+      // then replay the completed message through the normal path so an inline
+      // payload and a streamed one take exactly the same code.
+      const navigationMeshUrl = Reflect.get(event.data, "navMeshUrl");
+      if (
+        typeof navigationMeshUrl === "string" && navigationMeshUrl &&
+        !Reflect.get(event.data, "navigationMesh") &&
+        navigationMeshUrl !== hydratedNavigationMeshUrl
+      ) {
+        hydratedNavigationMeshUrl = navigationMeshUrl;
+        const streamedMessage = event.data;
+        setControlStatus("Downloading the verified walking map");
+        void fetchNavigationMesh(navigationMeshUrl).then((navigationMesh) => {
+          window.dispatchEvent(new MessageEvent("message", {
+            data: { ...streamedMessage, navigationMesh, navMeshUrl: null },
+            origin: parentOrigin,
+            source: window.parent,
+          }));
+        }).catch((error) => {
+          hydratedNavigationMeshUrl = null;
+          fail(
+            "WALKING_MAP_DOWNLOAD_FAILED",
+            `The approved walking map could not be downloaded: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          );
+        });
+        return;
+      }
+      // Hosts may re-send the same runtime payload; rebuilding Rapier + Detour
+      // for an identical runtime would discard live movement state for nothing.
+      const runtimeSignature = spatialRuntimeMessageSignature(event.data);
+      if (runtimeSignature !== null && runtimeSignature === activeSpatialRuntimeSignature) {
+        return;
+      }
+      activeSpatialRuntimeSignature = runtimeSignature;
       const runtimeGeneration = ++navigationRuntimeGeneration;
       detourNavigationRuntime?.destroy();
       detourNavigationRuntime = null;
@@ -409,9 +448,9 @@ async function start(): Promise<void> {
       if (authoredRuntime) {
         const runtimeMessage = event.data;
         navigationRuntime = authoredRuntime;
-        walkableBoxes = authoredBoxes;
         const navigationArtifact = Reflect.get(event.data, "navigationArtifact");
         if (!navigationArtifact || typeof navigationArtifact !== "object") {
+          activeSpatialRuntimeSignature = null;
           navigationRuntime = null;
           walkableBoxes = [];
           walkableBoundarySource = "none";
@@ -421,36 +460,29 @@ async function start(): Promise<void> {
           );
           return;
         }
-        const structuralV7 = navigationArtifact && typeof navigationArtifact === "object" &&
+        const structuralV7 =
           ["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
             String(Reflect.get(navigationArtifact, "schemaVersion")),
           );
         const requestedMode = Reflect.get(runtimeMessage, "defaultMovementMode");
         const preserveAuthoredFlyOpening = structuralV7 && requestedMode === "fly";
-        walkableBoxes = [];
+        walkableBoxes = authoredBoxes;
         if (!walkableBoxes.length) {
           const bounds = navigationMeshBounds(authoredRuntime);
           if (bounds) walkableBoxes = [bounds];
         }
         walkableBoundarySource = "authored";
         movementRuntimeReady = false;
-        setMovementAvailability(controls, movementRuntimeReady);
+        setMovementAvailability(controls, false);
         if (preserveAuthoredFlyOpening) {
           lastWalkablePosition = camera.position.clone();
         } else {
           anchorCameraToWalkable(camera);
         }
-        const obstacleCount = authoredRuntime.obstacleBoxes.length;
-        setControlStatus(
-          `Walking enabled · ${obstacleCount
-            ? `${obstacleCount} obstacle${obstacleCount === 1 ? "" : "s"} mapped`
-            : "clear route map"}`,
-          "ready",
-        );
-        setMovementAvailability(controls, false);
         setControlStatus("Preparing verified walking map");
         const collisionUrl = Reflect.get(event.data, "collisionUrl");
         if (typeof collisionUrl !== "string" || !collisionUrl) {
+          activeSpatialRuntimeSignature = null;
           fail(
             "WALKING_MAP_COLLISION_REQUIRED",
             "This scene's approved walking map has no verified collision asset.",
@@ -464,8 +496,14 @@ async function start(): Promise<void> {
             const initialMode: PhysicalMovementMode = structuralV7 && requestedMode === "fly"
               ? "fly"
               : "walk";
+            const streamedDetourUrl = Reflect.get(runtimeMessage, "detourUrl");
             const results = await Promise.allSettled([
-              detourModule.DetourNavigationRuntime.create(navigationArtifact),
+              detourModule.DetourNavigationRuntime.create(
+                navigationArtifact,
+                typeof streamedDetourUrl === "string" && streamedDetourUrl
+                  ? streamedDetourUrl
+                  : null,
+              ),
               physicalModule.PhysicalNavigationRuntime.create(
                 collisionUrl,
                 navigationArtifact,
@@ -532,6 +570,7 @@ async function start(): Promise<void> {
             );
           }).catch((error) => {
             if (runtimeGeneration !== navigationRuntimeGeneration) return;
+            activeSpatialRuntimeSignature = null;
             detourNavigationRuntime = null;
             collisionDrivenMovement = false;
             movementRuntimeReady = false;
@@ -542,6 +581,7 @@ async function start(): Promise<void> {
             );
           });
       } else {
+        activeSpatialRuntimeSignature = null;
         navigationRuntime = null;
         walkableBoxes = [];
         walkableBoundarySource = "none";
@@ -851,7 +891,8 @@ async function start(): Promise<void> {
     }));
   }
   let lastFrameAt = performance.now();
-  renderer.setAnimationLoop(() => {
+  let contextLost = false;
+  const renderLoop = (): void => {
     const now = performance.now();
     const deltaSeconds = Math.min(0.05, Math.max(0, (now - lastFrameAt) / 1_000));
     lastFrameAt = now;
@@ -956,9 +997,89 @@ async function start(): Promise<void> {
       });
       canvas.focus({ preventScroll: true });
     }
+  };
+  renderer.setAnimationLoop(renderLoop);
+
+  // A lost WebGL context must halt rendering and physics and tell the host,
+  // never leave a silent black canvas. Spark GPU resources cannot be rebuilt
+  // in place on restore, so the restored signal becomes a distinct fatal
+  // message the host can turn into a reload affordance.
+  canvas.addEventListener("webglcontextlost", (event) => {
+    event.preventDefault();
+    contextLost = true;
+    renderer.setAnimationLoop(null);
+    fail(
+      "WEBGL_CONTEXT_LOST",
+      "The graphics context was lost. The scene can continue after the browser restores it.",
+    );
+  });
+  canvas.addEventListener("webglcontextrestored", () => {
+    fail(
+      "WEBGL_CONTEXT_RESTORE_RELOAD_REQUIRED",
+      "The graphics context was restored, but the scene must be reloaded to rebuild its splat resources.",
+    );
+  });
+
+  // A hidden tab pauses rendering and physics entirely; resetting the frame
+  // clock on resume keeps the first visible frame from integrating the whole
+  // hidden interval as one giant step.
+  document.addEventListener("visibilitychange", () => {
+    if (contextLost) return;
+    if (document.hidden) {
+      renderer.setAnimationLoop(null);
+      return;
+    }
+    lastFrameAt = performance.now();
+    renderer.setAnimationLoop(renderLoop);
   });
 
   window.addEventListener("pagehide", dispose, { once: true });
+}
+
+// Streamed navigation payloads are only ever read back from the platform's own
+// release asset routes, never from a URL that could point somewhere else.
+async function fetchNavigationMesh(url: string): Promise<{
+  version: string;
+  vertices: Vector3Tuple[];
+  indices: number[];
+  sourceEntityIds: string[];
+}> {
+  const resolved = new URL(url, location.origin);
+  if (
+    resolved.origin !== location.origin ||
+    (!resolved.pathname.startsWith("/asset/") &&
+      !resolved.pathname.startsWith("/public-asset/") &&
+      !resolved.pathname.startsWith("/comparison-asset/"))
+  ) {
+    throw new Error("The navigation mesh URL is outside the trusted release boundary.");
+  }
+  const response = await fetch(resolved.toString(), { credentials: "same-origin" });
+  if (!response.ok) throw new Error(`the download failed with status ${response.status}`);
+  const payload = await response.json() as unknown;
+  const vertices = Reflect.get(payload as object, "vertices");
+  const indices = Reflect.get(payload as object, "indices");
+  const sourceEntityIds = Reflect.get(payload as object, "sourceEntityIds");
+  if (
+    !payload || typeof payload !== "object" ||
+    !Array.isArray(vertices) || !vertices.every((vertex) => finiteTuple(vertex)) ||
+    !Array.isArray(indices) || !indices.every((index) => Number.isInteger(index))
+  ) {
+    throw new Error("the downloaded navigation mesh is incomplete");
+  }
+  return {
+    version: String(Reflect.get(payload, "version") ?? "streamed-navigation-mesh-v1"),
+    vertices: vertices as Vector3Tuple[],
+    indices: indices as number[],
+    sourceEntityIds: Array.isArray(sourceEntityIds) ? sourceEntityIds.map(String) : [],
+  };
+}
+
+function spatialRuntimeMessageSignature(message: object): string | null {
+  try {
+    return JSON.stringify(message) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function replaceSceneAuthoringOverlay(group: THREE.Group, value: unknown): void {
@@ -1049,7 +1170,7 @@ function cameraPose(camera: THREE.PerspectiveCamera): {
 
 function broadcastCameraUpdate(camera: THREE.PerspectiveCamera): void {
   const now = performance.now();
-  if (now - lastCameraBroadcastAt < 180) return;
+  if (now - lastCameraBroadcastAt < 66) return;
   const direction = camera.getWorldDirection(new THREE.Vector3());
   const moved = !lastBroadcastPosition || lastBroadcastPosition.distanceToSquared(camera.position) > 0.0004;
   const turned = !lastBroadcastDirection || lastBroadcastDirection.angleTo(direction) > 0.015;
@@ -1301,8 +1422,8 @@ function setMovementAvailability(
     : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
     ? collisionDrivenMovement && movementMode === "fly"
-      ? "Drag to look · move through the full camera direction"
-      : "Drag to look · scroll or two-finger swipe to travel"
+      ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
+      : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel"
     : "Walking map required before this scene can be viewed";
   desktopKeyboardHelp.hidden = !available;
   desktopVerticalHelp.hidden = !available || !collisionDrivenMovement || movementMode !== "fly";
@@ -1427,8 +1548,8 @@ function updateMovementModeChrome(): void {
   flightAltitudeControls.hidden = !movementRuntimeReady || movementMode !== "fly" ||
     !mobileControls.active;
   desktopMovementHelp.textContent = movementMode === "fly"
-    ? "Drag to look · move through the full camera direction"
-    : "Drag to look · scroll or two-finger swipe to travel";
+    ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
+    : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel";
 }
 
 function movementStatusText(): string {

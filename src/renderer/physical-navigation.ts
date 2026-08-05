@@ -24,6 +24,9 @@ type MovementVector = { x: number; y: number; z: number };
 export type PhysicalMovementMode = "walk" | "fly";
 
 let initialization: Promise<void> | undefined;
+// Sub-millimetre float32 corrections from a graze along authored geometry must
+// not abort a controlled traversal; only genuine obstructions should block it.
+const CONTROLLED_MOVEMENT_EPSILON_METRES = 1e-3;
 const MAX_COLLISION_GLB_BYTES = 256 * 1024 * 1024;
 const MAX_COLLISION_VERTICES = 3_000_000;
 const MAX_COLLISION_TRIANGLES = 5_000_000;
@@ -252,6 +255,10 @@ export class PhysicalNavigationRuntime {
       return null;
     }
     this.#body.setNextKinematicTranslation(nextCenter);
+    // Match the physics integration to the same clamped wall-clock delta the
+    // gravity term uses; a small floor keeps kinematic velocities finite when
+    // two frames land on the same millisecond.
+    this.#world.timestep = Math.max(1 / 1_000, Math.min(0.05, deltaSeconds));
     this.#world.step();
     const actual = this.#body.translation();
     return this.#centerToCamera([actual.x, actual.y, actual.z], this.#mode);
@@ -331,9 +338,9 @@ export function controlledMovementReachedTarget(
   requested: MovementVector,
   corrected: MovementVector,
 ): boolean {
-  return corrected.x === Math.fround(requested.x) &&
-    corrected.y === Math.fround(requested.y) &&
-    corrected.z === Math.fround(requested.z);
+  return Math.abs(corrected.x - requested.x) <= CONTROLLED_MOVEMENT_EPSILON_METRES &&
+    Math.abs(corrected.y - requested.y) <= CONTROLLED_MOVEMENT_EPSILON_METRES &&
+    Math.abs(corrected.z - requested.z) <= CONTROLLED_MOVEMENT_EPSILON_METRES;
 }
 
 function parseRecoveryBounds(artifact: unknown): Record<PhysicalMovementMode, RecoveryBounds> {

@@ -783,6 +783,90 @@ test.describe("studio authentication lifecycle", () => {
   });
 });
 
+test.describe("studio invitation consent", () => {
+  const invitationId = "99999999-9999-4999-8999-999999999991";
+  const invitedOrganisationId = "11111111-1111-4111-8111-111111111112";
+
+  test("answers a pending organisation invitation and refreshes the membership inventory", async ({
+    page,
+  }) => {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    const invitation = {
+      id: invitationId,
+      organisationId: invitedOrganisationId,
+      organisationName: "Northwind Surveying",
+      role: "production_operator",
+      invitedAt: now,
+      expiresAt: "2026-08-05T08:00:00.000Z",
+    };
+    let accepted = false;
+    let acceptRequests = 0;
+    await page.route("**/api/**", async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname;
+      if (path === "/api/auth/session" && request.method() === "GET") {
+        return json(route, 200, {
+          authenticated: true,
+          user: {
+            userId,
+            organisationId,
+            email: "qa@whymelabs.com",
+            displayName: "UI QA",
+            role: "platform_admin",
+          },
+          pendingInvitations: accepted ? [] : [invitation],
+        });
+      }
+      if (path === `/api/team/invitations/${invitationId}/accept` && request.method() === "POST") {
+        acceptRequests += 1;
+        accepted = true;
+        return json(route, 200, { invitation: { ...invitation, status: "accepted" } });
+      }
+      if (path === "/api/auth/organisations") {
+        return json(route, 200, {
+          currentOrganisationId: organisationId,
+          organisations: [{
+            id: organisationId,
+            name: "WhyMe Labs",
+            slug: "whymelabs",
+            role: "platform_admin",
+            membershipUpdatedAt: now,
+            current: true,
+          }, ...(accepted
+            ? [{
+              id: invitedOrganisationId,
+              name: invitation.organisationName,
+              slug: "northwind-surveying",
+              role: "production_operator",
+              membershipUpdatedAt: now,
+              current: false,
+            }]
+            : [])],
+        });
+      }
+      return route.fallback();
+    });
+
+    await page.goto("/studio.html#projects");
+
+    const panel = page.locator("#pendingInvitationsPanel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText("Northwind Surveying");
+    await expect(panel).toContainText("Production Operator");
+    await expect(panel.getByRole("button", { name: "Decline" })).toBeVisible();
+    await expect(page.locator("#organisationSwitcher")).toBeHidden();
+
+    await panel.getByRole("button", { name: "Accept" }).click();
+
+    await expect.poll(() => acceptRequests).toBe(1);
+    await expect(panel).toBeHidden();
+    await expect(page.locator("#organisationSwitcher")).toBeVisible();
+    await expect(page.locator("#organisationSelect")).toContainText("Northwind Surveying");
+    await expect(page.locator("#toast")).toHaveText("Joined Northwind Surveying");
+  });
+});
+
 test.describe("Spark renderer chrome", () => {
   test("renderer error and navigation controls remain usable on desktop and mobile", async ({ page }) => {
     for (const viewport of [viewports[0], viewports[3], viewports[4]]) {
@@ -930,7 +1014,9 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
       status: "ARCHIVED",
     };
 
-    if (path === "/api/auth/session") return json(route, 200, { authenticated: true, user });
+    if (path === "/api/auth/session") {
+      return json(route, 200, { authenticated: true, user, pendingInvitations: [] });
+    }
     if (path === "/api/auth/organisations") {
       return json(route, 200, {
         currentOrganisationId: organisationId,

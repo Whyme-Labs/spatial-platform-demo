@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 
+// Playwright's default headless shell rejects the pointer lock API with a
+// WrongDocumentError; the full Chromium channel (new headless) supports it,
+// so this pointer-contract file runs on that channel.
+test.use({ channel: "chromium" });
+
 test.describe("spatial navigation direction", () => {
   for (const camera of [
     {
@@ -123,6 +128,43 @@ test.describe("spatial navigation direction", () => {
     const afterPress = await readCameraState(page);
     const travel = subtract(afterPress.position, initial.position);
     expect(dot(travel, planarForward)).toBeGreaterThan(0.01);
+  });
+
+  test.describe("pointer-lock mouse look", () => {
+    test("a stationary primary click engages pointer-lock mouse look until unlock", async ({ page }) => {
+      await page.goto("/e2e/fixtures/pointer-controls.html");
+
+      await page.mouse.move(500, 320);
+      await page.mouse.down();
+      await page.mouse.up();
+      await expect.poll(() =>
+        page.evaluate(() => document.pointerLockElement?.id ?? null)
+      ).toBe("controlCanvas");
+
+      await page.mouse.move(420, 320, { steps: 4 });
+      await page.waitForTimeout(80);
+      expect((await readProbe(page)).right).toBeLessThan(-0.02);
+
+      await page.evaluate(() => document.exitPointerLock());
+      await expect.poll(() =>
+        page.evaluate(() => document.pointerLockElement?.id ?? null)
+      ).toBeNull();
+
+      const beforeDrag = await readCameraState(page);
+      await drag(page, { x: 300, y: 260 }, { x: 300, y: 180 });
+      const afterDrag = await readCameraState(page);
+      expect(vectorLength(subtract(afterDrag.direction, beforeDrag.direction)))
+        .toBeGreaterThan(0.02);
+    });
+
+    test("a drag gesture keeps drag-look and never engages pointer lock", async ({ page }) => {
+      await page.goto("/e2e/fixtures/pointer-controls.html");
+
+      await drag(page, { x: 300, y: 260 }, { x: 220, y: 260 });
+
+      expect((await readProbe(page)).right).toBeLessThan(-0.02);
+      expect(await page.evaluate(() => document.pointerLockElement?.id ?? null)).toBeNull();
+    });
   });
 
   test("a trackpad secondary click cannot translate or rotate the camera", async ({ page }) => {

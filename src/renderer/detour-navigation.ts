@@ -33,7 +33,11 @@ export type DetourNavigationArtifact = {
   offMeshConnections: AuthoredTraversalLink[];
   detour: {
     format: "recast-navigation-js-export-v1";
-    bytesBase64: string;
+    // A published release inlines the navmesh as base64. A release that also
+    // ships the frozen binary as a same-origin asset can supply a URL instead,
+    // and either source produces the same verified Detour navmesh.
+    bytesBase64?: string;
+    url?: string;
   };
 };
 
@@ -73,11 +77,20 @@ export class DetourNavigationRuntime {
     }
   }
 
-  static async create(value: unknown): Promise<DetourNavigationRuntime> {
-    const artifact = parseDetourNavigationArtifact(value);
+  static async create(
+    value: unknown,
+    detourUrl: string | null = null,
+  ): Promise<DetourNavigationRuntime> {
+    const artifact = parseDetourNavigationArtifact(value, detourUrl);
     initialization ??= init();
     await initialization;
-    const bytes = decodeBase64(artifact.detour.bytesBase64);
+    const externalUrl = detourUrl ?? artifact.detour.url ?? null;
+    // An advertised binary is streamed instead of decoding the base64 copy. A
+    // failed fetch falls back to whatever the payload inlined so a published
+    // release never becomes unwalkable because of a derivative asset.
+    const bytes = externalUrl
+      ? await fetchDetourBytes(externalUrl, artifact.detour.bytesBase64)
+      : decodeBase64(artifact.detour.bytesBase64!);
     const { navMesh } = importNavMesh(bytes);
     return new DetourNavigationRuntime(navMesh, artifact);
   }
@@ -248,7 +261,10 @@ export class DetourNavigationRuntime {
   }
 }
 
-export function parseDetourNavigationArtifact(value: unknown): DetourNavigationArtifact {
+export function parseDetourNavigationArtifact(
+  value: unknown,
+  detourUrl: string | null = null,
+): DetourNavigationArtifact {
   if (!value || typeof value !== "object") throw new Error("Navigation artifact is missing");
   const schemaVersion = String(Reflect.get(value, "schemaVersion"));
   if (!["spatial-navigation-v6", "spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(
@@ -272,7 +288,8 @@ export function parseDetourNavigationArtifact(value: unknown): DetourNavigationA
     !Array.isArray(bounds) || bounds.length !== 2 || !bounds.every(finiteTuple) ||
     !detour || typeof detour !== "object" ||
     Reflect.get(detour, "format") !== "recast-navigation-js-export-v1" ||
-    typeof Reflect.get(detour, "bytesBase64") !== "string" ||
+    (typeof Reflect.get(detour, "bytesBase64") !== "string" &&
+      typeof (detourUrl ?? Reflect.get(detour, "url")) !== "string") ||
     !validDynamicBarriers(dynamicBarriers) ||
     !validAuthoredTraversals(offMeshConnections, schemaVersion)) {
     throw new Error("Navigation artifact is incomplete");
@@ -415,6 +432,42 @@ function finiteTuple(value: unknown): value is Vector3Tuple {
 function decodeBase64(value: string): Uint8Array {
   const binary = atob(value);
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+// Navigation derivatives are only ever read back from the platform's own
+// tokenized asset routes, never from a URL an embedding page could redirect
+// somewhere else.
+function isTrustedNavigationAssetUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value, location.origin);
+  } catch {
+    return false;
+  }
+  return url.origin === location.origin && [
+    "/asset/",
+    "/public-asset/",
+    "/comparison-asset/",
+  ].some((prefix) => url.pathname.startsWith(prefix));
+}
+
+async function fetchDetourBytes(
+  url: string,
+  inlineBase64: string | undefined,
+): Promise<Uint8Array> {
+  try {
+    if (!isTrustedNavigationAssetUrl(url)) {
+      throw new Error("The Detour navmesh URL is outside the trusted release boundary.");
+    }
+    const response = await fetch(url, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(`The Detour navmesh could not be downloaded (${response.status}).`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    if (inlineBase64) return decodeBase64(inlineBase64);
+    throw error;
+  }
 }
 
 function toVector(value: Vector3Tuple): { x: number; y: number; z: number } {

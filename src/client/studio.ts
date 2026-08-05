@@ -35,6 +35,7 @@ import {
   type EditableFloorplan,
   type RenderNativeCorrectionMode,
 } from "./render-native-floorplan";
+import { sha256HexOfBlob } from "./sha256-stream";
 import "../../styles.css";
 
 type TurnstileWidgetOptions = {
@@ -870,6 +871,28 @@ type CaptureCompletenessReport = {
   created_at: string;
   updated_at: string;
 };
+// A read-only reading of a public ASTM E57 container. Vendor extension field
+// names are listed verbatim; the platform decodes no vendor classification or
+// mesh schema, so this card never asserts what those names mean.
+type CaptureScanStructure = {
+  id: string;
+  assetId: string;
+  assetFileName: string;
+  assetFormat: string;
+  reportAssetId: string | null;
+  reportFileName: string | null;
+  reportSha256: string | null;
+  method: string;
+  status: "structure_read" | "structure_unreadable";
+  sourceFormat: string;
+  scanCount: number;
+  imageCount: number;
+  hasPerScanPoses: boolean;
+  vendorFieldNames: string[];
+  unreadableReason: string | null;
+  createdAt: string;
+  limitation: string;
+};
 type SpatialWorkspace = {
   version: { id: string; version_number: number } | null;
   entities: SpatialEntity[];
@@ -908,6 +931,7 @@ type SpatialWorkspace = {
   }>;
   changeReports: GeometryChangeReport[];
   captureCompletenessReports: CaptureCompletenessReport[];
+  captureScanStructures: CaptureScanStructure[];
   rawChangeReports: RegisteredSceneChangeReport[];
   semanticExtractions: Array<{
     id: string;
@@ -1152,6 +1176,20 @@ type TeamInvitation = {
   invitedBy: string;
 };
 type TeamWorkspace = { members: TeamMember[]; invitations: TeamInvitation[] };
+// Invitations addressed to this signed-in account. Auto-acceptance only covers
+// first-time onboarding, so an account that already belongs to an organisation
+// answers each invitation explicitly from the workspace.
+type PendingOrganisationInvitation = {
+  id: string;
+  organisationId: string;
+  organisationName: string;
+  role: "platform_admin" | "production_operator";
+  invitedAt: string;
+  expiresAt: string;
+};
+type OrganisationInvitationAnswer = {
+  invitation: PendingOrganisationInvitation & { status: "accepted" | "declined" };
+};
 type EnterpriseIdentityProvider = {
   id: string;
   name: string;
@@ -1215,6 +1253,7 @@ const byId = <T extends HTMLElement>(id: string): T => {
 const state: {
   user: User | null;
   organisations: OrganisationMembership[];
+  pendingInvitations: PendingOrganisationInvitation[];
   projects: Project[];
   jobs: Job[];
   releases: Release[];
@@ -1247,6 +1286,7 @@ const state: {
 } = {
   user: null,
   organisations: [],
+  pendingInvitations: [],
   projects: [],
   jobs: [],
   releases: [],
@@ -1368,6 +1408,7 @@ let pendingUploadOperation: {
   purpose: CaptureAssetPurpose;
   targetVersionId: string | null;
   captureJourneyId: string | null;
+  sha256: string | null;
 } | null = null;
 let activeUpload: {
   id: string;
@@ -1377,6 +1418,7 @@ let activeUpload: {
   format: string;
   purpose: CaptureAssetPurpose;
   partSizeBytes: number;
+  sha256: string | null;
   parts: Map<number, string>;
 } | null = null;
 let uploadAbortController: AbortController | null = null;
@@ -1458,14 +1500,16 @@ async function initialise(): Promise<void> {
     const ssoStatus = new URLSearchParams(window.location.search).get("sso");
     const ssoCode = new URLSearchParams(window.location.search).get("code");
     let session = await api<
-      { authenticated: true; user: User } | { authenticated: false }
+      | { authenticated: true; user: User; pendingInvitations?: PendingOrganisationInvitation[] }
+      | { authenticated: false }
     >("/api/auth/session");
     if (!session.authenticated) {
       try {
         const restored = await restoreAuthenticationSession();
         if (restored) {
           session = await api<
-            { authenticated: true; user: User } | { authenticated: false }
+            | { authenticated: true; user: User; pendingInvitations?: PendingOrganisationInvitation[] }
+            | { authenticated: false }
           >("/api/auth/session");
         }
       } catch (error) {
@@ -1488,7 +1532,9 @@ async function initialise(): Promise<void> {
     markAuthenticationEstablished();
     authenticationStatus = "authenticated";
     state.user = session.user;
+    state.pendingInvitations = session.pendingInvitations ?? [];
     renderIdentity();
+    renderPendingInvitations();
     await refreshAll();
     if (ssoStatus === "success") {
       showNotice("Enterprise sign-in verified.", "success");
@@ -2614,7 +2660,10 @@ async function handleSignIn(form: FormData): Promise<void> {
     await requestSignInCode(email);
     return;
   }
-  const result = await api<{ user: User }>("/api/auth/otp/verify", {
+  const result = await api<{
+    user: User;
+    pendingInvitations?: PendingOrganisationInvitation[];
+  }>("/api/auth/otp/verify", {
     method: "POST",
     body: JSON.stringify({
       email,
@@ -2625,9 +2674,11 @@ async function handleSignIn(form: FormData): Promise<void> {
   markAuthenticationEstablished();
   authenticationStatus = "authenticated";
   state.user = result.user;
+  state.pendingInvitations = result.pendingInvitations ?? [];
   loginDialog.close();
   resetLogin();
   renderIdentity();
+  renderPendingInvitations();
   await refreshAll();
 }
 
@@ -3145,6 +3196,7 @@ function transitionToSignedOut(message = ""): void {
   authenticationStatus = "signed-out";
   state.user = null;
   state.organisations = [];
+  state.pendingInvitations = [];
   rawSceneChangePollGeneration += 1;
   semanticExtractionPollGeneration += 1;
   floorplanExtractionPollGeneration += 1;
@@ -3152,6 +3204,7 @@ function transitionToSignedOut(message = ""): void {
   clearAssetHandoffPoll();
   clearTenantWorkspace();
   renderIdentity();
+  renderPendingInvitations();
   renderProjectControls();
   renderProjectTemplateOptions();
   renderProjects();
@@ -4598,6 +4651,107 @@ async function switchOrganisation(): Promise<void> {
   window.history.replaceState(null, "", "#projects");
   await refreshAll();
   showToast(`Switched to ${result.organisation.name}`);
+}
+
+function renderPendingInvitations(): void {
+  const panel = byId("pendingInvitationsPanel");
+  const list = byId("pendingInvitationList");
+  if (!state.user || !state.pendingInvitations.length) {
+    panel.hidden = true;
+    list.replaceChildren(emptyState("No organisation invitation is awaiting your response."));
+    return;
+  }
+  panel.hidden = false;
+  const card = element("article", "workspace-card-large");
+  const invitationError = element("p", "form-error");
+  invitationError.id = "pendingInvitationError";
+  invitationError.setAttribute("role", "alert");
+  card.append(
+    element("span", "eyebrow", "EXPLICIT CONSENT"),
+    element(
+      "h3",
+      "",
+      `${state.pendingInvitations.length} organisation invitation${state.pendingInvitations.length === 1 ? "" : "s"} awaiting your answer`,
+    ),
+    element(
+      "p",
+      "muted-copy",
+      "Accepting adds the organisation to your workspace switcher without moving you out of the current one. Declining leaves no membership behind and an administrator must issue a new invitation.",
+    ),
+    invitationError,
+  );
+  for (const invitation of state.pendingInvitations) {
+    const row = element("div", "team-member-row");
+    const identity = element("div", "team-member-identity");
+    identity.append(
+      element("strong", "", invitation.organisationName),
+      element("span", "", humanStatus(invitation.role)),
+      element(
+        "small",
+        "",
+        `Invited ${relativeTime(invitation.invitedAt)} · expires ${relativeTime(invitation.expiresAt)}`,
+      ),
+    );
+    const status = element("span", "status-pill invited", "Pending");
+    const actions = element("div", "team-member-actions");
+    const accept = element("button", "primary-button", "Accept");
+    const decline = element("button", "quiet-button", "Decline");
+    accept.addEventListener("click", () => {
+      void runAction({
+        key: `team-invitation-accept:${invitation.id}`,
+        trigger: accept,
+        pendingLabel: "Joining…",
+        disable: [decline],
+        errorTarget: invitationError,
+      }, () => acceptOrganisationInvitation(invitation));
+    });
+    decline.addEventListener("click", () => {
+      if (!confirm(
+        `Decline the invitation to ${invitation.organisationName}? An administrator must send a new invitation to restore it.`,
+      )) return;
+      void runAction({
+        key: `team-invitation-decline:${invitation.id}`,
+        trigger: decline,
+        pendingLabel: "Declining…",
+        disable: [accept],
+        errorTarget: invitationError,
+      }, () => declineOrganisationInvitation(invitation));
+    });
+    actions.append(accept, decline);
+    row.append(identity, status, actions);
+    card.append(row);
+  }
+  list.replaceChildren(card);
+}
+
+async function acceptOrganisationInvitation(
+  invitation: PendingOrganisationInvitation,
+): Promise<void> {
+  const result = await api<OrganisationInvitationAnswer>(
+    `/api/team/invitations/${invitation.id}/accept`,
+    { method: "POST" },
+  );
+  removePendingInvitation(invitation.id);
+  await refreshAll();
+  showToast(`Joined ${result.invitation.organisationName}`);
+}
+
+async function declineOrganisationInvitation(
+  invitation: PendingOrganisationInvitation,
+): Promise<void> {
+  const result = await api<OrganisationInvitationAnswer>(
+    `/api/team/invitations/${invitation.id}/decline`,
+    { method: "POST" },
+  );
+  removePendingInvitation(invitation.id);
+  showToast(`Declined the invitation to ${result.invitation.organisationName}`);
+}
+
+function removePendingInvitation(invitationId: string): void {
+  state.pendingInvitations = state.pendingInvitations.filter(
+    (invitation) => invitation.id !== invitationId,
+  );
+  renderPendingInvitations();
 }
 
 function clearTenantWorkspace(): void {
@@ -7025,6 +7179,20 @@ function renderSpatial(): void {
   }
   for (const report of captureReports.slice(0, 5)) {
     captureEvidence.append(renderCaptureCompletenessReport(report));
+  }
+  const scanStructures = spatial.captureScanStructures ?? [];
+  if (scanStructures.length) {
+    captureEvidence.append(
+      element("span", "eyebrow", "CONTAINER STRUCTURE"),
+      element(
+        "p",
+        "muted-copy",
+        "Read from the public ASTM E57 container only. Vendor classification and mesh semantics — indoor wall, floor, and ceiling labels — are not parsed, and no structural claim derives from this reading.",
+      ),
+    );
+    for (const structure of scanStructures.slice(0, 5)) {
+      captureEvidence.append(renderCaptureScanStructure(structure));
+    }
   }
   const authoredRooms = spatial.entities.filter((entity) => entity.kind === "room" && entity.geometry_json);
   const captureUsesProvisionalUnits =
@@ -10043,6 +10211,76 @@ function compactMetric(label: string, value: string | number): HTMLElement {
   return item;
 }
 
+// Read-only evidence. The card offers no control because the platform cannot
+// act on a vendor extension field it has never been given a schema for.
+function renderCaptureScanStructure(structure: CaptureScanStructure): HTMLElement {
+  const card = element("article", "geometry-change-card capture-report-card");
+  const header = element("div", "geometry-change-heading");
+  const title = element("div");
+  title.append(
+    element("strong", "", structure.assetFileName),
+    element(
+      "small",
+      "muted-copy",
+      `${structure.sourceFormat.toUpperCase()} · ${structure.method} · ${
+        parseTimestamp(structure.createdAt).toLocaleString()
+      }`,
+    ),
+  );
+  header.append(
+    title,
+    element(
+      "span",
+      `status-pill ${statusClass(structure.status === "structure_read" ? "READY" : "BLOCKED")}`,
+      structure.status === "structure_read" ? "Structure read" : "Structure unreadable",
+    ),
+  );
+  card.append(header);
+  if (structure.status === "structure_read") {
+    const metrics = element("div", "geometry-change-metrics");
+    metrics.append(
+      compactMetric("Scans", structure.scanCount),
+      compactMetric("Images", structure.imageCount),
+      compactMetric("Per-scan poses", structure.hasPerScanPoses ? "Present" : "Absent"),
+      compactMetric("Vendor fields", structure.vendorFieldNames.length),
+    );
+    card.append(metrics);
+    if (structure.vendorFieldNames.length) {
+      const fields = element("div", "notice-card capture-evidence-issues");
+      fields.append(element("strong", "", "Vendor extension fields recorded verbatim"));
+      const list = document.createElement("ul");
+      for (const name of structure.vendorFieldNames) list.append(element("li", "", name));
+      fields.append(
+        list,
+        element(
+          "small",
+          "muted-copy",
+          "These names are preserved as evidence. Their meaning is undocumented to this platform and is not decoded.",
+        ),
+      );
+      card.append(fields);
+    }
+  } else {
+    card.append(element(
+      "p",
+      "form-error",
+      structure.unreadableReason ??
+        "The container structure could not be read. The immutable bytes are still preserved.",
+    ));
+  }
+  card.append(element("small", "field-note", structure.limitation));
+  if (structure.reportFileName) {
+    card.append(element(
+      "small",
+      "muted-copy",
+      `Immutable reading: ${structure.reportFileName}${
+        structure.reportSha256 ? ` · ${structure.reportSha256.slice(0, 12)}…` : ""
+      }`,
+    ));
+  }
+  return card;
+}
+
 function renderCaptureCompletenessReport(report: CaptureCompletenessReport): HTMLElement {
   const card = element("article", "geometry-change-card capture-report-card");
   const summary = parseCaptureCompletenessSummary(report.summary_json);
@@ -11152,6 +11390,7 @@ const captureBundleRoleLabels: Record<string, string> = {
   metric_point_cloud: "Metric point cloud",
   gaussian_splat: "Gaussian splat",
   collision_mesh: "Collision mesh",
+  vendor_semantic_mesh: "Vendor semantic export (preserved, not parsed)",
   traversal_evidence: "Traversal evidence",
 };
 
@@ -11256,6 +11495,15 @@ function captureBundleEligibleRoles(asset: Asset): string[] {
     ["glb", "gltf", "obj", "ply"].includes(format)
   ) {
     roles.push("collision_mesh");
+  }
+  // A classified mesh or segmentation sidecar is declarable under its own role
+  // so it is never promoted to collision_mesh, which would assert a physical
+  // claim from labels this platform does not decode.
+  if (
+    ["source", "master", "report"].includes(asset.kind) &&
+    ["obj", "ply", "glb", "gltf", "e57", "json", "csv", "zip"].includes(format)
+  ) {
+    roles.push("vendor_semantic_mesh");
   }
   if (["source", "master", "pointcloud", "collision", "report"].includes(asset.kind)) {
     roles.push("traversal_evidence");
@@ -11932,6 +12180,7 @@ const capturePurposeHelp: Record<CaptureAssetPurpose, string> = {
   gnss_trajectory: "GNSS evidence is preserved without inferring RTK fix quality, datum, or survey control.",
   metric_point_cloud: "Metric geometry is stored as a point-cloud asset and does not enter the Gaussian reconstruction lane.",
   collision_mesh: "Collision geometry is preserved separately from appearance and requires spatial-alignment review.",
+  vendor_semantic_mesh: "A vendor's classified mesh or segmentation sidecar is preserved verbatim as evidence. Its classification semantics are not parsed, and it never becomes collision or navigation geometry.",
 };
 
 function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
@@ -12082,6 +12331,7 @@ function selectRecoverableUpload(upload: RecoverableUpload): void {
     format: upload.format,
     purpose: upload.purpose,
     partSizeBytes: upload.partSizeBytes,
+    sha256: upload.sha256,
     parts: new Map(upload.parts.map((part) => [part.partNumber, part.etag])),
   };
   const format = byId<HTMLFormElement>("uploadForm").elements.namedItem("format");
@@ -12203,10 +12453,32 @@ async function uploadAsset(
           purpose,
           targetVersionId,
           captureJourneyId: options.captureJourney?.id ?? null,
+          sha256: null,
         };
       }
       const operationId = pendingUploadOperation?.id;
       if (!operationId) throw new Error("The upload operation could not be initialised.");
+      let declaredSha256 = pendingUploadOperation?.sha256 ?? null;
+      if (!declaredSha256) {
+        try {
+          let lastPercent = -1;
+          declaredSha256 = await sha256HexOfBlob(file, {
+            signal: uploadAbortController.signal,
+            onProgress: (hashedBytes, totalBytes) => {
+              const percent = totalBytes ? Math.floor(hashedBytes / totalBytes * 100) : 100;
+              if (percent === lastPercent) return;
+              lastPercent = percent;
+              status.textContent = `Computing SHA-256 integrity fingerprint… ${percent}%`;
+            },
+          });
+          if (pendingUploadOperation) pendingUploadOperation.sha256 = declaredSha256;
+        } catch (error) {
+          if (uploadAbortController.signal.aborted) throw error;
+          // The file could not be streamed for hashing; continue without a
+          // declared fingerprint so the upload itself stays functional.
+          declaredSha256 = null;
+        }
+      }
       status.textContent = "Creating immutable multipart upload…";
       const initiated = await api<{ upload: { id: string; partSizeBytes: number; expectedSizeBytes: number } }>(
         `/api/projects/${projectId}/uploads`,
@@ -12219,6 +12491,7 @@ async function uploadAsset(
             format,
             purpose,
             mimeType: file.type || "application/octet-stream",
+            ...(declaredSha256 ? { sha256: declaredSha256 } : {}),
             ...(targetVersionId ? { targetVersionId } : {}),
             ...(posterCamera ? { posterCamera } : {}),
             ...(options.captureJourney ? { captureJourney: options.captureJourney } : {}),
@@ -12234,12 +12507,20 @@ async function uploadAsset(
         format,
         purpose,
         partSizeBytes: initiated.upload.partSizeBytes,
+        sha256: declaredSha256,
         parts: new Map(),
       };
       pendingUploadOperation = null;
     }
     const upload = activeUpload;
     if (!upload) throw new Error("The upload session could not be created.");
+    // Resumed sessions declared their SHA-256 when they were created; re-stream
+    // the selected file sequentially while parts upload so the fingerprint can
+    // be verified before the immutable completion call. Read failures resolve
+    // to null and keep the resumed upload functional.
+    const resumeIntegrityCheck = canResume && upload.sha256
+      ? sha256HexOfBlob(file, { signal: uploadAbortController.signal }).catch(() => null)
+      : null;
     const totalParts = Math.ceil(file.size / upload.partSizeBytes);
     for (let index = 0; index < totalParts; index += 1) {
       const partNumber = index + 1;
@@ -12263,6 +12544,18 @@ async function uploadAsset(
       );
       upload.parts.set(response.part.partNumber, response.part.etag);
       progress.style.width = `${Math.round(partNumber / totalParts * 92)}%`;
+    }
+    if (resumeIntegrityCheck) {
+      status.textContent = "Verifying the resumed file against its declared SHA-256 fingerprint…";
+      const resumedSha256 = await resumeIntegrityCheck;
+      if (uploadAbortController.signal.aborted) {
+        throw new Error("Upload paused before the resumed file could be verified.");
+      }
+      if (resumedSha256 && resumedSha256 !== upload.sha256) {
+        throw new Error(
+          `The selected file no longer matches the SHA-256 fingerprint declared for ${upload.fileName}. Choose the exact original capture file to resume this session.`,
+        );
+      }
     }
     status.textContent = "Finalising immutable source…";
     const parts = Array.from(upload.parts, ([partNumber, etag]) => ({ partNumber, etag }))

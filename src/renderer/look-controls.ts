@@ -21,12 +21,15 @@ const DEFAULT_BOOST_MULTIPLIER = 3;
 const TRACKPAD_METRES_PER_PIXEL = 0.0025;
 const MAX_TRACKPAD_DELTA_PIXELS = 80;
 const MOVEMENT_EPSILON = 1e-6;
+const CLICK_MAX_TRAVEL_PIXELS = 4;
 
 /**
  * A single, scene-aware input owner for the Spark renderer. Primary drag looks
- * in screen space; keyboard, joystick, mouse wheel, and two-finger trackpad
- * scrolling move on the authored navigation plane. Secondary clicks are inert
- * so trackpad click jitter cannot move the camera.
+ * in screen space, and a stationary primary click requests pointer lock so a
+ * desktop mouse can look without holding a button (Esc releases the lock and
+ * drag-look remains the fallback). Keyboard, joystick, mouse wheel, and
+ * two-finger trackpad scrolling move on the authored navigation plane.
+ * Secondary clicks are inert so trackpad click jitter cannot move the camera.
  */
 export class SpatialNavigationControls {
   private readonly canvas: HTMLCanvasElement;
@@ -49,11 +52,12 @@ export class SpatialNavigationControls {
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  private lookStartX = 0;
+  private lookStartY = 0;
   private lookDeltaX = 0;
   private lookDeltaY = 0;
   private wheelDeltaX = 0;
   private wheelDeltaY = 0;
-  private multiTouchGesture = false;
   private disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -190,6 +194,7 @@ export class SpatialNavigationControls {
     window.removeEventListener("keyup", this.handleKeyUp);
     window.removeEventListener("blur", this.handleSuspend);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    document.removeEventListener("pointerlockchange", this.handlePointerLockChange);
     this.suspend();
   }
 
@@ -205,32 +210,31 @@ export class SpatialNavigationControls {
     window.addEventListener("keyup", this.handleKeyUp);
     window.addEventListener("blur", this.handleSuspend);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    document.addEventListener("pointerlockchange", this.handlePointerLockChange);
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
     if (!this.lookEnabled) return;
     if (event.pointerType === "mouse") {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || this.isPointerLocked()) return;
       this.beginLook(event);
       return;
     }
 
     this.activeTouches.add(event.pointerId);
-    if (this.activeTouches.size === 1 && !this.multiTouchGesture) {
-      this.beginLook(event);
-      return;
-    }
-
-    // Spark continues to own two-finger slide and pinch. Do not resume custom
-    // look until every finger from that gesture has left the surface.
-    this.multiTouchGesture = true;
-    this.lookPointerId = null;
-    this.lookDeltaX = 0;
-    this.lookDeltaY = 0;
+    // Additional touches are inert: they neither move the camera nor cancel an
+    // in-progress one-finger look.
+    if (this.activeTouches.size === 1) this.beginLook(event);
   };
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
-    if (event.pointerId !== this.lookPointerId || this.multiTouchGesture) return;
+    if (this.isPointerLocked()) {
+      if (!this.lookEnabled) return;
+      this.lookDeltaX += event.movementX;
+      this.lookDeltaY += event.movementY;
+      return;
+    }
+    if (event.pointerId !== this.lookPointerId) return;
     this.lookDeltaX += event.clientX - this.lastPointerX;
     this.lookDeltaY += event.clientY - this.lastPointerY;
     this.lastPointerX = event.clientX;
@@ -240,7 +244,20 @@ export class SpatialNavigationControls {
   private readonly handlePointerEnd = (event: PointerEvent): void => {
     if (event.pointerType !== "mouse") {
       this.activeTouches.delete(event.pointerId);
-      if (this.activeTouches.size === 0) this.multiTouchGesture = false;
+    } else if (
+      event.type === "pointerup" &&
+      event.button === 0 &&
+      event.pointerId === this.lookPointerId &&
+      this.lookEnabled &&
+      !this.isPointerLocked() &&
+      Math.hypot(
+        event.clientX - this.lookStartX,
+        event.clientY - this.lookStartY,
+      ) < CLICK_MAX_TRAVEL_PIXELS
+    ) {
+      // A stationary primary click upgrades to pointer-lock mouse look; a drag
+      // stays on the existing capture-based look path.
+      this.requestPointerLock();
     }
     if (event.pointerId === this.lookPointerId) this.lookPointerId = null;
     try {
@@ -290,6 +307,35 @@ export class SpatialNavigationControls {
     if (document.hidden) this.suspend();
   };
 
+  private readonly handlePointerLockChange = (): void => {
+    if (this.isPointerLocked()) return;
+    // Browser-native unlock (Esc) discards pending locked-look deltas and
+    // returns input to the drag-look path.
+    this.lookDeltaX = 0;
+    this.lookDeltaY = 0;
+  };
+
+  private isPointerLocked(): boolean {
+    return document.pointerLockElement === this.canvas;
+  }
+
+  private requestPointerLock(): void {
+    const canvas = this.canvas as HTMLCanvasElement & {
+      requestPointerLock?: () => Promise<void> | void;
+    };
+    if (typeof canvas.requestPointerLock !== "function") return;
+    try {
+      const request = canvas.requestPointerLock();
+      if (request instanceof Promise) {
+        request.catch(() => {
+          // A denied pointer lock keeps the drag-look fallback working.
+        });
+      }
+    } catch {
+      // Pointer lock is an enhancement; drag-look remains the fallback.
+    }
+  }
+
   private beginLook(event: PointerEvent): void {
     this.canvas.focus({ preventScroll: true });
     try {
@@ -301,6 +347,8 @@ export class SpatialNavigationControls {
     this.lookPointerId = event.pointerId;
     this.lastPointerX = event.clientX;
     this.lastPointerY = event.clientY;
+    this.lookStartX = event.clientX;
+    this.lookStartY = event.clientY;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
     this.wheelDeltaX = 0;
@@ -315,7 +363,9 @@ export class SpatialNavigationControls {
     this.wheelDeltaY = 0;
     this.activeTouches.clear();
     this.clearKeyboardState();
-    this.multiTouchGesture = false;
+    if (this.isPointerLocked() && typeof document.exitPointerLock === "function") {
+      document.exitPointerLock();
+    }
   }
 
   private applyLook(camera: THREE.PerspectiveCamera): boolean {

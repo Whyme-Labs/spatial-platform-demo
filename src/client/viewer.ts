@@ -57,6 +57,8 @@ type ReleaseManifest = {
     contentUrl: string;
     posterUrl: string | null;
     collisionUrl?: string | null;
+    detourUrl?: string | null;
+    navMeshUrl?: string | null;
     sizeBytes: number;
     etag: string | null;
   };
@@ -65,7 +67,7 @@ type ReleaseManifest = {
     subtitle?: string;
     captureDate?: string;
     measurementDisclaimer: string;
-    splatBudgetMillions?: number;
+    splatBudgetMillions?: number | null;
     defaultMovementMode?: "walk" | "fly";
     sceneRotationDegrees?: [number, number, number];
     sourceToWorld?: SourceToWorldTransform;
@@ -155,6 +157,30 @@ type ReleaseManifest = {
     desktop_high_budget: number;
     max_initial_bytes: number;
   };
+  integrity?: {
+    assetSha256?: string | null;
+    sessionId?: string;
+    sessionExpiresAt?: string;
+    sessionHardExpiresAt?: string;
+    sessionRenewalPath?: string;
+  };
+};
+
+type SceneRenderSession = {
+  token: string;
+  // A private preview mints a non-renewable token, so the viewer only tracks
+  // its deadline and reports the expiry when it arrives.
+  renewalPath: string | null;
+  expiresAtMs: number;
+  hardExpiresAtMs: number;
+};
+
+type SceneSessionRenewal = {
+  token: string;
+  expiresAtEpochSeconds: number;
+  sessionExpiresAt: string;
+  sessionHardExpiresAt: string;
+  renewalPath: string;
 };
 
 type SpatialEntity = NonNullable<ReleaseManifest["spatial"]>["entities"][number];
@@ -277,6 +303,19 @@ const byId = <T extends Element = HTMLElement>(id: string): T => {
   return element as unknown as T;
 };
 
+// A published scene keeps loading for as long as the renderer keeps reporting
+// progress. Once nothing at all arrives for this long the infinite spinner is
+// replaced by a retryable error instead of a viewer that never resolves.
+const LOADING_WATCHDOG_MS = 90_000;
+// Renewal and the watchdog share one short tick. Long timers are throttled and
+// coalesced in background tabs, so every deadline is compared against the wall
+// clock rather than trusted to fire on time.
+const VIEWER_TICK_MS = 1_000;
+const SESSION_RENEWAL_FRACTION = 0.6;
+const SESSION_RENEWAL_RETRY_MS = 15_000;
+const SESSION_RENEWAL_MAX_FAILURES = 3;
+const POSTER_FADE_MS = 400;
+
 const frame = byId<HTMLIFrameElement>("rendererFrame");
 const loading = byId<HTMLElement>("loadingOverlay");
 const errorPanel = byId<HTMLElement>("errorPanel");
@@ -295,6 +334,12 @@ let activeFloorPlans: FloorPlan[] = [];
 let activeFloorPlanId: string | null = null;
 let latestCameraPose: CameraPose | null = null;
 let rendererReady = false;
+let sceneSession: SceneRenderSession | null = null;
+let sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
+let sceneSessionFailures = 0;
+let sceneSessionExpiryShown = false;
+let loadingWatchdogAtMs: number | null = null;
+let viewerTickHandle: number | null = null;
 const planRoomsById = new Map<string, PlanRoom>();
 const cameraRequests = new Map<string, {
   resolve: (pose: CameraPose) => void;
@@ -335,6 +380,7 @@ if (activeReleaseSlug || activePrivatePreview) {
     }, loadPublishedRelease);
   });
   window.addEventListener("message", handleRendererMessage);
+  bindViewerLifecycle();
   bindViewerKeyboardBridge();
   if (reviewMode) bindReviewInterface();
   bindViewerHud();
@@ -362,6 +408,11 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   activeDynamicBarriers.clear();
   setLoading(true, activePrivatePreview ? "Authorising private walkable preview…" : "Authorising scene release…");
   rendererReady = false;
+  sceneSession = null;
+  sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
+  sceneSessionFailures = 0;
+  sceneSessionExpiryShown = false;
+  armLoadingWatchdog();
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");
@@ -391,6 +442,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
       cleanUrl.searchParams.delete("access_token");
       history.replaceState({}, "", cleanUrl);
     }
+    adoptSceneRenderSession(manifest);
     applyManifest(manifest);
     if (reviewMode) await loadSceneReview();
     void recordTelemetry("viewer_open");
@@ -490,6 +542,7 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type === "progress") {
+    armLoadingWatchdog();
     setLoading(true, message.detail, message.progress);
     byId("rendererStatus").textContent = message.detail;
     return;
@@ -503,9 +556,11 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     return;
   }
   if (message.type !== "ready") return;
+  loadingWatchdogAtMs = null;
   errorPanel.hidden = true;
   frame.hidden = false;
   frame.classList.remove("is-loading");
+  fadeScenePoster();
   setLoading(false);
   rendererReady = true;
   byId<HTMLElement>("viewerHud").hidden = false;
@@ -513,7 +568,9 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   byId("reviewPanel").hidden = !reviewMode;
   setNavigatorReady(true);
   byId("rendererStatus").textContent = "Scene ready";
-  sendSpatialRuntime();
+  // The runtime payload is sent once, on iframe load: the renderer cannot even
+  // reach "ready" before it has rebuilt physics and navigation from that
+  // payload, so re-sending here only forces a redundant collision download.
   void recordTelemetry("renderer_ready", message.timeToFirstFrameMs, {
     runtime: message.runtime,
     format: message.format,
@@ -536,7 +593,203 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
       type === "authored-traversal-state" || type === "dynamic-barrier-state");
 }
 
+function bindViewerLifecycle(): void {
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    viewerTick();
+  });
+  if (viewerTickHandle === null) {
+    viewerTickHandle = window.setInterval(viewerTick, VIEWER_TICK_MS);
+  }
+}
+
+function viewerTick(): void {
+  const now = Date.now();
+  if (loadingWatchdogAtMs !== null) {
+    // A hidden tab pauses the renderer's frame loop, so the scene cannot report
+    // progress or reach its first frame. That silence is not a stall.
+    if (document.hidden) armLoadingWatchdog();
+    else if (now >= loadingWatchdogAtMs) failStalledLoading();
+  }
+  if (document.hidden || !sceneSession || sceneSessionExpiryShown) return;
+  if (viewerActions.isPending("renew-scene-session")) return;
+  if (now >= sceneSession.hardExpiresAtMs || now >= sceneSession.expiresAtMs) {
+    showSessionExpired();
+    return;
+  }
+  if (now >= sceneSessionRenewAtMs) void renewSceneRenderSession();
+}
+
+function armLoadingWatchdog(): void {
+  if (rendererReady) return;
+  loadingWatchdogAtMs = Date.now() + LOADING_WATCHDOG_MS;
+}
+
+function failStalledLoading(): void {
+  loadingWatchdogAtMs = null;
+  showError(
+    "This scene stopped responding while loading.",
+    "The renderer reported no progress for 90 seconds. Retry to reload the scene, or reopen it on a faster connection.",
+  );
+  void recordTelemetry("renderer_error", undefined, { reason: "loading_watchdog" });
+}
+
+// The scene token embedded in every asset URL expires with its render session.
+// Reading the manifest expiry lets the viewer renew ahead of that deadline and,
+// when renewal is impossible, say so instead of letting paged asset reads fail
+// as unexplained 401s inside the renderer.
+function adoptSceneRenderSession(manifest: ReleaseManifest): void {
+  const expiresAtMs = parseTimestamp(manifest.integrity?.sessionExpiresAt);
+  const token = sceneTokenFromManifest(manifest);
+  // A fully public release carries no token on any asset URL, so nothing about
+  // this manifest can expire and there is no session to track.
+  if (!expiresAtMs || !token) {
+    sceneSession = null;
+    sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
+    return;
+  }
+  sceneSession = {
+    token,
+    renewalPath: manifest.integrity?.sessionRenewalPath ?? null,
+    expiresAtMs,
+    hardExpiresAtMs: parseTimestamp(manifest.integrity?.sessionHardExpiresAt) ?? expiresAtMs,
+  };
+  scheduleSceneSessionRenewal();
+}
+
+function scheduleSceneSessionRenewal(): void {
+  if (!sceneSession?.renewalPath) {
+    sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
+    return;
+  }
+  const now = Date.now();
+  const remaining = Math.max(0, sceneSession.expiresAtMs - now);
+  sceneSessionRenewAtMs = now + Math.floor(remaining * SESSION_RENEWAL_FRACTION);
+}
+
+async function renewSceneRenderSession(): Promise<void> {
+  const session = sceneSession;
+  if (!session?.renewalPath) return;
+  const renewalPath = session.renewalPath;
+  await viewerActions.run("renew-scene-session", async () => {
+    try {
+      // A scene token is not an account session. Renewal deliberately bypasses
+      // the shared API client so a rejected scene token can never be mistaken
+      // for an expired sign-in and sign a reviewer out of the studio.
+      const response = await fetch(renewalPath, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: session.token }),
+      });
+      if (response.status === 401 || response.status === 410) {
+        showSessionExpired();
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`The scene session renewal failed with status ${response.status}.`);
+      }
+      const renewed = await response.json() as SceneSessionRenewal;
+      const expiresAtMs = parseTimestamp(renewed.sessionExpiresAt);
+      if (!expiresAtMs) throw new Error("The renewed scene session has no expiry.");
+      sceneSessionFailures = 0;
+      sceneSession = {
+        token: renewed.token,
+        renewalPath: renewed.renewalPath || renewalPath,
+        expiresAtMs,
+        hardExpiresAtMs: parseTimestamp(renewed.sessionHardExpiresAt) ?? session.hardExpiresAtMs,
+      };
+      applyRenewedSceneToken(renewed.token);
+      scheduleSceneSessionRenewal();
+    } catch {
+      // A transient network failure is retried; repeated failures leave the
+      // viewer holding a token it can no longer prove is live.
+      sceneSessionFailures += 1;
+      if (sceneSessionFailures >= SESSION_RENEWAL_MAX_FAILURES) {
+        showSessionExpired();
+        return;
+      }
+      sceneSessionRenewAtMs = Date.now() + SESSION_RENEWAL_RETRY_MS;
+    }
+  });
+}
+
+function applyRenewedSceneToken(token: string): void {
+  if (!activeManifest) return;
+  const scene = activeManifest.scene;
+  scene.contentUrl = withSceneToken(scene.contentUrl, token);
+  scene.posterUrl = withSceneToken(scene.posterUrl, token);
+  scene.collisionUrl = withSceneToken(scene.collisionUrl, token);
+  scene.detourUrl = withSceneToken(scene.detourUrl, token);
+  scene.navMeshUrl = withSceneToken(scene.navMeshUrl, token);
+}
+
+function withSceneToken<T extends string | null | undefined>(url: T, token: string): T {
+  if (!url) return url;
+  const next = new URL(url, location.origin);
+  if (!next.searchParams.has("token")) return url;
+  next.searchParams.set("token", token);
+  return `${next.pathname}${next.search}` as T;
+}
+
+function sceneTokenFromManifest(manifest: ReleaseManifest): string | null {
+  for (const url of [
+    manifest.scene.contentUrl,
+    manifest.scene.collisionUrl,
+    manifest.scene.detourUrl,
+    manifest.scene.posterUrl,
+  ]) {
+    if (!url) continue;
+    const token = new URL(url, location.origin).searchParams.get("token");
+    if (token) return token;
+  }
+  return null;
+}
+
+function showSessionExpired(): void {
+  if (sceneSessionExpiryShown) return;
+  sceneSessionExpiryShown = true;
+  sceneSession = null;
+  sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
+  showError(
+    "This viewing session expired.",
+    "Scene assets are no longer authorised for this tab. Retry to authorise a new session and reload the scene.",
+  );
+  void recordTelemetry("renderer_error", undefined, { reason: "scene_session_expired" });
+}
+
+function parseTimestamp(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function showScenePoster(posterUrl: string | null): void {
+  const poster = byId<HTMLImageElement>("scenePoster");
+  poster.classList.remove("is-faded");
+  if (!posterUrl) {
+    poster.hidden = true;
+    poster.removeAttribute("src");
+    return;
+  }
+  poster.src = posterUrl;
+  poster.hidden = false;
+}
+
+function fadeScenePoster(): void {
+  const poster = byId<HTMLImageElement>("scenePoster");
+  if (poster.hidden) return;
+  poster.classList.add("is-faded");
+  window.setTimeout(() => {
+    if (!poster.classList.contains("is-faded")) return;
+    poster.hidden = true;
+    poster.removeAttribute("src");
+  }, POSTER_FADE_MS);
+}
+
 function publishedRendererUrl(manifest: ReleaseManifest): URL {
+  // An operator budget wins; a release published without one carries null so the
+  // device and delivery-policy budget below is what actually reaches the scene.
   const budget = manifest.viewer.splatBudgetMillions ?? manifestBudget(manifest);
   const rendererUrl = new URL("/renderer/index.html", location.origin);
   rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
@@ -563,6 +816,7 @@ function publishedRendererUrl(manifest: ReleaseManifest): URL {
 }
 
 function applyManifest(manifest: ReleaseManifest): void {
+  showScenePoster(manifest.scene.posterUrl);
   document.title = `${manifest.viewer.title} | Spatial Studio`;
   byId("projectName").textContent = manifest.project.name;
   byId("accessPolicy").textContent = manifest.release.accessPolicy.toUpperCase();
@@ -1140,6 +1394,11 @@ function sendSpatialRuntime(): void {
     navigationProfile: spatial.navigationProfile,
     navigationArtifact: spatial.navigationArtifact ?? null,
     collisionUrl: activeManifest?.scene.collisionUrl ?? null,
+    // Optional same-origin derivatives. A renderer that understands them streams
+    // the navigation payload instead of decoding the inline copy; a release that
+    // ships neither URL keeps working from the inline bytes alone.
+    detourUrl: activeManifest?.scene.detourUrl ?? null,
+    navMeshUrl: activeManifest?.scene.navMeshUrl ?? null,
     defaultMovementMode: activeManifest?.viewer.defaultMovementMode ?? "walk",
   }, location.origin);
 }
@@ -1281,6 +1540,7 @@ function setLoading(visible: boolean, detail = "", progress?: number): void {
 
 function showError(title: string, message: string): void {
   rendererReady = false;
+  loadingWatchdogAtMs = null;
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("mobile-controls-onboarding");

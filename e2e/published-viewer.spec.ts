@@ -1,4 +1,4 @@
-import { expect, test, type Route } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 
 test("published viewer hands startup progress to the embedded Spark loader", async ({ page }) => {
@@ -734,7 +734,15 @@ test("visual-only releases do not imply a metric scale", async ({ page }) => {
     viewer: {
       title: "Visual-only room",
       measurementDisclaimer: "Visual experience only.",
-      splatBudgetMillions: 2,
+      splatBudgetMillions: null,
+    },
+    deliveryPolicy: {
+      adaptive_quality: 1,
+      mobile_lite_budget: 0.75,
+      mobile_standard_budget: 0.75,
+      desktop_standard_budget: 0.75,
+      desktop_high_budget: 0.75,
+      max_initial_bytes: 15_728_640,
     },
     spatial: {
       entities: [],
@@ -761,6 +769,9 @@ test("visual-only releases do not imply a metric scale", async ({ page }) => {
 
   await page.goto("/s/visual-only-room", { waitUntil: "commit" });
   await expect(page.locator("#scaleStatus")).toHaveText("Visual only — scale not declared");
+  // A release published without an operator budget must reach the delivery
+  // policy instead of silently opening every device at the same splat count.
+  await expect(page.locator("#rendererFrame")).toHaveAttribute("src", /budget=0\.75/);
 });
 
 test("routes SOG releases through the Spark renderer", async ({ page }) => {
@@ -841,6 +852,222 @@ test("routes SOG releases through the Spark renderer", async ({ page }) => {
   });
   await expect(page.locator("#viewerHud")).toBeVisible();
 });
+
+test("the release poster covers the viewport until the renderer reports its first frame", async ({ page }) => {
+  await page.route(
+    "**/api/releases/poster-handoff/manifest",
+    (route) => json(route, posterManifest()),
+  );
+  await page.route("**/scene-poster.png", (route) => route.fulfill({
+    status: 200,
+    contentType: "image/png",
+    body: Buffer.from(TRANSPARENT_PNG_BASE64, "base64"),
+  }));
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer(),
+  }));
+
+  await page.goto("/s/poster-handoff", { waitUntil: "commit" });
+  const poster = page.locator("#scenePoster");
+  await expect(poster).toBeVisible();
+  await expect(poster).toHaveAttribute("src", /scene-poster\.png/);
+  await expect(poster).toHaveCSS("object-fit", "cover");
+  await expect.poll(() => poster.evaluate((element) => {
+    const viewport = document.getElementById("viewport")!.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    return Math.abs(box.width - viewport.width) <= 4 &&
+      Math.abs(box.height - viewport.height) <= 4;
+  })).toBe(true);
+
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+  await expect(poster).toBeHidden();
+});
+
+test("a renderer that never reports progress ends in a retryable error", async ({ page }) => {
+  await page.clock.install();
+  await page.route(
+    "**/api/releases/stalled-loading/manifest",
+    (route) => json(route, posterManifest("stalled-loading", null)),
+  );
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: "<html><body><div role='status'>Loading spatial scene</div></body></html>",
+  }));
+
+  await page.goto("/s/stalled-loading", { waitUntil: "commit" });
+  await expect(page.locator("#loadingOverlay")).toBeVisible();
+  await expect(page.locator("#errorPanel")).toBeHidden();
+
+  await page.clock.fastForward(95_000);
+  await expect(page.locator("#errorPanel")).toBeVisible();
+  await expect(page.locator("#errorTitle")).toHaveText(
+    "This scene stopped responding while loading.",
+  );
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  await expect(page.locator("#loadingOverlay")).toBeHidden();
+});
+
+test("the viewer renews its scene session and reports an unrecoverable expiry", async ({ page }) => {
+  const renewals: string[] = [];
+  await page.route("**/api/releases/session-renewal/manifest", (route) => {
+    const manifest = posterManifest("session-renewal", null);
+    manifest.scene.contentUrl = "/asset/release/asset/scene.rad?token=first-scene-token";
+    manifest.integrity = {
+      sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      sessionExpiresAt: new Date(Date.now() + 6_000).toISOString(),
+      sessionHardExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      sessionRenewalPath: "/api/scene-sessions/renew",
+    };
+    return json(route, manifest);
+  });
+  await page.route("**/api/scene-sessions/renew", async (route) => {
+    const body = route.request().postDataJSON() as { token: string };
+    renewals.push(body.token);
+    if (renewals.length > 1) {
+      await route.fulfill({
+        status: 410,
+        contentType: "application/json",
+        body: '{"error":"This scene session can no longer be renewed"}',
+      });
+      return;
+    }
+    await json(route, {
+      sessionId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      token: "renewed-scene-token",
+      expiresAtEpochSeconds: Math.floor((Date.now() + 6_000) / 1_000),
+      sessionExpiresAt: new Date(Date.now() + 6_000).toISOString(),
+      sessionHardExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      renewalPath: "/api/scene-sessions/renew",
+    });
+  });
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer(),
+  }));
+
+  await page.goto("/s/session-renewal", { waitUntil: "commit" });
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+
+  // Renewal runs at roughly sixty percent of the remaining session lifetime and
+  // carries the token minted with the manifest, never the release slug.
+  await expect.poll(() => renewals, { timeout: 20_000 }).toEqual(["first-scene-token"]);
+  await expect.poll(() => renewals, { timeout: 20_000 }).toEqual([
+    "first-scene-token",
+    "renewed-scene-token",
+  ]);
+  await expect(page.locator("#errorPanel")).toBeVisible();
+  await expect(page.locator("#errorTitle")).toHaveText("This viewing session expired.");
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+});
+
+const TRANSPARENT_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+type ViewerManifestFixture = {
+  schemaVersion: string;
+  release: Record<string, unknown>;
+  project: Record<string, unknown>;
+  scene: {
+    format: string;
+    contentUrl: string;
+    posterUrl: string | null;
+    collisionUrl: string | null;
+    detourUrl: string | null;
+    navMeshUrl: string | null;
+    sizeBytes: number;
+    etag: string | null;
+  };
+  viewer: Record<string, unknown>;
+  spatial: Record<string, unknown>;
+  integrity?: Record<string, string>;
+};
+
+function posterManifest(
+  slug = "poster-handoff",
+  posterUrl: string | null = "/scene-poster.png",
+): ViewerManifestFixture {
+  return {
+    schemaVersion: "1",
+    release: {
+      id: "84444444-4444-4444-8444-444444444444",
+      slug,
+      publishedAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: null,
+      accessPolicy: "public",
+    },
+    project: {
+      id: "85555555-5555-4555-8555-555555555555",
+      versionId: "86666666-6666-4666-8666-666666666666",
+      name: "Poster handoff fixture",
+      captureAdapter: "test",
+      provenance: {},
+    },
+    scene: {
+      format: "rad",
+      contentUrl: "/poster-handoff.rad",
+      posterUrl,
+      collisionUrl: null,
+      detourUrl: null,
+      navMeshUrl: null,
+      sizeBytes: 1,
+      etag: null,
+    },
+    viewer: {
+      title: "Poster handoff fixture",
+      measurementDisclaimer: "Visual experience only.",
+      splatBudgetMillions: null,
+    },
+    spatial: {
+      entities: [],
+      routes: [],
+      routeStops: [],
+      collisionProxy: { version: "box-union-v1", boxes: [] },
+      navigationMesh: {
+        version: "room-box-triangles-v1",
+        vertices: [],
+        indices: [],
+        sourceEntityIds: [],
+      },
+      obstacleProxy: { version: "authored-obstacle-boxes-v1", boxes: [] },
+      navigationProfile: {
+        worldUnit: "metres",
+        agentRadius: 0.22,
+        agentHeight: 1.8,
+        eyeHeight: 1.6,
+        maxStepMetres: 0.1,
+      },
+    },
+  };
+}
+
+function readyOnDemandRenderer(): string {
+  return `<!doctype html>
+    <html>
+      <body>
+        <div role="status">Loading spatial scene</div>
+      </body>
+    </html>`;
+}
+
+function sendRendererReady(page: Page): Promise<void> {
+  return page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "ready",
+      runtime: "spark",
+      version: "2.1.0",
+      timeToFirstFrameMs: 1200,
+      format: "rad",
+      splatBudget: 2_000_000,
+    }, location.origin);
+  });
+}
 
 function json(route: Route, body: unknown): Promise<void> {
   return route.fulfill({

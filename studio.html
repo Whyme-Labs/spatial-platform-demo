@@ -60,6 +60,16 @@
 
       <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
 
+      <section id="pendingInvitationsPanel" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">ORGANISATION INVITATIONS</span><h2>Organisations waiting for your answer</h2></div>
+          <span class="worker-status"><i></i>Explicit consent</span>
+        </div>
+        <div id="pendingInvitationList" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">No organisation invitation is awaiting your response.</div>
+        </div>
+      </section>
+
       <section id="projectWorkspaceHeader" class="project-page-header" hidden>
         <button id="backToProjects" class="project-back-button" type="button"><span aria-hidden="true">←</span> Back to projects</button>
         <div class="project-page-heading">
@@ -491,7 +501,7 @@
         <summary>Advanced ingest options</summary>
         <p class="field-note">Use these only to preserve supporting evidence or attach authored collision geometry. They do not replace the portable splat needed for preview.</p>
         <div class="mock-form-grid">
-          <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option></select></label>
+          <label><span>Asset purpose</span><select id="uploadPurpose" name="purpose"><option value="gaussian_splat">Gaussian splat master</option><option value="web_scene">Ready web scene</option><option value="vendor_project">Vendor project</option><option value="raw_capture">Raw capture</option><option value="source_images">Source images</option><option value="source_video">Source video</option><option value="camera_poses">Camera poses</option><option value="calibration">Calibration</option><option value="imu_trajectory">IMU trajectory</option><option value="gnss_trajectory">GNSS trajectory</option><option value="metric_point_cloud">Metric point cloud</option><option value="collision_mesh">Collision mesh</option><option value="vendor_semantic_mesh">Vendor semantic export</option></select></label>
           <label><span>Declared format</span><select id="uploadFormat" name="format"><option value="ply">PLY</option></select></label>
         </div>
       </details>
