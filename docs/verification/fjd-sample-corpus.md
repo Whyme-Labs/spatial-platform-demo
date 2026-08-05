@@ -129,16 +129,42 @@ close the paired gap:
   points, 30.4 x 46.8 x 5.3 m), is genuinely multi-room — 1 m-cell occupancy
   fills 24.9 % of its bounding box — but is single storey and unfurnished, and
   carries no splat.
-- **No public FJD sample is multi-floor.** Measured directly from the pinned
-  `fjd-v4e-interior.las` over 1 m cells: the 0.2-2.6 m band occupies 956 cells
-  while the 4.4-6.2 m band occupies 171, so the upper level covers only 17.9 %
-  of the lower footprint, and 54 % of the 126 cells occupied in both bands show
-  an intervening 3.3-4.2 m slab. That is a partial mezzanine or gallery over a
-  tall single level, not a second storey, and its 20 m header Z extent is
-  outlier-driven. `Building` is an exterior walk whose trajectory climbs 1.63 m
-  over 7.2 minutes. Two independent sweeps disagreed on this file — one read
-  the two Z bands as two storeys — so the footprint ratio above was recomputed
-  from the pinned bytes rather than taken from either report.
+- **No sample on the public sample-data page is multi-floor.** Measured from
+  the pinned `fjd-v4e-interior.las` over 1 m cells: the 0.2-2.6 m band occupies
+  956 cells while the 4.4-6.2 m band occupies 171, so the upper level covers
+  only 17.9 % of the lower footprint. That is a mezzanine over a tall single
+  level, and its 20 m header Z extent is outlier-driven. `Building` is an
+  exterior walk whose trajectory climbs 1.63 m over 7.2 minutes. Two sweeps
+  disagreed on the V4e file — one read its two Z bands as two storeys — so the
+  ratio was recomputed from the pinned bytes rather than taken from either.
+
+## Dealer-portal samples, 2026-08-05
+
+`www.fjdtrion.com/dealer-portal` is ungated, in the sitemap, and linked from
+nowhere; it carries three sample folders absent from the store page. Three
+indoor candidates were downloaded and measured:
+
+- **`Trusesti scoala interior` is a genuine two-storey indoor capture** — the
+  first multi-floor FJD data found anywhere, and it corrects the earlier
+  conclusion that none exists. LAS 1.2, **124,711,667 points**. Its trajectory
+  puts the operator in two bands, 0.0-0.5 m and 3.5-4.0 m, with only 399 of
+  7,729 poses in the 1.0-3.0 m transition: a stair climb. The cloud confirms
+  real storeys rather than a gallery — ground band 543 cells against an upper
+  band of 539, so the upper floor is **99.3 % of the ground footprint**, with
+  97.2 % of it directly above and a slab under 58.6 %. Against the V4e's 17.9 %
+  this is a different regime entirely. It ships `.fjdata`, `.las`, and
+  `.trajectory.las` — **no splat**, so the paired gap stays open.
+- `smrtscan2-with_cam` descends 73.6 m continuously. A tunnel, not a building.
+- `S2 Pro Canteen` (81,757,141 points) shows continuous occupancy from ground
+  to 14.2 m with no discrete floor peaks over a 6,530 m² footprint, so it reads
+  as exterior-inclusive. A midpoint split calls it multi-storey; that is an
+  artifact of the heuristic on a tall structure. Treat as inconclusive.
+
+The school unblocks what could not previously be tested on real data: captured
+multi-level detection, stair and ramp inference, and multi-level Recast
+navigation. It stays private cache only — the dealer portal publishes no
+licence, and FJD's own FAQ gates sample data behind an email request for
+review.
 - No sample ships E57, SPZ, SOG, SPLAT, mesh, classified output, or imagery.
 - No dataset-specific licence exists. The only governing text is the store's
   Shopify terms, which withhold reproduction and redistribution rights, so the
