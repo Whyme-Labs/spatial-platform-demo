@@ -172,11 +172,13 @@ test("v9 carries Walk mode through an evidence-linked multi-floor elevator path"
   await page.keyboard.down("ArrowUp");
   try {
     await expect(renderer.locator("#controlStatus")).toContainText("evidence-linked");
-    const activeLimePixels = await countTraversalOverlayPixels(
+    // The overlay is drawn by the render loop, so a single screenshot taken the
+    // moment the status flips can land on the frame before it appears. Poll for
+    // the overlay to grow instead of sampling once.
+    await expect.poll(async () => countTraversalOverlayPixels(
       page,
       await renderer.locator("#sparkCanvas").screenshot(),
-    );
-    expect(activeLimePixels).toBeGreaterThan(idleLimePixels);
+    ), { timeout: 10_000 }).toBeGreaterThan(idleLimePixels);
     await expect.poll(async () => {
       const position = (await captureCamera(page)).position;
 	      return position[0] > 3.65 && position[1] > 4.5;

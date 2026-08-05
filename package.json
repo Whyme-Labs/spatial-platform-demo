@@ -24,6 +24,7 @@
     "verify:staging:public": "node scripts/staging-acceptance.mjs --http-only",
     "verify:staging": "node scripts/staging-acceptance.mjs",
     "verify:navigation": "node --experimental-strip-types scripts/verify-published-navigation.ts",
+    "verify:shell-capture": "node scripts/verify-shell-capture-agreement.mjs",
     "navigation:build": "node scripts/build-navigation-artifact.mjs",
     "dev": "npm run build && wrangler dev",
     "processor:once": "node scripts/processing-agent.mjs --once",
