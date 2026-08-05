@@ -297,8 +297,13 @@ try {
   };
   recordAssertion(
     "the product refuses a visual-only FJD preview without registered geometry",
+    // The registration gate fires before the collision/navigation gate: a
+    // visual-only import is refused because it has no verified
+    // capture-to-scene registration, the prerequisite for walking evidence.
     previewResponse.status === 409 &&
-      String(previewError.error ?? "").includes("approved collision and navigation"),
+      String(previewError.error ?? "").includes(
+        "no verified capture-to-scene registration",
+      ),
   );
   report.executionBoundary.observedHttpOrigins = [
     ...new Set(observedFetchOrigins),
