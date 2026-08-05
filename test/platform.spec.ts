@@ -3523,6 +3523,53 @@ describe("Spatial Studio Worker", () => {
       error: expect.stringContaining("verified capture-to-scene registration"),
     });
 
+    // A shell drawn on one visual master registers by naming that master, but
+    // only when the Worker can match the digest to a verified master on the
+    // same version. A shell naming a master that is not there stays blocked,
+    // otherwise the receipt would rest on the claim rather than the check.
+    const bindingArtifact = structuredClone(v7ArtifactContract.data) as Record<string, unknown>;
+    const bindingSource = { ...(bindingArtifact.source as Record<string, unknown>) };
+    bindingSource.authoredVisualBinding = { visualMasterSha256: "c".repeat(64) };
+    bindingArtifact.source = bindingSource;
+    await env.DB.prepare(`UPDATE scene_navigation_builds SET artifact_json = ? WHERE id = ?`)
+      .bind(JSON.stringify(bindingArtifact), navigationBuildId).run();
+    const unmatchedBindingResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(unmatchedBindingResponse.status).toBe(409);
+    await expect(unmatchedBindingResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("verified capture-to-scene registration"),
+    });
+
+    const boundMasterSha256 = await sha256Hex(sceneBytes);
+    await env.DB.prepare(`
+      INSERT INTO assets (
+        id, organisation_id, project_id, version_id, kind, format, object_key,
+        file_name, mime_type, size_bytes, etag, sha256, integrity_status
+      ) VALUES (?, ?, ?, ?, 'master', 'ply', ?, 'authored-visual-master.ply',
+        'application/octet-stream', 128, 'master-etag', ?, 'verified')
+    `).bind(
+      crypto.randomUUID(),
+      provisionalEvidenceOwner!.organisation_id,
+      project.id,
+      completed.asset.versionId,
+      `masters-private/${provisionalEvidenceOwner!.organisation_id}/${project.id}/${completed.asset.versionId}/authored-visual-master.ply`,
+      boundMasterSha256,
+    ).run();
+    bindingSource.authoredVisualBinding = { visualMasterSha256: boundMasterSha256 };
+    bindingArtifact.source = bindingSource;
+    await env.DB.prepare(`UPDATE scene_navigation_builds SET artifact_json = ? WHERE id = ?`)
+      .bind(JSON.stringify(bindingArtifact), navigationBuildId).run();
+    const matchedBindingResponse = await exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      approvalRequest,
+    );
+    expect(matchedBindingResponse.status).not.toBe(409);
+
+    await env.DB.prepare(`UPDATE scene_navigation_builds SET artifact_json = ? WHERE id = ?`)
+      .bind(JSON.stringify(v7ArtifactContract.data), navigationBuildId).run();
+
     const pairedJourneyId = crypto.randomUUID();
     const pairedGeometryAssetId = crypto.randomUUID();
     const pairedVisualSha256 = await sha256Hex(sceneBytes);

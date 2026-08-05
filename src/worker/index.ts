@@ -158,6 +158,7 @@ import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import { inspectWalkableConnectivity } from "../shared/navigation-connectivity";
 import {
   transformSourcePoint,
+  type SourceToWorldTransform,
   type Vector3Tuple,
 } from "../shared/navigation-runtime";
 import {
@@ -7460,7 +7461,10 @@ type PairedCaptureAuthoringRegistration = {
 };
 
 type QualifiedSceneRegistration = {
-  sourceToWorld: CaptureSceneRegistration["sourceToWorld"];
+  // A measured registration is always metric, but a shell authored on a
+  // provisional scene-unit visual registers the same frame without inventing a
+  // metre scale for it, so the unit stays open here.
+  sourceToWorld: SourceToWorldTransform;
   receipt: Record<string, unknown>;
 };
 
@@ -7543,6 +7547,86 @@ async function pairedCaptureAuthoringRegistration(
   };
 }
 
+/**
+ * Registration for a shell an operator drew directly on one visual master.
+ *
+ * A scene reconstructed from a single visual has no separately registered
+ * geometry to align against, so neither a capture manifest nor a paired journey
+ * can ever describe it — yet its frames do coincide, because the operator
+ * authored the shell on that exact master and no transform was applied. The
+ * approved build states which master it was drawn against; this re-derives the
+ * binding from the version's own verified asset rows, so the receipt rests on a
+ * digest the Worker checked rather than on anything an operator asserted.
+ *
+ * It establishes the frame, not the geometry. A shell can still disagree with
+ * the capture it was drawn on, which is what the shell-capture agreement
+ * command exists to surface.
+ */
+async function authoredShellVisualRegistration(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<QualifiedSceneRegistration | null> {
+  const build = await database.prepare(`
+    SELECT artifact_json
+    FROM scene_navigation_builds
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND status = 'APPROVED' AND artifact_json IS NOT NULL
+    ORDER BY reviewed_at DESC, created_at DESC
+    LIMIT 1
+  `).bind(organisationId, projectId, versionId).first<{ artifact_json: string }>();
+  if (!build?.artifact_json) return null;
+  const artifact = parseStoredObject(build.artifact_json);
+  const source = artifact && typeof artifact === "object"
+    ? Reflect.get(artifact, "source")
+    : null;
+  const binding = source && typeof source === "object"
+    ? Reflect.get(source, "authoredVisualBinding")
+    : null;
+  const declaredSha256 = binding && typeof binding === "object"
+    ? readNullableStringProperty(binding, "visualMasterSha256")
+    : null;
+  if (!declaredSha256 || !/^[a-f0-9]{64}$/i.test(declaredSha256)) return null;
+  const master = await database.prepare(`
+    SELECT id, sha256
+    FROM assets
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND kind = 'master' AND integrity_status = 'verified'
+      AND deleted_at IS NULL AND lower(sha256) = lower(?)
+    LIMIT 1
+  `).bind(organisationId, projectId, versionId, declaredSha256).first<{
+    id: string;
+    sha256: string;
+  }>();
+  if (!master) return null;
+  const coordinateSystem = artifact && typeof artifact === "object"
+    ? Reflect.get(artifact, "coordinateSystem")
+    : null;
+  const worldUnit = coordinateSystem && typeof coordinateSystem === "object" &&
+      readNullableStringProperty(coordinateSystem, "worldUnit") === "metres"
+    ? "metres" as const
+    : "scene_units" as const;
+  return {
+    sourceToWorld: {
+      sourceUpAxis: "Y",
+      worldUnit,
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    },
+    receipt: {
+      source: "authored-shell-visual-binding",
+      visualMasterAssetId: master.id,
+      visualMasterSha256: master.sha256.toLowerCase(),
+      method:
+        "The approved structural shell names this exact verified visual master; " +
+        "the shell was authored on it, so the scene frame is the capture frame " +
+        "with no transform applied.",
+    },
+  };
+}
+
 async function qualifiedSceneRegistration(
   database: D1Database,
   organisationId: string,
@@ -7565,7 +7649,11 @@ async function qualifiedSceneRegistration(
       },
     };
   }
-  if (!pairedRegistration) return null;
+  if (!pairedRegistration) {
+    // Last, because a measured registration should always outrank a frame that
+    // coincides only because the shell was drawn on the visual.
+    return authoredShellVisualRegistration(database, organisationId, projectId, versionId);
+  }
   return {
     sourceToWorld: pairedRegistration.sourceToWorld,
     receipt: {

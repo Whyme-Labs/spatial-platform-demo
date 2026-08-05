@@ -140,6 +140,7 @@ export async function extractCollisionGeometryFromGlb(bytes) {
     collisionSemantics,
     dynamicBarriers,
     structuralGeometry,
+    authoredVisualBinding: authoredVisualBinding(document),
   };
 }
 
@@ -209,6 +210,30 @@ function structuralDynamicBarriers(document) {
     : null;
   const values = extras && typeof extras === "object" ? extras.dynamicBarriers : null;
   return canonicalDynamicBarriers(values ?? []);
+}
+
+/**
+ * Reads the visual master a hand-authored shell was drawn against.
+ *
+ * An authored shell has no separate registered geometry to align to: the
+ * operator drew it directly on one exact visual master, so the frames coincide
+ * by construction. Carrying that master's digest lets the Worker confirm the
+ * binding against the version's own asset rows instead of trusting a
+ * declaration, which is the only registration evidence this shape of scene can
+ * honestly produce.
+ */
+function authoredVisualBinding(document) {
+  const extras = document?.asset && typeof document.asset === "object"
+    ? document.asset.extras
+    : null;
+  const value = extras && typeof extras === "object" ? extras.source : null;
+  if (!value || typeof value !== "object") return null;
+  const sha256 = typeof value.visualMasterSha256 === "string"
+    ? value.visualMasterSha256.toLowerCase()
+    : null;
+  if (!sha256 || !/^[a-f0-9]{64}$/.test(sha256)) return null;
+  const versionId = typeof value.visualVersionId === "string" ? value.visualVersionId : null;
+  return { visualMasterSha256: sha256, ...(versionId ? { visualVersionId: versionId } : {}) };
 }
 
 function structuralGeometryReview(document) {
@@ -610,6 +635,9 @@ export async function buildRecastNavigationArtifact(input) {
         authoringHash: input.source.authoringHash,
         triangleCount: input.indices.length / 3,
         vertexCount: input.positions.length / 3,
+        ...(input.authoredVisualBinding
+          ? { authoredVisualBinding: { ...input.authoredVisualBinding } }
+          : {}),
       },
       ...(collisionSemantics
         ? {

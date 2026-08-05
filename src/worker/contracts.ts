@@ -935,6 +935,14 @@ export const navigationArtifactSchema = z.object({
     authoringHash: z.string().regex(/^[a-f0-9]{64}$/i),
     triangleCount: z.number().int().positive(),
     vertexCount: z.number().int().positive(),
+    // The visual master an authored shell was drawn against. The Worker
+    // re-checks this digest against the version's own verified master before
+    // it counts as registration, so the shape is typed rather than passed
+    // through untouched.
+    authoredVisualBinding: z.object({
+      visualMasterSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+      visualVersionId: z.string().uuid().optional(),
+    }).strict().optional(),
   }).passthrough(),
   collisionSemantics: z.object({
     schemaVersion: z.literal("spatial-structural-collision-v1"),

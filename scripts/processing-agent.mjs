@@ -441,6 +441,13 @@ async function processNextJob() {
                   : {}),
               }
             : {}),
+          // The shell states which visual master it was drawn against. Carrying
+          // that digest lets the Worker confirm the binding against its own
+          // asset rows, which is the only registration an authored shell over a
+          // single visual can honestly offer.
+          ...(geometry.authoredVisualBinding
+            ? { authoredVisualBinding: geometry.authoredVisualBinding }
+            : {}),
           source: {
             ...navigationConfig.source,
             assetId: job.input.id,
