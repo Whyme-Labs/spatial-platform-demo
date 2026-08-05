@@ -390,22 +390,26 @@ acquire this qualification retroactively.
 
 This vendor-neutral seam matches available device exports rather than parsing
 vendor coordinates in the viewer. XGRIDS LCC Studio can preserve absolute RTK
-coordinates and convert reconstructed data to WGS84 or CGCS2000, and FJD Trion
-Model exports E57 among its point-cloud formats. The per-scan pose and image
-structure this platform reads is a property of the public ASTM E57 container,
-not a documented FJD guarantee: no FJD source reviewed on 2026-08-05 claims
-scan-position-preserving or gridded E57, and the closest statement is a release
-note that exports built-in camera images as E57 data. Treat structured vendor
-E57 as unverified until a real export has been read. FJD also does not promise
-that a Gaussian result and its point cloud share one frame — Trion Model
-registers them through an operator-run Linkage matching step — so a same-frame
-claim is an operator assertion, not a vendor guarantee. The current Studio flow
-records an operator-reviewed manual transform against those immutable exports.
-Automatic XGRIDS/FJD metadata extraction remains an adapter qualification gap;
-opaque vendor containers are not parsed today. Future versioned extractors will
-emit the same reviewed receipt:
+coordinates and convert reconstructed data to WGS84 or CGCS2000, while FJD
+Trion Model D.0203 states that its E57 export carries structured data including
+point clouds, images, and transformation matrices. Read that claim precisely:
+the vendor never writes "per-scan pose" or "structured E57", so the exact
+per-scan pose and `images2D` semantics this platform reads remain those of the
+public ASTM container until a real vendor export has been inspected. FJD also
+does not promise that a Gaussian result and its point cloud share one frame —
+Trion Model aligns them through an operator-run Linkage matching step, and no
+release note names a 3DGS export format or describes 3DGS-to-point-cloud
+alignment — so a same-frame claim stays an operator assertion rather than a
+vendor guarantee. The current Studio flow records an operator-reviewed manual
+transform against those immutable exports. Automatic XGRIDS/FJD metadata
+extraction remains an adapter qualification gap; opaque vendor containers are
+not parsed today. Future versioned extractors will emit the same reviewed
+receipt:
 [XGRIDS coordinate-system documentation](https://docs.xgrids.com/en-us/06-lixel-cybercolor/01-lcc-studio/v2.0.0/05-pre-reconstruction.html),
-[FJD Trion structured E57 release note](https://www.fjdynamics.com/blog/product-updates-50/new-release-fjd-trion-model-v1-000-d-0203-515).
+[FJD Trion D.0203 E57 release note](https://web.archive.org/web/20250520165458/https://www.fjdynamics.com/blog/product-updates-50/new-release-fjd-trion-model-v1-000-d-0203-515)
+— FJD moved its release notes to `fjdtrion.com/blog/product-updates-2`, which
+retains only posts from December 2025 onward, so every pre-D.0207 note now
+resolves through the Wayback Machine rather than the vendor's own site.
 
 Before a v7 build can be reviewed, the processor proves all authored anchors
 are enclosed by floor, ceiling, and walls; runs both-direction Walk-capsule and
