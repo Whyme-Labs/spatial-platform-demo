@@ -119,8 +119,32 @@ describe("capture adapter evidence ingestion", () => {
         body: JSON.stringify({ parts: [{ partNumber: 1, etag: part.etag }] }),
       },
     );
-    const completed = await completeResponse.json<{ job: { id: string } }>();
+    const completed = await completeResponse.json<{
+      job: { id: string };
+      asset: { sha256: string | null; integritySource: string | null };
+    }>();
     expect(completeResponse.status).toBe(200);
+    // The Worker streams the finished object through DigestStream, so the
+    // digest of record exists before any processor ever leases the job.
+    const verifiedSha256 = [
+      ...new Uint8Array(await crypto.subtle.digest("SHA-256", collisionBytes)),
+    ].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    expect(completed.asset).toMatchObject({
+      sha256: verifiedSha256,
+      integritySource: "server_verified",
+    });
+    const beforeCompletion = await env.DB.prepare(
+      "SELECT integrity_status, sha256, integrity_source FROM assets WHERE id = ?",
+    ).bind(upload.assetId).first<{
+      integrity_status: string;
+      sha256: string;
+      integrity_source: string;
+    }>();
+    expect(beforeCompletion).toEqual({
+      integrity_status: "verified",
+      sha256: verifiedSha256,
+      integrity_source: "server_verified",
+    });
 
     const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
       method: "POST",
@@ -131,7 +155,52 @@ describe("capture adapter evidence ingestion", () => {
       body: JSON.stringify({ workerId: "collision-verifier", jobId: completed.job.id }),
     });
     const lease = await leaseResponse.json<{ leaseToken: string }>();
-    const verifiedSha256 = "a".repeat(64);
+    const completionBody = (reportedSha256: string) => JSON.stringify({
+      leaseToken: lease.leaseToken,
+      progressMessage: "Collision integrity verified",
+      outputs: [],
+      report: { source: { sha256: reportedSha256 } },
+      evidence: {
+        processorVersion: "spatial-evidence/1.0.0",
+        computeDurationMs: 10,
+        activeHumanDurationMs: 0,
+        inputBytes: collisionBytes.byteLength,
+        outputBytes: 0,
+        toolVersions: { processor: "test" },
+      },
+    });
+    // An arbitrary processor-declared digest can never overwrite the
+    // server-verified hash; it is a contradiction, not a correction.
+    const contradiction = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${completed.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: completionBody("a".repeat(64)),
+      },
+    );
+    expect(contradiction.status).toBe(409);
+    await expect(contradiction.json()).resolves.toMatchObject({
+      error: expect.stringContaining("contradicts the stored server_verified digest"),
+    });
+    const afterContradiction = await env.DB.prepare(
+      "SELECT state, integrity_status, sha256, integrity_source FROM assets a JOIN processing_jobs j ON j.input_asset_id = a.id WHERE a.id = ?",
+    ).bind(upload.assetId).first<{
+      state: string;
+      integrity_status: string;
+      sha256: string;
+      integrity_source: string;
+    }>();
+    expect(afterContradiction).toEqual({
+      state: "LEASED",
+      integrity_status: "verified",
+      sha256: verifiedSha256,
+      integrity_source: "server_verified",
+    });
+
     const workerComplete = await exports.default.fetch(
       `${origin}/api/worker/jobs/${completed.job.id}/complete`,
       {
@@ -140,26 +209,13 @@ describe("capture adapter evidence ingestion", () => {
           authorization: `Bearer ${env.WORKER_API_TOKEN}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          leaseToken: lease.leaseToken,
-          progressMessage: "Collision integrity verified",
-          outputs: [],
-          report: { source: { sha256: verifiedSha256 } },
-          evidence: {
-            processorVersion: "spatial-evidence/1.0.0",
-            computeDurationMs: 10,
-            activeHumanDurationMs: 0,
-            inputBytes: collisionBytes.byteLength,
-            outputBytes: 0,
-            toolVersions: { processor: "test" },
-          },
-        }),
+        body: completionBody(verifiedSha256),
       },
     );
     expect(workerComplete.status).toBe(200);
     const stored = await env.DB.prepare(`
-      SELECT a.integrity_status, a.sha256, sv.status AS version_status,
-        p.status AS project_status
+      SELECT a.integrity_status, a.sha256, a.integrity_source,
+        sv.status AS version_status, p.status AS project_status
       FROM assets a
       JOIN scene_versions sv ON sv.id = a.version_id
       JOIN projects p ON p.id = a.project_id
@@ -167,12 +223,14 @@ describe("capture adapter evidence ingestion", () => {
     `).bind(upload.assetId).first<{
       integrity_status: string;
       sha256: string;
+      integrity_source: string;
       version_status: string;
       project_status: string;
     }>();
     expect(stored).toEqual({
       integrity_status: "verified",
       sha256: verifiedSha256,
+      integrity_source: "server_verified",
       version_status: "PUBLISHED",
       project_status: "PUBLISHED",
     });

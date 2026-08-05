@@ -11,6 +11,7 @@ export const captureBundleRoles = [
   "metric_point_cloud",
   "gaussian_splat",
   "collision_mesh",
+  "vendor_semantic_mesh",
   "traversal_evidence",
 ] as const;
 
@@ -112,6 +113,13 @@ const roleCompatibility: Record<CaptureBundleRole, {
   collision_mesh: {
     kinds: ["source", "master", "collision"],
     formats: ["glb", "gltf", "obj", "ply"],
+  },
+  // A vendor's classified mesh or segmentation sidecar is preserved verbatim
+  // under its own role. It is never promoted to collision_mesh: that would
+  // assert a physical claim from labels this platform does not decode.
+  vendor_semantic_mesh: {
+    kinds: ["source", "master", "report"],
+    formats: ["obj", "ply", "glb", "gltf", "e57", "json", "csv", "zip"],
   },
   traversal_evidence: {
     kinds: ["source", "master", "pointcloud", "collision", "report"],
@@ -328,6 +336,11 @@ export function validateCaptureBundle(input: {
     issues,
     limitations: [
       ...input.declaredLimitations,
+      ...(roles.has("vendor_semantic_mesh")
+        ? [
+          "Vendor semantic exports are preserved as immutable evidence only. Their classification semantics — indoor wall, floor, and ceiling labels — are NOT parsed, and no structural, collision, or navigation claim derives from them pending a registered indoor vendor corpus.",
+        ]
+        : []),
       "This manifest proves what the operator registered and the platform preserved; it does not independently verify scanner origin, calibration accuracy, reconstruction quality, or vendor licence terms.",
     ],
   };

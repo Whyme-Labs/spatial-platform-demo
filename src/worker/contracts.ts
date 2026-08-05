@@ -428,11 +428,26 @@ const workerOutputSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
+// The bounded reading of a public ASTM E57 container. Vendor extension field
+// names are carried verbatim as evidence; nothing here decodes a vendor
+// classification or mesh schema, and none is assumed.
+export const captureScanStructureSchema = z.object({
+  status: z.enum(["structure_read", "structure_unreadable"]),
+  method: z.string().trim().min(1).max(120),
+  scanCount: z.number().int().nonnegative().max(100_000),
+  imageCount: z.number().int().nonnegative().max(100_000),
+  hasPerScanPoses: z.boolean(),
+  vendorFieldNames: z.array(z.string().trim().min(1).max(200)).max(512).default([]),
+  reportSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().default(null),
+  reason: z.string().trim().min(2).max(1000).optional(),
+});
+
 export const workerJobCompletionSchema = z.object({
   leaseToken: z.string().min(20).max(512),
   progressMessage: z.string().trim().min(2).max(500),
   outputs: z.array(workerOutputSchema).max(20).default([]),
   report: z.record(z.string(), z.unknown()).default({}),
+  captureScanStructure: captureScanStructureSchema.optional(),
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
     computeDurationMs: z.number().int().nonnegative(),
@@ -456,6 +471,7 @@ export const workerJobFailureSchema = z.object({
     "network",
     "capacity",
     "configuration",
+    "lease",
     "unknown",
   ]).default("unknown"),
   details: z.record(z.string(), z.unknown()).default({}),
@@ -2298,6 +2314,10 @@ export const workerSceneChangeCompletionSchema = z.object({
 export const captureCompletenessSchema = z.object({
   clientOperationId: z.string().uuid(),
   versionId: z.string().uuid(),
+  // Optional binding to an immutable structure reading. Without it the
+  // trajectory claim cites nothing; with it the claim is bound to the exact
+  // exported scan poses it describes.
+  scanStructureId: z.string().uuid().optional(),
   source: z.object({
     adapter: captureAdapterSchema,
     fileName: z.string().trim().min(1).max(255),
@@ -2463,7 +2483,10 @@ export const releaseInputSchema = z.object({
     subtitle: z.string().trim().max(240).optional(),
     captureDate: z.string().date().optional(),
     measurementDisclaimer: z.string().trim().min(1).max(500),
-    splatBudgetMillions: z.number().min(0.25).max(8).default(2),
+    // An unset budget must stay unset: a default here would publish every scene
+    // at the same splat count and permanently bypass the viewer's device-aware
+    // and delivery-policy budget selection.
+    splatBudgetMillions: z.number().min(0.25).max(8).nullish(),
     defaultMovementMode: z.enum(["walk", "fly"]).default("walk"),
     sceneRotationDegrees: z.tuple([
       z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
@@ -2537,10 +2560,33 @@ export const telemetrySessionSchema = z.object({
   sessionId: z.string().uuid().optional(),
 }).strict();
 
+// Scene render sessions are renewed by presenting the scene token itself, so the
+// walkthrough can keep streaming paged assets past the original token TTL.
+export const sceneSessionRenewalSchema = z.object({
+  token: z.string().trim().min(1).max(4096),
+}).strict();
+
 export type AuthContext = {
   userId: string;
   organisationId: string;
   email: string;
   displayName: string;
   role: "platform_admin" | "production_operator" | "customer_reviewer" | "customer_readonly";
+};
+
+// Tenant invitations awaiting an explicit accept or decline. Auto-acceptance is
+// limited to first-time onboarding, so an established account sees its pending
+// invitations on the login and session responses instead of being enrolled
+// silently.
+export type PendingOrganisationInvitation = {
+  id: string;
+  organisationId: string;
+  organisationName: string;
+  role: "platform_admin" | "production_operator";
+  invitedAt: string;
+  expiresAt: string;
+};
+
+export type OrganisationInvitationResponse = {
+  invitation: PendingOrganisationInvitation & { status: "accepted" | "declined" };
 };

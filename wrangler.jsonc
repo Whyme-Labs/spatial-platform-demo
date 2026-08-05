@@ -40,6 +40,7 @@
     "OTP_RESEND_SECONDS": "60",
     "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
     "MAX_UPLOAD_BYTES": "107374182400",
+    "SERVER_HASH_MAX_BYTES": "2147483648",
     "SCENE_SESSION_TTL_SECONDS": "1800",
     "CLOUDFLARE_SAAS_ZONE_ID": "",
     "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",
@@ -64,7 +65,7 @@
   "kv_namespaces": [
     {
       "binding": "AUTH_CACHE",
-      "id": "708239eda1cc4d3ca357398adf40cedd"
+      "id": "00000000000000000000000000000001"
     }
   ],
   "send_email": [
@@ -152,6 +153,7 @@
         "OTP_RESEND_SECONDS": "60",
         "TURNSTILE_SITE_KEY": "1x00000000000000000000AA",
         "MAX_UPLOAD_BYTES": "107374182400",
+        "SERVER_HASH_MAX_BYTES": "2147483648",
         "SCENE_SESSION_TTL_SECONDS": "1800",
         "CLOUDFLARE_SAAS_ZONE_ID": "",
         "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",
@@ -260,6 +262,7 @@
         "OTP_RESEND_SECONDS": "60",
         "TURNSTILE_SITE_KEY": "0x4AAAAAAEAmJg9EFR9gEONs",
         "MAX_UPLOAD_BYTES": "107374182400",
+        "SERVER_HASH_MAX_BYTES": "2147483648",
         "SCENE_SESSION_TTL_SECONDS": "1800",
         "CLOUDFLARE_SAAS_ZONE_ID": "",
         "CLOUDFLARE_SAAS_CNAME_TARGET": "spatial.whymelabs.com",

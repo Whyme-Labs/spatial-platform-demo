@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { routePath } from "hono/route";
 import { Earcut } from "three/src/extras/Earcut.js";
 // These modules are shared with the offline processor so an approved plan is
 // recooked from the exact same structural semantics as the proposal preview.
@@ -88,6 +89,7 @@ import {
   measurementCheckPointSchema,
   professionalSignoffSchema,
   projectCostSchema,
+  sceneSessionRenewalSchema,
   telemetrySchema,
   telemetrySessionSchema,
   uploadCompleteSchema,
@@ -99,6 +101,8 @@ import {
   workerFloorplanExtractionCompletionSchema,
   workerOutputUploadSchema,
   type AuthContext,
+  type OrganisationInvitationResponse,
+  type PendingOrganisationInvitation,
 } from "./contracts";
 import {
   appendAuthCookies,
@@ -479,6 +483,18 @@ type UploadRow = {
   capture_journey_id: string | null;
 };
 
+type AssetIntegritySource =
+  | "client_declared"
+  | "server_verified"
+  | "processor_reported"
+  | "operator_manual";
+
+type CompletedUploadIntegrity = {
+  status: "ok" | "failed";
+  sha256: string | null;
+  source: AssetIntegritySource | null;
+};
+
 type AssetRow = {
   id: string;
   organisation_id: string;
@@ -743,6 +759,7 @@ type ReleaseRow = {
   expires_at: string | null;
   revoked_at: string | null;
   slug: string;
+  channel_activation_generation: number;
   project_name: string;
   capture_adapter: string;
   source_provenance_json: string;
@@ -884,6 +901,16 @@ const NAVIGATION_TRAVERSAL_EVIDENCE_SELECT = `
 const app = new Hono<AppEnvironment>();
 const maximumPartBytes = 95 * 1024 * 1024;
 const captureUploadPartBytes = 10 * 1024 * 1024;
+// R2 completes at most 10,000 parts per multipart upload. Keep headroom so a
+// resumed session that re-uploads a boundary part can never exhaust the ceiling.
+const maximumUploadParts = 9500;
+// 2 GiB: covers the largest known vendor Gaussian masters (the FJD P2 sample is
+// ~536.8 MB, only ~57 KB under the previous 512 MiB bound) while native
+// DigestStream hashing stays ~1s CPU; wall time is R2 streaming. Above this the
+// digest degrades to client_declared and the processor re-verifies on download.
+const serverHashMaximumBytes = 2 * 1024 * 1024 * 1024;
+const jobDispatchBackoffMinutes = 10;
+const maximumOperatorJobRetries = 5;
 const maximumPrivacyImageBytes = 10 * 1024 * 1024;
 const privacyDetector = "@cf/moondream/moondream3.1-9B-A2B";
 const privacyDetectorVersion = "moondream3.1-9B-A2B:2026-07";
@@ -917,6 +944,17 @@ app.use("*", async (context, next) => {
   } finally {
     context.header("X-Request-Id", requestId);
     applySecurityHeaders(context);
+    if ([401, 403, 429].includes(context.res.status)) {
+      const matchedPath = routePath(context, -1);
+      console.warn(JSON.stringify({
+        event: "request.denied",
+        requestId,
+        method: context.req.method,
+        path: (matchedPath === "/*" || matchedPath === "*" ? context.req.path : matchedPath).slice(0, 200),
+        status: context.res.status,
+        ip: context.req.header("CF-Connecting-IP") ?? "unknown",
+      }));
+    }
     console.log(JSON.stringify({
       event: "request.completed",
       requestId,
@@ -930,6 +968,26 @@ app.use("*", async (context, next) => {
 });
 
 app.onError((error, context) => {
+  if (error instanceof RequestBodyError) {
+    console.warn(JSON.stringify({
+      event: "request.body_rejected",
+      requestId: context.get("requestId"),
+      path: context.req.path,
+      code: error.kind,
+    }));
+    if (error.kind === "too_large") {
+      return context.json({
+        error: error.message,
+        code: "request_body_too_large",
+        requestId: context.get("requestId"),
+      }, 413);
+    }
+    return context.json({
+      error: error.message,
+      code: "invalid_json",
+      requestId: context.get("requestId"),
+    }, 400);
+  }
   console.error(JSON.stringify({
     event: "request.failed",
     requestId: context.get("requestId"),
@@ -943,13 +1001,47 @@ app.onError((error, context) => {
 app.notFound((context) => context.json({ error: "Not found", requestId: context.get("requestId") }, 404));
 
 app.get("/api/health", async (context) => {
-  const database = await context.env.DB.prepare("SELECT 1 AS ready").first<{ ready: number }>();
+  const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
+  let withinRateLimit = true;
+  try {
+    withinRateLimit = await allowRate(context.env.DB, "health-ip", clientAddress, 120, 60);
+  } catch {
+    // Database unavailability is reported by the database probe below.
+  }
+  if (!withinRateLimit) return tooManyRequests(context, 60);
+  const probe = async (check: () => Promise<boolean>): Promise<"ok" | "degraded"> => {
+    try {
+      const healthy = await Promise.race([
+        check(),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_500)),
+      ]);
+      return healthy ? "ok" : "degraded";
+    } catch {
+      return "degraded";
+    }
+  };
+  const [database, cache, storage] = await Promise.all([
+    probe(async () => {
+      const row = await context.env.DB.prepare("SELECT 1 AS ready").first<{ ready: number }>();
+      return row?.ready === 1;
+    }),
+    probe(async () => {
+      await context.env.AUTH_CACHE.get("health:probe");
+      return true;
+    }),
+    probe(async () => {
+      await context.env.SPATIAL_ASSETS.head("health/probe");
+      return true;
+    }),
+  ]);
+  const healthy = database === "ok";
   return context.json({
-    status: database?.ready === 1 ? "ok" : "degraded",
+    status: healthy && cache === "ok" && storage === "ok" ? "ok" : "degraded",
     environment: context.env.APP_ENV,
+    dependencies: { database, cache, storage },
     timestamp: new Date().toISOString(),
     requestId: context.get("requestId"),
-  }, database?.ready === 1 ? 200 : 503);
+  }, healthy ? 200 : 503);
 });
 
 for (const path of [
@@ -976,9 +1068,9 @@ app.get("/api/auth/config", (context) => {
 });
 
 app.post("/api/auth/otp/request", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
-  if (!(await allowRate(context.env.DB, "otp-ip", clientAddress, 8, 600))) return tooManyRequests(context);
+  if (!(await allowRate(context.env.DB, "otp-ip", clientAddress, 8, 600))) return tooManyRequests(context, 600);
   const parsed = otpRequestSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const email = parsed.data.email;
@@ -1036,7 +1128,7 @@ app.post("/api/auth/otp/request", async (context) => {
       requestId: context.get("requestId"),
     }, 503);
   }
-  if (!(await allowRate(context.env.DB, "otp-email", emailSubject, 5, 900))) return tooManyRequests(context);
+  if (!(await allowRate(context.env.DB, "otp-email", emailSubject, 5, 900))) return tooManyRequests(context, 900);
 
   let challengeId = crypto.randomUUID();
   const ttlSeconds = positiveInteger(context.env.OTP_TTL_SECONDS, 600);
@@ -1084,33 +1176,39 @@ app.post("/api/auth/otp/request", async (context) => {
         )
       ) LIMIT 1
     `).bind(email, new Date().toISOString()).first<{ id: string }>());
+  // Delivery work runs after the response so authorised and unknown emails
+  // answer in indistinguishable time (no user-enumeration timing oracle).
   if (authorised) {
-    await context.env.AUTH_CACHE.put(cooldownKey, challengeId, { expirationTtl: retryAfterSeconds });
-    try {
-      await sendOtpEmail(context.env, email, code, ttlSeconds);
-      await authSecurityEvent(context, "otp.sent", emailSubject, null, null);
-    } catch (error) {
-      console.error(JSON.stringify({
-        event: "auth.otp_email_failed",
-        requestId: context.get("requestId"),
-        challengeId,
-        error: error instanceof Error ? error.message : String(error),
-      }));
-      await context.env.DB.prepare(
-        "UPDATE auth_otp_challenges SET consumed_at = datetime('now') WHERE id = ?",
-      ).bind(challengeId).run();
-      await authSecurityEvent(context, "otp.delivery_failed", emailSubject, null, null);
-    }
+    context.executionCtx.waitUntil((async () => {
+      await context.env.AUTH_CACHE.put(cooldownKey, challengeId, { expirationTtl: retryAfterSeconds });
+      try {
+        await sendOtpEmail(context.env, email, code, ttlSeconds);
+        await authSecurityEvent(context, "otp.sent", emailSubject, null, null);
+      } catch (error) {
+        console.error(JSON.stringify({
+          event: "auth.otp_email_failed",
+          requestId: context.get("requestId"),
+          challengeId,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+        await context.env.DB.prepare(
+          "UPDATE auth_otp_challenges SET consumed_at = datetime('now') WHERE id = ?",
+        ).bind(challengeId).run();
+        await authSecurityEvent(context, "otp.delivery_failed", emailSubject, null, null);
+      }
+    })());
   } else {
-    await authSecurityEvent(context, "otp.unknown_email", emailSubject, null, null);
+    context.executionCtx.waitUntil(
+      authSecurityEvent(context, "otp.unknown_email", emailSubject, null, null),
+    );
   }
   return genericResponse();
 });
 
 app.post("/api/auth/otp/verify", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
-  if (!(await allowRate(context.env.DB, "otp-verify-ip", clientAddress, 20, 600))) return tooManyRequests(context);
+  if (!(await allowRate(context.env.DB, "otp-verify-ip", clientAddress, 20, 600))) return tooManyRequests(context, 600);
   const parsed = otpVerifySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const { challengeId, email, code } = parsed.data;
@@ -1144,7 +1242,11 @@ app.post("/api/auth/otp/verify", async (context) => {
   }
   await acceptPendingProjectInvitations(context.env.DB, auth);
   const tokens = await createAuthSession(context.env, auth, context.req.raw);
-  const response = context.json({ user: auth, accessExpiresAt: tokens.accessExpiresAt });
+  const response = context.json({
+    user: auth,
+    accessExpiresAt: tokens.accessExpiresAt,
+    pendingInvitations: await pendingOrganisationInvitations(context.env.DB, email),
+  });
   appendAuthCookies(response.headers, tokens);
   const sessionId = tokens.refreshToken.slice(0, tokens.refreshToken.indexOf("."));
   await audit(context, auth, "auth.login", "auth_session", sessionId);
@@ -1153,16 +1255,16 @@ app.post("/api/auth/otp/verify", async (context) => {
 });
 
 app.post("/api/auth/oidc/discover", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
   if (!(await allowRate(context.env.DB, "oidc-discover-ip", clientAddress, 20, 600))) {
-    return tooManyRequests(context);
+    return tooManyRequests(context, 600);
   }
   const parsed = enterpriseIdentityDiscoverySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const emailHash = await sha256Hex(parsed.data.email);
   if (!(await allowRate(context.env.DB, "oidc-discover-email", emailHash, 12, 900))) {
-    return tooManyRequests(context);
+    return tooManyRequests(context, 900);
   }
   const domain = emailDomain(parsed.data.email);
   const secrets = oidcClientSecrets(context.env);
@@ -1187,10 +1289,10 @@ app.post("/api/auth/oidc/discover", async (context) => {
 });
 
 app.post("/api/auth/oidc/:providerId/start", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
   if (!(await allowRate(context.env.DB, "oidc-start-ip", clientAddress, 12, 600))) {
-    return tooManyRequests(context);
+    return tooManyRequests(context, 600);
   }
   const parsed = enterpriseIdentityStartSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
@@ -1210,7 +1312,7 @@ app.post("/api/auth/oidc/:providerId/start", async (context) => {
     return notFound(context, "Enterprise sign-in is not available for this account");
   }
   if (!(await allowRate(context.env.DB, "oidc-start-email", emailHash, 8, 900))) {
-    return tooManyRequests(context);
+    return tooManyRequests(context, 900);
   }
 
   let metadata: OidcMetadata;
@@ -1476,7 +1578,9 @@ app.get("/api/auth/oidc/:providerId/callback", async (context) => {
 });
 
 app.post("/api/auth/refresh", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
+  if (!(await allowRate(context.env.DB, "refresh-ip", clientAddress, 60, 600))) return tooManyRequests(context, 600);
   if (!extractRefreshToken(context.req.raw)) return context.body(null, 204);
   const result = await rotateRefreshSession(context.env, context.req.raw);
   if (!result) {
@@ -1518,7 +1622,11 @@ app.post("/api/auth/session", (context) => {
 app.get("/api/auth/session", async (context) => {
   const auth = await authenticate(context);
   if (!auth) return context.json({ authenticated: false });
-  return context.json({ authenticated: true, user: publicAuthContext(auth) });
+  return context.json({
+    authenticated: true,
+    user: publicAuthContext(auth),
+    pendingInvitations: await pendingOrganisationInvitations(context.env.DB, auth.email),
+  });
 });
 
 app.get("/api/auth/organisations", async (context) => {
@@ -1549,7 +1657,7 @@ app.get("/api/auth/organisations", async (context) => {
 app.post("/api/auth/organisations/switch", async (context) => {
   const auth = await authenticate(context);
   if (!auth) return unauthorized(context, "Sign in required");
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   if (auth.authMethod === "oidc") {
     return forbidden(context, "Enterprise SSO sessions are restricted to their configured organisation");
   }
@@ -1609,7 +1717,7 @@ app.post("/api/auth/organisations/switch", async (context) => {
 });
 
 app.delete("/api/auth/session", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const auth = await authenticate(context);
   const refresh = extractRefreshToken(context.req.raw);
   if (auth) {
@@ -1706,7 +1814,7 @@ app.get("/api/capture-agents", async (context) => {
 app.post("/api/capture-agents", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureAgentCredentialSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const assignmentError = await captureAgentProjectAssignmentError(
@@ -1799,7 +1907,7 @@ app.post("/api/capture-agents", async (context) => {
 app.patch("/api/capture-agents/:credentialId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureAgentCredentialUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const credential = await captureAgentCredential(
@@ -1845,7 +1953,7 @@ app.patch("/api/capture-agents/:credentialId", async (context) => {
 app.post("/api/capture-agents/:credentialId/rotate", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureAgentCredentialRotateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const credential = await captureAgentCredential(
@@ -1929,7 +2037,7 @@ app.post("/api/capture-agents/:credentialId/rotate", async (context) => {
 app.delete("/api/capture-agents/:credentialId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const credential = await captureAgentCredential(
     context.env.DB,
     auth.organisationId,
@@ -2001,7 +2109,7 @@ app.get("/api/team/identity-providers", async (context) => {
 app.post("/api/team/identity-providers", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = enterpriseIdentityProviderSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   let issuer: string;
@@ -2071,7 +2179,7 @@ app.post("/api/team/identity-providers", async (context) => {
 app.post("/api/team/identity-providers/:providerId/activate", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const provider = await identityProviderForOrganisation(
     context.env.DB,
     auth.organisationId,
@@ -2122,7 +2230,7 @@ app.post("/api/team/identity-providers/:providerId/activate", async (context) =>
 app.post("/api/team/identity-providers/:providerId/disable", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const provider = await identityProviderForOrganisation(
     context.env.DB,
     auth.organisationId,
@@ -2168,7 +2276,7 @@ app.post("/api/team/identity-providers/:providerId/disable", async (context) => 
 app.delete("/api/team/identity-providers/:providerId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const provider = await identityProviderForOrganisation(
     context.env.DB,
     auth.organisationId,
@@ -2196,7 +2304,10 @@ app.delete("/api/team/identity-providers/:providerId", async (context) => {
 app.post("/api/team/invitations", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  if (!(await allowRate(context.env.DB, "team-invitation-org", auth.organisationId, 30, 3600))) {
+    return tooManyRequests(context, 3600);
+  }
   const parsed = teamInvitationSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
 
@@ -2312,7 +2423,7 @@ app.post("/api/team/invitations", async (context) => {
 app.post("/api/team/invitations/:invitationId/resend", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const invitation = await context.env.DB.prepare(`
     SELECT id, email, role, status, expires_at AS expiresAt
     FROM organisation_invitations
@@ -2349,10 +2460,104 @@ app.post("/api/team/invitations/:invitationId/resend", async (context) => {
   return context.json({ invitation: { ...invitation, deliveryStatus: delivery.status } });
 });
 
+// Explicit consent for accounts that already belong to an organisation: those
+// invitations are never auto-accepted at sign-in, so the invitee answers here.
+app.post("/api/team/invitations/:invitationId/accept", async (context) => {
+  return respondToOrganisationInvitation(context, "accept");
+});
+
+app.post("/api/team/invitations/:invitationId/decline", async (context) => {
+  return respondToOrganisationInvitation(context, "decline");
+});
+
+async function respondToOrganisationInvitation(
+  context: Context<AppEnvironment>,
+  response: "accept" | "decline",
+): Promise<Response> {
+  const auth = await requireAuth(context);
+  if (auth instanceof Response) return auth;
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  if (!(await allowRate(context.env.DB, "team-invitation-response-user", auth.userId, 30, 600))) {
+    return tooManyRequests(context, 600);
+  }
+  const now = new Date().toISOString();
+  const invitation = await context.env.DB.prepare(`
+    SELECT oi.id, oi.organisation_id AS organisationId, o.name AS organisationName,
+      oi.role, oi.invited_at AS invitedAt, oi.expires_at AS expiresAt,
+      m.status AS membershipStatus
+    FROM organisation_invitations oi
+    JOIN organisations o ON o.id = oi.organisation_id
+    JOIN memberships m ON m.organisation_id = oi.organisation_id AND m.user_id = ?
+    WHERE oi.id = ? AND lower(oi.email) = lower(?) AND oi.status = 'pending'
+  `).bind(auth.userId, context.req.param("invitationId"), auth.email).first<
+    PendingOrganisationInvitation & { membershipStatus: string }
+  >();
+  if (!invitation) return notFound(context, "Pending team invitation not found");
+  if (Date.parse(invitation.expiresAt) <= Date.now()) {
+    await context.env.DB.prepare(
+      "UPDATE organisation_invitations SET status = 'expired' WHERE id = ? AND status = 'pending'",
+    ).bind(invitation.id).run();
+    return conflict(context, "This invitation has expired. Ask an administrator for a new one.");
+  }
+  if (invitation.membershipStatus !== "invited") {
+    return conflict(context, "This invitation is no longer awaiting a response");
+  }
+  const invitedAuth: AuthContext = { ...publicAuthContext(auth), organisationId: invitation.organisationId };
+  const membershipStatement = response === "accept"
+    ? context.env.DB.prepare(`
+        UPDATE memberships
+        SET status = 'active', updated_at = datetime('now'), revoked_at = NULL
+        WHERE organisation_id = ? AND user_id = ? AND status = 'invited'
+      `).bind(invitation.organisationId, auth.userId)
+    : context.env.DB.prepare(`
+        UPDATE memberships
+        SET status = 'revoked', revoked_at = datetime('now'), updated_at = datetime('now')
+        WHERE organisation_id = ? AND user_id = ? AND status = 'invited'
+      `).bind(invitation.organisationId, auth.userId);
+  const invitationStatement = response === "accept"
+    ? context.env.DB.prepare(`
+        UPDATE organisation_invitations
+        SET status = 'accepted', accepted_by = ?, accepted_at = datetime('now')
+        WHERE id = ? AND status = 'pending' AND expires_at > ?
+      `).bind(auth.userId, invitation.id, now)
+    : context.env.DB.prepare(`
+        UPDATE organisation_invitations
+        SET status = 'declined', declined_by = ?, declined_at = datetime('now')
+        WHERE id = ? AND status = 'pending' AND expires_at > ?
+      `).bind(auth.userId, invitation.id, now);
+  const results = await context.env.DB.batch([
+    membershipStatement,
+    invitationStatement,
+    auditStatement(
+      context,
+      invitedAuth,
+      response === "accept" ? "team.invitation_accept" : "team.invitation_decline",
+      "organisation_invitation",
+      invitation.id,
+      { role: invitation.role },
+    ),
+  ]);
+  if ((requiredBatchResult(results, 1).meta.changes ?? 0) !== 1) {
+    return conflict(context, "This invitation is no longer awaiting a response");
+  }
+  const answered: OrganisationInvitationResponse = {
+    invitation: {
+      id: invitation.id,
+      organisationId: invitation.organisationId,
+      organisationName: invitation.organisationName,
+      role: invitation.role,
+      invitedAt: invitation.invitedAt,
+      expiresAt: invitation.expiresAt,
+      status: response === "accept" ? "accepted" : "declined",
+    },
+  };
+  return context.json(answered);
+}
+
 app.patch("/api/team/members/:userId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = teamMemberUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const userId = context.req.param("userId");
@@ -2362,27 +2567,32 @@ app.patch("/api/team/members/:userId", async (context) => {
   if (member.role === parsed.data.role) {
     return context.json({ member, idempotent: true });
   }
-  if (member.role === "platform_admin" && parsed.data.role !== "platform_admin") {
-    if (await isLastAdministrator(context.env.DB, auth.organisationId, userId)) {
-      return conflict(context, "The final platform administrator cannot be demoted");
-    }
+  const demotesAdministrator = member.role === "platform_admin" && parsed.data.role !== "platform_admin";
+  if (demotesAdministrator && await isLastAdministrator(context.env.DB, auth.organisationId, userId)) {
+    return conflict(context, "The final platform administrator cannot be demoted");
   }
-  await context.env.DB.batch([
+  const guardBindings = [demotesAdministrator ? 1 : 0, auth.organisationId, userId];
+  const roleResults = await context.env.DB.batch([
     context.env.DB.prepare(`
       UPDATE memberships SET role = ?, updated_at = datetime('now')
       WHERE organisation_id = ? AND user_id = ? AND revoked_at IS NULL
-    `).bind(parsed.data.role, auth.organisationId, userId),
+        AND ${administratorSurvivorGuard}
+    `).bind(parsed.data.role, auth.organisationId, userId, ...guardBindings),
     context.env.DB.prepare(`
       UPDATE auth_sessions
       SET revoked_at = COALESCE(revoked_at, datetime('now')),
         revoke_reason = COALESCE(revoke_reason, 'membership_role_changed')
       WHERE organisation_id = ? AND user_id = ? AND revoked_at IS NULL
-    `).bind(auth.organisationId, userId),
+        AND ${administratorSurvivorGuard}
+    `).bind(auth.organisationId, userId, ...guardBindings),
+    auditStatement(context, auth, "team.role_change", "membership", userId, {
+      previousRole: member.role,
+      role: parsed.data.role,
+    }, { expression: administratorSurvivorGuard, bindings: guardBindings }),
   ]);
-  await audit(context, auth, "team.role_change", "membership", userId, {
-    previousRole: member.role,
-    role: parsed.data.role,
-  });
+  if ((requiredBatchResult(roleResults, 0).meta.changes ?? 0) !== 1) {
+    return conflict(context, "The final platform administrator cannot be demoted");
+  }
   return context.json({
     member: { ...member, role: parsed.data.role, updatedAt: new Date().toISOString() },
   });
@@ -2391,37 +2601,45 @@ app.patch("/api/team/members/:userId", async (context) => {
 app.delete("/api/team/members/:userId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const userId = context.req.param("userId");
   if (userId === auth.userId) return conflict(context, "You cannot revoke your own team access");
   const member = await activeTeamMember(context.env.DB, auth.organisationId, userId);
   if (!member) return notFound(context, "Active team member not found");
-  if (member.role === "platform_admin" && await isLastAdministrator(context.env.DB, auth.organisationId, userId)) {
+  const revokesAdministrator = member.role === "platform_admin" && member.status === "active";
+  if (revokesAdministrator && await isLastAdministrator(context.env.DB, auth.organisationId, userId)) {
     return conflict(context, "The final platform administrator cannot be revoked");
   }
-  await context.env.DB.batch([
+  const guardBindings = [revokesAdministrator ? 1 : 0, auth.organisationId, userId];
+  const revokeResults = await context.env.DB.batch([
     context.env.DB.prepare(`
       UPDATE memberships
       SET status = 'revoked', revoked_at = datetime('now'), updated_at = datetime('now')
       WHERE organisation_id = ? AND user_id = ? AND revoked_at IS NULL
-    `).bind(auth.organisationId, userId),
+        AND ${administratorSurvivorGuard}
+    `).bind(auth.organisationId, userId, ...guardBindings),
     context.env.DB.prepare(`
       UPDATE auth_sessions
       SET revoked_at = COALESCE(revoked_at, datetime('now')),
         revoke_reason = COALESCE(revoke_reason, 'membership_revoked')
       WHERE organisation_id = ? AND user_id = ? AND revoked_at IS NULL
-    `).bind(auth.organisationId, userId),
+        AND ${administratorSurvivorGuard}
+    `).bind(auth.organisationId, userId, ...guardBindings),
     context.env.DB.prepare(`
       UPDATE organisation_invitations
       SET status = 'revoked', revoked_at = datetime('now')
       WHERE organisation_id = ? AND lower(email) = lower(?)
         AND status IN ('pending', 'accepted')
-    `).bind(auth.organisationId, member.email),
+        AND ${administratorSurvivorGuard}
+    `).bind(auth.organisationId, member.email, ...guardBindings),
+    auditStatement(context, auth, "team.revoke", "membership", userId, {
+      role: member.role,
+      emailHash: await sha256Hex(member.email),
+    }, { expression: administratorSurvivorGuard, bindings: guardBindings }),
   ]);
-  await audit(context, auth, "team.revoke", "membership", userId, {
-    role: member.role,
-    emailHash: await sha256Hex(member.email),
-  });
+  if ((requiredBatchResult(revokeResults, 0).meta.changes ?? 0) !== 1) {
+    return conflict(context, "The final platform administrator cannot be revoked");
+  }
   return context.body(null, 204);
 });
 
@@ -2466,7 +2684,7 @@ app.get("/api/project-templates", async (context) => {
 app.post("/api/project-templates", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectTemplateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const canonicalRequest = JSON.stringify(parsed.data);
@@ -2527,7 +2745,7 @@ app.post("/api/project-templates", async (context) => {
 app.patch("/api/project-templates/:templateId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectTemplateUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const template = await context.env.DB.prepare(`
@@ -2576,7 +2794,7 @@ app.patch("/api/project-templates/:templateId", async (context) => {
 app.delete("/api/project-templates/:templateId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const template = await context.env.DB.prepare(`
     SELECT id, name FROM project_templates WHERE id = ? AND organisation_id = ?
   `).bind(context.req.param("templateId"), auth.organisationId).first<{ id: string; name: string }>();
@@ -2606,7 +2824,7 @@ app.get("/api/project-views", async (context) => {
 app.post("/api/project-views", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectSavedViewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const requestHash = await sha256Hex(JSON.stringify(parsed.data));
@@ -2671,7 +2889,7 @@ app.post("/api/project-views", async (context) => {
 app.patch("/api/project-views/:viewId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectSavedViewUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const view = await context.env.DB.prepare(`
@@ -2722,7 +2940,7 @@ app.patch("/api/project-views/:viewId", async (context) => {
 app.delete("/api/project-views/:viewId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const view = await context.env.DB.prepare(`
     SELECT id, name FROM project_saved_views
     WHERE id = ? AND organisation_id = ? AND user_id = ?
@@ -2754,7 +2972,7 @@ app.get("/api/project-fields", async (context) => {
 app.post("/api/project-fields", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectCustomFieldDefinitionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const { clientOperationId, ...definition } = parsed.data;
@@ -2818,7 +3036,7 @@ app.post("/api/project-fields", async (context) => {
 app.patch("/api/project-fields/:fieldId", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectCustomFieldUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const field = await context.env.DB.prepare(`
@@ -2882,7 +3100,7 @@ app.patch("/api/project-fields/:fieldId", async (context) => {
 app.post("/api/projects/portfolio-handoffs/preview", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectPortfolioHandoffPreviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const destination = await requireDestinationAdministrator(
@@ -2906,7 +3124,7 @@ app.post("/api/projects/portfolio-handoffs/preview", async (context) => {
 app.post("/api/projects/portfolio-handoffs", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectPortfolioHandoffSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const destination = await requireDestinationAdministrator(
@@ -3057,7 +3275,7 @@ app.post("/api/projects/portfolio-handoffs", async (context) => {
 app.post("/api/projects/asset-handoffs/preview", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectAssetHandoffPreviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const destination = await requireDestinationAdministrator(
@@ -3121,7 +3339,7 @@ app.get("/api/projects/asset-handoffs/:handoffId", async (context) => {
 app.post("/api/projects/asset-handoffs", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectAssetHandoffSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const destination = await requireDestinationAdministrator(
@@ -3312,7 +3530,7 @@ app.post("/api/projects/asset-handoffs", async (context) => {
 app.post("/api/projects/asset-handoffs/:handoffId/retry", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectAssetHandoffRetrySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const handoff = await context.env.DB.prepare(`
@@ -3400,7 +3618,7 @@ app.post("/api/projects/asset-handoffs/:handoffId/retry", async (context) => {
 app.post("/api/projects/asset-handoffs/:handoffId/cancel", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectAssetHandoffCancelSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const handoff = await context.env.DB.prepare(`
@@ -3509,7 +3727,7 @@ app.get("/api/projects", async (context) => {
 app.post("/api/projects/export", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectPortfolioExportSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const selectedIds = parsed.data.projectIds;
@@ -3593,7 +3811,7 @@ app.post("/api/projects/export", async (context) => {
 app.post("/api/projects/import/preview", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectPortfolioManifestSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const preview = await portfolioPreview(context.env.DB, auth.organisationId, parsed.data);
@@ -3603,7 +3821,7 @@ app.post("/api/projects/import/preview", async (context) => {
 app.post("/api/projects/import", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectPortfolioImportSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const { clientOperationId, manifest } = parsed.data;
@@ -3870,7 +4088,7 @@ app.post("/api/projects/import", async (context) => {
 app.post("/api/projects", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectInputSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const customFieldResult = await validateProjectCustomFieldValues(
@@ -4005,7 +4223,7 @@ app.post("/api/projects", async (context) => {
 app.post("/api/projects/bulk-lifecycle", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectBulkLifecycleSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
 
@@ -4147,7 +4365,7 @@ app.post("/api/projects/bulk-lifecycle", async (context) => {
 app.patch("/api/projects/:projectId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -4252,7 +4470,7 @@ app.patch("/api/projects/:projectId", async (context) => {
 app.post("/api/projects/:projectId/archive", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const result = await applyProjectLifecycleAction(
     context,
     auth,
@@ -4270,7 +4488,7 @@ app.post("/api/projects/:projectId/archive", async (context) => {
 app.post("/api/projects/:projectId/restore", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const result = await applyProjectLifecycleAction(
     context,
     auth,
@@ -4396,7 +4614,7 @@ app.get("/api/projects/:projectId", async (context) => {
 app.post("/api/projects/:projectId/capture-bundles", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureBundleManifestSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(
@@ -4636,7 +4854,7 @@ app.post("/api/projects/:projectId/capture-bundles", async (context) => {
 app.patch("/api/projects/:projectId/capture-bundles/:manifestId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureBundleReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const existing = await context.env.DB.prepare(`
@@ -4697,7 +4915,7 @@ app.get("/api/projects/:projectId/reviewers", async (context) => {
 app.post("/api/projects/:projectId/reviewers", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = reviewerInvitationSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -4812,7 +5030,7 @@ app.post("/api/projects/:projectId/reviewers", async (context) => {
 app.delete("/api/projects/:projectId/reviewers/:userId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
   if (!project) return notFound(context, "Project not found");
   const reviewer = await context.env.DB.prepare(
@@ -4903,7 +5121,7 @@ app.get("/api/review/projects/:projectId", async (context) => {
 app.post("/api/review/projects/:projectId/versions/:versionId/comments", async (context) => {
   const access = await requireReviewProject(context, context.req.param("projectId"), true);
   if (access instanceof Response) return access;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = reviewCommentSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const version = await context.env.DB.prepare(
@@ -4977,7 +5195,7 @@ app.post("/api/review/projects/:projectId/versions/:versionId/comments", async (
 app.post("/api/review/projects/:projectId/versions/:versionId/decisions", async (context) => {
   const access = await requireReviewProject(context, context.req.param("projectId"), true);
   if (access instanceof Response) return access;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = reviewDecisionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const version = await context.env.DB.prepare(
@@ -5062,7 +5280,7 @@ app.get("/api/projects/:projectId/reviews", async (context) => {
 app.patch("/api/projects/:projectId/reviews/comments/:commentId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = reviewCommentResolutionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const result = await context.env.DB.prepare(`
@@ -5507,7 +5725,7 @@ app.get("/api/projects/:projectId/theme", async (context) => {
 app.put("/api/projects/:projectId/theme", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectThemeSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -5559,7 +5777,7 @@ app.get("/api/projects/:projectId/domains", async (context) => {
 app.post("/api/projects/:projectId/domains", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = customDomainSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -5596,7 +5814,7 @@ app.post("/api/projects/:projectId/domains", async (context) => {
 app.post("/api/projects/:projectId/domains/:domainId/challenge", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const domain = await scopedCustomDomain(
     context.env.DB,
     auth.organisationId,
@@ -5630,7 +5848,7 @@ app.post("/api/projects/:projectId/domains/:domainId/challenge", async (context)
 app.post("/api/projects/:projectId/domains/:domainId/verify", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = customDomainVerifySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const domain = await scopedCustomDomain(
@@ -5697,7 +5915,7 @@ app.post("/api/projects/:projectId/domains/:domainId/verify", async (context) =>
 app.post("/api/projects/:projectId/domains/:domainId/provision", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const domain = await scopedCustomDomain(
     context.env.DB,
     auth.organisationId,
@@ -5798,7 +6016,7 @@ app.post("/api/projects/:projectId/domains/:domainId/provision", async (context)
 app.delete("/api/projects/:projectId/domains/:domainId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const domain = await scopedCustomDomain(
     context.env.DB,
     auth.organisationId,
@@ -5916,7 +6134,7 @@ app.get("/api/hosting", async (context) => {
 app.post("/api/admin/billing/invoices", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = manualInvoiceIssueSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, parsed.data.projectId);
@@ -5937,90 +6155,133 @@ app.post("/api/admin/billing/invoices", async (context) => {
     externalReference: parsed.data.externalReference ?? null,
     note: parsed.data.note ?? null,
   }));
-  const existingOperation = await context.env.DB.prepare(`
-    SELECT request_hash, invoice_id, subscription_id
-    FROM billing_manual_operations
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<ManualBillingOperationRow>();
+  const existingOperation = await persistedManualBillingOperation(
+    context.env.DB,
+    auth.organisationId,
+    parsed.data.clientOperationId,
+  );
   if (existingOperation) {
-    if (existingOperation.request_hash !== requestHash) {
-      return conflict(context, "This billing operation identifier was already used for a different invoice");
-    }
-    const state = await manualBillingState(
-      context.env.DB,
-      auth.organisationId,
-      existingOperation.invoice_id,
-      existingOperation.subscription_id,
+    return manualBillingReplay(
+      context,
+      auth,
+      existingOperation,
+      requestHash,
+      "This billing operation identifier was already used for a different invoice",
     );
-    return context.json({ ...state, idempotent: true });
+  }
+  // One hosting subscription per project stays non-terminal, so cancellation and
+  // lifecycle enforcement always have exactly one row to act on.
+  const liveSubscription = await liveHostingSubscription(
+    context.env.DB,
+    auth.organisationId,
+    project.id,
+  );
+  if (liveSubscription && liveSubscription.payment_provider !== "manual") {
+    return conflict(
+      context,
+      "This project already has a provider-managed hosting subscription; cancel it before issuing a manual invoice",
+    );
   }
   const invoiceId = crypto.randomUUID();
-  const subscriptionId = crypto.randomUUID();
+  const subscriptionId = liveSubscription?.id ?? crypto.randomUUID();
   const operationId = crypto.randomUUID();
-  await context.env.DB.batch([
-    context.env.DB.prepare(`
-      INSERT INTO project_hosting_subscriptions (
-        id, organisation_id, project_id, plan_code, status,
-        current_period_start, current_period_end, renews_automatically,
-        archive_on_expiry, created_by, payment_provider, billing_note
-      ) VALUES (?, ?, ?, ?, 'past_due', ?, ?, 0, ?, ?, 'manual', ?)
-    `).bind(
-      subscriptionId,
-      auth.organisationId,
-      project.id,
-      parsed.data.planCode,
-      parsed.data.periodStart,
-      parsed.data.periodEnd,
-      parsed.data.archiveOnExpiry ? 1 : 0,
-      auth.userId,
-      parsed.data.note ?? null,
-    ),
-    context.env.DB.prepare(`
-      INSERT INTO billing_invoices (
-        id, organisation_id, project_id, subscription_id, status,
-        currency, amount_cents, period_start, period_end, due_at,
-        payment_provider, billing_method, external_reference, note,
-        issued_by, updated_at
-      ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 'manual', 'manual', ?, ?, ?, datetime('now'))
-    `).bind(
-      invoiceId,
-      auth.organisationId,
-      project.id,
-      subscriptionId,
-      parsed.data.currency,
-      parsed.data.amountCents,
-      parsed.data.periodStart,
-      parsed.data.periodEnd,
-      parsed.data.dueAt,
-      parsed.data.externalReference ?? null,
-      parsed.data.note ?? null,
-      auth.userId,
-    ),
-    context.env.DB.prepare(`
-      INSERT INTO billing_manual_operations (
-        id, organisation_id, project_id, subscription_id, invoice_id,
-        client_operation_id, operation, request_hash, note, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, 'issue_invoice', ?, ?, ?)
-    `).bind(
-      operationId,
-      auth.organisationId,
-      project.id,
-      subscriptionId,
-      invoiceId,
+  const subscriptionStatement = liveSubscription
+    ? context.env.DB.prepare(`
+        UPDATE project_hosting_subscriptions
+        SET plan_code = CASE WHEN status = 'past_due' THEN ? ELSE plan_code END,
+          current_period_start = CASE WHEN status = 'past_due' THEN ? ELSE current_period_start END,
+          current_period_end = CASE WHEN status = 'past_due' THEN ? ELSE current_period_end END,
+          archive_on_expiry = ?, renews_automatically = 0,
+          billing_note = COALESCE(?, billing_note), updated_at = datetime('now')
+        WHERE id = ? AND organisation_id = ? AND payment_provider = 'manual'
+          AND status IN ('active', 'past_due')
+      `).bind(
+        parsed.data.planCode,
+        parsed.data.periodStart,
+        parsed.data.periodEnd,
+        parsed.data.archiveOnExpiry ? 1 : 0,
+        parsed.data.note ?? null,
+        subscriptionId,
+        auth.organisationId,
+      )
+    : context.env.DB.prepare(`
+        INSERT INTO project_hosting_subscriptions (
+          id, organisation_id, project_id, plan_code, status,
+          current_period_start, current_period_end, renews_automatically,
+          archive_on_expiry, created_by, payment_provider, billing_note
+        ) VALUES (?, ?, ?, ?, 'past_due', ?, ?, 0, ?, ?, 'manual', ?)
+      `).bind(
+        subscriptionId,
+        auth.organisationId,
+        project.id,
+        parsed.data.planCode,
+        parsed.data.periodStart,
+        parsed.data.periodEnd,
+        parsed.data.archiveOnExpiry ? 1 : 0,
+        auth.userId,
+        parsed.data.note ?? null,
+      );
+  try {
+    await context.env.DB.batch([
+      subscriptionStatement,
+      context.env.DB.prepare(`
+        INSERT INTO billing_invoices (
+          id, organisation_id, project_id, subscription_id, status,
+          currency, amount_cents, period_start, period_end, due_at,
+          payment_provider, billing_method, external_reference, note,
+          issued_by, updated_at
+        ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 'manual', 'manual', ?, ?, ?, datetime('now'))
+      `).bind(
+        invoiceId,
+        auth.organisationId,
+        project.id,
+        subscriptionId,
+        parsed.data.currency,
+        parsed.data.amountCents,
+        parsed.data.periodStart,
+        parsed.data.periodEnd,
+        parsed.data.dueAt,
+        parsed.data.externalReference ?? null,
+        parsed.data.note ?? null,
+        auth.userId,
+      ),
+      context.env.DB.prepare(`
+        INSERT INTO billing_manual_operations (
+          id, organisation_id, project_id, subscription_id, invoice_id,
+          client_operation_id, operation, request_hash, note, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, 'issue_invoice', ?, ?, ?)
+      `).bind(
+        operationId,
+        auth.organisationId,
+        project.id,
+        subscriptionId,
+        invoiceId,
+        parsed.data.clientOperationId,
+        requestHash,
+        parsed.data.note ?? null,
+        auth.userId,
+      ),
+      auditStatement(context, auth, "billing.manual.invoice.issue", "billing_invoice", invoiceId, {
+        projectId: project.id,
+        subscriptionId,
+        planCode: parsed.data.planCode,
+        amountCents: parsed.data.amountCents,
+        currency: parsed.data.currency,
+        externalReference: parsed.data.externalReference ?? null,
+      }),
+    ]);
+  } catch (error) {
+    const replayed = await manualBillingConflictReplay(
+      context,
+      auth,
+      error,
       parsed.data.clientOperationId,
       requestHash,
-      parsed.data.note ?? null,
-      auth.userId,
-    ),
-  ]);
-  await audit(context, auth, "billing.manual.invoice.issue", "billing_invoice", invoiceId, {
-    projectId: project.id,
-    subscriptionId,
-    planCode: parsed.data.planCode,
-    amountCents: parsed.data.amountCents,
-    currency: parsed.data.currency,
-    externalReference: parsed.data.externalReference ?? null,
-  });
+      "This billing operation identifier was already used for a different invoice",
+    );
+    if (replayed) return replayed;
+    throw error;
+  }
   const state = await manualBillingState(
     context.env.DB,
     auth.organisationId,
@@ -6033,7 +6294,7 @@ app.post("/api/admin/billing/invoices", async (context) => {
 app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = manualInvoiceTransitionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const invoice = await context.env.DB.prepare(`
@@ -6050,22 +6311,19 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
     paymentReference: parsed.data.paymentReference ?? null,
     note: parsed.data.note ?? null,
   }));
-  const existingOperation = await context.env.DB.prepare(`
-    SELECT request_hash, invoice_id, subscription_id
-    FROM billing_manual_operations
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<ManualBillingOperationRow>();
+  const existingOperation = await persistedManualBillingOperation(
+    context.env.DB,
+    auth.organisationId,
+    parsed.data.clientOperationId,
+  );
   if (existingOperation) {
-    if (existingOperation.request_hash !== requestHash) {
-      return conflict(context, "This billing operation identifier was already used for a different transition");
-    }
-    const state = await manualBillingState(
-      context.env.DB,
-      auth.organisationId,
-      existingOperation.invoice_id,
-      existingOperation.subscription_id,
+    return manualBillingReplay(
+      context,
+      auth,
+      existingOperation,
+      requestHash,
+      "This billing operation identifier was already used for a different transition",
     );
-    return context.json({ ...state, idempotent: true });
   }
   if (invoice.status !== "open") {
     return conflict(context, `A ${invoice.status} invoice cannot transition to ${parsed.data.status}`);
@@ -6073,7 +6331,7 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
   const operation = parsed.data.status === "paid" ? "mark_paid" : "void_invoice";
   const targetSubscriptionStatus = parsed.data.status === "paid" ? "active" : "cancelled";
   const operationId = crypto.randomUUID();
-  const results = await context.env.DB.batch([
+  const transitionStatements = [
     context.env.DB.prepare(`
       UPDATE billing_invoices
       SET status = ?, paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE NULL END,
@@ -6092,6 +6350,8 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
     context.env.DB.prepare(`
       UPDATE project_hosting_subscriptions
       SET status = ?, activated_at = CASE WHEN ? = 'active' THEN datetime('now') ELSE activated_at END,
+        current_period_start = CASE WHEN ? = 'active' THEN ? ELSE current_period_start END,
+        current_period_end = CASE WHEN ? = 'active' THEN ? ELSE current_period_end END,
         renews_automatically = 0, billing_note = COALESCE(?, billing_note),
         updated_at = datetime('now')
       WHERE id = ? AND organisation_id = ?
@@ -6102,6 +6362,10 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
     `).bind(
       targetSubscriptionStatus,
       targetSubscriptionStatus,
+      targetSubscriptionStatus,
+      invoice.period_start,
+      targetSubscriptionStatus,
+      invoice.period_end,
       parsed.data.note ?? null,
       invoice.subscription_id,
       auth.organisationId,
@@ -6136,15 +6400,36 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
       auth.organisationId,
       parsed.data.status,
     ),
-  ]);
+    auditStatement(context, auth, `billing.manual.invoice.${parsed.data.status}`, "billing_invoice", invoice.id, {
+      projectId: invoice.project_id,
+      subscriptionId: invoice.subscription_id,
+      paymentReference: parsed.data.paymentReference ?? null,
+    }, {
+      expression: `EXISTS (
+        SELECT 1 FROM billing_invoices
+        WHERE id = ? AND organisation_id = ? AND status = ?
+      )`,
+      bindings: [invoice.id, auth.organisationId, parsed.data.status],
+    }),
+  ];
+  let results: D1Result<unknown>[];
+  try {
+    results = await context.env.DB.batch(transitionStatements);
+  } catch (error) {
+    const replayed = await manualBillingConflictReplay(
+      context,
+      auth,
+      error,
+      parsed.data.clientOperationId,
+      requestHash,
+      "This billing operation identifier was already used for a different transition",
+    );
+    if (replayed) return replayed;
+    throw error;
+  }
   if ((requiredBatchResult(results, 2).meta.changes ?? 0) !== 1) {
     return conflict(context, "Invoice state changed concurrently; refresh before retrying");
   }
-  await audit(context, auth, `billing.manual.invoice.${parsed.data.status}`, "billing_invoice", invoice.id, {
-    projectId: invoice.project_id,
-    subscriptionId: invoice.subscription_id,
-    paymentReference: parsed.data.paymentReference ?? null,
-  });
   const state = await manualBillingState(
     context.env.DB,
     auth.organisationId,
@@ -6157,7 +6442,7 @@ app.post("/api/admin/billing/invoices/:invoiceId/transition", async (context) =>
 app.post("/api/admin/billing/subscriptions/:subscriptionId/transition", async (context) => {
   const auth = await requireAdministrator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = manualSubscriptionTransitionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const subscription = await context.env.DB.prepare(`
@@ -6173,22 +6458,19 @@ app.post("/api/admin/billing/subscriptions/:subscriptionId/transition", async (c
     status: parsed.data.status,
     note: parsed.data.note,
   }));
-  const existingOperation = await context.env.DB.prepare(`
-    SELECT request_hash, invoice_id, subscription_id
-    FROM billing_manual_operations
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<ManualBillingOperationRow>();
+  const existingOperation = await persistedManualBillingOperation(
+    context.env.DB,
+    auth.organisationId,
+    parsed.data.clientOperationId,
+  );
   if (existingOperation) {
-    if (existingOperation.request_hash !== requestHash) {
-      return conflict(context, "This billing operation identifier was already used for a different transition");
-    }
-    const state = await manualBillingState(
-      context.env.DB,
-      auth.organisationId,
-      existingOperation.invoice_id,
-      existingOperation.subscription_id,
+    return manualBillingReplay(
+      context,
+      auth,
+      existingOperation,
+      requestHash,
+      "This billing operation identifier was already used for a different transition",
     );
-    return context.json({ ...state, idempotent: true });
   }
   if (subscription.status === parsed.data.status) {
     return context.json({
@@ -6211,7 +6493,7 @@ app.post("/api/admin/billing/subscriptions/:subscriptionId/transition", async (c
       ? "cancel_subscription"
       : "expire_subscription";
   const operationId = crypto.randomUUID();
-  const results = await context.env.DB.batch([
+  const transitionStatements = [
     context.env.DB.prepare(`
       UPDATE project_hosting_subscriptions
       SET status = ?, renews_automatically = 0, billing_note = ?,
@@ -6249,14 +6531,35 @@ app.post("/api/admin/billing/subscriptions/:subscriptionId/transition", async (c
       auth.organisationId,
       parsed.data.status,
     ),
-  ]);
+    auditStatement(context, auth, `billing.manual.subscription.${parsed.data.status}`, "hosting_subscription", subscription.id, {
+      projectId: subscription.project_id,
+      note: parsed.data.note,
+    }, {
+      expression: `EXISTS (
+        SELECT 1 FROM project_hosting_subscriptions
+        WHERE id = ? AND organisation_id = ? AND status = ?
+      )`,
+      bindings: [subscription.id, auth.organisationId, parsed.data.status],
+    }),
+  ];
+  let results: D1Result<unknown>[];
+  try {
+    results = await context.env.DB.batch(transitionStatements);
+  } catch (error) {
+    const replayed = await manualBillingConflictReplay(
+      context,
+      auth,
+      error,
+      parsed.data.clientOperationId,
+      requestHash,
+      "This billing operation identifier was already used for a different transition",
+    );
+    if (replayed) return replayed;
+    throw error;
+  }
   if ((requiredBatchResult(results, 1).meta.changes ?? 0) !== 1) {
     return conflict(context, "Subscription state changed concurrently; refresh before retrying");
   }
-  await audit(context, auth, `billing.manual.subscription.${parsed.data.status}`, "hosting_subscription", subscription.id, {
-    projectId: subscription.project_id,
-    note: parsed.data.note,
-  });
   const state = await manualBillingState(
     context.env.DB,
     auth.organisationId,
@@ -6345,7 +6648,7 @@ app.post("/api/billing/stripe/webhook", async (context) => {
 app.post("/api/hosting/lifecycle/run", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const result = await runLifecycleEnforcement(context.env, "manual");
   await audit(context, auth, "lifecycle.enforce", "lifecycle_run", result.runId, result.summary);
   return context.json(result);
@@ -6354,7 +6657,7 @@ app.post("/api/hosting/lifecycle/run", async (context) => {
 app.post("/api/projects/:projectId/retention/restore-drill", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
   if (!project) return notFound(context, "Project not found");
   const asset = await context.env.DB.prepare(`
@@ -6418,7 +6721,7 @@ app.post("/api/projects/:projectId/retention/restore-drill", async (context) => 
 app.put("/api/projects/:projectId/hosting", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = hostingSubscriptionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -6561,7 +6864,7 @@ app.put("/api/projects/:projectId/hosting", async (context) => {
 app.post("/api/projects/:projectId/hosting/renew", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   return context.json({
     error: "Provider-managed subscriptions renew through Stripe; start a new checkout to recover a past-due plan",
     retryable: false,
@@ -6572,12 +6875,16 @@ app.post("/api/projects/:projectId/hosting/renew", async (context) => {
 app.post("/api/projects/:projectId/hosting/cancel", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  // At most one subscription per project is non-terminal, so cancellation always
+  // resolves the same row instead of picking one of several duplicates.
   const subscription = await context.env.DB.prepare(`
     SELECT id, status, payment_provider, provider_subscription_id, current_period_end
     FROM project_hosting_subscriptions
     WHERE project_id = ? AND organisation_id = ? AND status IN ('trial', 'active', 'past_due')
-    ORDER BY created_at DESC LIMIT 1
+    ORDER BY CASE WHEN status IN ('active', 'past_due') THEN 0 ELSE 1 END,
+      updated_at DESC, created_at DESC, id
+    LIMIT 1
   `).bind(context.req.param("projectId"), auth.organisationId).first<{
     id: string;
     status: string;
@@ -6647,7 +6954,7 @@ app.post("/api/projects/:projectId/hosting/cancel", async (context) => {
 app.put("/api/projects/:projectId/retention", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = retentionPolicySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -6693,6 +7000,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     privacyCandidates: [],
     changeReports: [],
     captureCompletenessReports: [],
+    captureScanStructures: [],
     rawChangeReports: [],
     semanticExtractions: [],
     semanticCandidates: [],
@@ -6835,6 +7143,15 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE t.project_id = ? AND t.version_id = ? AND t.organisation_id = ?
       ORDER BY t.label, t.created_at
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT s.*, a.file_name AS asset_file_name, a.format AS asset_format,
+        r.file_name AS report_file_name, r.sha256 AS report_asset_sha256
+      FROM capture_scan_structures s
+      JOIN assets a ON a.id = s.asset_id
+      LEFT JOIN assets r ON r.id = s.report_asset_id
+      WHERE s.project_id = ? AND s.version_id = ? AND s.organisation_id = ?
+      ORDER BY s.created_at DESC LIMIT 25
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
@@ -6869,6 +7186,9 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     privacyCandidates: requiredBatchResult(results, 5).results,
     changeReports: requiredBatchResult(results, 6).results,
     captureCompletenessReports: requiredBatchResult(results, 7).results,
+    captureScanStructures: requiredBatchResult(results, 19).results.map(
+      captureScanStructureApi,
+    ),
     rawChangeReports: requiredBatchResult(results, 8).results,
     deliveryPolicy: requiredBatchResult(results, 9).results[0] ?? null,
     semanticExtractions: requiredBatchResult(results, 10).results,
@@ -6897,7 +7217,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
 app.post("/api/projects/:projectId/spatial/entities", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = sceneEntitySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -6958,7 +7278,7 @@ app.post("/api/projects/:projectId/spatial/entities", async (context) => {
 app.patch("/api/projects/:projectId/spatial/entities/:entityId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = sceneEntityUpdateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const existing = await context.env.DB.prepare(`
@@ -7022,7 +7342,7 @@ app.patch("/api/projects/:projectId/spatial/entities/:entityId", async (context)
 app.delete("/api/projects/:projectId/spatial/entities/:entityId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const result = await context.env.DB.prepare(`
     UPDATE scene_entities SET status = 'archived', updated_at = datetime('now')
     WHERE id = ? AND project_id = ? AND organisation_id = ? AND status = 'active'
@@ -7036,7 +7356,7 @@ app.delete("/api/projects/:projectId/spatial/entities/:entityId", async (context
 app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationObstacleSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(
@@ -7093,7 +7413,7 @@ app.post("/api/projects/:projectId/spatial/navigation-obstacles", async (context
 app.delete("/api/projects/:projectId/spatial/navigation-obstacles/:obstacleId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const result = await context.env.DB.prepare(`
     UPDATE scene_navigation_obstacles
     SET status = 'archived', updated_at = datetime('now')
@@ -7596,7 +7916,7 @@ async function hasMetricNavigationProfile(
 app.post("/api/projects/:projectId/spatial/navigation-traversals", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationTraversalCreateSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(
@@ -7724,7 +8044,7 @@ app.patch(
   async (context) => {
     const auth = await requireOperator(context);
     if (auth instanceof Response) return auth;
-    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
     const parsed = navigationTraversalUpdateSchema.safeParse(await readJson(context));
     if (!parsed.success) return validationError(context, parsed.error.flatten());
     const existing = await context.env.DB.prepare(`
@@ -7856,7 +8176,7 @@ app.delete(
   async (context) => {
     const auth = await requireOperator(context);
     if (auth instanceof Response) return auth;
-    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
     const result = await context.env.DB.prepare(`
       UPDATE scene_navigation_traversals
       SET status = 'archived', updated_at = datetime('now')
@@ -7882,7 +8202,7 @@ app.delete(
 app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationProfileSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(
@@ -8037,7 +8357,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
 app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationBuildSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(
@@ -8277,7 +8597,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
 app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = navigationBuildReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const reviewable = await context.env.DB.prepare(`
@@ -8391,7 +8711,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = sceneRouteSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -8429,7 +8749,7 @@ app.post("/api/projects/:projectId/spatial/routes", async (context) => {
 app.post("/api/projects/:projectId/privacy-scans", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = privacyScanSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -8542,7 +8862,7 @@ app.post("/api/projects/:projectId/privacy-scans", async (context) => {
 app.post("/api/projects/:projectId/privacy-scans/:scanId/retry", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const scan = await context.env.DB.prepare(`
     SELECT * FROM privacy_scans
     WHERE id = ? AND project_id = ? AND organisation_id = ?
@@ -8602,7 +8922,7 @@ app.get("/api/projects/:projectId/privacy-assets/:assetId", async (context) => {
 app.patch("/api/projects/:projectId/privacy-candidates/:candidateId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = privacyCandidateDecisionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const result = await context.env.DB.prepare(`
@@ -8634,7 +8954,7 @@ app.patch("/api/projects/:projectId/privacy-candidates/:candidateId", async (con
 app.post("/api/projects/:projectId/spatial/privacy-regions", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = privacyRegionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -8657,7 +8977,7 @@ app.post("/api/projects/:projectId/spatial/privacy-regions", async (context) => 
 app.patch("/api/projects/:projectId/spatial/privacy-regions/:regionId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = privacyRegionDecisionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const result = await context.env.DB.prepare(`
@@ -8674,7 +8994,7 @@ app.patch("/api/projects/:projectId/spatial/privacy-regions/:regionId", async (c
 app.post("/api/projects/:projectId/spatial/change-reports", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = changeDetectionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -8842,7 +9162,7 @@ app.post("/api/projects/:projectId/spatial/change-reports", async (context) => {
 app.patch("/api/projects/:projectId/spatial/change-reports/:reportId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = changeDetectionReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const report = await context.env.DB.prepare(`
@@ -8883,7 +9203,7 @@ app.patch("/api/projects/:projectId/spatial/change-reports/:reportId", async (co
 app.post("/api/projects/:projectId/spatial/raw-change-reports", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = registeredSceneChangeSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -9023,7 +9343,7 @@ app.post("/api/projects/:projectId/spatial/raw-change-reports", async (context) 
 app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = semanticExtractionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -9137,7 +9457,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
 app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/review", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = semanticExtractionReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -9442,7 +9762,7 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
 app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = floorplanExtractionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -9610,7 +9930,7 @@ app.post(
   async (context) => {
     const auth = await requireOperator(context);
     if (auth instanceof Response) return auth;
-    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
     const parsed = floorplanCorrectionDraftSchema.safeParse(await readJson(context));
     if (!parsed.success) return validationError(context, parsed.error.flatten());
     const projectId = context.req.param("projectId");
@@ -9747,7 +10067,7 @@ app.post(
   async (context) => {
     const auth = await requireOperator(context);
     if (auth instanceof Response) return auth;
-    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
     const parsed = floorplanExtractionReviewSchema.safeParse(await readJson(context));
     if (!parsed.success) return validationError(context, parsed.error.flatten());
     const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -10255,7 +10575,7 @@ app.post(
   async (context) => {
     const auth = await requireOperator(context);
     if (auth instanceof Response) return auth;
-    if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
     const parsed = floorplanExportSchema.safeParse(await readJson(context));
     if (!parsed.success) return validationError(context, parsed.error.flatten());
     const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -10527,7 +10847,7 @@ app.get(
 app.post("/api/projects/:projectId/spatial/raw-change-reports/:reportId/retry", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const report = await context.env.DB.prepare(`
     SELECT r.*, j.state AS job_state
     FROM registered_scene_change_reports r
@@ -10573,7 +10893,7 @@ app.post("/api/projects/:projectId/spatial/raw-change-reports/:reportId/retry", 
 app.patch("/api/projects/:projectId/spatial/raw-change-reports/:reportId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = registeredSceneChangeReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const report = await context.env.DB.prepare(`
@@ -10610,7 +10930,7 @@ app.patch("/api/projects/:projectId/spatial/raw-change-reports/:reportId", async
 app.post("/api/projects/:projectId/spatial/capture-completeness", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureCompletenessSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -10622,7 +10942,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
   }
   const requestHash = await sha256Hex(JSON.stringify(parsed.data));
   const prior = await context.env.DB.prepare(`
-    SELECT id, status, result, summary_json, request_hash,
+    SELECT id, status, result, summary_json, request_hash, scan_structure_id,
       review_decision, review_note, reviewed_at, created_at, updated_at
     FROM capture_completeness_reports
     WHERE organisation_id = ? AND client_operation_id = ?
@@ -10635,6 +10955,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
     result: string;
     summary_json: string;
     request_hash: string;
+    scan_structure_id: string | null;
     review_decision: string | null;
     review_note: string | null;
     reviewed_at: string | null;
@@ -10651,6 +10972,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
         status: prior.status,
         result: prior.result,
         summary: JSON.parse(prior.summary_json),
+        scanStructureId: prior.scan_structure_id,
         reviewDecision: prior.review_decision,
         reviewNote: prior.review_note,
         reviewedAt: prior.reviewed_at,
@@ -10697,6 +11019,30 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
       context,
       "Capture completeness evidence cannot use provisional scene-unit room geometry",
     );
+  }
+  // A cited structure reading binds this trajectory claim to the exact exported
+  // scan poses. It must belong to this version, and it must actually be a
+  // reading: an unreadable container proves nothing about a trajectory.
+  if (parsed.data.scanStructureId) {
+    const structure = await context.env.DB.prepare(`
+      SELECT status FROM capture_scan_structures
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+    `).bind(
+      parsed.data.scanStructureId,
+      auth.organisationId,
+      project.id,
+      version.id,
+    ).first<{ status: string }>();
+    if (!structure) {
+      return validationError(context, {
+        scanStructureId: ["Container structure reading is not registered against this scene version"],
+      });
+    }
+    if (structure.status !== "structure_read") {
+      return unprocessable(context, {
+        scanStructureId: ["An unreadable container structure cannot bind a trajectory claim"],
+      });
+    }
   }
   const summary = computeCaptureCompleteness({
     version: { id: version.id, versionNumber: version.version_number },
@@ -10752,8 +11098,8 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
           (id, organisation_id, project_id, version_id, status, method, result,
             source_asset_id, source_file_name, source_format, source_hash,
             coordinate_frame, alignment_evidence, parameters_json, summary_json,
-            client_operation_id, request_hash, created_by)
-        VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            client_operation_id, request_hash, created_by, scan_structure_id)
+        VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         reportId,
         auth.organisationId,
@@ -10772,6 +11118,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
         parsed.data.clientOperationId,
         requestHash,
         auth.userId,
+        parsed.data.scanStructureId ?? null,
       ),
     ]);
   } catch (error) {
@@ -10785,6 +11132,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
     sourceHash,
     result: summary.result,
     sampleCount: parsed.data.points.length,
+    scanStructureId: parsed.data.scanStructureId ?? null,
   });
   return context.json({
     report: {
@@ -10792,6 +11140,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
       status: "ready",
       result: summary.result,
       summary,
+      scanStructureId: parsed.data.scanStructureId ?? null,
       reviewDecision: null,
       reviewNote: null,
       reviewedAt: null,
@@ -10802,7 +11151,7 @@ app.post("/api/projects/:projectId/spatial/capture-completeness", async (context
 app.patch("/api/projects/:projectId/spatial/capture-completeness/:reportId", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = captureCompletenessReviewSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const report = await context.env.DB.prepare(`
@@ -10845,7 +11194,7 @@ app.patch("/api/projects/:projectId/spatial/capture-completeness/:reportId", asy
 app.put("/api/projects/:projectId/spatial/delivery-policy", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = deliveryPolicySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -10929,7 +11278,7 @@ app.get("/api/projects/:projectId/measurement", async (context) => {
 app.post("/api/projects/:projectId/measurement/briefs", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = measurementBriefSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -10990,7 +11339,7 @@ app.post("/api/projects/:projectId/measurement/briefs", async (context) => {
 app.post("/api/projects/:projectId/measurement/briefs/:briefId/check-points", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = measurementCheckPointSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const brief = await context.env.DB.prepare(`
@@ -11049,7 +11398,7 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/check-points", as
 app.post("/api/projects/:projectId/measurement/briefs/:briefId/qa-report", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const brief = await context.env.DB.prepare(`
     SELECT id, version_id, tolerance_mm FROM measurement_briefs
     WHERE id = ? AND project_id = ? AND organisation_id = ?
@@ -11143,7 +11492,7 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/qa-report", async
 app.post("/api/projects/:projectId/measurement/briefs/:briefId/deliverables", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const brief = await context.env.DB.prepare(`
     SELECT b.id, b.version_id, b.product_type, b.status, b.units, b.tolerance_mm,
       b.reliance_class, b.coordinate_reference, b.intended_use, b.exclusions,
@@ -11388,7 +11737,7 @@ app.get("/api/projects/:projectId/measurement/deliverables/:deliverableId/downlo
 app.post("/api/projects/:projectId/measurement/briefs/:briefId/signoffs", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = professionalSignoffSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const brief = await context.env.DB.prepare(`
@@ -11438,7 +11787,7 @@ app.post("/api/projects/:projectId/measurement/briefs/:briefId/signoffs", async 
 app.post("/api/projects/:projectId/costs", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectCostSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -11570,6 +11919,9 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   const principal = await requireUploadPrincipal(context);
   if (principal instanceof Response) return principal;
   const organisationId = uploadPrincipalOrganisationId(principal);
+  if (!(await allowRate(context.env.DB, "upload-session-org", organisationId, 60, 600))) {
+    return tooManyRequests(context, 600);
+  }
   const parsed = uploadInputSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, organisationId, context.req.param("projectId"));
@@ -11581,6 +11933,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   }
   const maximumUploadBytes = positiveInteger(context.env.MAX_UPLOAD_BYTES, 100 * 1024 * 1024 * 1024);
   if (parsed.data.sizeBytes > maximumUploadBytes) return context.json({ error: "Asset exceeds organisation upload limit" }, 413);
+  const sessionPartSizeBytes = uploadPartSizeBytes(parsed.data.sizeBytes);
   if (!fileNameMatchesFormat(parsed.data.fileName, parsed.data.format)) return validationError(context, { fileName: ["File extension does not match declared format"] });
   const purpose: CaptureAssetPurpose = parsed.data.purpose ??
     (parsed.data.format === "rad" ? "web_scene" : "gaussian_splat");
@@ -11792,7 +12145,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
         purpose,
         parsed.data.mimeType,
         parsed.data.sizeBytes,
-        captureUploadPartBytes,
+        sessionPartSizeBytes,
         parsed.data.sha256 ?? null,
         expiresAt,
         uploadPrincipalUserId(principal),
@@ -11824,7 +12177,7 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       versionId,
       assetId,
       purpose,
-      partSizeBytes: captureUploadPartBytes,
+      partSizeBytes: sessionPartSizeBytes,
       expectedSizeBytes: parsed.data.sizeBytes,
       expiresAt,
       status: "OPEN",
@@ -11856,20 +12209,39 @@ app.put("/api/uploads/:uploadId/parts/:partNumber", async (context) => {
   }
   if (!context.req.raw.body) return validationError(context, { body: ["Missing upload body"] });
   const multipart = context.env.SPATIAL_ASSETS.resumeMultipartUpload(upload.object_key, upload.r2_upload_id);
+  // A declared Content-Length is a client claim. Count the bytes the Worker
+  // actually streams into R2 so completion arithmetic is server-observed, and
+  // let the fixed-length boundary reject a body that contradicts its header.
+  let observedPartBytes = 0;
+  const measuredPartBody = new FixedLengthStream(contentLength);
+  const measuredPartTransfer = context.req.raw.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        observedPartBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    }),
+  ).pipeTo(measuredPartBody.writable);
   let result: R2UploadedPart;
   try {
-    result = await multipart.uploadPart(partNumber, context.req.raw.body);
+    [result] = await Promise.all([
+      multipart.uploadPart(partNumber, measuredPartBody.readable),
+      measuredPartTransfer,
+    ]);
   } catch (error) {
     console.error(JSON.stringify({ event: "upload.part_failed", uploadId: upload.id, partNumber, error: errorMessage(error) }));
     return context.json({ error: "R2 rejected this upload part; retry the same part" }, 502);
+  }
+  if (observedPartBytes <= 0 || observedPartBytes > maximumPartBytes) {
+    return context.json({ error: `Each part must be between 1 byte and ${maximumPartBytes} bytes` }, 413);
   }
   await context.env.DB.prepare(`
     INSERT INTO upload_parts (upload_session_id, part_number, etag, size_bytes)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(upload_session_id, part_number)
     DO UPDATE SET etag = excluded.etag, size_bytes = excluded.size_bytes, uploaded_at = datetime('now')
-  `).bind(upload.id, partNumber, result.etag, contentLength).run();
-  return context.json({ part: result });
+  `).bind(upload.id, partNumber, result.etag, observedPartBytes).run();
+  return context.json({ part: result, sizeBytes: observedPartBytes });
 });
 
 app.post("/api/uploads/:uploadId/complete", async (context) => {
@@ -11954,6 +12326,32 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
     format: upload.format as CaptureAssetFormat,
   });
   if (!importPlan.accepted) return context.json({ error: importPlan.reason }, 422);
+  if (object.size !== upload.expected_size_bytes) {
+    await quarantineUploadSession(context, upload, object, importPlan.assetKind, null, {
+      reason: "size_mismatch",
+      storedBytes: object.size,
+      expectedBytes: upload.expected_size_bytes,
+    });
+    return conflict(
+      context,
+      `R2 stored ${object.size} bytes for this upload but the session declared ${upload.expected_size_bytes}; discard it and start a new upload`,
+    );
+  }
+  const integrity = await verifyCompletedUploadIntegrity(context, upload, object.size);
+  if (integrity.status === "failed") {
+    await quarantineUploadSession(context, upload, object, importPlan.assetKind, integrity.sha256, {
+      reason: "sha256_mismatch",
+      declaredSha256: upload.sha256,
+      computedSha256: integrity.sha256,
+    });
+    return conflict(
+      context,
+      "The stored object SHA-256 does not match the digest declared when this upload was created; the asset is quarantined as failed",
+    );
+  }
+  // Only a digest the Worker computed itself proves byte integrity. A digest
+  // the client merely declared stays pending until a processor confirms it.
+  const uploadIntegrityStatus = integrity.source === "server_verified" ? "verified" : "pending";
   const processorVersion = importPlan.jobType === "asset.validate"
     ? "open-import-v1"
     : "spatial-evidence/1.0.0";
@@ -11966,8 +12364,8 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
   const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       INSERT INTO assets
-        (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       upload.asset_id,
       upload.organisation_id,
@@ -11980,7 +12378,9 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       upload.mime_type,
       object.size,
       object.etag,
-      upload.sha256,
+      integrity.sha256,
+      uploadIntegrityStatus,
+      integrity.source,
     ),
     context.env.DB.prepare("UPDATE upload_sessions SET status = 'COMPLETED', completed_at = datetime('now') WHERE id = ? AND status = 'OPEN'").bind(upload.id),
     context.env.DB.prepare(`
@@ -12020,6 +12420,8 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
     kind: importPlan.assetKind,
     sizeBytes: object.size,
     etag: object.etag,
+    sha256: integrity.sha256,
+    integritySource: integrity.source,
   });
   dispatchProcessingJob(context, jobId);
   return context.json({
@@ -12030,7 +12432,9 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       purpose: upload.purpose,
       sizeBytes: object.size,
       etag: object.etag,
-      integrityStatus: "pending",
+      sha256: integrity.sha256,
+      integrityStatus: uploadIntegrityStatus,
+      integritySource: integrity.source,
     },
     job: { id: jobId, type: importPlan.jobType, state: "QUEUED" },
   });
@@ -12107,9 +12511,9 @@ app.get("/api/releases", async (context) => {
 app.post("/api/jobs/:jobId/retry", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const job = await context.env.DB.prepare(`
-    SELECT id, project_id, version_id, job_type, state
+    SELECT id, project_id, version_id, job_type, state, retry_count
     FROM processing_jobs
     WHERE id = ? AND organisation_id = ?
   `).bind(context.req.param("jobId"), auth.organisationId).first<{
@@ -12118,6 +12522,7 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
     version_id: string;
     job_type: string;
     state: string;
+    retry_count: number;
   }>();
   if (!job) return notFound(context, "Job not found");
   if (job.state === "QUEUED") {
@@ -12126,13 +12531,23 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
   if (!["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) {
     return context.json({ error: `A ${job.state.toLowerCase()} job cannot be retried` }, 409);
   }
+  // Resetting attempt_count makes DEAD_LETTER re-attemptable. Bound the total so
+  // a permanently broken job cannot be recycled without limit.
+  if (job.retry_count >= maximumOperatorJobRetries) {
+    return context.json({
+      error: `This job has already been retried ${job.retry_count} times; the ${maximumOperatorJobRetries}-retry ceiling is exhausted`,
+      code: "retry_limit_exhausted",
+    }, 409);
+  }
   const retryStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       UPDATE processing_jobs
       SET state = 'QUEUED', attempt_count = 0, progress = 0,
+        retry_count = retry_count + 1,
         progress_message = 'Operator retry queued', error_json = NULL,
         lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
-        heartbeat_at = NULL, completed_at = NULL, updated_at = datetime('now')
+        heartbeat_at = NULL, dispatched_at = NULL, completed_at = NULL,
+        updated_at = datetime('now')
       WHERE id = ? AND organisation_id = ?
     `).bind(job.id, auth.organisationId),
     context.env.DB.prepare(`
@@ -12168,15 +12583,21 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
     ).bind(job.project_id, auth.organisationId));
   }
   await context.env.DB.batch(retryStatements);
-  await audit(context, auth, "job.retry", "processing_job", job.id, { priorState: job.state });
+  await audit(context, auth, "job.retry", "processing_job", job.id, {
+    priorState: job.state,
+    retryCount: job.retry_count + 1,
+  });
   dispatchProcessingJob(context, job.id);
-  return context.json({ job: { id: job.id, state: "QUEUED" } });
+  return context.json({
+    job: { id: job.id, state: "QUEUED", retryCount: job.retry_count + 1 },
+    retriesRemaining: maximumOperatorJobRetries - (job.retry_count + 1),
+  });
 });
 
 app.post("/api/jobs/:jobId/cancel", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const job = await context.env.DB.prepare(`
     SELECT id, project_id, version_id, job_type, state
     FROM processing_jobs
@@ -12256,7 +12677,7 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
 app.post("/api/jobs/:jobId/manual-complete", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = manualJobCompletionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const job = await context.env.DB.prepare(
@@ -12277,15 +12698,18 @@ app.post("/api/jobs/:jobId/manual-complete", async (context) => {
   await context.env.DB.batch([
     context.env.DB.prepare(`
       UPDATE processing_jobs
-      SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?, completed_at = datetime('now'), updated_at = datetime('now')
+      SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?,
+        dispatched_at = NULL, completed_at = datetime('now'), updated_at = datetime('now')
       WHERE id = ? AND organisation_id = ?
     `).bind(parsed.data.progressMessage, JSON.stringify({ manual: true, ...parsed.data.report }), job.id, auth.organisationId),
     context.env.DB.prepare(`
       INSERT INTO qa_reports (id, organisation_id, project_id, version_id, status, report_json)
       VALUES (?, ?, ?, ?, 'pending', ?)
     `).bind(qaReportId, auth.organisationId, job.project_id, job.version_id, JSON.stringify(parsed.data.report)),
+    // An operator signing off a job is not a digest. Record who vouched for the
+    // asset without minting an integrity claim the Worker never verified.
     context.env.DB.prepare(
-      "UPDATE assets SET integrity_status = 'verified' WHERE id = (SELECT input_asset_id FROM processing_jobs WHERE id = ?) AND organisation_id = ?",
+      "UPDATE assets SET integrity_source = 'operator_manual' WHERE id = (SELECT input_asset_id FROM processing_jobs WHERE id = ?) AND organisation_id = ?",
     ).bind(job.id, auth.organisationId),
     context.env.DB.prepare("UPDATE scene_versions SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ?").bind(job.version_id),
     context.env.DB.prepare("UPDATE projects SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(job.project_id, auth.organisationId),
@@ -12698,7 +13122,7 @@ app.post("/api/worker/jobs/:jobId/outputs/:outputId/complete", async (context) =
     return context.json({ output: workerOutputDescriptor(upload, stored), idempotent: true });
   }
   if (upload.status !== "OPEN") return validationError(context, { upload: [`Output upload is ${upload.status.toLowerCase()}`] });
-  const parsed = uploadCompleteSchema.safeParse(await readJson(context));
+  const parsed = uploadCompleteSchema.safeParse(await readJson(context, { maxBytes: 24 * 1024 * 1024 }));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const storedParts = await context.env.DB.prepare(`
     SELECT part_number, etag, size_bytes
@@ -12742,7 +13166,7 @@ app.post("/api/worker/jobs/:jobId/heartbeat", async (context) => {
   const leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const result = await context.env.DB.prepare(`
     UPDATE processing_jobs
-    SET state = 'RUNNING', progress = ?, progress_message = ?, heartbeat_at = datetime('now'),
+    SET state = 'RUNNING', progress = MAX(progress, ?), progress_message = ?, heartbeat_at = datetime('now'),
       lease_expires_at = ?, updated_at = datetime('now')
     WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
       AND lease_expires_at > ?
@@ -12760,14 +13184,15 @@ app.post("/api/worker/jobs/:jobId/heartbeat", async (context) => {
 
 app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
-  const parsed = workerJobCompletionSchema.safeParse(await readJson(context));
+  const parsed = workerJobCompletionSchema.safeParse(await readJson(context, { maxBytes: 24 * 1024 * 1024 }));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
       j.job_type, j.state, a.kind AS input_kind, a.format AS input_format,
       a.file_name AS input_file_name, a.size_bytes AS input_size_bytes,
-      a.sha256 AS input_sha256, sv.status AS version_status,
+      a.sha256 AS input_sha256, a.integrity_source AS input_integrity_source,
+      sv.status AS version_status,
       us.purpose AS input_purpose, us.created_by AS input_created_by,
       nb.authoring_hash AS navigation_authoring_hash,
       nb.parameters_json AS navigation_parameters_json,
@@ -12792,6 +13217,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     input_file_name: string;
     input_size_bytes: number;
     input_sha256: string | null;
+    input_integrity_source: AssetIntegritySource | null;
     input_purpose: CaptureAssetPurpose | null;
     input_created_by: string | null;
     version_status: string;
@@ -12817,12 +13243,15 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
         report: ["Evidence validation must report the SHA-256 of the exact downloaded input"],
       });
     }
+    // A processor report can only fill a gap in the record. It can never
+    // restate — let alone contradict — a digest the Worker already holds.
     if (job.input_sha256 && reportedSha256 !== job.input_sha256.toLowerCase()) {
-      return validationError(context, {
-        report: ["Reported input SHA-256 does not match the immutable asset record"],
-      });
+      return conflict(
+        context,
+        `Reported input SHA-256 ${reportedSha256} contradicts the stored ${job.input_integrity_source ?? "recorded"} digest ${job.input_sha256.toLowerCase()}`,
+      );
     }
-    verifiedInputSha256 = reportedSha256;
+    if (!job.input_sha256) verifiedInputSha256 = reportedSha256;
   }
   let navigationArtifact: ReturnType<typeof navigationArtifactSchema.parse> | null = null;
   if (job.job_type === "navigation.build-v1") {
@@ -12859,6 +13288,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
 
   const assetStatements: D1PreparedStatement[] = [];
   const outputSummary: Array<Record<string, unknown>> = [];
+  const outputAssetIdBySha256 = new Map<string, string>();
   for (const output of parsed.data.outputs) {
     const allowedPrefixes = [
       `delivery-private/${job.organisation_id}/${job.project_id}/${job.version_id}/`,
@@ -12879,8 +13309,8 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     const assetId = crypto.randomUUID();
     assetStatements.push(context.env.DB.prepare(`
       INSERT INTO assets
-        (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified')
+        (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'verified', 'processor_reported')
     `).bind(
       assetId,
       job.organisation_id,
@@ -12896,6 +13326,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       output.sha256 ?? null,
     ));
     outputSummary.push({ id: assetId, kind: output.kind, format: output.format, sizeBytes: stored.size });
+    if (output.sha256) outputAssetIdBySha256.set(output.sha256.toLowerCase(), assetId);
   }
   const storedOutputBytes = outputSummary.reduce((total, output) => {
     const size = output.sizeBytes;
@@ -12904,6 +13335,32 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   if (parsed.data.evidence.outputBytes !== storedOutputBytes) {
     return validationError(context, { evidence: ["Reported output bytes do not match stored derivative assets"] });
   }
+  // A structure reading is evidence about a leased evidence source, so it may
+  // only be recorded on that lane, and a successful reading must cite the exact
+  // immutable report asset this same completion stored.
+  const scanStructure = parsed.data.captureScanStructure ?? null;
+  let scanStructureReportAssetId: string | null = null;
+  if (scanStructure) {
+    if (job.job_type !== "asset.evidence-validate" || !job.input_asset_id) {
+      return validationError(context, {
+        captureScanStructure: ["Container structure evidence is only recorded on the evidence-validate lane"],
+      });
+    }
+    if (scanStructure.status === "structure_read") {
+      scanStructureReportAssetId = scanStructure.reportSha256
+        ? outputAssetIdBySha256.get(scanStructure.reportSha256.toLowerCase()) ?? null
+        : null;
+      if (!scanStructureReportAssetId) {
+        return validationError(context, {
+          captureScanStructure: ["A read container structure must cite a stored report derivative by SHA-256"],
+        });
+      }
+    } else if (scanStructure.scanCount || scanStructure.imageCount || scanStructure.hasPerScanPoses) {
+      return validationError(context, {
+        captureScanStructure: ["An unreadable container structure cannot report scan, image, or pose evidence"],
+      });
+    }
+  }
 
   const navigationCompletion = job.job_type === "navigation.build-v1";
   const qaReportId = navigationCompletion ? null : crypto.randomUUID();
@@ -12911,6 +13368,41 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     ...parsed.data.evidence,
     completedAt: new Date().toISOString(),
   };
+  // scene_navigation_builds.artifact_json is the single copy of the full
+  // navigation artifact. The job row keeps a summary so a build never stores
+  // navmesh vertices and the base64 Detour twice.
+  const completionReport: Record<string, unknown> = navigationArtifact
+    ? {
+      artifactStoredIn: "scene_navigation_builds.artifact_json",
+      schemaVersion: navigationArtifact.schemaVersion,
+      generator: navigationArtifact.generator,
+      source: {
+        assetId: navigationArtifact.source.assetId,
+        sha256: navigationArtifact.source.sha256,
+        authoringHash: navigationArtifact.source.authoringHash,
+        triangleCount: navigationArtifact.source.triangleCount,
+        vertexCount: navigationArtifact.source.vertexCount,
+      },
+      navMesh: {
+        vertexCount: navigationArtifact.navMesh.vertices.length,
+        indexCount: navigationArtifact.navMesh.indices.length,
+      },
+      detour: {
+        format: navigationArtifact.detour.format,
+        byteLength: navigationArtifact.detour.byteLength,
+      },
+      offMeshConnectionCount: navigationArtifact.offMeshConnections.length,
+      validation: {
+        passed: navigationArtifact.validation.passed,
+        componentCount: navigationArtifact.validation.componentCount,
+        destinationCount: navigationArtifact.validation.destinationCount,
+      },
+      physicalValidation: {
+        passed: navigationArtifact.physicalValidation.passed,
+        routeCount: navigationArtifact.physicalValidation.routeCount,
+      },
+    }
+    : parsed.data.report;
   const navigationStatements: D1PreparedStatement[] = [];
   if (navigationArtifact) {
     const navmeshAsset = outputSummary.find((output) => output.kind === "navmesh");
@@ -13012,34 +13504,70 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       ));
     }
   }
+  // The lease-guarded job transition commits on its own first. A stolen lease
+  // must never leave assets, QA reports, or state flips behind a job row that
+  // now belongs to another worker.
+  const leaseClaim = await context.env.DB.prepare(`
+    UPDATE processing_jobs
+    SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?,
+      processor_version = ?, compute_duration_ms = ?, active_human_duration_ms = ?,
+      input_bytes = ?, output_bytes = ?, evidence_json = ?,
+      completed_at = datetime('now'), lease_token_hash = NULL, lease_expires_at = NULL,
+      dispatched_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
+  `).bind(
+    parsed.data.progressMessage,
+    JSON.stringify({ outputs: outputSummary, report: completionReport }),
+    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.computeDurationMs,
+    parsed.data.evidence.activeHumanDurationMs,
+    parsed.data.evidence.inputBytes,
+    parsed.data.evidence.outputBytes,
+    JSON.stringify(executionEvidence),
+    job.id,
+    tokenHash,
+  ).run();
+  if (leaseClaim.meta.changes !== 1) {
+    return conflict(context, "This job lease was reclaimed before completion could commit");
+  }
   const completionStatements: D1PreparedStatement[] = [
     ...assetStatements,
     ...navigationStatements,
     context.env.DB.prepare(`
-      UPDATE assets SET integrity_status = 'verified', sha256 = COALESCE(sha256, ?)
+      UPDATE assets
+      SET integrity_status = 'verified',
+        integrity_source = CASE WHEN sha256 IS NULL AND ? IS NOT NULL
+          THEN 'processor_reported' ELSE integrity_source END,
+        sha256 = COALESCE(sha256, ?)
       WHERE id = ? AND organisation_id = ?
-    `).bind(verifiedInputSha256, job.input_asset_id, job.organisation_id),
-    context.env.DB.prepare(`
-      UPDATE processing_jobs
-      SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?,
-        processor_version = ?, compute_duration_ms = ?, active_human_duration_ms = ?,
-        input_bytes = ?, output_bytes = ?, evidence_json = ?,
-        completed_at = datetime('now'), lease_token_hash = NULL, lease_expires_at = NULL,
-        updated_at = datetime('now')
-      WHERE id = ? AND lease_token_hash = ?
-    `).bind(
-      parsed.data.progressMessage,
-      JSON.stringify({ outputs: outputSummary, report: parsed.data.report }),
-      parsed.data.evidence.processorVersion,
-      parsed.data.evidence.computeDurationMs,
-      parsed.data.evidence.activeHumanDurationMs,
-      parsed.data.evidence.inputBytes,
-      parsed.data.evidence.outputBytes,
-      JSON.stringify(executionEvidence),
-      job.id,
-      tokenHash,
-    ),
+    `).bind(verifiedInputSha256, verifiedInputSha256, job.input_asset_id, job.organisation_id),
   ];
+  if (scanStructure) {
+    completionStatements.push(context.env.DB.prepare(`
+      INSERT INTO capture_scan_structures
+        (id, organisation_id, project_id, version_id, asset_id, job_id, report_asset_id,
+          method, status, source_format, scan_count, image_count, has_per_scan_poses,
+          vendor_field_names_json, report_sha256, unreadable_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      job.organisation_id,
+      job.project_id,
+      job.version_id,
+      job.input_asset_id,
+      job.id,
+      scanStructureReportAssetId,
+      scanStructure.method,
+      scanStructure.status,
+      job.input_format,
+      scanStructure.scanCount,
+      scanStructure.imageCount,
+      scanStructure.hasPerScanPoses ? 1 : 0,
+      JSON.stringify(scanStructure.vendorFieldNames),
+      scanStructure.reportSha256?.toLowerCase() ?? null,
+      scanStructure.reason ?? null,
+    ));
+  }
   if (!navigationCompletion) {
     const auxiliaryCollisionCompletion = job.job_type === "asset.evidence-validate" &&
       job.input_kind === "collision" &&
@@ -13094,7 +13622,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
 
 app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
   if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
-  const parsed = workerSceneChangeCompletionSchema.safeParse(await readJson(context));
+  const parsed = workerSceneChangeCompletionSchema.safeParse(await readJson(context, { maxBytes: 24 * 1024 * 1024 }));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
@@ -13219,12 +13747,36 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
     completedAt: new Date().toISOString(),
     changeReportId: job.report_id,
   };
+  const leaseClaim = await context.env.DB.prepare(`
+    UPDATE processing_jobs
+    SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
+      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
+      evidence_json = ?, completed_at = datetime('now'),
+      lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+      dispatched_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
+  `).bind(
+    parsed.data.progressMessage,
+    JSON.stringify({ outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }], report: parsed.data.report }),
+    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.computeDurationMs,
+    parsed.data.evidence.activeHumanDurationMs,
+    parsed.data.evidence.inputBytes,
+    parsed.data.evidence.outputBytes,
+    JSON.stringify(executionEvidence),
+    job.id,
+    tokenHash,
+  ).run();
+  if (leaseClaim.meta.changes !== 1) {
+    return conflict(context, "This job lease was reclaimed before completion could commit");
+  }
   await context.env.DB.batch([
     context.env.DB.prepare(`
       INSERT INTO assets (
         id, organisation_id, project_id, version_id, kind, format, object_key,
-        file_name, mime_type, size_bytes, etag, sha256, integrity_status
-      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified')
+        file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source
+      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified', 'processor_reported')
     `).bind(
       reportAssetId,
       job.organisation_id,
@@ -13236,27 +13788,6 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
       stored.size,
       stored.etag,
       output.sha256 ?? null,
-    ),
-    context.env.DB.prepare(`
-      UPDATE processing_jobs
-      SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-        output_json = ?, processor_version = ?, compute_duration_ms = ?,
-        active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
-        evidence_json = ?, completed_at = datetime('now'),
-        lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
-        updated_at = datetime('now')
-      WHERE id = ? AND lease_token_hash = ?
-    `).bind(
-      parsed.data.progressMessage,
-      JSON.stringify({ outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }], report: parsed.data.report }),
-      parsed.data.evidence.processorVersion,
-      parsed.data.evidence.computeDurationMs,
-      parsed.data.evidence.activeHumanDurationMs,
-      parsed.data.evidence.inputBytes,
-      parsed.data.evidence.outputBytes,
-      JSON.stringify(executionEvidence),
-      job.id,
-      tokenHash,
     ),
     context.env.DB.prepare(`
       UPDATE registered_scene_change_reports
@@ -13286,7 +13817,7 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
 
 app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context) => {
   if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
-  const parsed = workerSemanticExtractionCompletionSchema.safeParse(await readJson(context));
+  const parsed = workerSemanticExtractionCompletionSchema.safeParse(await readJson(context, { maxBytes: 24 * 1024 * 1024 }));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
@@ -13434,12 +13965,39 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       semanticWorldUnit,
     )
   );
+  const leaseClaim = await context.env.DB.prepare(`
+    UPDATE processing_jobs
+    SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
+      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
+      evidence_json = ?, completed_at = datetime('now'),
+      lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+      dispatched_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
+  `).bind(
+    parsed.data.progressMessage,
+    JSON.stringify({
+      outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }],
+      report: parsed.data.report,
+    }),
+    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.computeDurationMs,
+    parsed.data.evidence.activeHumanDurationMs,
+    parsed.data.evidence.inputBytes,
+    parsed.data.evidence.outputBytes,
+    JSON.stringify(executionEvidence),
+    job.id,
+    tokenHash,
+  ).run();
+  if (leaseClaim.meta.changes !== 1) {
+    return conflict(context, "This job lease was reclaimed before completion could commit");
+  }
   await context.env.DB.batch([
     context.env.DB.prepare(`
       INSERT INTO assets (
         id, organisation_id, project_id, version_id, kind, format, object_key,
-        file_name, mime_type, size_bytes, etag, sha256, integrity_status
-      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified')
+        file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source
+      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified', 'processor_reported')
     `).bind(
       reportAssetId,
       job.organisation_id,
@@ -13451,30 +14009,6 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       stored.size,
       stored.etag,
       output.sha256 ?? null,
-    ),
-    context.env.DB.prepare(`
-      UPDATE processing_jobs
-      SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-        output_json = ?, processor_version = ?, compute_duration_ms = ?,
-        active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
-        evidence_json = ?, completed_at = datetime('now'),
-        lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
-        updated_at = datetime('now')
-      WHERE id = ? AND lease_token_hash = ?
-    `).bind(
-      parsed.data.progressMessage,
-      JSON.stringify({
-        outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }],
-        report: parsed.data.report,
-      }),
-      parsed.data.evidence.processorVersion,
-      parsed.data.evidence.computeDurationMs,
-      parsed.data.evidence.activeHumanDurationMs,
-      parsed.data.evidence.inputBytes,
-      parsed.data.evidence.outputBytes,
-      JSON.stringify(executionEvidence),
-      job.id,
-      tokenHash,
     ),
     context.env.DB.prepare(`
       UPDATE semantic_extraction_runs
@@ -13503,7 +14037,7 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
 
 app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context) => {
   if (!(await authenticateWorker(context))) return unauthorized(context, "Invalid worker credential");
-  const parsed = workerFloorplanExtractionCompletionSchema.safeParse(await readJson(context));
+  const parsed = workerFloorplanExtractionCompletionSchema.safeParse(await readJson(context, { maxBytes: 24 * 1024 * 1024 }));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
@@ -13851,12 +14385,44 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     proposalHash,
     humanReviewRequired: true,
   };
+  const leaseClaim = await context.env.DB.prepare(`
+    UPDATE processing_jobs
+    SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
+      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
+      evidence_json = ?, completed_at = datetime('now'),
+      lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+      dispatched_at = NULL, updated_at = datetime('now')
+    WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
+  `).bind(
+    parsed.data.progressMessage,
+    JSON.stringify({
+      outputs: [
+        { id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size },
+        ...(collisionAssetId && storedCollision
+          ? [{ id: collisionAssetId, kind: "collision", format: "glb", sizeBytes: storedCollision.size }]
+          : []),
+      ],
+      proposalHash,
+    }),
+    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.computeDurationMs,
+    parsed.data.evidence.activeHumanDurationMs,
+    parsed.data.evidence.inputBytes,
+    parsed.data.evidence.outputBytes,
+    JSON.stringify(executionEvidence),
+    job.id,
+    tokenHash,
+  ).run();
+  if (leaseClaim.meta.changes !== 1) {
+    return conflict(context, "This job lease was reclaimed before completion could commit");
+  }
   const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       INSERT INTO assets (
         id, organisation_id, project_id, version_id, kind, format, object_key,
-        file_name, mime_type, size_bytes, etag, sha256, integrity_status
-      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified')
+        file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source
+      ) VALUES (?, ?, ?, ?, 'report', 'json', ?, ?, ?, ?, ?, ?, 'verified', 'processor_reported')
     `).bind(
       reportAssetId,
       job.organisation_id,
@@ -13873,8 +14439,8 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       ? [context.env.DB.prepare(`
         INSERT INTO assets (
           id, organisation_id, project_id, version_id, kind, format, object_key,
-          file_name, mime_type, size_bytes, etag, sha256, integrity_status
-        ) VALUES (?, ?, ?, ?, 'collision', 'glb', ?, ?, ?, ?, ?, ?, 'verified')
+          file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source
+        ) VALUES (?, ?, ?, ?, 'collision', 'glb', ?, ?, ?, ?, ?, ?, 'verified', 'processor_reported')
       `).bind(
         collisionAssetId,
         job.organisation_id,
@@ -13888,35 +14454,6 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
         storedCollisionHash,
       )]
       : []),
-    context.env.DB.prepare(`
-      UPDATE processing_jobs
-      SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-        output_json = ?, processor_version = ?, compute_duration_ms = ?,
-        active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
-        evidence_json = ?, completed_at = datetime('now'),
-        lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
-        updated_at = datetime('now')
-      WHERE id = ? AND lease_token_hash = ?
-    `).bind(
-      parsed.data.progressMessage,
-      JSON.stringify({
-        outputs: [
-          { id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size },
-          ...(collisionAssetId && storedCollision
-            ? [{ id: collisionAssetId, kind: "collision", format: "glb", sizeBytes: storedCollision.size }]
-            : []),
-        ],
-        proposalHash,
-      }),
-      parsed.data.evidence.processorVersion,
-      parsed.data.evidence.computeDurationMs,
-      parsed.data.evidence.activeHumanDurationMs,
-      parsed.data.evidence.inputBytes,
-      parsed.data.evidence.outputBytes,
-      JSON.stringify(executionEvidence),
-      job.id,
-      tokenHash,
-    ),
     context.env.DB.prepare(`
       UPDATE floorplan_extraction_runs
       SET status = 'READY_FOR_REVIEW', proposal_json = ?, proposal_hash = ?,
@@ -14043,7 +14580,10 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
     max_attempts: number;
   }>();
   if (!job) return forbidden(context, "Lease is invalid");
-  const retry = parsed.data.retryable && job.attempt_count < job.max_attempts;
+  // A lease reclaimed under a running processor is transient infrastructure
+  // state, never a configuration defect: it always earns another attempt.
+  const retry = (parsed.data.retryable || parsed.data.failureClass === "lease") &&
+    job.attempt_count < job.max_attempts;
   const terminalState = job.attempt_count >= job.max_attempts ? "DEAD_LETTER" : "FAILED";
   const error = JSON.stringify({
     code: parsed.data.code,
@@ -14056,7 +14596,8 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
     context.env.DB.prepare(`
       UPDATE processing_jobs
       SET state = ?, error_json = ?, progress_message = ?, lease_token_hash = NULL,
-        leased_by = NULL, lease_expires_at = NULL, updated_at = datetime('now'),
+        leased_by = NULL, lease_expires_at = NULL, dispatched_at = NULL,
+        updated_at = datetime('now'),
         completed_at = CASE WHEN ? = 'QUEUED' THEN NULL ELSE datetime('now') END
       WHERE id = ? AND lease_token_hash = ?
     `).bind(
@@ -14134,7 +14675,7 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
 app.post("/api/versions/:versionId/approve", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = qaDecisionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const version = await context.env.DB.prepare(`
@@ -14251,7 +14792,7 @@ app.post("/api/versions/:versionId/approve", async (context) => {
 app.post("/api/projects/:projectId/releases", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = releaseInputSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
@@ -14308,13 +14849,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     }
   }
   const approved = await context.env.DB.prepare(`
-    SELECT sv.id, sv.version_number, sv.manifest_json
+    SELECT sv.id, sv.version_number, sv.status, sv.manifest_json
     FROM scene_versions sv
     WHERE sv.project_id = ? AND sv.status IN ('APPROVED', 'PUBLISHED')
     ORDER BY sv.version_number DESC LIMIT 1
   `).bind(project.id).first<{
     id: string;
     version_number: number;
+    status: string;
     manifest_json: string | null;
   }>();
   if (!approved?.manifest_json) return validationError(context, { project: ["Project has no approved scene version"] });
@@ -14551,55 +15093,100 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     : null;
   const accessTokenHash = rawAccessToken ? await sha256Hex(`${rawAccessToken}:${context.env.SESSION_PEPPER}`) : null;
   const publishedAt = new Date().toISOString();
-  await context.env.DB.batch([
-    context.env.DB.prepare(`
-      INSERT INTO releases
-        (id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id,
-          access_policy, access_token_hash, viewer_config_json, spatial_snapshot_json,
-          published_at, expires_at, created_by, client_operation_id, release_number)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        (SELECT COALESCE(MAX(release_number), 0) + 1 FROM releases WHERE project_id = ?))
-    `).bind(
-      releaseId,
-      auth.organisationId,
-      project.id,
-      approved.id,
-      webAssetId,
-      posterAssetId,
-      parsed.data.accessPolicy,
-      accessTokenHash,
-      viewerConfigJson,
-      spatialSnapshotJson,
-      publishedAt,
-      parsed.data.expiresAt ?? null,
-      auth.userId,
-      parsed.data.clientOperationId ?? null,
-      project.id,
-    ),
-    context.env.DB.prepare(`
-      INSERT INTO release_channels (id, organisation_id, project_id, slug, active_release_id)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(slug) DO UPDATE SET
-        active_release_id = excluded.active_release_id,
-        activation_generation = release_channels.activation_generation + 1,
-        updated_at = datetime('now')
-      WHERE release_channels.organisation_id = excluded.organisation_id
-        AND release_channels.project_id = excluded.project_id
-    `).bind(channelId, auth.organisationId, project.id, parsed.data.slug, releaseId),
-    context.env.DB.prepare("UPDATE scene_versions SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ?").bind(approved.id),
-    context.env.DB.prepare("UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, auth.organisationId),
-  ]);
-  const storedRelease = await context.env.DB.prepare(`
-    SELECT release_number FROM releases WHERE id = ? AND organisation_id = ?
-  `).bind(releaseId, auth.organisationId).first<{ release_number: number }>();
-  if (!storedRelease) throw new Error("Published release revision was not stored");
-  await audit(context, auth, "release.publish", "release", releaseId, {
-    slug: parsed.data.slug,
-    accessPolicy: parsed.data.accessPolicy,
-    sourceToWorldEvidenceId: parsed.data.sourceToWorldEvidenceId ?? null,
-    releaseNumber: storedRelease.release_number,
-    versionNumber: approved.version_number,
-  });
+  const previousVersionStatus = approved.status;
+  const previousProjectStatus = project.status;
+  let releaseNumber = await nextReleaseNumber(context.env.DB, project.id);
+  for (let allocationAttempt = 0; ; allocationAttempt += 1) {
+    try {
+      await context.env.DB.batch([
+        context.env.DB.prepare(`
+          INSERT INTO releases
+            (id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id,
+              access_policy, access_token_hash, viewer_config_json, spatial_snapshot_json,
+              published_at, expires_at, created_by, client_operation_id, release_number)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          releaseId,
+          auth.organisationId,
+          project.id,
+          approved.id,
+          webAssetId,
+          posterAssetId,
+          parsed.data.accessPolicy,
+          accessTokenHash,
+          viewerConfigJson,
+          spatialSnapshotJson,
+          publishedAt,
+          parsed.data.expiresAt ?? null,
+          auth.userId,
+          parsed.data.clientOperationId ?? null,
+          releaseNumber,
+        ),
+        context.env.DB.prepare(`
+          INSERT INTO release_channels (id, organisation_id, project_id, slug, active_release_id)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(slug) DO UPDATE SET
+            active_release_id = excluded.active_release_id,
+            activation_generation = release_channels.activation_generation + 1,
+            updated_at = datetime('now')
+          WHERE release_channels.organisation_id = excluded.organisation_id
+            AND release_channels.project_id = excluded.project_id
+        `).bind(channelId, auth.organisationId, project.id, parsed.data.slug, releaseId),
+        context.env.DB.prepare("UPDATE scene_versions SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ?").bind(approved.id),
+        context.env.DB.prepare("UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(project.id, auth.organisationId),
+        auditStatement(context, auth, "release.publish", "release", releaseId, {
+          slug: parsed.data.slug,
+          accessPolicy: parsed.data.accessPolicy,
+          sourceToWorldEvidenceId: parsed.data.sourceToWorldEvidenceId ?? null,
+          releaseNumber,
+          versionNumber: approved.version_number,
+        }),
+      ]);
+      break;
+    } catch (error) {
+      if (allocationAttempt >= 4 || !isReleaseNumberSequenceConflict(error)) throw error;
+      releaseNumber = Math.max(
+        releaseNumber + 1,
+        await nextReleaseNumber(context.env.DB, project.id),
+      );
+    }
+  }
+  // The channel upsert's tenant guard turns a cross-tenant slug collision into a
+  // silent no-op, so the release row and the PUBLISHED flips would otherwise
+  // commit behind a URL that resolves to somebody else's scene.
+  const activatedChannel = await context.env.DB.prepare(`
+    SELECT active_release_id FROM release_channels
+    WHERE slug = ? AND organisation_id = ? AND project_id = ?
+  `).bind(parsed.data.slug, auth.organisationId, project.id).first<{ active_release_id: string | null }>();
+  if (activatedChannel?.active_release_id !== releaseId) {
+    await context.env.DB.batch([
+      context.env.DB.prepare(
+        "DELETE FROM releases WHERE id = ? AND organisation_id = ?",
+      ).bind(releaseId, auth.organisationId),
+      context.env.DB.prepare(`
+        UPDATE scene_versions SET status = ?, updated_at = datetime('now')
+        WHERE id = ? AND status = 'PUBLISHED'
+          AND NOT EXISTS (
+            SELECT 1 FROM releases r
+            JOIN release_channels rc ON rc.active_release_id = r.id
+            WHERE r.version_id = scene_versions.id AND r.revoked_at IS NULL
+          )
+      `).bind(previousVersionStatus, approved.id),
+      context.env.DB.prepare(`
+        UPDATE projects SET status = ?, updated_at = datetime('now')
+        WHERE id = ? AND organisation_id = ? AND status = 'PUBLISHED'
+          AND NOT EXISTS (
+            SELECT 1 FROM release_channels rc
+            WHERE rc.project_id = projects.id AND rc.active_release_id IS NOT NULL
+          )
+      `).bind(previousProjectStatus, project.id, auth.organisationId),
+      auditStatement(context, auth, "release.publish_reverted", "release", releaseId, {
+        slug: parsed.data.slug,
+        reason: "slug_taken",
+      }),
+    ]);
+    return context.json({ error: "Release slug is already assigned to another project" }, 409);
+  }
   return context.json({
     release: {
       id: releaseId,
@@ -14608,7 +15195,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       accessPolicy: parsed.data.accessPolicy,
       accessToken: rawAccessToken,
       publishedAt,
-      releaseNumber: storedRelease.release_number,
+      releaseNumber,
       versionNumber: approved.version_number,
     },
   }, 201);
@@ -14617,7 +15204,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
 app.post("/api/release-channels/:slug/rollback", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const input = await readJson(context);
   const releaseId = readStringProperty(input, "releaseId");
   if (!releaseId) return validationError(context, { releaseId: ["releaseId is required"] });
@@ -14661,15 +15248,15 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
     context.env.DB.prepare(
       "UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
     ).bind(release.project_id, auth.organisationId),
+    auditStatement(context, auth, "release.rollback", "release_channel", context.req.param("slug"), { releaseId }),
   ]);
-  await audit(context, auth, "release.rollback", "release_channel", context.req.param("slug"), { releaseId });
   return context.json({ slug: context.req.param("slug"), activeReleaseId: release.id });
 });
 
 app.delete("/api/release-channels/:slug", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const channel = await context.env.DB.prepare(
     "SELECT id, project_id, active_release_id FROM release_channels WHERE slug = ? AND organisation_id = ?",
   ).bind(context.req.param("slug"), auth.organisationId).first<{
@@ -14684,8 +15271,8 @@ app.delete("/api/release-channels/:slug", async (context) => {
     context.env.DB.prepare(
       "UPDATE projects SET status = 'REVOKED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
     ).bind(channel.project_id, auth.organisationId),
+    auditStatement(context, auth, "release.revoke", "release_channel", channel.id),
   ]);
-  await audit(context, auth, "release.revoke", "release_channel", channel.id);
   return context.body(null, 204);
 });
 
@@ -14775,8 +15362,134 @@ function telemetrySessionReleaseIsAvailable(session: TelemetrySessionState): boo
     (!session.release_expires_at || Date.parse(session.release_expires_at) > Date.now());
 }
 
+// Renewable scene render sessions. A scene token used to be a bare HMAC with a
+// fixed TTL baked once into every asset URL, so paged RAD streaming started
+// 401ing mid-walkthrough. Tokens now carry a sessionId whose D1 row can be
+// extended up to a hard ceiling; tokens issued before this (no sessionId) keep
+// validating on the HMAC alone until they expire naturally.
+const sceneRenderSessionRenewalPath = "/api/scene-sessions/renew";
+const sceneRenderSessionHardTtlSeconds = 86_400;
+const sceneRenderSessionCacheTtlMs = 60_000;
+const sceneRenderSessionCache = new Map<string, { expiresAtEpoch: number; cachedUntilMs: number }>();
+
+function sceneRenderSessionCacheKey(releaseId: string, sessionId: string): string {
+  return `${releaseId}:${sessionId}`;
+}
+
+function rememberSceneRenderSession(releaseId: string, sessionId: string, expiresAtEpoch: number): void {
+  if (sceneRenderSessionCache.size > 2048) sceneRenderSessionCache.clear();
+  sceneRenderSessionCache.set(sceneRenderSessionCacheKey(releaseId, sessionId), {
+    expiresAtEpoch,
+    cachedUntilMs: Date.now() + sceneRenderSessionCacheTtlMs,
+  });
+}
+
+// A short per-isolate cache keeps ranged asset reads off D1; a cached entry that
+// already looks expired falls through to a fresh read so a renewal is picked up
+// immediately instead of after the cache window.
+async function sceneRenderSessionIsLive(
+  database: D1Database,
+  releaseId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const now = Date.now();
+  const cached = sceneRenderSessionCache.get(sceneRenderSessionCacheKey(releaseId, sessionId));
+  if (cached && cached.cachedUntilMs > now && cached.expiresAtEpoch * 1000 > now) return true;
+  const session = await database.prepare(`
+    SELECT expires_at_epoch AS expiresAtEpoch FROM scene_render_sessions
+    WHERE id = ? AND release_id = ?
+  `).bind(sessionId, releaseId).first<{ expiresAtEpoch: number }>();
+  if (!session) return false;
+  rememberSceneRenderSession(releaseId, sessionId, session.expiresAtEpoch);
+  return session.expiresAtEpoch * 1000 > now;
+}
+
+async function openSceneRenderSession(
+  env: Env,
+  releaseId: string,
+  activationGeneration: number,
+): Promise<{ id: string; expiresAtEpoch: number; hardExpiresAtEpoch: number }> {
+  const ttlSeconds = positiveInteger(env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const now = Math.floor(Date.now() / 1000);
+  const session = {
+    id: crypto.randomUUID(),
+    expiresAtEpoch: now + ttlSeconds,
+    hardExpiresAtEpoch: now + sceneRenderSessionHardTtlSeconds,
+  };
+  await env.DB.prepare(`
+    INSERT INTO scene_render_sessions
+      (id, release_id, activation_generation, expires_at_epoch, hard_expires_at_epoch)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(
+    session.id,
+    releaseId,
+    activationGeneration,
+    session.expiresAtEpoch,
+    session.hardExpiresAtEpoch,
+  ).run();
+  rememberSceneRenderSession(releaseId, session.id, session.expiresAtEpoch);
+  return session;
+}
+
+app.post(sceneRenderSessionRenewalPath, async (context) => {
+  const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
+  if (!(await allowRate(context.env.DB, "scene-session-renew-ip", clientAddress, 120, 60))) {
+    return tooManyRequests(context, 60);
+  }
+  const parsed = sceneSessionRenewalSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const payload = await verifySceneToken(parsed.data.token, context.env.SESSION_PEPPER);
+  if (!payload || payload.scope || !payload.sessionId) {
+    return unauthorized(context, "Invalid or expired scene token");
+  }
+  if (!(await allowRate(context.env.DB, "scene-session-renew-session", payload.sessionId, 60, 60))) {
+    return tooManyRequests(context, 60);
+  }
+  const ttlSeconds = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const now = Math.floor(Date.now() / 1000);
+  const renewed = await context.env.DB.prepare(`
+    UPDATE scene_render_sessions
+    SET expires_at_epoch = MIN(?, hard_expires_at_epoch),
+      renewal_count = renewal_count + 1, updated_at = datetime('now')
+    WHERE id = ? AND release_id = ? AND hard_expires_at_epoch > ?
+      AND EXISTS (
+        SELECT 1 FROM releases r
+        JOIN release_channels rc ON rc.active_release_id = r.id
+        WHERE r.id = scene_render_sessions.release_id AND r.revoked_at IS NULL
+          AND rc.activation_generation = scene_render_sessions.activation_generation
+          AND (r.expires_at IS NULL OR unixepoch(r.expires_at) > ?)
+      )
+    RETURNING expires_at_epoch AS expiresAtEpoch, hard_expires_at_epoch AS hardExpiresAtEpoch
+  `).bind(
+    now + ttlSeconds,
+    payload.sessionId,
+    payload.releaseId,
+    now,
+    now,
+  ).first<{ expiresAtEpoch: number; hardExpiresAtEpoch: number }>();
+  if (!renewed) {
+    sceneRenderSessionCache.delete(sceneRenderSessionCacheKey(payload.releaseId, payload.sessionId));
+    return context.json({ error: "This scene session can no longer be renewed" }, 410);
+  }
+  rememberSceneRenderSession(payload.releaseId, payload.sessionId, renewed.expiresAtEpoch);
+  const token = await signSceneToken({
+    releaseId: payload.releaseId,
+    expiresAt: renewed.expiresAtEpoch,
+    sessionId: payload.sessionId,
+  }, context.env.SESSION_PEPPER);
+  context.header("Cache-Control", "private, no-store");
+  return context.json({
+    sessionId: payload.sessionId,
+    token,
+    expiresAtEpochSeconds: renewed.expiresAtEpoch,
+    sessionExpiresAt: new Date(renewed.expiresAtEpoch * 1000).toISOString(),
+    sessionHardExpiresAt: new Date(renewed.hardExpiresAtEpoch * 1000).toISOString(),
+    renewalPath: sceneRenderSessionRenewalPath,
+  });
+});
+
 app.post("/api/releases/:slug/telemetry-session", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = telemetrySessionSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const release = await activeRelease(context.env.DB, context.req.param("slug"));
@@ -14862,6 +15575,10 @@ app.post("/api/releases/:slug/telemetry-session", async (context) => {
 });
 
 app.get("/api/releases/:slug/manifest", async (context) => {
+  const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
+  if (!(await allowRate(context.env.DB, "release-manifest-ip", clientAddress, 120, 60))) {
+    return tooManyRequests(context, 60);
+  }
   const release = await activeRelease(context.env.DB, context.req.param("slug"));
   if (!release) return notFound(context, "Published scene not found");
   const requestHostname = new URL(context.req.url).hostname;
@@ -14882,10 +15599,15 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       ).bind(release.poster_asset_id, release.organisation_id).first<AssetRow>()
     : null;
   if (!webAsset) return context.json({ error: "Published scene asset is unavailable" }, 503);
-  const tokenTtl = positiveInteger(context.env.SCENE_SESSION_TTL_SECONDS, 1800);
+  const renderSession = await openSceneRenderSession(
+    context.env,
+    release.id,
+    release.channel_activation_generation,
+  );
   const sceneToken = await signSceneToken({
     releaseId: release.id,
-    expiresAt: Math.floor(Date.now() / 1000) + tokenTtl,
+    expiresAt: renderSession.expiresAtEpoch,
+    sessionId: renderSession.id,
   }, context.env.SESSION_PEPPER);
   const viewerConfig = parseStoredObject(release.viewer_config_json);
   const theme = await context.env.DB.prepare(`
@@ -14925,6 +15647,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     );
   }
   const collisionAsset = verifiedWalkingPackage.collisionAsset;
+  const detourAsset = verifiedWalkingPackage.detourAsset;
   context.header("Cache-Control", "private, no-store");
   return context.json({
     schemaVersion: "1.0.0",
@@ -14955,10 +15678,19 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       collisionUrl: collisionAsset
         ? `/asset/${release.id}/${collisionAsset.id}/${encodeURIComponent(collisionAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`
         : null,
+      // The frozen Detour binary is also served as a release asset so a renderer
+      // can stream it instead of decoding the base64 copy carried inline.
+      detourUrl: detourAsset
+        ? `/asset/${release.id}/${detourAsset.id}/${encodeURIComponent(detourAsset.file_name)}?token=${encodeURIComponent(sceneToken)}`
+        : null,
+      navMeshUrl: null,
       sizeBytes: webAsset.size_bytes,
       etag: webAsset.etag,
     },
-    viewer: viewerConfig,
+    viewer: {
+      ...(viewerConfig && typeof viewerConfig === "object" ? viewerConfig : {}),
+      splatBudgetMillions: releaseSplatBudgetMillions(viewerConfig),
+    },
     theme: {
       brandName: theme?.brand_name ?? null,
       logoUrl: theme?.logo_url ?? null,
@@ -14976,7 +15708,10 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     },
     integrity: {
       assetSha256: webAsset.sha256,
-      sessionExpiresAt: new Date((Math.floor(Date.now() / 1000) + tokenTtl) * 1000).toISOString(),
+      sessionId: renderSession.id,
+      sessionExpiresAt: new Date(renderSession.expiresAtEpoch * 1000).toISOString(),
+      sessionHardExpiresAt: new Date(renderSession.hardExpiresAtEpoch * 1000).toISOString(),
+      sessionRenewalPath: sceneRenderSessionRenewalPath,
     },
   });
 });
@@ -15009,12 +15744,24 @@ app.get("/asset/:releaseId/:assetId/:fileName", async (context) => {
   if (!token) return unauthorized(context, "Missing scene token");
   const payload = await verifySceneToken(token, context.env.SESSION_PEPPER);
   if (!payload || payload.scope || payload.releaseId !== context.req.param("releaseId")) return unauthorized(context, "Invalid or expired scene token");
+  // Tokens minted before renewable sessions carry no sessionId and keep
+  // validating on the HMAC expiry alone until they lapse naturally.
+  if (payload.sessionId && !(await sceneRenderSessionIsLive(
+    context.env.DB,
+    payload.releaseId,
+    payload.sessionId,
+  ))) {
+    return unauthorized(context, "Invalid or expired scene token");
+  }
   const asset = await context.env.DB.prepare(`
     SELECT a.* FROM assets a
     JOIN releases r ON (
       r.web_asset_id = a.id OR r.poster_asset_id = a.id OR (
         a.kind = 'collision' AND
         json_extract(r.spatial_snapshot_json, '$.navigationArtifact.source.assetId') = a.id
+      ) OR (
+        a.kind = 'navmesh' AND
+        json_extract(r.spatial_snapshot_json, '$.navigationAssets.detour.assetId') = a.id
       )
     )
     WHERE r.id = ? AND a.id = ? AND r.revoked_at IS NULL AND a.deleted_at IS NULL
@@ -15022,7 +15769,13 @@ app.get("/asset/:releaseId/:assetId/:fileName", async (context) => {
   `).bind(payload.releaseId, context.req.param("assetId"), new Date().toISOString()).first<AssetRow>();
   if (!asset) return notFound(context, "Scene asset not found");
   if (context.req.param("fileName") !== asset.file_name) return notFound(context, "Scene asset not found");
-  return serveR2Object(context, asset.object_key);
+  // The token and its session are already verified above, so the edge copy is
+  // keyed on immutable asset identity alone. A token never enters the cache key
+  // and every request still pays the full authorisation check.
+  return serveR2Object(context, asset.object_key, {
+    edgeCacheKey: `protected:${asset.id}:${asset.etag ?? asset.sha256 ?? asset.size_bytes}`,
+    edgeCacheControl: "public, s-maxage=31536000, immutable",
+  });
 });
 
 app.get("/comparison-asset/:projectId/:versionId/:assetId/:fileName", async (context) => {
@@ -15058,14 +15811,22 @@ app.get("/comparison-asset/:projectId/:versionId/:assetId/:fileName", async (con
 async function serveR2Object(
   context: Context<AppEnvironment>,
   objectKey: string,
-  options: { cacheControl?: string; edgeCacheKey?: string } = {},
+  options: {
+    cacheControl?: string;
+    edgeCacheKey?: string;
+    edgeCacheControl?: string;
+  } = {},
 ): Promise<Response> {
   const metadata = await context.env.SPATIAL_ASSETS.head(objectKey);
   if (!metadata) return notFound(context, "Stored object not found");
-  const range = parseRangeHeader(context.req.header("Range"), metadata.size);
-  if (context.req.header("Range") && !range) {
+  const rangeHeader = context.req.header("Range");
+  const range = parseRangeHeader(rangeHeader, metadata.size);
+  if (rangeHeader && !range) {
     return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${metadata.size}` } });
   }
+  // The key is immutable asset identity alone. A scene token is verified before
+  // this point and never enters the key, and the edge slices every page range
+  // out of the one stored copy.
   const edgeCacheUrl = options.edgeCacheKey
     ? new URL(
         `/__spatial-asset-cache/${encodeURIComponent(options.edgeCacheKey)}`,
@@ -15083,7 +15844,7 @@ async function serveR2Object(
     }));
     if (cached) {
       const headers = new Headers(cached.headers);
-      headers.set("Cache-Control", options.cacheControl ?? "public, max-age=1800, s-maxage=31536000, immutable");
+      headers.set("Cache-Control", options.cacheControl ?? "private, max-age=1800, immutable");
       headers.set("X-Spatial-Asset-Cache", "HIT");
       return new Response(cached.body, {
         status: cached.status,
@@ -15112,13 +15873,24 @@ async function serveR2Object(
     const length = range && "length" in range && typeof range.length === "number" ? range.length : object.size;
     headers.set("Content-Range", `bytes ${offset}-${offset + length - 1}/${metadata.size}`);
     headers.set("Content-Length", String(length));
+    // A 206 cannot be stored, so a paged scene would otherwise never populate
+    // the edge: the first page range pulls the whole object into cache once and
+    // every later range is sliced out of it instead of re-reading R2.
+    if (edgeCacheUrl && metadata.size <= edgeAssetWarmCeilingBytes) {
+      warmAssetAtEdge(context, objectKey, edgeCacheUrl, options);
+    }
     return new Response(object.body, { status: 206, headers });
   }
   headers.set("Content-Length", String(object.size));
   const response = new Response(object.body, { headers });
   if (edgeCacheUrl) {
-    const cacheResponse = response.clone();
+    const cacheResponse = new Response(response.clone().body, { headers: response.headers });
     cacheResponse.headers.delete("X-Spatial-Asset-Cache");
+    // The Cache API discards a private response, so the stored copy always
+    // carries a shared-cache directive while the browser keeps the private one.
+    if (options.edgeCacheControl) {
+      cacheResponse.headers.set("Cache-Control", options.edgeCacheControl);
+    }
     context.executionCtx.waitUntil(
       caches.default.put(new Request(edgeCacheUrl), cacheResponse).catch((error) => {
         console.warn(JSON.stringify({
@@ -15132,10 +15904,53 @@ async function serveR2Object(
   return response;
 }
 
+const edgeAssetWarmCeilingBytes = 134_217_728;
+const edgeAssetWarmsInFlight = new Set<string>();
+
+function warmAssetAtEdge(
+  context: Context<AppEnvironment>,
+  objectKey: string,
+  edgeCacheUrl: string,
+  options: { cacheControl?: string; edgeCacheKey?: string; edgeCacheControl?: string },
+): void {
+  if (edgeAssetWarmsInFlight.has(edgeCacheUrl)) return;
+  edgeAssetWarmsInFlight.add(edgeCacheUrl);
+  context.executionCtx.waitUntil((async () => {
+    try {
+      if (await caches.default.match(new Request(edgeCacheUrl))) return;
+      const object = await context.env.SPATIAL_ASSETS.get(objectKey);
+      if (!object) return;
+      const headers = new Headers();
+      object.writeHttpMetadata(headers);
+      headers.set("ETag", object.httpEtag);
+      headers.set("Accept-Ranges", "bytes");
+      headers.set("X-Content-Type-Options", "nosniff");
+      headers.set("Content-Length", String(object.size));
+      headers.set(
+        "Cache-Control",
+        options.edgeCacheControl ?? options.cacheControl ??
+          "public, max-age=1800, s-maxage=31536000, immutable",
+      );
+      await caches.default.put(
+        new Request(edgeCacheUrl),
+        new Response(object.body, { headers }),
+      );
+    } catch (error) {
+      console.warn(JSON.stringify({
+        event: "asset.edge_cache_warm_failed",
+        cacheKey: options.edgeCacheKey,
+        error: errorMessage(error),
+      }));
+    } finally {
+      edgeAssetWarmsInFlight.delete(edgeCacheUrl);
+    }
+  })());
+}
+
 app.post("/api/telemetry", async (context) => {
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
-  if (!(await allowRate(context.env.DB, "telemetry", clientAddress, 120, 60))) return tooManyRequests(context);
+  if (!(await allowRate(context.env.DB, "telemetry", clientAddress, 120, 60))) return tooManyRequests(context, 60);
   const parsed = telemetrySchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const release = await context.env.DB.prepare(`
@@ -15521,7 +16336,7 @@ async function requireUploadPrincipal(
   }
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
-  if (!isSameOrigin(context)) return forbidden(context, "Cross-origin request rejected");
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   return { kind: "human", auth };
 }
 
@@ -15591,16 +16406,26 @@ async function authenticateWorker(context: Context<AppEnvironment>): Promise<boo
 
 function dispatchProcessingJob(context: Context<AppEnvironment>, jobId: string): void {
   context.executionCtx.waitUntil(
-    context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId }).catch((error) => {
-      console.error(JSON.stringify({
-        event: "processing.dispatch_enqueue_failed",
-        jobId,
-        error: errorMessage(error),
-      }));
-    }),
+    context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId })
+      .then(() =>
+        context.env.DB.prepare(
+          "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
+        ).bind(jobId).run()
+      )
+      .then(() => undefined)
+      .catch((error) => {
+        console.error(JSON.stringify({
+          event: "processing.dispatch_enqueue_failed",
+          jobId,
+          error: errorMessage(error),
+        }));
+      }),
   );
 }
 
+// The minutely reconciler used to re-enqueue every stuck job on every tick —
+// sixty duplicate dispatches an hour per job. A dispatch stamp plus a backoff
+// window keeps reconciliation to one dispatch per window.
 async function enqueueDispatchableProcessingJobs(env: Env): Promise<void> {
   const result = await env.DB.prepare(`
     SELECT id
@@ -15610,12 +16435,22 @@ async function enqueueDispatchableProcessingJobs(env: Env): Promise<void> {
       OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?)
     )
       AND attempt_count < max_attempts
+      AND (
+        dispatched_at IS NULL
+        OR dispatched_at <= datetime('now', ?)
+      )
     ORDER BY priority ASC, created_at ASC
     LIMIT 100
-  `).bind(new Date().toISOString()).all<{ id: string }>();
+  `).bind(
+    new Date().toISOString(),
+    `-${jobDispatchBackoffMinutes} minutes`,
+  ).all<{ id: string }>();
   await Promise.all(result.results.map(async ({ id }) => {
     try {
       await env.PROCESSING_DISPATCH_QUEUE.send({ jobId: id });
+      await env.DB.prepare(
+        "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
+      ).bind(id).run();
     } catch (error) {
       console.error(JSON.stringify({
         event: "processing.dispatch_reconcile_failed",
@@ -15638,15 +16473,22 @@ async function enqueueDispatchableProjectAssetCopies(env: Env): Promise<void> {
     WHERE h.status IN ('queued', 'copying')
       AND i.status = 'queued'
       AND i.attempt_count < 10
+      AND (
+        i.dispatched_at IS NULL
+        OR i.dispatched_at <= datetime('now', ?)
+      )
     ORDER BY h.started_at ASC, i.updated_at ASC
     LIMIT 50
-  `).all<{ id: string }>();
+  `).bind(`-${jobDispatchBackoffMinutes} minutes`).all<{ id: string }>();
   await Promise.all(result.results.map(async ({ id }) => {
     try {
       await env.PORTFOLIO_COPY_QUEUE.send({
         type: "project_asset_copy",
         itemId: id,
       });
+      await env.DB.prepare(
+        "UPDATE project_asset_handoff_items SET dispatched_at = datetime('now') WHERE id = ?",
+      ).bind(id).run();
     } catch (error) {
       console.error(JSON.stringify({
         event: "project_asset_handoff.dispatch_reconcile_failed",
@@ -15659,6 +16501,102 @@ async function enqueueDispatchableProjectAssetCopies(env: Env): Promise<void> {
     event: "project_asset_handoff.dispatch_reconciled",
     items: result.results.length,
   }));
+}
+
+// Jobs whose lease expired after exhausting every attempt used to sit in
+// LEASED/RUNNING forever, invisible to the failure dashboard that queries
+// FAILED and DEAD_LETTER.
+async function reapExpiredJobLeases(env: Env): Promise<void> {
+  const expired = await env.DB.prepare(`
+    SELECT id, organisation_id, project_id, version_id, job_type, leased_by,
+      attempt_count, max_attempts, lease_expires_at
+    FROM processing_jobs
+    WHERE state IN ('LEASED', 'RUNNING')
+      AND lease_expires_at IS NOT NULL
+      AND lease_expires_at <= ?
+      AND attempt_count >= max_attempts
+    ORDER BY lease_expires_at
+    LIMIT 100
+  `).bind(new Date().toISOString()).all<{
+    id: string;
+    organisation_id: string;
+    project_id: string;
+    version_id: string;
+    job_type: string;
+    leased_by: string | null;
+    attempt_count: number;
+    max_attempts: number;
+    lease_expires_at: string;
+  }>();
+  for (const job of expired.results) {
+    const error = JSON.stringify({
+      code: "JOB_LEASE_EXPIRED",
+      message:
+        `The worker lease expired at ${job.lease_expires_at} after ${job.attempt_count} of ${job.max_attempts} attempts without a completion or failure report`,
+      failureClass: "lease_expired",
+      details: {
+        leasedBy: job.leased_by,
+        leaseExpiresAt: job.lease_expires_at,
+        attemptCount: job.attempt_count,
+        maxAttempts: job.max_attempts,
+      },
+      failedAt: new Date().toISOString(),
+    });
+    const statements: D1PreparedStatement[] = [
+      env.DB.prepare(`
+        UPDATE processing_jobs
+        SET state = 'DEAD_LETTER', error_json = ?,
+          progress_message = 'Worker lease expired without a completion report',
+          lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+          dispatched_at = NULL, completed_at = datetime('now'),
+          updated_at = datetime('now')
+        WHERE id = ? AND state IN ('LEASED', 'RUNNING')
+      `).bind(error, job.id),
+      env.DB.prepare(`
+        UPDATE registered_scene_change_reports
+        SET status = 'DEAD_LETTER', error_json = ?, completed_at = datetime('now'),
+          updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(error, job.id),
+      env.DB.prepare(`
+        UPDATE semantic_extraction_runs SET status = 'FAILED', updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(job.id),
+      env.DB.prepare(`
+        UPDATE floorplan_extraction_runs
+        SET status = 'FAILED', error_json = ?, updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(error, job.id),
+      env.DB.prepare(`
+        UPDATE scene_navigation_builds SET status = 'FAILED', updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(job.id),
+    ];
+    if (
+      ![
+        "registered-scene-change-v1",
+        "semantic.extract-v1",
+        "floorplan.extract-v1",
+        "navigation.build-v1",
+      ].includes(job.job_type)
+    ) {
+      statements.push(
+        env.DB.prepare(
+          "UPDATE scene_versions SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ?",
+        ).bind(job.version_id),
+        env.DB.prepare(
+          "UPDATE projects SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
+        ).bind(job.project_id, job.organisation_id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+  if (expired.results.length) {
+    console.log(JSON.stringify({
+      event: "processing.expired_leases_reaped",
+      jobs: expired.results.length,
+    }));
+  }
 }
 
 async function requireWorkerLease(
@@ -15930,6 +16868,7 @@ async function applyProjectLifecycleAction(
       AND NOT EXISTS (
         SELECT 1 FROM upload_sessions
         WHERE project_id = ? AND organisation_id = ? AND status = 'OPEN'
+          AND expires_at > datetime('now')
       )
   `).bind(
     project.id,
@@ -17117,7 +18056,8 @@ async function processProjectAssetCopy(
     await env.DB.batch([
       env.DB.prepare(`
         UPDATE project_asset_handoff_items
-        SET status = ?, error_message = ?, updated_at = datetime('now')
+        SET status = ?, error_message = ?, dispatched_at = NULL,
+          updated_at = datetime('now')
         WHERE id = ?
       `).bind(terminal ? "failed" : "queued", message, itemId),
       env.DB.prepare(`
@@ -17476,6 +18416,7 @@ async function projectArchiveBlocker(
     database.prepare(`
       SELECT COUNT(*) AS count FROM upload_sessions
       WHERE project_id = ? AND organisation_id = ? AND status = 'OPEN'
+        AND expires_at > datetime('now')
     `).bind(projectId, organisationId),
   ]);
   if (scalarCount(requiredBatchResult(blockers, 0)) > 0) {
@@ -17506,9 +18447,85 @@ async function scopedUpload(database: D1Database, organisationId: string, upload
   return database.prepare("SELECT * FROM upload_sessions WHERE id = ? AND organisation_id = ?").bind(uploadId, organisationId).first<UploadRow>();
 }
 
+// The Worker — not the client and not the processor — establishes the digest of
+// record whenever the finished object is small enough to stream through
+// DigestStream inside a single request.
+async function verifyCompletedUploadIntegrity(
+  context: Context<AppEnvironment>,
+  upload: UploadRow,
+  objectSize: number,
+): Promise<CompletedUploadIntegrity> {
+  const declared = upload.sha256 ? upload.sha256.toLowerCase() : null;
+  const unverified: CompletedUploadIntegrity = declared
+    ? { status: "ok", sha256: declared, source: "client_declared" }
+    : { status: "ok", sha256: null, source: null };
+  const hashLimitBytes = positiveInteger(context.env.SERVER_HASH_MAX_BYTES, serverHashMaximumBytes);
+  if (objectSize > hashLimitBytes) return unverified;
+  const stored = await context.env.SPATIAL_ASSETS.get(upload.object_key);
+  if (!stored) return unverified;
+  const digestStream = new crypto.DigestStream("SHA-256");
+  await stored.body.pipeTo(digestStream);
+  const computed = arrayBufferToHex(await digestStream.digest);
+  if (declared && declared !== computed) {
+    return { status: "failed", sha256: computed, source: "server_verified" };
+  }
+  return { status: "ok", sha256: computed, source: "server_verified" };
+}
+
+async function quarantineUploadSession(
+  context: Context<AppEnvironment>,
+  upload: UploadRow,
+  object: R2Object,
+  assetKind: string,
+  computedSha256: string | null,
+  detail: Record<string, unknown>,
+): Promise<void> {
+  const version = await context.env.DB.prepare(
+    "SELECT status FROM scene_versions WHERE id = ? AND project_id = ?",
+  ).bind(upload.version_id, upload.project_id).first<{ status: string }>();
+  const statements: D1PreparedStatement[] = [
+    context.env.DB.prepare(`
+      INSERT INTO assets
+        (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, etag, sha256, integrity_status, integrity_source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed', 'server_verified')
+      ON CONFLICT(id) DO UPDATE SET integrity_status = 'failed', integrity_source = 'server_verified'
+    `).bind(
+      upload.asset_id,
+      upload.organisation_id,
+      upload.project_id,
+      upload.version_id,
+      assetKind,
+      upload.format,
+      upload.object_key,
+      upload.file_name,
+      upload.mime_type,
+      object.size,
+      object.etag,
+      computedSha256,
+    ),
+    context.env.DB.prepare(
+      "UPDATE upload_sessions SET status = 'FAILED', completed_at = datetime('now') WHERE id = ? AND status = 'OPEN'",
+    ).bind(upload.id),
+  ];
+  if (version?.status === "UPLOADING") {
+    statements.push(
+      context.env.DB.prepare("UPDATE scene_versions SET status = 'UPLOAD_FAILED', updated_at = datetime('now') WHERE id = ?").bind(upload.version_id),
+      context.env.DB.prepare("UPDATE projects SET status = 'UPLOAD_FAILED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?").bind(upload.project_id, upload.organisation_id),
+    );
+  }
+  await context.env.DB.batch(statements);
+  console.error(JSON.stringify({
+    event: "upload.integrity_failed",
+    uploadId: upload.id,
+    assetId: upload.asset_id,
+    ...detail,
+  }));
+}
+
 async function activeRelease(database: D1Database, slug: string): Promise<ReleaseRow | null> {
   return database.prepare(`
-    SELECT r.*, rc.slug, p.name AS project_name,
+    SELECT r.*, rc.slug, rc.activation_generation AS channel_activation_generation,
+      p.name AS project_name,
       COALESCE(p.capture_adapter_v2, p.capture_adapter) AS capture_adapter,
       sv.source_provenance_json, sv.version_number
     FROM release_channels rc
@@ -17539,6 +18556,84 @@ function stripeBillingConfig(env: Env): StripeBillingConfig | null {
     webhookSecret,
     prices: { listing, portfolio, venue },
   };
+}
+
+// A project may hold at most one non-terminal hosting subscription (enforced by
+// project_subscriptions_single_live_idx), so cancellation and manual invoicing
+// resolve the same row deterministically instead of picking one arbitrarily.
+async function liveHostingSubscription(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+): Promise<{ id: string; status: string; payment_provider: string | null } | null> {
+  return database.prepare(`
+    SELECT id, status, payment_provider FROM project_hosting_subscriptions
+    WHERE project_id = ? AND organisation_id = ? AND status IN ('active', 'past_due')
+    ORDER BY updated_at DESC, created_at DESC, id
+    LIMIT 1
+  `).bind(projectId, organisationId).first<{
+    id: string;
+    status: string;
+    payment_provider: string | null;
+  }>();
+}
+
+async function persistedManualBillingOperation(
+  database: D1Database,
+  organisationId: string,
+  clientOperationId: string,
+): Promise<ManualBillingOperationRow | null> {
+  return database.prepare(`
+    SELECT request_hash, invoice_id, subscription_id
+    FROM billing_manual_operations
+    WHERE organisation_id = ? AND client_operation_id = ?
+  `).bind(organisationId, clientOperationId).first<ManualBillingOperationRow>();
+}
+
+async function manualBillingReplay(
+  context: Context<AppEnvironment>,
+  auth: AuthContext,
+  operation: ManualBillingOperationRow,
+  requestHash: string,
+  mismatchMessage: string,
+): Promise<Response> {
+  if (operation.request_hash !== requestHash) return conflict(context, mismatchMessage);
+  const state = await manualBillingState(
+    context.env.DB,
+    auth.organisationId,
+    operation.invoice_id,
+    operation.subscription_id,
+  );
+  return context.json({ ...state, idempotent: true });
+}
+
+// UNIQUE(organisation_id, client_operation_id) turns a concurrent duplicate into
+// a thrown constraint error, which used to surface as a 500 instead of the
+// documented idempotent replay. Recover the persisted operation and answer with
+// its terminal response; return null when this was not that conflict.
+async function manualBillingConflictReplay(
+  context: Context<AppEnvironment>,
+  auth: AuthContext,
+  error: unknown,
+  clientOperationId: string,
+  requestHash: string,
+  mismatchMessage: string,
+): Promise<Response | null> {
+  if (!isManualBillingOperationConflict(error)) return null;
+  const persisted = await persistedManualBillingOperation(
+    context.env.DB,
+    auth.organisationId,
+    clientOperationId,
+  );
+  if (!persisted) return null;
+  return manualBillingReplay(context, auth, persisted, requestHash, mismatchMessage);
+}
+
+function isManualBillingOperationConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed") &&
+    message.includes("billing_manual_operations.organisation_id") &&
+    message.includes("billing_manual_operations.client_operation_id");
 }
 
 async function manualBillingState(
@@ -17841,6 +18936,20 @@ async function isLastAdministrator(
   return (result?.count ?? 0) === 0;
 }
 
+// `isLastAdministrator` above is only a fast pre-check: two administrators
+// demoting each other concurrently would both read a surviving peer and both
+// commit. Every statement that removes or demotes an active platform
+// administrator carries this guard so the mutation itself is conditional on a
+// surviving peer. The predicate only inspects OTHER members, so it stays stable
+// across the statements of one batch. Bind [guardActive ? 1 : 0,
+// organisationId, targetUserId].
+const administratorSurvivorGuard = `(? = 0 OR EXISTS (
+  SELECT 1 FROM memberships other
+  WHERE other.organisation_id = ? AND other.role = 'platform_admin'
+    AND other.status = 'active' AND other.revoked_at IS NULL
+    AND other.user_id != ?
+))`;
+
 async function deliverTeamInvitation(
   env: Env,
   organisationId: string,
@@ -17962,13 +19071,55 @@ async function acceptPendingOrganisationInvitationForOrganisation(
   ]);
 }
 
+// One sign-in can only ever onboard a bounded number of invitations, so a
+// mis-seeded invitation set cannot spin this loop forever.
+const maximumAutomaticInvitationAcceptances = 20;
+
+async function hasActiveOrganisationMembership(
+  database: D1Database,
+  email: string,
+): Promise<boolean> {
+  const membership = await database.prepare(`
+    SELECT 1 AS present FROM memberships m
+    JOIN users u ON u.id = m.user_id
+    WHERE lower(u.email) = lower(?) AND m.status = 'active' AND m.revoked_at IS NULL
+    LIMIT 1
+  `).bind(email).first<{ present: number }>();
+  return Boolean(membership);
+}
+
 async function acceptPendingOrganisationInvitations(
   database: D1Database,
   email: string,
 ): Promise<void> {
-  while (await acceptPendingOrganisationInvitation(database, email)) {
-    // Accept every live tenant invitation before selecting the initial session.
+  // Silent acceptance is only defensible as first-time onboarding. Once an
+  // account holds an active membership anywhere, any platform administrator
+  // could otherwise pre-create an invited membership for an arbitrary email and
+  // capture that account's default workspace on its next sign-in, so those
+  // invitations stay pending until the invitee accepts or declines explicitly.
+  if (await hasActiveOrganisationMembership(database, email)) return;
+  for (let accepted = 0; accepted < maximumAutomaticInvitationAcceptances; accepted += 1) {
+    if (!(await acceptPendingOrganisationInvitation(database, email))) return;
   }
+}
+
+async function pendingOrganisationInvitations(
+  database: D1Database,
+  email: string,
+): Promise<PendingOrganisationInvitation[]> {
+  const invitations = await database.prepare(`
+    SELECT oi.id, oi.organisation_id AS organisationId, o.name AS organisationName,
+      oi.role, oi.invited_at AS invitedAt, oi.expires_at AS expiresAt
+    FROM organisation_invitations oi
+    JOIN organisations o ON o.id = oi.organisation_id
+    JOIN users u ON lower(u.email) = lower(oi.email)
+    JOIN memberships m ON m.organisation_id = oi.organisation_id AND m.user_id = u.id
+    WHERE lower(oi.email) = lower(?) AND oi.status = 'pending' AND oi.expires_at > ?
+      AND m.status = 'invited' AND m.revoked_at IS NULL
+    ORDER BY oi.invited_at DESC
+    LIMIT 50
+  `).bind(email, new Date().toISOString()).all<PendingOrganisationInvitation>();
+  return invitations.results;
 }
 
 async function acceptPendingProjectInvitations(database: D1Database, auth: AuthContext): Promise<void> {
@@ -18188,7 +19339,9 @@ async function applyStripeBillingEvent(
     const localSubscription = await database.prepare(`
       SELECT id FROM project_hosting_subscriptions
       WHERE project_id = ? AND organisation_id = ?
-      ORDER BY created_at DESC LIMIT 1
+      ORDER BY CASE WHEN status IN ('active', 'past_due') THEN 0 ELSE 1 END,
+        updated_at DESC, created_at DESC, id
+      LIMIT 1
     `).bind(
       checkout.project_id,
       checkout.organisation_id,
@@ -18474,6 +19627,8 @@ type LifecycleSummary = {
   releasesExpired: number;
   subscriptionsPastDue: number;
   subscriptionsExpired: number;
+  uploadSessionsExpired: number;
+  uploadSessionAbortFailures: number;
   projectsArchived: number;
   assetsDeleted: number;
   notificationsSent: number;
@@ -18498,6 +19653,8 @@ async function runLifecycleEnforcement(
     releasesExpired: 0,
     subscriptionsPastDue: 0,
     subscriptionsExpired: 0,
+    uploadSessionsExpired: 0,
+    uploadSessionAbortFailures: 0,
     projectsArchived: 0,
     assetsDeleted: 0,
     notificationsSent: 0,
@@ -18702,6 +19859,47 @@ async function runLifecycleEnforcement(
       }
     }
 
+    // An expired OPEN session leaves an R2 multipart upload alive forever and
+    // permanently blocks project archival. Abort the R2 side, then retire the
+    // session into the existing terminal vocabulary.
+    const expiredUploadSessions = await env.DB.prepare(`
+      SELECT id, organisation_id, project_id, object_key, r2_upload_id
+      FROM upload_sessions
+      WHERE status = 'OPEN' AND expires_at <= datetime('now')
+      ORDER BY expires_at
+      LIMIT 200
+    `).all<{
+      id: string;
+      organisation_id: string;
+      project_id: string;
+      object_key: string;
+      r2_upload_id: string;
+    }>();
+    for (const session of expiredUploadSessions.results) {
+      let abortError: string | null = null;
+      try {
+        await env.SPATIAL_ASSETS
+          .resumeMultipartUpload(session.object_key, session.r2_upload_id)
+          .abort();
+      } catch (error) {
+        abortError = errorMessage(error).slice(0, 500);
+        summary.uploadSessionAbortFailures += 1;
+      }
+      await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE upload_sessions
+          SET status = 'ABORTED', completed_at = datetime('now')
+          WHERE id = ? AND status = 'OPEN'
+        `).bind(session.id),
+        lifecycleActionStatement(env.DB, runId, session.organisation_id, session.project_id,
+          "upload_session_expired", "upload_session", session.id, {
+            objectKey: session.object_key,
+            ...(abortError ? { abortError } : {}),
+          }),
+      ]);
+      summary.uploadSessionsExpired += 1;
+    }
+
     const retainedAssets = await env.DB.prepare(`
       SELECT a.id, a.organisation_id, a.project_id, a.kind, a.object_key, a.created_at,
         rp.raw_retention_days, rp.derivative_retention_days, rp.release_retention_days,
@@ -18754,7 +19952,21 @@ async function runLifecycleEnforcement(
       SELECT DISTINCT organisation_id FROM lifecycle_actions
       WHERE run_id = ? AND action NOT IN ('notification_sent', 'notification_failed')
     `).bind(runId).all<{ organisation_id: string }>();
-    for (const item of actionOrganisations.results) {
+    // The digest carries the whole run's global summary to the platform
+    // administrator, so it goes out exactly once per run. Looping the affected
+    // tenants sent N identical emails and wrote N delivery rows that each
+    // claimed a per-tenant delivery that never happened.
+    const digestOrganisationId = actionOrganisations.results.length === 0
+      ? null
+      : (await env.DB.prepare(`
+          SELECT m.organisation_id FROM memberships m
+          JOIN users u ON u.id = m.user_id
+          WHERE lower(u.email) = lower(?) AND m.role = 'platform_admin'
+            AND m.status = 'active' AND m.revoked_at IS NULL
+          ORDER BY m.created_at LIMIT 1
+        `).bind(env.ADMIN_EMAIL).first<{ organisation_id: string }>())?.organisation_id
+        ?? actionOrganisations.results[0]?.organisation_id ?? null;
+    if (digestOrganisationId) {
       try {
         await sendLifecycleDigestEmail(env, summary, runId);
         await env.DB.batch([
@@ -18762,8 +19974,8 @@ async function runLifecycleEnforcement(
             INSERT INTO notification_deliveries
               (id, organisation_id, channel, template, recipient, status, sent_at)
             VALUES (?, ?, 'email', 'lifecycle_digest', ?, 'sent', datetime('now'))
-          `).bind(crypto.randomUUID(), item.organisation_id, env.ADMIN_EMAIL),
-          lifecycleActionStatement(env.DB, runId, item.organisation_id, null,
+          `).bind(crypto.randomUUID(), digestOrganisationId, env.ADMIN_EMAIL),
+          lifecycleActionStatement(env.DB, runId, digestOrganisationId, null,
             "notification_sent", "lifecycle_run", runId),
         ]);
         summary.notificationsSent += 1;
@@ -18774,8 +19986,8 @@ async function runLifecycleEnforcement(
             INSERT INTO notification_deliveries
               (id, organisation_id, channel, template, recipient, status, error_message)
             VALUES (?, ?, 'email', 'lifecycle_digest', ?, 'failed', ?)
-          `).bind(crypto.randomUUID(), item.organisation_id, env.ADMIN_EMAIL, message),
-          lifecycleActionStatement(env.DB, runId, item.organisation_id, null,
+          `).bind(crypto.randomUUID(), digestOrganisationId, env.ADMIN_EMAIL, message),
+          lifecycleActionStatement(env.DB, runId, digestOrganisationId, null,
             "notification_failed", "lifecycle_run", runId, { error: message }),
         ]);
         summary.notificationFailures += 1;
@@ -18836,6 +20048,8 @@ async function sendLifecycleDigestEmail(env: Env, summary: LifecycleSummary, run
     `Releases expired: ${summary.releasesExpired}`,
     `Subscriptions past due: ${summary.subscriptionsPastDue}`,
     `Subscriptions expired: ${summary.subscriptionsExpired}`,
+    `Expired upload sessions retired: ${summary.uploadSessionsExpired}`,
+    `Expired upload session abort failures: ${summary.uploadSessionAbortFailures}`,
     `Projects archived: ${summary.projectsArchived}`,
     `Assets deleted: ${summary.assetsDeleted}`,
   ];
@@ -18877,19 +20091,29 @@ async function authSecurityEvent(
   ).run();
 }
 
-async function audit(
+// A boolean SQL expression (plus its bindings) that must hold for the guarded
+// audit row to be written, so the evidence lands only when the mutation it
+// records survives the same transaction.
+type AuditGuard = { expression: string; bindings: unknown[] };
+
+// Prepared audit INSERT meant to be appended to the SAME D1 batch as the
+// mutation it records, so a committed control-plane change can never leave the
+// ledger without its evidence row. `audit()` below still issues a separate
+// awaited INSERT after the mutation; that remains acceptable only where the
+// mutation is not itself batched. The highest-stakes routes (billing, team role
+// and revocation, publish/rollback/revoke) use this helper instead — migrate any
+// further call site here as soon as its mutation moves into a batch.
+function auditStatement(
   context: Context<AppEnvironment>,
   auth: AuthContext,
   action: string,
   resourceType: string,
   resourceId: string,
   metadata: Record<string, unknown> = {},
-): Promise<void> {
-  await context.env.DB.prepare(`
-    INSERT INTO audit_events
-      (id, organisation_id, actor_user_id, action, resource_type, resource_id, request_id, metadata_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
+  guard?: AuditGuard,
+): D1PreparedStatement {
+  const columns = "(id, organisation_id, actor_user_id, action, resource_type, resource_id, request_id, metadata_json)";
+  const bindings = [
     crypto.randomUUID(),
     auth.organisationId,
     auth.userId,
@@ -18898,7 +20122,29 @@ async function audit(
     resourceId,
     context.get("requestId"),
     JSON.stringify(metadata),
-  ).run();
+  ];
+  if (!guard) {
+    return context.env.DB.prepare(`
+      INSERT INTO audit_events ${columns}
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(...bindings);
+  }
+  return context.env.DB.prepare(`
+    INSERT INTO audit_events ${columns}
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?
+    WHERE ${guard.expression}
+  `).bind(...bindings, ...guard.bindings);
+}
+
+async function audit(
+  context: Context<AppEnvironment>,
+  auth: AuthContext,
+  action: string,
+  resourceType: string,
+  resourceId: string,
+  metadata: Record<string, unknown> = {},
+): Promise<void> {
+  await auditStatement(context, auth, action, resourceType, resourceId, metadata).run();
 }
 
 async function auditUploadPrincipal(
@@ -19374,9 +20620,22 @@ function applySecurityHeaders(context: Context<AppEnvironment>): void {
   if (context.env.APP_ENV === "production") context.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 }
 
-function isSameOrigin(context: Context<AppEnvironment>): boolean {
+async function isSameOrigin(context: Context<AppEnvironment>): Promise<boolean> {
   const origin = context.req.header("Origin");
-  return !origin || origin === new URL(context.req.url).origin;
+  if (!origin) {
+    const fetchSite = context.req.header("Sec-Fetch-Site");
+    return !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
+  }
+  try {
+    if (origin === new URL(context.env.APP_ORIGIN).origin) return true;
+  } catch {
+    // Invalid configuration is handled by the normal application boundary.
+  }
+  const requestUrl = new URL(context.req.url);
+  if (origin !== requestUrl.origin) return false;
+  if (isPlatformHostname(context.env, requestUrl.hostname)) return false;
+  const domain = await customDomainForHost(context.env.DB, requestUrl.hostname);
+  return Boolean(domain && customDomainReady(domain));
 }
 
 function fileNameMatchesFormat(fileName: string, format: string): boolean {
@@ -19388,16 +20647,44 @@ function legacyCaptureAdapter(adapter: CaptureAdapterId): Exclude<CaptureAdapter
   return adapter === "drone-imagery" ? "open-import" : adapter;
 }
 
-async function readJson(context: Context<AppEnvironment>): Promise<unknown> {
+class RequestBodyError extends Error {
+  readonly kind: "invalid_json" | "too_large";
+
+  constructor(kind: "invalid_json" | "too_large", message: string) {
+    super(message);
+    this.name = "RequestBodyError";
+    this.kind = kind;
+  }
+}
+
+async function readJson(
+  context: Context<AppEnvironment>,
+  options?: { maxBytes?: number },
+): Promise<unknown> {
+  const maxBytes = options?.maxBytes ?? 1024 * 1024;
+  const limitLabel = `JSON request body exceeds ${Math.floor(maxBytes / (1024 * 1024))} MiB`;
   const contentLength = Number(context.req.header("Content-Length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > 1024 * 1024) {
-    throw new Error("JSON request body exceeds 1 MiB");
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new RequestBodyError("too_large", limitLabel);
   }
   const body = await context.req.text();
-  if (new TextEncoder().encode(body).byteLength > 1024 * 1024) {
-    throw new Error("JSON request body exceeds 1 MiB");
+  if (new TextEncoder().encode(body).byteLength > maxBytes) {
+    throw new RequestBodyError("too_large", limitLabel);
   }
-  return JSON.parse(body) as unknown;
+  try {
+    return JSON.parse(body) as unknown;
+  } catch {
+    throw new RequestBodyError("invalid_json", "Request body is not valid JSON");
+  }
+}
+
+// A release that never carried an operator-chosen splat budget publishes an
+// explicit null so the viewer runs its device-aware and delivery-policy path
+// instead of silently inheriting one fixed budget on every device.
+function releaseSplatBudgetMillions(viewerConfig: unknown): number | null {
+  if (!viewerConfig || typeof viewerConfig !== "object") return null;
+  const budget = Reflect.get(viewerConfig, "splatBudgetMillions");
+  return typeof budget === "number" && Number.isFinite(budget) ? budget : null;
 }
 
 function parseStoredObject(value: string): unknown {
@@ -19516,6 +20803,20 @@ function storedPairedCaptureJourney(value: string): PairedCaptureJourney | null 
     : null;
 }
 
+async function nextReleaseNumber(database: D1Database, projectId: string): Promise<number> {
+  const allocated = await database.prepare(
+    "SELECT COALESCE(MAX(release_number), 0) + 1 AS next FROM releases WHERE project_id = ?",
+  ).bind(projectId).first<{ next: number }>();
+  return allocated?.next ?? 1;
+}
+
+function isReleaseNumberSequenceConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("UNIQUE constraint failed") &&
+    message.includes("releases.project_id") &&
+    message.includes("releases.release_number");
+}
+
 function isFloorplanRevisionSequenceConflict(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("UNIQUE constraint failed") &&
@@ -19626,6 +20927,37 @@ function semanticCandidateApi(value: unknown): Record<string, unknown> {
     elevation,
     area,
     worldUnit: parseWorldUnit(rawWorldUnit),
+  };
+}
+
+// Read-only evidence about a public ASTM E57 container. Vendor extension field
+// names travel verbatim; nothing here decodes a vendor classification or mesh
+// schema, so the Studio can list them without asserting what they mean.
+function captureScanStructureApi(value: unknown): Record<string, unknown> {
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const storedFieldNames = parseStoredObject(String(row.vendor_field_names_json ?? "[]"));
+  const vendorFieldNames = (Array.isArray(storedFieldNames) ? storedFieldNames : [])
+    .filter((name): name is string => typeof name === "string");
+  return {
+    id: row.id,
+    assetId: row.asset_id,
+    assetFileName: row.asset_file_name,
+    assetFormat: row.asset_format,
+    jobId: row.job_id,
+    reportAssetId: row.report_asset_id,
+    reportFileName: row.report_file_name,
+    reportSha256: row.report_sha256 ?? row.report_asset_sha256 ?? null,
+    method: row.method,
+    status: row.status,
+    sourceFormat: row.source_format,
+    scanCount: row.scan_count,
+    imageCount: row.image_count,
+    hasPerScanPoses: row.has_per_scan_poses === 1,
+    vendorFieldNames,
+    unreadableReason: row.unreadable_reason ?? null,
+    createdAt: row.created_at,
+    limitation:
+      "Only the public ASTM E57 container structure was read. Vendor classification and mesh semantics are not parsed, and no structural claim derives from this reading.",
   };
 }
 
@@ -20561,7 +21893,7 @@ async function verifiedPhysicalNavigation(
   projectId: string,
   versionId: string,
   spatial: Record<string, unknown>,
-): Promise<{ collisionAsset: AssetRow } | null> {
+): Promise<{ collisionAsset: AssetRow; reportAsset: AssetRow; detourAsset: AssetRow } | null> {
   const artifact = navigationArtifactSchema.safeParse(
     Reflect.get(spatial, "navigationArtifact"),
   );
@@ -20634,7 +21966,7 @@ async function verifiedPhysicalNavigation(
     navmeshObject?.size !== navmeshAsset.size_bytes
   ) return null;
 
-  return { collisionAsset };
+  return { collisionAsset, reportAsset, detourAsset: navmeshAsset };
 }
 
 function isPhysicalNavigationArtifact(value: unknown): boolean {
@@ -21665,6 +22997,15 @@ function positiveInteger(value: string, fallback: number): number {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+// A fixed 10 MiB part size cannot complete an upload beyond ~97.6 GiB because
+// R2 refuses more than 10,000 parts. Scale the boundary with the declared size
+// so every accepted MAX_UPLOAD_BYTES value stays completable.
+function uploadPartSizeBytes(sizeBytes: number): number {
+  const requiredBytes = Math.ceil(sizeBytes / maximumUploadParts);
+  const roundedBytes = Math.ceil(requiredBytes / (1024 * 1024)) * 1024 * 1024;
+  return Math.min(Math.max(captureUploadPartBytes, roundedBytes), maximumPartBytes);
+}
+
 function scalarCount(result: D1Result<unknown>): number {
   return scalarNumber(result, "count");
 }
@@ -21724,8 +23065,8 @@ function notFound(context: Context<AppEnvironment>, message: string): Response {
   return context.json({ error: message, requestId: context.get("requestId") }, 404);
 }
 
-function tooManyRequests(context: Context<AppEnvironment>): Response {
-  context.header("Retry-After", "60");
+function tooManyRequests(context: Context<AppEnvironment>, retryAfterSeconds = 60): Response {
+  context.header("Retry-After", String(retryAfterSeconds));
   return context.json({ error: "Rate limit exceeded", requestId: context.get("requestId") }, 429);
 }
 
@@ -22161,6 +23502,7 @@ const worker = {
     if (controller.cron === "17 * * * *") {
       executionContext.waitUntil(runLifecycleEnforcement(env, "scheduled"));
     }
+    executionContext.waitUntil(reapExpiredJobLeases(env));
     executionContext.waitUntil(enqueueDispatchableProcessingJobs(env));
     executionContext.waitUntil(enqueueDispatchableProjectAssetCopies(env));
   },

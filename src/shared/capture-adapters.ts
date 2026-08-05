@@ -21,6 +21,7 @@ export const captureAssetPurposes = [
   "gnss_trajectory",
   "metric_point_cloud",
   "collision_mesh",
+  "vendor_semantic_mesh",
 ] as const;
 
 export type CaptureAssetPurpose = typeof captureAssetPurposes[number];
@@ -91,20 +92,24 @@ export const captureAdapterProfiles: CaptureAdapterProfile[] = [
   {
     id: "fjd-trion",
     label: "FJD Trion",
-    summary: "Preserve FJD SLAM capture, open point-cloud exports, source imagery, and portable Gaussian masters.",
+    summary: "Preserve FJD SLAM capture, open point-cloud exports, source imagery, vendor semantic exports, and portable Gaussian masters.",
     evidence: [
       "Immutable FJDSLAM or vendor project",
       "Metric E57, LAS, LAZ, PTS, or PLY point cloud",
+      "Structured E57 scan poses, image records, and point-field inventory read from the public ASTM container",
       "Portable Gaussian PLY, SPZ, or SOG",
       "Images and calibrated transforms when exported",
+      "Vendor semantic exports — classified mesh or segmentation sidecars — preserved verbatim",
     ],
     nativeInputs: [
       "fjdslam", "ply", "spz", "sog", "splat", "ksplat", "rad", "e57", "las", "laz", "pts", "jpg", "jpeg",
-      "png", "webp", "zip", "json", "csv", "yaml", "yml",
+      "png", "webp", "zip", "json", "csv", "yaml", "yml", "obj", "glb", "gltf",
     ],
     limitations: [
       "The platform records exported evidence and does not infer calibration accuracy.",
       "FJD vendor projects remain evidence unless a compatible portable Gaussian master is also supplied.",
+      "Structured E57 readings cover the public ASTM container only: scan poses, bounds, image representation types, and point-field names. Vendor extension field names are recorded verbatim and never decoded.",
+      "FJD classified mesh and segmentation semantics — indoor wall, floor, and ceiling labels — are NOT parsed. These exports are preserved as immutable evidence pending a registered indoor FJD corpus that documents the actual exported dimensions and pose records.",
     ],
   },
   {
@@ -195,6 +200,7 @@ const formatsByPurpose: Record<CaptureAssetPurpose, readonly CaptureAssetFormat[
   gnss_trajectory: ["json", "csv"],
   metric_point_cloud: ["ply", "e57", "las", "laz", "pts"],
   collision_mesh: ["glb", "gltf", "obj", "ply"],
+  vendor_semantic_mesh: ["obj", "ply", "glb", "gltf", "e57", "json", "csv", "zip"],
 };
 
 const assetKindByPurpose: Record<CaptureAssetPurpose, "source" | "master" | "web" | "pointcloud" | "collision"> = {
@@ -210,6 +216,7 @@ const assetKindByPurpose: Record<CaptureAssetPurpose, "source" | "master" | "web
   gnss_trajectory: "source",
   metric_point_cloud: "pointcloud",
   collision_mesh: "collision",
+  vendor_semantic_mesh: "source",
 };
 
 export function captureFormatsForPurpose(purpose: CaptureAssetPurpose): readonly CaptureAssetFormat[] {

@@ -1,3 +1,6 @@
+# Copy to .dev.vars, replace the placeholder values, then run
+# `npm run auth:init:local` — it generates the mandatory JWT_KEYRING secret and
+# writes it into .dev.vars for you (the Worker cannot mint tokens without it).
 SESSION_PEPPER=replace-with-an-independent-long-random-value
 WORKER_API_TOKEN=replace-with-an-independent-long-random-value
 OTP_PEPPER=replace-with-an-independent-long-random-value

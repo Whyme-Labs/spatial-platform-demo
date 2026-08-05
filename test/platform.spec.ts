@@ -1,9 +1,14 @@
-import { env } from "cloudflare:test";
+import {
+  createExecutionContext,
+  createScheduledController,
+  env,
+  waitOnExecutionContext,
+} from "cloudflare:test";
 import { exports } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { navigationArtifactSchema } from "../src/worker/contracts";
-import {
+import worker, {
   currentNavigationAuthoringState,
   navigationArtifactMatchesFrozenConnections,
   navigationAuthoringHash,
@@ -247,6 +252,7 @@ describe("Spatial Studio Worker", () => {
 
     expect(response.status).toBe(200);
     expect(body.status).toBe("ok");
+    expect(body.dependencies).toEqual({ database: "ok", cache: "ok", storage: "ok" });
     expect(JSON.stringify(body)).not.toContain("test-otp-pepper");
   });
 
@@ -924,6 +930,96 @@ describe("Spatial Studio Worker", () => {
     expect(stale.headers.get("set-cookie") ?? "").not.toContain("spatial_refresh=");
   });
 
+  it("classifies malformed and oversized JSON bodies instead of failing the request", async () => {
+    const malformed = await exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "CF-Connecting-IP": nextTestClientAddress(),
+      },
+      body: "{not valid json",
+    });
+    expect(malformed.status).toBe(400);
+    const malformedBody = await malformed.json<{ code?: string; requestId?: string }>();
+    expect(malformedBody.code).toBe("invalid_json");
+    expect(malformedBody.requestId).toBeTruthy();
+
+    const oversized = await exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "CF-Connecting-IP": nextTestClientAddress(),
+      },
+      body: JSON.stringify({
+        email: "reviewer@example.com",
+        challengeId: crypto.randomUUID(),
+        code: "9".repeat(1024 * 1024 + 64),
+      }),
+    });
+    expect(oversized.status).toBe(413);
+    const oversizedBody = await oversized.json<{ code?: string; requestId?: string }>();
+    expect(oversizedBody.code).toBe("request_body_too_large");
+    expect(oversizedBody.requestId).toBeTruthy();
+  });
+
+  it("rate limits refresh attempts per address with the real window in Retry-After", async () => {
+    const clientAddress = nextTestClientAddress();
+    const windowStart = Math.floor(Date.now() / 1000 / 600) * 600;
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO rate_limits (bucket, subject, window_start, request_count)
+        VALUES ('refresh-ip', ?, ?, 60)
+      `).bind(clientAddress, windowStart),
+      env.DB.prepare(`
+        INSERT INTO rate_limits (bucket, subject, window_start, request_count)
+        VALUES ('refresh-ip', ?, ?, 60)
+      `).bind(clientAddress, windowStart + 600),
+    ]);
+
+    const denied = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "CF-Connecting-IP": clientAddress },
+    });
+    expect(denied.status).toBe(429);
+    expect(denied.headers.get("retry-after")).toBe("600");
+
+    const freshAddress = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: { "CF-Connecting-IP": nextTestClientAddress() },
+    });
+    expect(freshAddress.status).toBe(204);
+  });
+
+  it("rejects declared cross-origin writes while keeping non-browser clients working", async () => {
+    const crossOrigin = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: {
+        Origin: "https://evil.example",
+        "CF-Connecting-IP": nextTestClientAddress(),
+      },
+    });
+    expect(crossOrigin.status).toBe(403);
+
+    const crossSite = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: {
+        "Sec-Fetch-Site": "cross-site",
+        "CF-Connecting-IP": nextTestClientAddress(),
+      },
+    });
+    expect(crossSite.status).toBe(403);
+
+    const canonical = await exports.default.fetch(`${origin}/api/auth/refresh`, {
+      method: "POST",
+      headers: {
+        Origin: origin,
+        "Sec-Fetch-Site": "same-origin",
+        "CF-Connecting-IP": nextTestClientAddress(),
+      },
+    });
+    expect(canonical.status).toBe(204);
+  });
+
   it("manages organisation invitations and invalidates access across role lifecycle changes", async () => {
     const administrator = await loginSession();
     const teammateEmail = `operator-${crypto.randomUUID().slice(0, 8)}@example.com`;
@@ -1229,7 +1325,53 @@ describe("Spatial Studio Worker", () => {
       }),
     });
     expect(primaryInvitation.status).toBe(201);
+    const primaryInvitationBody = await primaryInvitation.json<{ invitation: { id: string } }>();
+    // An account that already belongs to an organisation is never enrolled
+    // silently: the invitation stays pending until it is answered explicitly.
     const multiOrganisationSession = await loginSession(multiOrganisationEmail);
+    const membershipsBeforeConsent = await exports.default.fetch(`${origin}/api/auth/organisations`, {
+      headers: { cookie: multiOrganisationSession.accessCookie },
+    });
+    expect(membershipsBeforeConsent.status).toBe(200);
+    const pendingMemberships = await membershipsBeforeConsent.json<{
+      organisations: Array<{ id: string }>;
+    }>();
+    expect(pendingMemberships.organisations.map((organisation) => organisation.id)).toEqual([
+      secondOrganisationId,
+    ]);
+    const pendingSession = await exports.default.fetch(`${origin}/api/auth/session`, {
+      headers: { cookie: multiOrganisationSession.accessCookie },
+    });
+    expect(pendingSession.status).toBe(200);
+    await expect(pendingSession.json()).resolves.toMatchObject({
+      pendingInvitations: [
+        {
+          id: primaryInvitationBody.invitation.id,
+          organisationId: primaryOrganisationId,
+          role: "production_operator",
+        },
+      ],
+    });
+
+    const acceptedInvitation = await exports.default.fetch(
+      `${origin}/api/team/invitations/${primaryInvitationBody.invitation.id}/accept`,
+      {
+        method: "POST",
+        headers: { cookie: multiOrganisationSession.accessCookie, origin },
+      },
+    );
+    expect(acceptedInvitation.status).toBe(200);
+    await expect(acceptedInvitation.json()).resolves.toMatchObject({
+      invitation: { organisationId: primaryOrganisationId, status: "accepted" },
+    });
+    const repeatedAcceptance = await exports.default.fetch(
+      `${origin}/api/team/invitations/${primaryInvitationBody.invitation.id}/accept`,
+      {
+        method: "POST",
+        headers: { cookie: multiOrganisationSession.accessCookie, origin },
+      },
+    );
+    expect(repeatedAcceptance.status).toBe(404);
     const membershipsAfterAcceptance = await exports.default.fetch(`${origin}/api/auth/organisations`, {
       headers: { cookie: multiOrganisationSession.accessCookie },
     });
@@ -1240,6 +1382,63 @@ describe("Spatial Studio Worker", () => {
     expect(membershipsBody.organisations.map((organisation) => organisation.id)).toEqual(
       expect.arrayContaining([primaryOrganisationId, secondOrganisationId]),
     );
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE action = 'team.invitation_accept' AND resource_id = ?",
+    ).bind(primaryInvitationBody.invitation.id).first<{ count: number }>()).toMatchObject({ count: 1 });
+  });
+
+  it("declines a tenant invitation without enrolling the invitee", async () => {
+    const administratorCookie = await login();
+    const invitedEmail = `decline-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const invitedUserId = crypto.randomUUID();
+    const otherOrganisationId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug, created_at) VALUES (?, ?, ?, ?)",
+      ).bind(otherOrganisationId, "Decline tenant", `decline-${otherOrganisationId.slice(0, 8)}`, now),
+      env.DB.prepare(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, 'Declining operator', ?)",
+      ).bind(invitedUserId, invitedEmail, now),
+      env.DB.prepare(`
+        INSERT INTO memberships
+          (organisation_id, user_id, role, created_at, updated_at, status)
+        VALUES (?, ?, 'production_operator', ?, ?, 'active')
+      `).bind(otherOrganisationId, invitedUserId, now, now),
+    ]);
+    const invitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: { cookie: administratorCookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email: invitedEmail,
+        role: "production_operator",
+        expiresInDays: 7,
+      }),
+    });
+    expect(invitation.status).toBe(201);
+    const invitationId = (await invitation.json<{ invitation: { id: string } }>()).invitation.id;
+    const invitedSession = await loginSession(invitedEmail);
+    const declined = await exports.default.fetch(
+      `${origin}/api/team/invitations/${invitationId}/decline`,
+      { method: "POST", headers: { cookie: invitedSession.accessCookie, origin } },
+    );
+    expect(declined.status).toBe(200);
+    await expect(declined.json()).resolves.toMatchObject({
+      invitation: { id: invitationId, status: "declined" },
+    });
+    expect(await env.DB.prepare(
+      "SELECT status FROM organisation_invitations WHERE id = ?",
+    ).bind(invitationId).first<{ status: string }>()).toMatchObject({ status: "declined" });
+    expect(await env.DB.prepare(
+      "SELECT status FROM memberships WHERE user_id = ? AND organisation_id != ?",
+    ).bind(invitedUserId, otherOrganisationId).first<{ status: string }>()).toMatchObject({
+      status: "revoked",
+    });
+    const sessionAfterDecline = await exports.default.fetch(`${origin}/api/auth/session`, {
+      headers: { cookie: invitedSession.accessCookie },
+    });
+    await expect(sessionAfterDecline.json()).resolves.toMatchObject({ pendingInvitations: [] });
   });
 
   it("creates projects and enforces tenant isolation", async () => {
@@ -1531,6 +1730,99 @@ describe("Spatial Studio Worker", () => {
       WHERE invoice_id = ? OR subscription_id = ?
     `).bind(issued.invoice.id, issued.subscription.id).first<{ count: number }>();
     expect(operationCount?.count).toBe(3);
+  });
+
+  it("keeps one live hosting subscription per project across repeated manual invoices", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Recurring billing ${crypto.randomUUID().slice(0, 8)}`,
+        customerName: "Spatial Merchant",
+        customerEmail: "accounts@example.com",
+        captureAdapter: "open-import",
+        deliveryTemplate: "Venue navigator",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const projectId = (await projectResponse.json<{ project: { id: string } }>()).project.id;
+    const issueInvoice = async (amountCents: number, reference: string) => {
+      const periodStart = new Date().toISOString();
+      const periodEnd = new Date(Date.now() + 30 * 86_400_000).toISOString();
+      return exports.default.fetch(`${origin}/api/admin/billing/invoices`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          projectId,
+          planCode: "venue",
+          amountCents,
+          currency: "MYR",
+          periodStart,
+          periodEnd,
+          dueAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+          archiveOnExpiry: true,
+          externalReference: reference,
+        }),
+      });
+    };
+    const first = await issueInvoice(49_900, "INV-RECUR-001");
+    expect(first.status).toBe(201);
+    const firstBody = await first.json<{
+      invoice: { id: string };
+      subscription: { id: string };
+    }>();
+    const second = await issueInvoice(59_900, "INV-RECUR-002");
+    expect(second.status).toBe(201);
+    const secondBody = await second.json<{
+      invoice: { id: string };
+      subscription: { id: string };
+    }>();
+    // A second billing period attaches to the same non-terminal subscription
+    // instead of inserting a duplicate that cancellation would then pick between.
+    expect(secondBody.subscription.id).toBe(firstBody.subscription.id);
+    expect(secondBody.invoice.id).not.toBe(firstBody.invoice.id);
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM project_hosting_subscriptions
+      WHERE project_id = ? AND status IN ('active', 'past_due')
+    `).bind(projectId).first<{ count: number }>()).toMatchObject({ count: 1 });
+    // The audit rows ride in the same batch as the mutation they record.
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM audit_events
+      WHERE action = 'billing.manual.invoice.issue' AND resource_id IN (?, ?)
+    `).bind(firstBody.invoice.id, secondBody.invoice.id).first<{ count: number }>())
+      .toMatchObject({ count: 2 });
+
+    const cancelled = await exports.default.fetch(
+      `${origin}/api/admin/billing/subscriptions/${firstBody.subscription.id}/transition`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          status: "cancelled",
+          note: "Merchant closed the venue.",
+        }),
+      },
+    );
+    expect(cancelled.status).toBe(200);
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM project_hosting_subscriptions
+      WHERE project_id = ? AND status IN ('active', 'past_due')
+    `).bind(projectId).first<{ count: number }>()).toMatchObject({ count: 0 });
+
+    // A subsequent invoice opens exactly one replacement subscription, so the
+    // partial unique index still holds.
+    const third = await issueInvoice(69_900, "INV-RECUR-003");
+    expect(third.status).toBe(201);
+    const thirdBody = await third.json<{ subscription: { id: string } }>();
+    expect(thirdBody.subscription.id).not.toBe(firstBody.subscription.id);
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM project_hosting_subscriptions
+      WHERE project_id = ? AND status IN ('active', 'past_due')
+    `).bind(projectId).first<{ count: number }>()).toMatchObject({ count: 1 });
   });
 
   it("manages project metadata and preserves lifecycle state across archive and restore", async () => {
@@ -4018,7 +4310,6 @@ describe("Spatial Studio Worker", () => {
           viewerConfig: {
             title: "Publishable apartment — revised presentation",
             measurementDisclaimer: "Visual experience only.",
-            splatBudgetMillions: 1,
             initialCamera: {
               position: [3.14, 0.18, -3.56],
               target: [3.08, -0.31, -2.69],
@@ -4035,6 +4326,20 @@ describe("Spatial Studio Worker", () => {
     }>();
     expect(revisedRelease.release).toMatchObject({ releaseNumber: 2, versionNumber: 1 });
     expect(revisedRelease.release.id).not.toBe(release.release.id);
+    // The publish batch only reports success once the channel actually points at
+    // the new release, so a committed release is never left without its channel.
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM releases r
+      WHERE r.project_id = ? AND r.revoked_at IS NULL AND NOT EXISTS (
+        SELECT 1 FROM release_channels rc
+        WHERE rc.active_release_id = r.id OR rc.project_id = r.project_id
+      )
+    `).bind(project.id).first<{ count: number }>()).toMatchObject({ count: 0 });
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM audit_events
+      WHERE action = 'release.publish' AND resource_id IN (?, ?)
+    `).bind(release.release.id, revisedRelease.release.id).first<{ count: number }>())
+      .toMatchObject({ count: 2 });
     const supersededTelemetryResponse = await exports.default.fetch(`${origin}/api/telemetry`, {
       method: "POST",
       headers: {
@@ -4084,7 +4389,13 @@ describe("Spatial Studio Worker", () => {
     const manifest = await manifestResponse.json<{
       release: { number: number };
       project: { versionNumber: number };
-      scene: { contentUrl: string; posterUrl: string | null; collisionUrl: string | null };
+      scene: {
+        contentUrl: string;
+        posterUrl: string | null;
+        collisionUrl: string | null;
+        detourUrl: string | null;
+        navMeshUrl: string | null;
+      };
       spatial: {
         entities: Array<{ id: string; label: string }>;
         navigationMesh: { indices: number[]; sourceEntityIds: string[] };
@@ -4108,12 +4419,20 @@ describe("Spatial Studio Worker", () => {
         };
       };
       viewer: {
+        splatBudgetMillions: number | null;
         initialCamera: {
           position: [number, number, number];
           target: [number, number, number];
           up: [number, number, number];
           fovDegrees: number;
         };
+      };
+      integrity: {
+        assetSha256: string | null;
+        sessionId: string;
+        sessionExpiresAt: string;
+        sessionHardExpiresAt: string;
+        sessionRenewalPath: string;
       };
     }>();
     expect(manifest.release.number).toBe(2);
@@ -4133,6 +4452,120 @@ describe("Spatial Studio Worker", () => {
     expect(new Uint8Array(await collisionResponse.arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3, 4]),
     );
+
+    // A release published without an operator budget publishes an explicit null
+    // so the viewer runs its device-aware selection instead of a fixed default.
+    expect(manifest.viewer.splatBudgetMillions).toBeNull();
+
+    // The frozen Detour navmesh is reachable through the release asset route so
+    // a renderer can stream it instead of decoding the inline base64 copy.
+    expect(manifest.scene.detourUrl).toContain(
+      `/${manifest.spatial.navigationAssets.detour.assetId}/`,
+    );
+    expect(manifest.scene.detourUrl).toContain("?token=");
+    const detourResponse = await exports.default.fetch(
+      new URL(manifest.scene.detourUrl!, origin),
+    );
+    expect(detourResponse.status).toBe(200);
+
+    // A token-gated asset is authorised on every request and only then served
+    // from the edge, keyed on immutable asset identity and never on the token.
+    expect(collisionResponse.headers.get("x-spatial-asset-cache")).toBe("MISS");
+    expect(collisionResponse.headers.get("cache-control")).toBe(
+      "private, max-age=1800, immutable",
+    );
+    const cachedCollisionResponse = await exports.default.fetch(
+      new URL(manifest.scene.collisionUrl!, origin),
+    );
+    expect(cachedCollisionResponse.status).toBe(200);
+    expect(cachedCollisionResponse.headers.get("x-spatial-asset-cache")).toBe("HIT");
+    expect(cachedCollisionResponse.headers.get("cache-control")).toBe(
+      "private, max-age=1800, immutable",
+    );
+    const untokenizedCollisionResponse = await exports.default.fetch(
+      new URL(new URL(manifest.scene.collisionUrl!, origin).pathname, origin),
+    );
+    expect(untokenizedCollisionResponse.status).toBe(401);
+
+    // Scene tokens are bound to a renewable D1 session so a long walkthrough can
+    // extend its streaming grant instead of 401ing mid-scene.
+    expect(manifest.integrity).toMatchObject({
+      sessionRenewalPath: "/api/scene-sessions/renew",
+    });
+    expect(manifest.integrity.sessionId).toEqual(expect.any(String));
+    expect(Date.parse(manifest.integrity.sessionHardExpiresAt)).toBeGreaterThan(
+      Date.parse(manifest.integrity.sessionExpiresAt),
+    );
+    const collisionAssetPath =
+      `/asset/${revisedRelease.release.id}/${collisionAssetId}/fixture.collision.glb`;
+    const sceneToken = new URL(manifest.scene.collisionUrl!, origin)
+      .searchParams.get("token")!;
+    const strandedSessionToken = await signSceneToken({
+      releaseId: revisedRelease.release.id,
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+      sessionId: crypto.randomUUID(),
+    }, env.SESSION_PEPPER);
+    const strandedSessionAsset = await exports.default.fetch(
+      `${origin}${collisionAssetPath}?token=${encodeURIComponent(strandedSessionToken)}`,
+    );
+    expect(strandedSessionAsset.status).toBe(401);
+    // Tokens minted before renewable sessions carry no sessionId and must keep
+    // validating on the signature alone until they lapse naturally.
+    const legacySceneToken = await signSceneToken({
+      releaseId: revisedRelease.release.id,
+      expiresAt: Math.floor(Date.now() / 1000) + 600,
+    }, env.SESSION_PEPPER);
+    const legacySceneAsset = await exports.default.fetch(
+      `${origin}${collisionAssetPath}?token=${encodeURIComponent(legacySceneToken)}`,
+    );
+    expect(legacySceneAsset.status).toBe(200);
+
+    const renewalResponse = await exports.default.fetch(
+      `${origin}${manifest.integrity.sessionRenewalPath}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: sceneToken }),
+      },
+    );
+    expect(renewalResponse.status).toBe(200);
+    const renewedSession = await renewalResponse.json<{
+      sessionId: string;
+      token: string;
+      expiresAtEpochSeconds: number;
+      sessionHardExpiresAt: string;
+    }>();
+    expect(renewedSession.sessionId).toBe(manifest.integrity.sessionId);
+    expect(renewedSession.sessionHardExpiresAt).toBe(manifest.integrity.sessionHardExpiresAt);
+    expect(renewedSession.expiresAtEpochSeconds * 1000).toBeGreaterThanOrEqual(
+      Date.parse(manifest.integrity.sessionExpiresAt),
+    );
+    const renewedAsset = await exports.default.fetch(
+      `${origin}${collisionAssetPath}?token=${encodeURIComponent(renewedSession.token)}`,
+    );
+    expect(renewedAsset.status).toBe(200);
+    const rejectedRenewal = await exports.default.fetch(
+      `${origin}${manifest.integrity.sessionRenewalPath}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: legacySceneToken }),
+      },
+    );
+    expect(rejectedRenewal.status).toBe(401);
+    // Past the hard ceiling the walkthrough must start a fresh session.
+    await env.DB.prepare(`
+      UPDATE scene_render_sessions SET hard_expires_at_epoch = ? WHERE id = ?
+    `).bind(Math.floor(Date.now() / 1000) - 1, manifest.integrity.sessionId).run();
+    const ceilingRenewal = await exports.default.fetch(
+      `${origin}${manifest.integrity.sessionRenewalPath}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: renewedSession.token }),
+      },
+    );
+    expect(ceilingRenewal.status).toBe(410);
     expect(manifest.viewer.initialCamera.up).toEqual([-0.01, -0.87, -0.49]);
     expect(manifest.spatial).toMatchObject({
       entities: [{ id: snapshotEntity.entity.id, label: "Published walkable room" }],
@@ -6337,20 +6770,83 @@ describe("Spatial Studio Worker", () => {
       `).bind(expiredHistoryHash, expiredSessionId),
     ]);
 
+    // A second affected tenant proves the run-level digest is sent once rather
+    // than once per organisation touched by the run.
+    const tenantOrganisationId = crypto.randomUUID();
+    const tenantProjectId = crypto.randomUUID();
+    const tenantVersionId = crypto.randomUUID();
+    const tenantAssetId = crypto.randomUUID();
+    const tenantObjectKey =
+      `raw-private/${tenantOrganisationId}/${tenantProjectId}/${tenantVersionId}/expired-source.ply`;
+    await env.SPATIAL_ASSETS.put(tenantObjectKey, new Uint8Array([5, 6, 7, 8]));
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organisations (id, name, slug) VALUES (?, 'Retention tenant', ?)",
+      ).bind(tenantOrganisationId, `retention-tenant-${tenantOrganisationId.slice(0, 8)}`),
+      env.DB.prepare(`
+        INSERT INTO projects
+          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
+        VALUES (?, ?, 'Tenant retention proof', ?, 'ARCHIVED', 'open-import', 'property-tour', ?)
+      `).bind(
+        tenantProjectId,
+        tenantOrganisationId,
+        `retention-${tenantProjectId.slice(0, 8)}`,
+        member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
+        VALUES (?, ?, 1, 'ARCHIVED', ?)
+      `).bind(tenantVersionId, tenantProjectId, member!.userId),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, integrity_status, created_at)
+        VALUES (?, ?, ?, ?, 'source', 'ply', ?, 'expired-source.ply',
+          'application/octet-stream', 4, 'verified', '2000-01-01T00:00:00.000Z')
+      `).bind(tenantAssetId, tenantOrganisationId, tenantProjectId, tenantVersionId, tenantObjectKey),
+      env.DB.prepare(`
+        INSERT INTO project_retention_policies
+          (project_id, organisation_id, raw_retention_days, derivative_retention_days,
+            release_retention_days, legal_hold, updated_by)
+        VALUES (?, ?, 0, 30, 30, 0, ?)
+      `).bind(tenantProjectId, tenantOrganisationId, member!.userId),
+    ]);
+
+    const digestsBeforeRun = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM notification_deliveries WHERE template = 'lifecycle_digest'",
+    ).first<{ count: number }>();
     const response = await exports.default.fetch(`${origin}/api/hosting/lifecycle/run`, {
       method: "POST",
       headers: { cookie },
     });
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
+    const lifecycleRun = await response.json<{
+      runId: string;
+      status: string;
+      summary: Record<string, number>;
+    }>();
+    expect(lifecycleRun).toMatchObject({
       status: "succeeded",
       summary: {
-        assetsDeleted: 1,
+        assetsDeleted: 2,
         otpChallengesDeleted: 1,
         rateLimitWindowsDeleted: 1,
         refreshHistoryDeleted: 1,
+        notificationsSent: 1,
       },
     });
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM lifecycle_actions
+      WHERE run_id = ? AND action = 'notification_sent'
+    `).bind(lifecycleRun.runId).first<{ count: number }>()).toMatchObject({ count: 1 });
+    expect(await env.DB.prepare(`
+      SELECT COUNT(*) AS count FROM lifecycle_actions
+      WHERE run_id = ? AND action = 'asset_deleted'
+    `).bind(lifecycleRun.runId).first<{ count: number }>()).toMatchObject({ count: 2 });
+    const digestsAfterRun = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM notification_deliveries WHERE template = 'lifecycle_digest'",
+    ).first<{ count: number }>();
+    expect(digestsAfterRun!.count - digestsBeforeRun!.count).toBe(1);
     await expect(env.SPATIAL_ASSETS.head(objectKey)).resolves.toBeNull();
     const tombstone = await env.DB.prepare(`
       SELECT deleted_at, deletion_reason FROM assets WHERE id = ?
@@ -6702,6 +7198,760 @@ describe("Spatial Studio Worker", () => {
       qaReports: [{ point_count: 3, result: "pass" }],
       deliverables: [{ id: deliverable.deliverable.id, asset_id: deliverable.deliverable.assetId }],
       economics: { totalCostCents: 0, currency: "MYR" },
+    });
+  });
+});
+
+describe("upload integrity and processing-job durability", () => {
+  async function createProject(cookie: string, captureAdapter = "open-import"): Promise<string> {
+    const response = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Integrity ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter,
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    expect(response.status).toBe(201);
+    const { project } = await response.json<{ project: { id: string } }>();
+    return project.id;
+  }
+
+  async function createUpload(
+    cookie: string,
+    projectId: string,
+    body: Record<string, unknown>,
+  ): Promise<{ id: string; assetId: string; versionId: string; partSizeBytes: number }> {
+    const response = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/uploads`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ clientOperationId: crypto.randomUUID(), ...body }),
+      },
+    );
+    expect(response.status).toBe(201);
+    const { upload } = await response.json<{
+      upload: { id: string; assetId: string; versionId: string; partSizeBytes: number };
+    }>();
+    return upload;
+  }
+
+  it("scales the multipart part size so a session can never exceed R2's part ceiling", async () => {
+    const cookie = await login();
+    const projectId = await createProject(cookie);
+    const small = await createUpload(cookie, projectId, {
+      fileName: "small.rad",
+      sizeBytes: 4 * 1024 * 1024,
+      format: "rad",
+      mimeType: "application/octet-stream",
+    });
+    expect(small.partSizeBytes).toBe(10 * 1024 * 1024);
+
+    const hugeSizeBytes = 100 * 1024 * 1024 * 1024;
+    const huge = await createUpload(cookie, projectId, {
+      fileName: "huge.rad",
+      sizeBytes: hugeSizeBytes,
+      format: "rad",
+      mimeType: "application/octet-stream",
+    });
+    expect(huge.partSizeBytes).toBeGreaterThan(10 * 1024 * 1024);
+    expect(huge.partSizeBytes % (1024 * 1024)).toBe(0);
+    expect(huge.partSizeBytes).toBeLessThanOrEqual(95 * 1024 * 1024);
+    expect(Math.ceil(hugeSizeBytes / huge.partSizeBytes)).toBeLessThanOrEqual(10_000);
+    const persisted = await env.DB.prepare(
+      "SELECT part_size_bytes FROM upload_sessions WHERE id = ?",
+    ).bind(huge.id).first<{ part_size_bytes: number }>();
+    expect(persisted?.part_size_bytes).toBe(huge.partSizeBytes);
+  });
+
+  it("records a server-computed digest and quarantines a declared digest that does not match", async () => {
+    const cookie = await login();
+    const bytes = new Uint8Array(64).fill(7);
+    const trueSha256 = await sha256Hex(bytes);
+
+    const honestProject = await createProject(cookie);
+    const honest = await createUpload(cookie, honestProject, {
+      fileName: "honest.rad",
+      sizeBytes: bytes.byteLength,
+      format: "rad",
+      mimeType: "application/octet-stream",
+      sha256: trueSha256,
+    });
+    const honestPart = await exports.default.fetch(
+      `${origin}/api/uploads/${honest.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-length": String(bytes.byteLength) },
+        body: bytes,
+      },
+    );
+    expect(honestPart.status).toBe(200);
+    await expect(honestPart.json()).resolves.toMatchObject({ sizeBytes: bytes.byteLength });
+    const honestEtag = (await env.DB.prepare(
+      "SELECT etag FROM upload_parts WHERE upload_session_id = ? AND part_number = 1",
+    ).bind(honest.id).first<{ etag: string }>())!.etag;
+    const honestComplete = await exports.default.fetch(
+      `${origin}/api/uploads/${honest.id}/complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ partNumber: 1, etag: honestEtag }] }),
+      },
+    );
+    expect(honestComplete.status).toBe(200);
+    await expect(honestComplete.json()).resolves.toMatchObject({
+      asset: {
+        sha256: trueSha256,
+        integrityStatus: "verified",
+        integritySource: "server_verified",
+      },
+    });
+
+    const lyingProject = await createProject(cookie);
+    const lying = await createUpload(cookie, lyingProject, {
+      fileName: "lying.rad",
+      sizeBytes: bytes.byteLength,
+      format: "rad",
+      mimeType: "application/octet-stream",
+      sha256: "b".repeat(64),
+    });
+    await exports.default.fetch(`${origin}/api/uploads/${lying.id}/parts/1`, {
+      method: "PUT",
+      headers: { cookie, "content-length": String(bytes.byteLength) },
+      body: bytes,
+    });
+    const lyingEtag = (await env.DB.prepare(
+      "SELECT etag FROM upload_parts WHERE upload_session_id = ? AND part_number = 1",
+    ).bind(lying.id).first<{ etag: string }>())!.etag;
+    const lyingComplete = await exports.default.fetch(
+      `${origin}/api/uploads/${lying.id}/complete`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ parts: [{ partNumber: 1, etag: lyingEtag }] }),
+      },
+    );
+    expect(lyingComplete.status).toBe(409);
+    const quarantined = await env.DB.prepare(`
+      SELECT a.integrity_status, a.integrity_source, a.sha256,
+        u.status AS upload_status,
+        (SELECT COUNT(*) FROM processing_jobs WHERE input_asset_id = a.id) AS job_count
+      FROM assets a
+      JOIN upload_sessions u ON u.asset_id = a.id
+      WHERE a.id = ?
+    `).bind(lying.assetId).first<{
+      integrity_status: string;
+      integrity_source: string;
+      sha256: string;
+      upload_status: string;
+      job_count: number;
+    }>();
+    expect(quarantined).toEqual({
+      integrity_status: "failed",
+      integrity_source: "server_verified",
+      sha256: trueSha256,
+      upload_status: "FAILED",
+      job_count: 0,
+    });
+  });
+
+  it("retires expired open upload sessions and unblocks project archival", async () => {
+    const cookie = await login();
+    const projectId = await createProject(cookie);
+    const upload = await createUpload(cookie, projectId, {
+      fileName: "abandoned.rad",
+      sizeBytes: 1024,
+      format: "rad",
+      mimeType: "application/octet-stream",
+    });
+    const blockedArchive = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/archive`,
+      { method: "POST", headers: { cookie, origin } },
+    );
+    expect(blockedArchive.status).toBe(409);
+
+    await env.DB.prepare(
+      "UPDATE upload_sessions SET expires_at = datetime('now', '-1 day') WHERE id = ?",
+    ).bind(upload.id).run();
+    const expiredArchive = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/archive`,
+      { method: "POST", headers: { cookie, origin } },
+    );
+    expect(expiredArchive.status).toBe(200);
+    await exports.default.fetch(`${origin}/api/projects/${projectId}/restore`, {
+      method: "POST",
+      headers: { cookie, origin },
+    });
+
+    const lifecycle = await exports.default.fetch(`${origin}/api/hosting/lifecycle/run`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(lifecycle.status).toBe(200);
+    const summary = await lifecycle.json<{ summary: { uploadSessionsExpired: number } }>();
+    expect(summary.summary.uploadSessionsExpired).toBeGreaterThanOrEqual(1);
+    const retired = await env.DB.prepare(
+      "SELECT status FROM upload_sessions WHERE id = ?",
+    ).bind(upload.id).first<{ status: string }>();
+    expect(retired?.status).toBe("ABORTED");
+    const action = await env.DB.prepare(
+      "SELECT action FROM lifecycle_actions WHERE resource_id = ? AND resource_type = 'upload_session'",
+    ).bind(upload.id).first<{ action: string }>();
+    expect(action?.action).toBe("upload_session_expired");
+  });
+
+  it("keeps the highest reported progress across heartbeats", async () => {
+    const cookie = await login();
+    const projectId = await createProject(cookie);
+    const project = await env.DB.prepare(
+      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
+    ).bind(projectId).first<{ organisation_id: string; created_by: string }>();
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'PROCESSING', '{}', ?)
+      `).bind(versionId, projectId, project!.created_by),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status)
+        VALUES (?, ?, ?, ?, 'source', 'rad', ?, 'scene.rad', 'application/octet-stream',
+          16, ?, 'pending')
+      `).bind(
+        assetId,
+        project!.organisation_id,
+        projectId,
+        versionId,
+        `raw-private/${project!.organisation_id}/${projectId}/${versionId}/scene.rad`,
+        "e".repeat(64),
+      ),
+      env.DB.prepare(`
+        INSERT INTO processing_jobs
+          (id, organisation_id, project_id, version_id, input_asset_id, job_type,
+            processor_version, idempotency_key, state)
+        VALUES (?, ?, ?, ?, ?, 'asset.validate', 'open-import-v1', ?, 'QUEUED')
+      `).bind(
+        jobId,
+        project!.organisation_id,
+        projectId,
+        versionId,
+        assetId,
+        `heartbeat-progress:${jobId}`,
+      ),
+    ]);
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workerId: "progress-worker", jobId }),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const lease = await leaseResponse.json<{ leaseToken: string }>();
+    for (const progress of [96, 12]) {
+      const heartbeat = await exports.default.fetch(
+        `${origin}/api/worker/jobs/${jobId}/heartbeat`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ leaseToken: lease.leaseToken, progress, message: `at ${progress}` }),
+        },
+      );
+      expect(heartbeat.status).toBe(200);
+    }
+    const stored = await env.DB.prepare(
+      "SELECT progress, progress_message FROM processing_jobs WHERE id = ?",
+    ).bind(jobId).first<{ progress: number; progress_message: string }>();
+    expect(stored).toEqual({ progress: 96, progress_message: "at 12" });
+  });
+
+  it("bounds operator retries and clears the dispatch stamp on requeue", async () => {
+    const cookie = await login();
+    const projectId = await createProject(cookie);
+    const project = await env.DB.prepare(
+      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
+    ).bind(projectId).first<{ organisation_id: string; created_by: string }>();
+    const versionId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'PROCESSING_FAILED', '{}', ?)
+      `).bind(versionId, projectId, project!.created_by),
+      env.DB.prepare(`
+        INSERT INTO processing_jobs
+          (id, organisation_id, project_id, version_id, job_type, processor_version,
+            idempotency_key, state, retry_count, dispatched_at)
+        VALUES (?, ?, ?, ?, 'asset.validate', 'open-import-v1', ?, 'DEAD_LETTER', 4,
+          datetime('now'))
+      `).bind(
+        jobId,
+        project!.organisation_id,
+        projectId,
+        versionId,
+        `retry-bound:${jobId}`,
+      ),
+    ]);
+    const retry = await exports.default.fetch(`${origin}/api/jobs/${jobId}/retry`, {
+      method: "POST",
+      headers: { cookie, origin },
+    });
+    expect(retry.status).toBe(200);
+    await expect(retry.json()).resolves.toMatchObject({
+      job: { state: "QUEUED", retryCount: 5 },
+      retriesRemaining: 0,
+    });
+    const requeued = await env.DB.prepare(
+      "SELECT retry_count, dispatched_at FROM processing_jobs WHERE id = ?",
+    ).bind(jobId).first<{ retry_count: number; dispatched_at: string | null }>();
+    expect(requeued?.retry_count).toBe(5);
+    expect(requeued?.dispatched_at).toBeNull();
+
+    await env.DB.prepare(
+      "UPDATE processing_jobs SET state = 'DEAD_LETTER' WHERE id = ?",
+    ).bind(jobId).run();
+    const exhausted = await exports.default.fetch(`${origin}/api/jobs/${jobId}/retry`, {
+      method: "POST",
+      headers: { cookie, origin },
+    });
+    expect(exhausted.status).toBe(409);
+    await expect(exhausted.json()).resolves.toMatchObject({ code: "retry_limit_exhausted" });
+  });
+});
+
+describe("processing-job dispatch, lease reaping, and output size", () => {
+  async function seedLeasableJob(options: {
+    jobType: string;
+    state?: string;
+    attemptCount?: number;
+    maxAttempts?: number;
+    leaseExpiresAt?: string | null;
+    assetKind?: string;
+    assetFormat?: string;
+    assetBytes?: Uint8Array;
+    assetSha256?: string;
+  }): Promise<{
+    cookie: string;
+    organisationId: string;
+    createdBy: string;
+    projectId: string;
+    versionId: string;
+    assetId: string;
+    jobId: string;
+    objectKey: string;
+  }> {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Dispatch ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const owner = (await env.DB.prepare(
+      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
+    ).bind(project.id).first<{ organisation_id: string; created_by: string }>())!;
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const assetBytes = options.assetBytes ?? new Uint8Array(8).fill(3);
+    const assetSha256 = options.assetSha256 ?? await sha256Hex(assetBytes);
+    const assetKind = options.assetKind ?? "source";
+    const assetFormat = options.assetFormat ?? "rad";
+    const objectKey =
+      `raw-private/${owner.organisation_id}/${project.id}/${versionId}/input.${assetFormat}`;
+    await env.SPATIAL_ASSETS.put(objectKey, assetBytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'PROCESSING', '{}', ?)
+      `).bind(versionId, project.id, owner.created_by),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status, integrity_source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'application/octet-stream', ?, ?, 'verified',
+          'server_verified')
+      `).bind(
+        assetId,
+        owner.organisation_id,
+        project.id,
+        versionId,
+        assetKind,
+        assetFormat,
+        objectKey,
+        `input.${assetFormat}`,
+        assetBytes.byteLength,
+        assetSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO processing_jobs
+          (id, organisation_id, project_id, version_id, input_asset_id, job_type,
+            processor_version, idempotency_key, state, attempt_count, max_attempts,
+            lease_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'spatial-processor/0.11.0', ?, ?, ?, ?, ?)
+      `).bind(
+        jobId,
+        owner.organisation_id,
+        project.id,
+        versionId,
+        assetId,
+        options.jobType,
+        `dispatch-fixture:${jobId}`,
+        options.state ?? "QUEUED",
+        options.attemptCount ?? 0,
+        options.maxAttempts ?? 3,
+        options.leaseExpiresAt ?? null,
+      ),
+    ]);
+    return {
+      cookie,
+      organisationId: owner.organisation_id,
+      createdBy: owner.created_by,
+      projectId: project.id,
+      versionId,
+      assetId,
+      jobId,
+      objectKey,
+    };
+  }
+
+  it("dispatches a reconciled job once per backoff window instead of every minute", async () => {
+    const seeded = await seedLeasableJob({ jobType: "asset.validate" });
+    const processingSend = vi.fn(async () => undefined);
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: processingSend },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    for (let tick = 0; tick < 3; tick += 1) {
+      const context = createExecutionContext();
+      await worker.scheduled!(
+        createScheduledController({ cron: "* * * * *" }),
+        scheduledEnv,
+        context,
+      );
+      await waitOnExecutionContext(context);
+    }
+    expect(
+      processingSend.mock.calls.filter(([message]) =>
+        (message as { jobId?: string }).jobId === seeded.jobId
+      ),
+    ).toHaveLength(1);
+    const stamped = await env.DB.prepare(
+      "SELECT dispatched_at FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{ dispatched_at: string | null }>();
+    expect(stamped?.dispatched_at).toBeTruthy();
+
+    await env.DB.prepare(
+      "UPDATE processing_jobs SET dispatched_at = datetime('now', '-20 minutes') WHERE id = ?",
+    ).bind(seeded.jobId).run();
+    const laterContext = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      laterContext,
+    );
+    await waitOnExecutionContext(laterContext);
+    expect(
+      processingSend.mock.calls.filter(([message]) =>
+        (message as { jobId?: string }).jobId === seeded.jobId
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("dead-letters an exhausted job whose lease expired so it reaches the failure dashboard", async () => {
+    const seeded = await seedLeasableJob({
+      jobType: "asset.validate",
+      state: "RUNNING",
+      attemptCount: 3,
+      maxAttempts: 3,
+      leaseExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: vi.fn(async () => undefined) },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    const context = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      context,
+    );
+    await waitOnExecutionContext(context);
+    const reaped = await env.DB.prepare(
+      "SELECT state, error_json, lease_expires_at FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{
+      state: string;
+      error_json: string;
+      lease_expires_at: string | null;
+    }>();
+    expect(reaped?.state).toBe("DEAD_LETTER");
+    expect(reaped?.lease_expires_at).toBeNull();
+    expect(JSON.parse(reaped!.error_json)).toMatchObject({
+      code: "JOB_LEASE_EXPIRED",
+      failureClass: "lease_expired",
+    });
+    const version = await env.DB.prepare(
+      "SELECT status FROM scene_versions WHERE id = ?",
+    ).bind(seeded.versionId).first<{ status: string }>();
+    expect(version?.status).toBe("PROCESSING_FAILED");
+  });
+
+  it("requeues a reclaimed-lease failure report instead of treating it as terminal", async () => {
+    const seeded = await seedLeasableJob({ jobType: "asset.validate" });
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workerId: "lease-reporter", jobId: seeded.jobId }),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const lease = await leaseResponse.json<{ leaseToken: string }>();
+    const failure = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${seeded.jobId}/fail`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          code: "PROCESSOR_LEASE_REJECTED",
+          message: "A lease-scoped route rejected the reclaimed lease",
+          retryable: false,
+          failureClass: "lease",
+        }),
+      },
+    );
+    expect(failure.status).toBe(200);
+    await expect(failure.json()).resolves.toMatchObject({
+      job: { state: "QUEUED", retryQueued: true },
+    });
+    const requeued = await env.DB.prepare(
+      "SELECT state, dispatched_at FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{ state: string; dispatched_at: string | null }>();
+    expect(requeued).toEqual({ state: "QUEUED", dispatched_at: null });
+  });
+
+  it("stores only a navigation summary on the job and keeps the artifact on the build", async () => {
+    const collisionBytes = new Uint8Array(4).fill(1);
+    const collisionSha256 = await sha256Hex(collisionBytes);
+    const seeded = await seedLeasableJob({
+      jobType: "navigation.build-v1",
+      assetKind: "collision",
+      assetFormat: "glb",
+      assetBytes: collisionBytes,
+      assetSha256: collisionSha256,
+    });
+    const buildAuthoringHash = "f".repeat(64);
+    const buildId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO scene_navigation_builds (
+        id, organisation_id, project_id, version_id, collision_asset_id,
+        job_id, status, parameters_json, client_operation_id, request_hash,
+        authoring_hash, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?)
+    `).bind(
+      buildId,
+      seeded.organisationId,
+      seeded.projectId,
+      seeded.versionId,
+      seeded.assetId,
+      seeded.jobId,
+      JSON.stringify({ offMeshConnections: [] }),
+      crypto.randomUUID(),
+      "a".repeat(64),
+      buildAuthoringHash,
+      seeded.createdBy,
+    ).run();
+
+    const detourBase64 = btoa("x".repeat(1024));
+    const navigationArtifact = {
+      schemaVersion: "spatial-navigation-v6",
+      generator: {
+        name: "recast-navigation-js",
+        version: "0.43.1",
+        nativeRecastCommit: "599fd0f023181c0a484df2a18cf1d75a3553852e",
+        mode: "tiled",
+      },
+      coordinateSystem: {
+        handedness: "right",
+        upAxis: "Y",
+        worldUnit: "metres",
+        triangleWinding: "counter-clockwise",
+      },
+      source: {
+        assetId: seeded.assetId,
+        sha256: collisionSha256,
+        authoringHash: buildAuthoringHash,
+        triangleCount: 2,
+        vertexCount: 4,
+      },
+      agent: {
+        radius: 0.22,
+        height: 1.8,
+        eyeHeight: 1.6,
+        maxClimb: 0.1,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        maxEdgeLengthVoxels: 12,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 8,
+        mergeRegionSizeVoxels: 20,
+      },
+      recastConfig: { walkableRadius: 3, walkableHeight: 36, walkableClimb: 2 },
+      bounds: [[0, 0, 0], [4, 2.6, 4]],
+      spawn: {
+        id: "opening",
+        requestedPosition: [0.5, 0, 0.5],
+        projectedPosition: [0.5, 0, 0.5],
+      },
+      offMeshConnections: [],
+      navMesh: {
+        clearanceApplied: true,
+        vertices: Array.from({ length: 900 }, (_, index) => [index * 0.01, 0, index * 0.02]),
+        indices: Array.from({ length: 900 }, (_, index) => index % 900),
+      },
+      detour: {
+        format: "recast-navigation-js-export-v1",
+        byteLength: 1024,
+        bytesBase64: detourBase64,
+      },
+      validation: {
+        passed: true,
+        componentCount: 1,
+        rawTriangleComponentCount: 1,
+        spawnProjectedDistance: 0,
+        destinationCount: 0,
+        unreachableDestinationIds: [],
+        destinations: [],
+      },
+      physicalValidation: {
+        passed: true,
+        engine: "rapier3d",
+        version: "0.19.3",
+        controller: "kinematic-capsule",
+        spawnOccupancyPassed: true,
+        routeCount: 0,
+        failedDestinationIds: [],
+        routes: [],
+      },
+    };
+    expect(navigationArtifactSchema.safeParse(navigationArtifact).success).toBe(true);
+
+    const navmeshKey =
+      `delivery-private/${seeded.organisationId}/${seeded.projectId}/${seeded.versionId}/navigation.bin`;
+    const reportKey =
+      `reports-private/${seeded.organisationId}/${seeded.projectId}/${seeded.versionId}/navigation.json`;
+    const navmeshBytes = new Uint8Array(64).fill(9);
+    const reportBytes = new TextEncoder().encode(JSON.stringify({ ok: true }));
+    await Promise.all([
+      env.SPATIAL_ASSETS.put(navmeshKey, navmeshBytes),
+      env.SPATIAL_ASSETS.put(reportKey, reportBytes),
+    ]);
+
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workerId: "navigation-builder", jobId: seeded.jobId }),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const lease = await leaseResponse.json<{ leaseToken: string }>();
+    const completion = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${seeded.jobId}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Navigation build accepted",
+          outputs: [
+            {
+              kind: "navmesh",
+              format: "bin",
+              objectKey: navmeshKey,
+              fileName: "navigation.bin",
+              mimeType: "application/octet-stream",
+            },
+            {
+              kind: "report",
+              format: "json",
+              objectKey: reportKey,
+              fileName: "navigation.json",
+              mimeType: "application/json",
+            },
+          ],
+          report: navigationArtifact,
+          evidence: {
+            processorVersion: "spatial-processor/0.11.0",
+            computeDurationMs: 100,
+            activeHumanDurationMs: 0,
+            inputBytes: collisionBytes.byteLength,
+            outputBytes: navmeshBytes.byteLength + reportBytes.byteLength,
+            toolVersions: { processor: "test" },
+          },
+        }),
+      },
+    );
+    expect(completion.status).toBe(200);
+    const stored = await env.DB.prepare(`
+      SELECT j.output_json, b.artifact_json, b.status
+      FROM processing_jobs j
+      JOIN scene_navigation_builds b ON b.job_id = j.id
+      WHERE j.id = ?
+    `).bind(seeded.jobId).first<{
+      output_json: string;
+      artifact_json: string;
+      status: string;
+    }>();
+    expect(stored?.status).toBe("READY_FOR_REVIEW");
+    // The full artifact survives exactly once, on the build the manifest reads.
+    expect(JSON.parse(stored!.artifact_json)).toMatchObject({
+      navMesh: { indices: navigationArtifact.navMesh.indices },
+      detour: { bytesBase64: detourBase64 },
+    });
+    expect(stored!.output_json).not.toContain(detourBase64);
+    expect(stored!.output_json.length).toBeLessThan(stored!.artifact_json.length / 4);
+    expect(JSON.parse(stored!.output_json)).toMatchObject({
+      report: {
+        artifactStoredIn: "scene_navigation_builds.artifact_json",
+        navMesh: { vertexCount: 900, indexCount: 900 },
+        detour: { format: "recast-navigation-js-export-v1", byteLength: 1024 },
+      },
     });
   });
 });
