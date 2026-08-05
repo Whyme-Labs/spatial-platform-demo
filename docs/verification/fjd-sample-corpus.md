@@ -116,6 +116,49 @@ by 8 bytes while both builds completed and emitted signature-valid RAD
 containers. Each qualification report records the exact RAD byte count and
 SHA-256 it actually produced.
 
+## Public sample sweep, 2026-08-05
+
+FJD's whole public sample library was re-enumerated and measured at byte level
+(live folder listings, ZIP central directories, parsed LAS headers). It cannot
+close the paired gap:
+
+- Exactly one 3DGS exists in the catalogue — the outdoor P2 Horse — and it
+  ships **no point cloud**. Every indoor sample ships `.fjdata` plus `.las`
+  with **no splat**.
+- A new indoor sample, `Floor Plan 60x40m.zip` (625,962,309 bytes, 41,088,411
+  points, 30.4 x 46.8 x 5.3 m), is genuinely multi-room — 1 m-cell occupancy
+  fills 24.9 % of its bounding box — but is single storey and unfurnished, and
+  carries no splat.
+- **No public FJD sample is multi-floor.** The V4e interior is a tall single
+  level with a partial mezzanine: only 17 % of cells shared between the
+  0.3-2.2 m and 4.4-6.0 m bands show a solid intervening slab, and its 20 m
+  header Z extent comes from under 2 % outlier points. `Building` is an
+  exterior walk whose trajectory climbs 1.63 m over 7.2 minutes.
+- No sample ships E57, SPZ, SOG, SPLAT, mesh, classified output, or imagery.
+- No dataset-specific licence exists. The only governing text is the store's
+  Shopify terms, which withhold reproduction and redistribution rights, so the
+  private-cache policy in this repo stands.
+
+`.fjdata` is a readable ASCII sidecar: the georeferenced samples carry a 6-DoF
+trajectory (`timestamp E N H qx qy qz qw`) in the same frame as their LAS plus
+a camera intrinsics block, and the Horse sidecar adds image records. That is
+decodable provenance an adapter could read once a paired capture exists.
+
+One capture can qualify the paired lane without waiting on FJD: **P2 Horse
+ships its raw `.fjdslamp2` SLAM file and the companion `.insv` video**, which
+is exactly what Trion Model needs to reconstruct both a point cloud and a 3DGS
+from one session, then run the Linkage matching step. It is an outdoor object
+capture and cannot qualify indoor navigation, but it can prove the
+paired-artifact and registration-transform semantics end to end.
+
+Structured E57 remains the highest-risk assumption. Release note D.0203 claims
+the export carries structured data including point clouds, images, and
+transformation matrices, but the 180-page Rev.205 manual mentions E57 exactly
+once, as a flat entry in a format list with no structure toggle and no image
+option, and the export dialog's filter list matches CloudCompare's, whose E57
+writer emits unstructured files. Vendor marketing and vendor documentation
+disagree; only a real export settles it.
+
 ## Gap to close with the first device capture
 
 Ask FJD Trion Model export for one indoor capture containing:

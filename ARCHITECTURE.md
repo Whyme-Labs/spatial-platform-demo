@@ -393,9 +393,12 @@ vendor coordinates in the viewer. XGRIDS LCC Studio can preserve absolute RTK
 coordinates and convert reconstructed data to WGS84 or CGCS2000, while FJD
 Trion Model D.0203 states that its E57 export carries structured data including
 point clouds, images, and transformation matrices. Read that claim precisely:
-the vendor never writes "per-scan pose" or "structured E57", so the exact
-per-scan pose and `images2D` semantics this platform reads remain those of the
-public ASTM container until a real vendor export has been inspected. FJD also
+FJD's own Rev.205 manual mentions E57 once, as a flat entry in a format list
+with no structure toggle and no image option, and its export filter list
+matches CloudCompare's, whose E57 writer emits unstructured files. Vendor
+marketing and vendor documentation disagree, so the per-scan pose and
+`images2D` semantics this platform reads remain those of the public ASTM
+container until a real vendor export has been inspected. FJD also
 does not promise that a Gaussian result and its point cloud share one frame —
 Trion Model aligns them through an operator-run Linkage matching step, and no
 release note names a 3DGS export format or describes 3DGS-to-point-cloud
