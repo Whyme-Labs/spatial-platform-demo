@@ -947,6 +947,7 @@ async function start(): Promise<void> {
         desired,
         deltaSeconds,
       );
+      noteMovementResistance(origin, desired, resolved, deltaSeconds);
       if (resolved) {
         camera.position.fromArray(resolved);
         lastWalkablePosition = camera.position.clone();
@@ -1556,6 +1557,44 @@ function movementStatusText(): string {
   return movementMode === "fly"
     ? "Fly enabled · structural shell collision · furniture ignored"
     : "Walk enabled · structural shell collision · furniture ignored";
+}
+
+// A reviewed shell stops the walker at surfaces the capture shows but never
+// opened — an exterior door, or a wall the operator authored across a visible
+// gap. Without a word the scene reads as broken input, so hold the requested
+// direction against the achieved one and name the boundary once it is clear
+// the walker is leaning on it rather than brushing past a corner.
+const BLOCKED_MOVEMENT_HINT_SECONDS = 1.2;
+const BLOCKED_MOVEMENT_EPSILON_METRES = 1e-4;
+let blockedMovementSeconds = 0;
+let blockedMovementHintShown = false;
+
+function noteMovementResistance(
+  origin: Vector3Tuple,
+  desired: Vector3Tuple,
+  resolved: Vector3Tuple | null,
+  deltaSeconds: number,
+): void {
+  const requested = Math.hypot(desired[0] - origin[0], desired[2] - origin[2]);
+  const achieved = resolved
+    ? Math.hypot(resolved[0] - origin[0], resolved[2] - origin[2])
+    : 0;
+  if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES || achieved > requested * 0.25) {
+    blockedMovementSeconds = 0;
+    if (blockedMovementHintShown) {
+      blockedMovementHintShown = false;
+      setControlStatus(movementStatusText(), "ready");
+    }
+    return;
+  }
+  blockedMovementSeconds += deltaSeconds;
+  if (blockedMovementSeconds >= BLOCKED_MOVEMENT_HINT_SECONDS && !blockedMovementHintShown) {
+    blockedMovementHintShown = true;
+    setControlStatus(
+      "Blocked by the walking map · this surface has no reviewed opening",
+      "info",
+    );
+  }
 }
 
 function startFlyAscend(event: PointerEvent): void {

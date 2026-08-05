@@ -60,6 +60,25 @@ test("v7 ignores furniture while Walk and Fly remain inside the structural shell
   const stillAgainstWall = await captureCamera(page);
   expect(stillAgainstWall.position[0] - againstWall.position[0]).toBeLessThan(0.08);
 
+  // Leaning on a reviewed wall has to say so: the capture can show a door the
+  // shell never opened, and silent refusal reads as broken input.
+  await page.keyboard.down("ShiftLeft");
+  await page.keyboard.down("ArrowUp");
+  await expect(renderer.locator("#controlStatus")).toHaveText(
+    "Blocked by the walking map · this surface has no reviewed opening",
+    { timeout: 5_000 },
+  );
+  await page.keyboard.up("ArrowUp");
+  await page.keyboard.up("ShiftLeft");
+  await page.keyboard.down("ShiftLeft");
+  await page.keyboard.down("ArrowDown");
+  await page.waitForTimeout(600);
+  await page.keyboard.up("ArrowDown");
+  await page.keyboard.up("ShiftLeft");
+  await expect(renderer.locator("#controlStatus")).toHaveText(
+    "Walk enabled · structural shell collision · furniture ignored",
+  );
+
   await renderer.locator("#movementModeToggle").click();
   await expect(renderer.locator("#controlStatus")).toHaveText(
     "Fly enabled · structural shell collision · furniture ignored",
