@@ -72,6 +72,27 @@ The first production extractor uses bounded metric occupancy:
 8. require an operator to correct level/ceiling evidence, labels, polygons,
    wall geometry, opening type/associations, and connectors.
 
+### Choosing the floor of a storey
+
+Step 1 groups credible horizontal layers into clusters and picks one anchor per
+cluster. Wall evidence answers only *could anything stand here?*, which is what
+rejects ceilings and roof planes — nothing sits above them. It must not rank the
+survivors, because it is biased in two opposite directions:
+
+- A mesh skirt or scan fringe hanging *below* the slab outscores the slab, since
+  everything resting on the floor falls inside the sub-floor anchor's evidence
+  window while the slab's own window starts above it.
+- In a tall hall, roof structure can give a raised deck a better score than the
+  ground it stands on.
+
+Among the layers that carry wall evidence, the storey's floor is therefore the
+one covering the most ground, breaking ties downwards. Measured on the Meta
+EyefulTower captures, ranking by wall evidence anchored the apartment on a
+61-cell skirt beneath its 802-cell slab (one 2 m² room for the whole flat) and
+anchored the workshop partway up its racking, where a 2.85 m layer scored 13,801
+against the floor's 9,677 (4 m² of a 75 m² floor). Ranking by footprint recovers
+26.9 m² and 70.3 m² respectively, unattended.
+
 Reviewed room outlines remain exact concave floor and ceiling surfaces in the
 collision GLB; they are never expanded to axis-aligned room bounds. Stair/ramp
 footprints cut explicit holes, and the navigation proof targets every inferred

@@ -1481,6 +1481,10 @@ function extractSingleLevelMetricFloorPlan(signature, {
   };
 }
 
+// Layers carrying under a fifth of the best wall evidence in their own cluster
+// are surfaces nothing stands on — ceilings, roof planes, tabletops.
+const FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO = 0.2;
+
 function metricFloorLevelCandidates(signature, {
   gridSizeM = 0.25,
   floorBandM = 0.15,
@@ -1522,25 +1526,34 @@ function metricFloorLevelCandidates(signature, {
       clusters.push([layer]);
     }
   }
-  return clusters.map((cluster) => [...cluster].sort((left, right) => {
-    const scoreDifference = metricWallSupportScore(
-      points,
-      right.elevationM,
-      gridSizeM,
-      wallMinHeightM,
-      wallMaxHeightM,
-      floorBandM,
-    ) - metricWallSupportScore(
-      points,
-      left.elevationM,
-      gridSizeM,
-      wallMinHeightM,
-      wallMaxHeightM,
-      floorBandM,
-    );
-    return scoreDifference || right.cells.size - left.cells.size ||
-      left.elevationM - right.elevationM;
-  })[0].elevationM);
+  return clusters.map((cluster) => {
+    // Ranking a cluster by wall evidence alone picks the wrong slab twice over. A
+    // mesh skirt hanging under the floor scores *higher* than the floor, because
+    // everything resting on the floor falls inside the skirt's evidence window
+    // while the floor's own window starts above it. And in a tall hall, roof
+    // structure can give a mezzanine a better score than the ground it stands on.
+    // Wall evidence answers only "could anything stand here?" — it rejects
+    // ceilings and roof planes, which have nothing above them. Among the surfaces
+    // that survive that test, the storey's floor is simply the one covering the
+    // most ground.
+    const scored = cluster.map((layer) => ({
+      ...layer,
+      wallSupport: metricWallSupportScore(
+        points,
+        layer.elevationM,
+        gridSizeM,
+        wallMinHeightM,
+        wallMaxHeightM,
+        floorBandM,
+      ),
+    }));
+    const bestSupport = Math.max(...scored.map((layer) => layer.wallSupport));
+    const standable = scored.filter((layer) =>
+      layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO);
+    return standable.sort((left, right) =>
+      right.cells.size - left.cells.size ||
+      left.elevationM - right.elevationM)[0].elevationM;
+  });
 }
 
 function metricHorizontalSupportDensity(cells, minimumCells) {

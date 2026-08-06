@@ -136,6 +136,116 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     expect(report.measurementClass).toBe("indicative");
   });
 
+  it("ignores a narrow skirt hanging below the slab when choosing the floor", () => {
+    // Photogrammetric meshes and SLAM clouds both trail a skirt of stray surface
+    // under the real floor. Anchoring the storey there scores *higher* on wall
+    // support than the slab does, because everything standing on the floor then
+    // falls inside the sub-floor anchor's wall-evidence window while the slab's
+    // own window starts above it. The Meta EyefulTower apartment mesh reproduced
+    // this exactly: a 61-cell skirt beat the 802-cell slab 0.3 m above it, and
+    // the extractor returned one 2 m2 room for a whole apartment.
+    const points: Array<[number, number, number]> = [];
+    const add = (point: [number, number, number]) => points.push(point);
+
+    for (let x = 0.125; x < 8; x += 0.25) {
+      for (let z = 0.125; z < 4; z += 0.25) add([x, 0, z]);
+    }
+    // Walls stop below 2.5 m so the lower anchor forfeits no wall evidence.
+    for (let y = 0.25; y <= 2.2; y += 0.25) {
+      for (let x = 0; x <= 8; x += 0.25) {
+        add([x, y, 0]);
+        add([x, y, 4]);
+      }
+      for (let z = 0; z <= 4; z += 0.25) {
+        add([0, y, z]);
+        add([8, y, z]);
+      }
+      for (let z = 0; z <= 4; z += 0.25) {
+        if (z >= 1.5 && z <= 2.5) continue;
+        add([4, y, z]);
+      }
+    }
+    // Low clutter resting on the slab, visible only to a sub-floor anchor.
+    for (let x = 0.125; x < 8; x += 0.25) {
+      for (let z = 0.125; z < 4; z += 0.25) {
+        for (const y of [0.06, 0.12, 0.18, 0.24]) add([x, y, z]);
+      }
+    }
+    // The skirt itself: compact, well above the minimum room size, but covering
+    // far less ground than the slab it hangs beneath.
+    for (let x = 0.125; x < 3; x += 0.25) {
+      for (let z = 0.125; z < 3; z += 0.25) add([x, -0.3, z]);
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.summary.inferredFloorElevationM).toBe(0);
+    expect(report.rooms).toHaveLength(2);
+    expect(report.rooms.reduce((area, room) => area + room.areaM2, 0)).toBeGreaterThan(25);
+  });
+
+  it("anchors a tall hall on the ground rather than on a raised deck", () => {
+    // The Meta EyefulTower workshop is a single 13 m hall whose roof structure
+    // gives raised decks more wall evidence above them than the ground has: at
+    // 2.85 m it scored 13,801 against the floor's 9,677. Ranking by wall evidence
+    // therefore put the storey partway up the racking and reported 4 m2 of a
+    // 75 m2 floor. Ground wins on footprint, which is what should decide.
+    const points: Array<[number, number, number]> = [];
+    const add = (point: [number, number, number]) => points.push(point);
+
+    for (let x = 0.125; x < 12; x += 0.25) {
+      for (let z = 0.125; z < 8; z += 0.25) add([x, 0, z]);
+    }
+    // Stacked racking decks, close enough together that every height between the
+    // floor and the roof stays occupied and the hall remains a single cluster.
+    for (const y of [0.7, 1.4, 2.1, 2.8]) {
+      for (let x = 0.125; x < 8; x += 0.25) {
+        for (let z = 0.125; z < 4; z += 0.25) add([x, y, z]);
+      }
+    }
+    // Hall walls run the full 6 m height, so every anchor sees wall evidence.
+    for (let y = 0.25; y <= 6; y += 0.25) {
+      for (let x = 0; x <= 12; x += 0.25) {
+        add([x, y, 0]);
+        add([x, y, 8]);
+      }
+      for (let z = 0; z <= 8; z += 0.25) {
+        add([0, y, z]);
+        add([12, y, z]);
+      }
+    }
+    // Dense roof structure, sitting inside the top deck's evidence window and
+    // outside the ground's — the thing that flattered the raised decks.
+    for (const y of [3.3, 3.45, 3.6, 3.75, 3.9, 4.05]) {
+      for (let x = 0.125; x < 10; x += 0.25) {
+        for (let z = 0.125; z < 8; z += 0.25) add([x, y, z]);
+      }
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 4_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.summary.inferredFloorElevationM).toBe(0);
+    expect(report.rooms.reduce((area, room) => area + room.areaM2, 0)).toBeGreaterThan(60);
+  });
+
   it("rejects a source without enough vertically persistent wall evidence", () => {
     const floorOnly: Array<[number, number, number]> = [];
     for (let x = 0.125; x < 4; x += 0.25) {
