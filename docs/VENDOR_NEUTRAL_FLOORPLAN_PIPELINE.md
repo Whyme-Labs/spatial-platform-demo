@@ -84,9 +84,8 @@ its mezzanine or racking deck cannot both be storeys.
 
 ### Choosing the floor of a storey
 
-Step 1 groups credible horizontal layers into clusters and picks one anchor per
-cluster. Wall evidence answers only *could anything stand here?*, which is what
-rejects ceilings and roof planes — nothing sits above them. It must not rank the
+Wall evidence answers only *could anything stand here?*, which is what rejects
+ceilings and roof planes — nothing sits above them. It must not rank the
 survivors, because it is biased in two opposite directions:
 
 - A mesh skirt or scan fringe hanging *below* the slab outscores the slab, since
