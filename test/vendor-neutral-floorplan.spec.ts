@@ -246,6 +246,38 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     expect(report.rooms.reduce((area, room) => area + room.areaM2, 0)).toBeGreaterThan(60);
   });
 
+  it("leaves the wall line open where it recorded an opening", () => {
+    // Bounded gaps are closed so the flood fill can tell one room from the next,
+    // but those cells are inferred rather than observed. Emitting them as wall
+    // geometry drew a solid wall straight across every opening found in the same
+    // pass, so a reviewer approved a doorway that was sealed in collision.
+    const signature = parsePlySceneSignature(rectangularTwoRoomFixture(), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+      maximumOpeningWidthM: 1.25,
+    });
+
+    const opening = report.openings.find((candidate) => candidate.widthM >= 0.75);
+    expect(opening, "fixture should record the 1 m doorway").toBeDefined();
+
+    // Nothing may bridge the doorway mouth along the shared wall at x = 4.
+    const mouth = { from: 1.6, to: 2.4 };
+    const spanning = report.walls.filter((wall) => {
+      const [start, end] = wall.geometry.points;
+      if (Math.abs(start[0] - 4) > 0.13 || Math.abs(end[0] - 4) > 0.13) return false;
+      const low = Math.min(start[2], end[2]);
+      const high = Math.max(start[2], end[2]);
+      return low < mouth.to && high > mouth.from;
+    });
+    expect(spanning.map((wall) => wall.wallKey)).toEqual([]);
+  });
+
   it("rejects a source without enough vertically persistent wall evidence", () => {
     const floorOnly: Array<[number, number, number]> = [];
     for (let x = 0.125; x < 4; x += 0.25) {

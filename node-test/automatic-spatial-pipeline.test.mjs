@@ -197,6 +197,101 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.equal(new Set(lowerHole.map((point) => point[2])).size, 4);
   });
 
+  it("floors the doorway threshold so rooms are not separate navigation islands", async () => {
+    // Room polygons stop at the faces of the wall between them, so two rooms a
+    // doorway apart are still separated by the wall's own thickness. Carving the
+    // opening out of the barrier is not enough: without floor across that strip
+    // the walker has nothing to step onto and each room is its own island.
+    const northOf = (z) => [[0, 0, z], [6, 0, z], [6, 0, z + 3.75], [0, 0, z + 3.75]];
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.5 }],
+      rooms: [
+        {
+          roomKey: "south",
+          elevationM: 0,
+          geometry: { type: "polygon", points: [[0, 0, 0], [6, 0, 0], [6, 0, 4], [0, 0, 4]] },
+          evidence: { levelKey: "level-001" },
+        },
+        {
+          roomKey: "north",
+          elevationM: 0,
+          geometry: { type: "polygon", points: northOf(4.25) },
+          evidence: { levelKey: "level-001" },
+        },
+      ],
+      walls: [
+        // The shared wall is observed on both faces and open across the doorway.
+        lineProposal("wall-001", 0, [0, 4], [2, 4]),
+        lineProposal("wall-002", 0, [3.25, 4], [6, 4]),
+        lineProposal("wall-003", 0, [0, 4.25], [2, 4.25]),
+        lineProposal("wall-004", 0, [3.25, 4.25], [6, 4.25]),
+        lineProposal("wall-005", 0, [0, 0], [6, 0]),
+        lineProposal("wall-006", 0, [6, 0], [6, 4]),
+        lineProposal("wall-007", 0, [0, 4], [0, 0]),
+        lineProposal("wall-008", 0, [0, 8], [6, 8]),
+        lineProposal("wall-009", 0, [6, 4.25], [6, 8]),
+        lineProposal("wall-010", 0, [0, 4.25], [0, 8]),
+      ],
+      openings: [{
+        openingKey: "opening-001",
+        kind: "opening_candidate",
+        widthM: 1.25,
+        elevationM: 0,
+        geometry: { type: "line", points: [[2, 0, 4], [3.25, 0, 4]] },
+      }],
+      connectors: [],
+    };
+
+    const config = automaticStructuralCollisionConfig(report);
+    const threshold = config.floorSurfaces.find((surface) =>
+      surface.id === "auto-threshold-opening-001");
+    assert.ok(threshold, "the doorway should be floored");
+    const thresholdZ = threshold.points.map((point) => point[2]);
+    assert.ok(Math.min(...thresholdZ) < 4, "threshold must reach into the south room");
+    assert.ok(Math.max(...thresholdZ) > 4.25, "threshold must reach into the north room");
+
+    const bytes = buildAuthoredStructuralCollisionGlb(config);
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    const layout = automaticNavigationLayout({
+      agent: {
+        radius: 0.25,
+        height: 1.7,
+        eyeHeight: 1.6,
+        maxClimb: 0.1,
+        maxSlopeDegrees: 45,
+      },
+      build: {
+        cellSize: 0.08,
+        cellHeight: 0.05,
+        tileSize: 64,
+        maxEdgeLengthVoxels: 80,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 2,
+        mergeRegionSizeVoxels: 8,
+      },
+      source: {
+        assetId: "automatic-doorway-threshold-fixture",
+        sha256: createHash("sha256").update("doorway-threshold").digest("hex"),
+        authoringHash: createHash("sha256").update("doorway-authoring").digest("hex"),
+        worldUnit: "metres",
+      },
+    }, geometry);
+    // A threshold links rooms; it is not a room, so it earns no destination.
+    assert.deepEqual(layout.destinations.map((destination) => destination.id),
+      ["automatic-room-north", "automatic-room-south"]);
+
+    const artifact = await buildRecastNavigationArtifact({
+      ...layout,
+      positions: geometry.positions,
+      indices: geometry.indices,
+      collisionSemantics: geometry.collisionSemantics,
+      structuralGeometry: geometry.structuralGeometry,
+      dynamicBarriers: geometry.dynamicBarriers,
+    });
+    assert.deepEqual(artifact.validation.unreachableDestinationIds, []);
+    assert.equal(artifact.validation.componentCount, 1);
+  });
+
   it("cooks stair treads and proves every inferred level is reachable", async () => {
     const report = {
       levels: [

@@ -89,7 +89,7 @@ export function automaticStructuralCollisionConfig(report, {
     room.elevation,
     connectorPlans,
     "floor",
-  ));
+  )).concat(automaticThresholdSurfaces(roomSurfaces, openings));
   const ceilingSurfaces = roomSurfaces.map((room) => horizontalRoomSurface(
     `auto-ceiling-${room.roomKey}`,
     room.points.map(([x, _y, z]) => [x, room.ceilingElevation, z]),
@@ -202,7 +202,12 @@ export function automaticNavigationLayout(config, geometry) {
     );
   }
   const agentDiameter = config.agent.radius * 2;
-  const unusableFloors = floors.filter((floor) =>
+  // Doorway thresholds are deliberately as narrow as the wall is thick. They are
+  // links between rooms, not rooms, so they neither owe room clearance nor earn a
+  // reachability destination of their own.
+  const roomFloors = floors.filter((floor) =>
+    !String(floor.id).startsWith(THRESHOLD_SURFACE_ID_PREFIX));
+  const unusableFloors = roomFloors.filter((floor) =>
     floor.max[0] - floor.min[0] <= agentDiameter ||
     floor.max[1] - floor.min[1] <= agentDiameter);
   if (unusableFloors.length) {
@@ -220,7 +225,7 @@ export function automaticNavigationLayout(config, geometry) {
       },
     );
   }
-  const usableFloors = floors;
+  const usableFloors = roomFloors;
   const largestFloor = usableFloors.reduce((largest, floor) =>
     floor.area > largest.area ? floor : largest);
   const connectorBounds = (geometry.structuralGeometry?.connectorSurfaces ?? [])
@@ -340,6 +345,93 @@ function automaticConnectorTreads(connector) {
     hole: { points: footprint },
     surfaces,
   };
+}
+
+// Room polygons stop at the faces of the wall between them, so two rooms joined
+// by a doorway are still separated by the wall's own thickness. Carving the
+// opening out of the barrier is not enough on its own: with no floor across that
+// strip the walker has nothing to step onto, and every room becomes its own
+// navigation island. Bridge each doorway with the floor the capture implies.
+const THRESHOLD_SURFACE_ID_PREFIX = "auto-threshold-";
+const THRESHOLD_MAXIMUM_GAP_M = 0.75;
+const THRESHOLD_ROOM_EDGE_TOLERANCE_M = 0.35;
+const THRESHOLD_ROOM_OVERLAP_M = 0.05;
+
+function automaticThresholdSurfaces(roomSurfaces, openings) {
+  const surfaces = [];
+  for (const [index, opening] of openings.entries()) {
+    const points = opening.geometry?.points ?? [];
+    const from = [Number(points[0]?.[0]), Number(points[0]?.[2])];
+    const to = [Number(points[1]?.[0]), Number(points[1]?.[2])];
+    if (![...from, ...to].every(Number.isFinite)) continue;
+    const spanX = to[0] - from[0];
+    const spanZ = to[1] - from[1];
+    const width = Math.hypot(spanX, spanZ);
+    if (width < 1e-3) continue;
+    const along = [spanX / width, spanZ / width];
+    const normal = [-along[1], along[0]];
+    const middle = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+
+    const neighbours = roomSurfaces
+      .map((room) => ({ room, ...closestOutlinePoint(middle, room.points) }))
+      .filter((candidate) => candidate.distance <= THRESHOLD_MAXIMUM_GAP_M)
+      .sort((left, right) => left.distance - right.distance);
+    if (neighbours.length < 2) continue;
+    const [near, far] = neighbours;
+    if (near.distance > THRESHOLD_ROOM_EDGE_TOLERANCE_M) continue;
+    if (Math.abs(near.room.elevation - far.room.elevation) > 0.1) continue;
+
+    // How far each room sits across the wall, measured along the doorway normal.
+    const offsets = [near, far].map((candidate) =>
+      (candidate.point[0] - middle[0]) * normal[0] +
+      (candidate.point[1] - middle[1]) * normal[1]);
+    const gap = Math.abs(offsets[1] - offsets[0]);
+    if (gap < 1e-3 || gap > THRESHOLD_MAXIMUM_GAP_M) continue;
+
+    const low = Math.min(...offsets) - THRESHOLD_ROOM_OVERLAP_M;
+    const high = Math.max(...offsets) + THRESHOLD_ROOM_OVERLAP_M;
+    const half = width / 2;
+    const elevation = near.room.elevation;
+    const corner = (alongScale, normalScale) => [
+      middle[0] + along[0] * alongScale + normal[0] * normalScale,
+      elevation,
+      middle[1] + along[1] * alongScale + normal[1] * normalScale,
+    ];
+    surfaces.push({
+      id: `${THRESHOLD_SURFACE_ID_PREFIX}${opening.openingKey ?? `opening-${index + 1}`}`,
+      points: [
+        corner(-half, low),
+        corner(half, low),
+        corner(half, high),
+        corner(-half, high),
+      ],
+      holes: [],
+    });
+  }
+  return surfaces;
+}
+
+function closestOutlinePoint(point, polygon) {
+  let distance = Infinity;
+  let closest = point;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const spanX = end[0] - start[0];
+    const spanZ = end[2] - start[2];
+    const lengthSquared = spanX * spanX + spanZ * spanZ;
+    const projection = lengthSquared
+      ? Math.max(0, Math.min(1,
+        ((point[0] - start[0]) * spanX + (point[1] - start[2]) * spanZ) / lengthSquared))
+      : 0;
+    const candidate = [start[0] + spanX * projection, start[2] + spanZ * projection];
+    const candidateDistance = Math.hypot(point[0] - candidate[0], point[1] - candidate[1]);
+    if (candidateDistance < distance) {
+      distance = candidateDistance;
+      closest = candidate;
+    }
+  }
+  return { distance, point: closest };
 }
 
 function horizontalRoomSurface(id, points, elevation, connectors, label) {

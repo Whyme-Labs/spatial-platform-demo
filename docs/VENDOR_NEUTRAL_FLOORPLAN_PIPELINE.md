@@ -93,6 +93,27 @@ anchored the workshop partway up its racking, where a 2.85 m layer scored 13,801
 against the floor's 9,677 (4 m² of a 75 m² floor). Ranking by footprint recovers
 26.9 m² and 70.3 m² respectively, unattended.
 
+### Observed cells versus closed cells
+
+Step 4 closes bounded gaps so the flood fill in step 5 can tell one room from the
+next. Those cells are inferred, never observed, and they exist only for
+segmentation. Wall geometry in step 5 is therefore derived from observed wall
+cells alone. Deriving it from the closed set instead drew a solid wall straight
+across every opening recorded in step 6 — the extractor would report a doorway
+and seal it in the same pass, and a reviewer approving the plan got a wall where
+the capture plainly showed a gap.
+
+### Doorway thresholds
+
+Room outlines stop at the faces of the wall between them, so two rooms joined by
+a doorway are still separated by the wall's own thickness. Carving the opening
+out of the barrier is not sufficient: with no floor across that strip a walker
+has nothing to step onto and each room becomes its own navigation island. The
+automatic collision config bridges each opening that lies between two rooms on
+one level with a threshold floor spanning the gap and overlapping slightly into
+both. Thresholds are links rather than rooms, so they are exempt from the
+per-room clearance proof and earn no reachability destination of their own.
+
 Reviewed room outlines remain exact concave floor and ceiling surfaces in the
 collision GLB; they are never expanded to axis-aligned room bounds. Stair/ramp
 footprints cut explicit holes, and the navigation proof targets every inferred

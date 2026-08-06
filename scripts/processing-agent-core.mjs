@@ -1396,7 +1396,11 @@ function extractSingleLevelMetricFloorPlan(signature, {
     };
   });
 
-  const walls = metricWallSegments(closedWallCells, gridSizeM, floor.elevationM, wallMaxHeightM);
+  // Gap closure exists so flood fill can tell one room from the next; those cells
+  // are inferred, not observed. Building wall geometry from them draws a solid
+  // wall straight across every opening recorded in the same pass, which seals the
+  // doorway the capture plainly shows. Walls come from observed cells only.
+  const walls = metricWallSegments(wallCells, gridSizeM, floor.elevationM, wallMaxHeightM);
   const openings = openingPlans
     .sort((left, right) => left.axis.localeCompare(right.axis) ||
       left.fixed - right.fixed || left.start - right.start)
