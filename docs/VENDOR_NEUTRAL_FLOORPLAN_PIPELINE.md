@@ -72,6 +72,16 @@ The first production extractor uses bounded metric occupancy:
 8. require an operator to correct level/ceiling evidence, labels, polygons,
    wall geometry, opening type/associations, and connectors.
 
+### Choosing the storeys
+
+Storeys of an occupied building are contiguous in elevation: floor, contents,
+ceiling, then the next floor, with no empty band anywhere between. Grouping
+credible layers into clusters separated by empty space therefore collapses a
+whole building into one group and can only ever report a single storey. Candidate
+floors are instead taken greedily by footprint, each at least
+`MINIMUM_STOREY_SEPARATION_M` from every candidate already taken, so a slab and
+its mezzanine or racking deck cannot both be storeys.
+
 ### Choosing the floor of a storey
 
 Step 1 groups credible horizontal layers into clusters and picks one anchor per

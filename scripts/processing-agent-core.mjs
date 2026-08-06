@@ -1485,9 +1485,15 @@ function extractSingleLevelMetricFloorPlan(signature, {
   };
 }
 
-// Layers carrying under a fifth of the best wall evidence in their own cluster
-// are surfaces nothing stands on — ceilings, roof planes, tabletops.
+// Layers carrying under a fifth of the best wall evidence in the capture are
+// surfaces nothing stands on — ceilings, roof planes, tabletops.
 const FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO = 0.2;
+// Two floors closer together than this are a slab and its mezzanine, gantry, or
+// racking deck, not two storeys.
+const MINIMUM_STOREY_SEPARATION_M = 2;
+// A storey floor covers ground comparable to the building's widest floor. Raised
+// decks inside a tall hall cover a fraction of it.
+const FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO = 0.6;
 
 function metricFloorLevelCandidates(signature, {
   gridSizeM = 0.25,
@@ -1520,44 +1526,46 @@ function metricFloorLevelCandidates(signature, {
   const substantial = observed
     .filter((layer) => layer.supportDensity >= 0.3)
     .sort((left, right) => left.elevationM - right.elevationM);
-  const clusters = [];
-  const clusterGap = Math.max(0.45, floorBandM * 5);
-  for (const layer of substantial) {
-    const cluster = clusters.at(-1);
-    if (cluster && layer.elevationM - cluster.at(-1).elevationM <= clusterGap) {
-      cluster.push(layer);
-    } else {
-      clusters.push([layer]);
-    }
+  // Storeys of an occupied building are contiguous in elevation — floor, its
+  // contents, its ceiling, then the next floor, with no empty band anywhere
+  // between. Grouping layers into clusters separated by empty space therefore
+  // collapses an entire building into a single group and can only ever report
+  // one storey, however many it really has. Take the widest layer instead, then
+  // the widest remaining layer at least a storey's height away, and so on.
+  const peaks = [];
+  for (const layer of [...substantial].sort((left, right) =>
+    right.cells.size - left.cells.size || left.elevationM - right.elevationM)) {
+    if (peaks.some((peak) =>
+      Math.abs(peak.elevationM - layer.elevationM) < MINIMUM_STOREY_SEPARATION_M)) continue;
+    peaks.push(layer);
   }
-  return clusters.map((cluster) => {
-    // Ranking a cluster by wall evidence alone picks the wrong slab twice over. A
-    // mesh skirt hanging under the floor scores *higher* than the floor, because
-    // everything resting on the floor falls inside the skirt's evidence window
-    // while the floor's own window starts above it. And in a tall hall, roof
-    // structure can give a mezzanine a better score than the ground it stands on.
-    // Wall evidence answers only "could anything stand here?" — it rejects
-    // ceilings and roof planes, which have nothing above them. Among the surfaces
-    // that survive that test, the storey's floor is simply the one covering the
-    // most ground.
-    const scored = cluster.map((layer) => ({
-      ...layer,
-      wallSupport: metricWallSupportScore(
-        points,
-        layer.elevationM,
-        gridSizeM,
-        wallMinHeightM,
-        wallMaxHeightM,
-        floorBandM,
-      ),
-    }));
-    const bestSupport = Math.max(...scored.map((layer) => layer.wallSupport));
-    const standable = scored.filter((layer) =>
-      layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO);
-    return standable.sort((left, right) =>
-      right.cells.size - left.cells.size ||
-      left.elevationM - right.elevationM)[0].elevationM;
-  });
+
+  // Ranking by wall evidence alone picks the wrong slab twice over. A mesh skirt
+  // hanging under the floor scores *higher* than the floor, because everything
+  // resting on the floor falls inside the skirt's evidence window while the
+  // floor's own window starts above it. And in a tall hall, roof structure can
+  // give a raised deck a better score than the ground it stands on. Wall evidence
+  // answers only "could anything stand here?", which is what rejects ceilings and
+  // roof planes: nothing sits above them. Footprint decides the rest.
+  const scored = peaks.map((layer) => ({
+    ...layer,
+    wallSupport: metricWallSupportScore(
+      points,
+      layer.elevationM,
+      gridSizeM,
+      wallMinHeightM,
+      wallMaxHeightM,
+      floorBandM,
+    ),
+  }));
+  const bestSupport = Math.max(...scored.map((layer) => layer.wallSupport));
+  const widestFootprint = Math.max(...scored.map((layer) => layer.cells.size));
+  return scored
+    .filter((layer) =>
+      layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO &&
+      layer.cells.size >= widestFootprint * FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO)
+    .sort((left, right) => left.elevationM - right.elevationM)
+    .map((layer) => layer.elevationM);
 }
 
 function metricHorizontalSupportDensity(cells, minimumCells) {

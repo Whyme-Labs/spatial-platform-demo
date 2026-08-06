@@ -278,6 +278,56 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     expect(spanning.map((wall) => wall.wallKey)).toEqual([]);
   });
 
+  it("finds every storey of a building with no empty band between them", () => {
+    // An occupied building is contiguous in elevation: floor, contents, ceiling,
+    // then the next floor, with no gap anywhere. Grouping layers into clusters
+    // separated by empty space therefore collapsed the whole building into one
+    // group and reported a single storey. The LaMAR CAB capture showed it at
+    // scale — 240 credible layers over four real storeys, of which one was found.
+    const points: Array<[number, number, number]> = [];
+    const add = (point: [number, number, number]) => points.push(point);
+
+    for (const base of [0, 3, 6]) {
+      for (let x = 0.125; x < 8; x += 0.25) {
+        for (let z = 0.125; z < 6; z += 0.25) {
+          add([x, base, z]);
+          // The ceiling is pierced by the stairwell, so the floor above always
+          // covers more ground than the slab underside below it.
+          if (x < 2.5 || x > 4.5) add([x, base + 2.7, z]);
+        }
+      }
+      // Contents at head height keep every intermediate layer occupied.
+      for (const lift of [0.6, 1.2, 1.8, 2.4]) {
+        for (let x = 0.125; x < 4; x += 0.25) {
+          for (let z = 0.125; z < 3; z += 0.25) add([x, base + lift, z]);
+        }
+      }
+      for (let y = base + 0.15; y <= base + 2.7; y += 0.15) {
+        for (let x = 0; x <= 8; x += 0.25) {
+          add([x, y, 0]);
+          add([x, y, 6]);
+        }
+        for (let z = 0; z <= 6; z += 0.25) {
+          add([0, y, z]);
+          add([8, y, z]);
+        }
+      }
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 4_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.levels.map((level) => level.elevationM)).toEqual([0, 3, 6]);
+  });
+
   it("rejects a source without enough vertically persistent wall evidence", () => {
     const floorOnly: Array<[number, number, number]> = [];
     for (let x = 0.125; x < 4; x += 0.25) {
