@@ -93,7 +93,7 @@ export function automaticStructuralCollisionConfig(report, {
     room.elevation,
     connectorPlans,
     "floor",
-  )).concat(automaticThresholdSurfaces(roomSurfaces, openings));
+  ));
   const ceilingSurfaces = roomSurfaces.map((room) => horizontalRoomSurface(
     `auto-ceiling-${room.roomKey}`,
     room.points.map(([x, _y, z]) => [x, room.ceilingElevation, z]),
@@ -129,6 +129,10 @@ export function automaticStructuralCollisionConfig(report, {
       "Automatic navigation could not derive structural barrier segments",
     );
   }
+  floorSurfaces.push(
+    ...automaticThresholdSurfaces(roomSurfaces, openings),
+    ...automaticAdjacencyThresholds(roomSurfaces, barrierSegments),
+  );
   return {
     schemaVersion: "authored-structural-collision-v2",
     provenance,
@@ -413,6 +417,125 @@ function automaticThresholdSurfaces(roomSurfaces, openings) {
     });
   }
   return surfaces;
+}
+
+// Opening candidates come from gaps in gridline wall runs, which a real
+// building's doorways rarely satisfy — measured on a four-storey capture, 1,812
+// of 1,923 recorded openings had no second room within three metres, and the
+// navmesh fell apart into 92 islands. The honest connective evidence is
+// adjacency itself: where two room polygons approach within a doorway's depth
+// and the strip between them is free of observed wall geometry, the capture is
+// showing a doorway, whether or not the opening detector recorded it.
+const ADJACENCY_MAXIMUM_GAP_M = 1.0;
+const ADJACENCY_SAMPLE_STEP_M = 0.1;
+const ADJACENCY_MINIMUM_RUN_M = 0.5;
+const ADJACENCY_RUN_BREAK_M = 0.25;
+const ADJACENCY_MAXIMUM_RUNS_PER_PAIR = 2;
+const ADJACENCY_WALL_CLEARANCE_M = 0.01;
+
+function automaticAdjacencyThresholds(roomSurfaces, barrierSegments) {
+  const surfaces = [];
+  for (let first = 0; first < roomSurfaces.length; first += 1) {
+    for (let second = first + 1; second < roomSurfaces.length; second += 1) {
+      const roomA = roomSurfaces[first];
+      const roomB = roomSurfaces[second];
+      if (Math.abs(roomA.elevation - roomB.elevation) > 0.1) continue;
+      const barriers = barrierSegments.filter((barrier) =>
+        barrier.minY <= roomA.elevation + 0.5 && barrier.maxY >= roomA.elevation + 0.5);
+      const crossings = [];
+      let travelled = 0;
+      for (let edge = 0; edge < roomA.points.length; edge += 1) {
+        const start = roomA.points[edge];
+        const end = roomA.points[(edge + 1) % roomA.points.length];
+        const edgeLength = Math.hypot(end[0] - start[0], end[2] - start[2]);
+        for (let along = 0; along <= edgeLength; along += ADJACENCY_SAMPLE_STEP_M) {
+          const t = edgeLength ? along / edgeLength : 0;
+          const sample = [
+            start[0] + (end[0] - start[0]) * t,
+            start[2] + (end[2] - start[2]) * t,
+          ];
+          const { distance, point } = closestOutlinePoint(sample, roomB.points);
+          if (distance > ADJACENCY_MAXIMUM_GAP_M) continue;
+          // The doorway is open only if nothing observed stands between the two
+          // outlines. Shrink the probe so the door jambs on either side, which
+          // legitimately end exactly at the outlines, do not veto the crossing.
+          const blocked = distance > 2 * ADJACENCY_WALL_CLEARANCE_M &&
+            barriers.some((barrier) => segmentsCross(
+              shrinkSegment(sample, point, ADJACENCY_WALL_CLEARANCE_M),
+              barrier,
+            ));
+          if (!blocked) crossings.push({ arc: travelled + along, sample, point });
+        }
+        travelled += edgeLength;
+      }
+      const runs = [];
+      for (const crossing of crossings) {
+        const run = runs.at(-1);
+        if (run && crossing.arc - run.at(-1).arc <= ADJACENCY_RUN_BREAK_M) run.push(crossing);
+        else runs.push([crossing]);
+      }
+      const usable = runs
+        .filter((run) => run.at(-1).arc - run[0].arc >= ADJACENCY_MINIMUM_RUN_M)
+        .sort((left, right) =>
+          (right.at(-1).arc - right[0].arc) - (left.at(-1).arc - left[0].arc))
+        .slice(0, ADJACENCY_MAXIMUM_RUNS_PER_PAIR);
+      for (const [runIndex, run] of usable.entries()) {
+        const head = run[0];
+        const tail = run.at(-1);
+        const elevation = roomA.elevation;
+        const corners = [
+          [head.sample[0], elevation, head.sample[1]],
+          [tail.sample[0], elevation, tail.sample[1]],
+          [tail.point[0], elevation, tail.point[1]],
+          [head.point[0], elevation, head.point[1]],
+        ];
+        if (quadIsDegenerate(corners)) continue;
+        surfaces.push({
+          id: `auto-threshold-adjacent-${roomA.roomKey}-${roomB.roomKey}-${runIndex + 1}`,
+          points: quadWindingFixed(corners),
+          holes: [],
+        });
+      }
+    }
+  }
+  return surfaces;
+}
+
+function shrinkSegment(from, to, margin) {
+  const dx = to[0] - from[0];
+  const dz = to[1] - from[1];
+  const length = Math.hypot(dx, dz) || 1;
+  const scale = margin / length;
+  return {
+    start: [from[0] + dx * scale, from[1] + dz * scale],
+    end: [to[0] - dx * scale, to[1] - dz * scale],
+  };
+}
+
+function segmentsCross(probe, barrier) {
+  return segmentsIntersect2(probe.start, probe.end, barrier.start, barrier.end);
+}
+
+function quadIsDegenerate(corners) {
+  let doubledArea = 0;
+  for (let index = 0; index < corners.length; index += 1) {
+    const a = corners[index];
+    const b = corners[(index + 1) % corners.length];
+    doubledArea += a[0] * b[2] - b[0] * a[2];
+  }
+  return Math.abs(doubledArea / 2) < 0.05;
+}
+
+function quadWindingFixed(corners) {
+  // The two outline runs can be traversed in opposite senses, which twists the
+  // quad into a bowtie; swapping the far edge untwists it.
+  const [a, b, c, d] = corners;
+  const flat = (point) => [point[0], point[2]];
+  if (segmentsIntersect2(flat(a), flat(b), flat(c), flat(d)) ||
+    segmentsIntersect2(flat(b), flat(c), flat(d), flat(a))) {
+    return [a, b, d, c];
+  }
+  return corners;
 }
 
 function closestOutlinePoint(point, polygon) {
