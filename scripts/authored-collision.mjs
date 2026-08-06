@@ -189,16 +189,17 @@ function serializeGroupedCollisionGlb(groups, metadata) {
     });
     binaryParts.push(indexBytes);
     byteOffset += indexBytes.byteLength;
-    const axes = [0, 1, 2].map((axis) =>
-      geometry.positions.filter((_, index) => index % 3 === axis));
+    const axisExtents = [0, 1, 2].map((axis) =>
+      arrayExtent(geometry.positions.filter((_, index) => index % 3 === axis)));
+    const indexExtent = arrayExtent(geometry.indices);
     const positionAccessor = accessors.length;
     accessors.push({
       bufferView: positionView,
       componentType: 5126,
       count: geometry.positions.length / 3,
       type: "VEC3",
-      min: axes.map((values) => Math.min(...values)),
-      max: axes.map((values) => Math.max(...values)),
+      min: axisExtents.map(([minimum]) => minimum),
+      max: axisExtents.map(([, maximum]) => maximum),
     });
     const indexAccessor = accessors.length;
     accessors.push({
@@ -206,8 +207,8 @@ function serializeGroupedCollisionGlb(groups, metadata) {
       componentType: 5125,
       count: geometry.indices.length,
       type: "SCALAR",
-      min: [Math.min(...geometry.indices)],
-      max: [Math.max(...geometry.indices)],
+      min: [indexExtent[0]],
+      max: [indexExtent[1]],
     });
     const meshIndex = meshes.length;
     meshes.push({
@@ -391,10 +392,24 @@ function barrierSegmentsGeometry(barriers) {
   return geometry;
 }
 
+// Loop-based extent: Math.min(...values) turns every element into a call
+// argument and overflows the stack on building-scale geometry.
+function arrayExtent(values) {
+  let minimum = Infinity;
+  let maximum = -Infinity;
+  for (const value of values) {
+    if (value < minimum) minimum = value;
+    if (value > maximum) maximum = value;
+  }
+  return [minimum, maximum];
+}
+
 function appendGeometry(target, source) {
+  // Element-wise, not push(...spread): a building-scale collision config carries
+  // more vertices than V8 accepts as call arguments.
   const offset = target.positions.length / 3;
-  target.positions.push(...source.positions);
-  target.indices.push(...source.indices.map((index) => index + offset));
+  for (const position of source.positions) target.positions.push(position);
+  for (const index of source.indices) target.indices.push(index + offset);
 }
 
 function serializeGlbDocument(document, binary) {
@@ -571,7 +586,9 @@ function triangleNormalY(positions, first, second, third) {
 }
 
 function gltfDocument(geometry, positionByteLength, binaryByteLength, metadata) {
-  const axes = [0, 1, 2].map((axis) => geometry.positions.filter((_, index) => index % 3 === axis));
+  const axisExtents = [0, 1, 2].map((axis) =>
+    arrayExtent(geometry.positions.filter((_, index) => index % 3 === axis)));
+  const indexExtent = arrayExtent(geometry.indices);
   return {
     asset: {
       version: "2.0",
@@ -594,15 +611,15 @@ function gltfDocument(geometry, positionByteLength, binaryByteLength, metadata) 
       componentType: 5126,
       count: geometry.positions.length / 3,
       type: "VEC3",
-      min: axes.map((values) => Math.min(...values)),
-      max: axes.map((values) => Math.max(...values)),
+      min: axisExtents.map(([minimum]) => minimum),
+      max: axisExtents.map(([, maximum]) => maximum),
     }, {
       bufferView: 1,
       componentType: 5125,
       count: geometry.indices.length,
       type: "SCALAR",
-      min: [Math.min(...geometry.indices)],
-      max: [Math.max(...geometry.indices)],
+      min: [indexExtent[0]],
+      max: [indexExtent[1]],
     }],
     bufferViews: [{
       buffer: 0,

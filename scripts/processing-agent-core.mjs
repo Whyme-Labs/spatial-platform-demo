@@ -1257,9 +1257,11 @@ function extractSingleLevelMetricFloorPlan(signature, {
   });
   const floor = credibleLayers[0];
   const inferredCeilingElevationM = metricCeilingElevation(
-    floor,
-    credibleLayers,
-    minimumRoomCells,
+    floor.cells,
+    floor.elevationM,
+    sourcePoints,
+    gridSizeM,
+    floorBandM,
   );
 
   const verticalResolutionM = Math.max(
@@ -1492,8 +1494,19 @@ const FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO = 0.2;
 // racking deck, not two storeys.
 const MINIMUM_STOREY_SEPARATION_M = 2;
 // A storey floor covers ground comparable to the building's widest floor. Raised
-// decks inside a tall hall cover a fraction of it.
-const FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO = 0.6;
+// decks inside a tall hall cover a fraction of it. A walk rarely covers every
+// storey equally — the LaMAR CAB top storey holds 55% of the widest floor's
+// footprint — so the ratio must sit below that, with the head-room gate (below)
+// rejecting the deck tops and shelf planes that footprint alone cannot.
+const FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO = 0.5;
+// Head-room over a candidate floor: capture between 0.25 m (floor-thickness
+// fuzz) and standing height above it marks a column a person cannot occupy.
+// Measured floors run 40-54% blocked (furnished flat 54, workshop 50, CAB
+// storeys 40-54) while the top of loaded racking runs 88%, so the line sits at
+// 0.6 — comfortably above any real floor seen, well below a shelf plane.
+const FLOOR_LEVEL_HEADROOM_MINIMUM_M = 0.25;
+const FLOOR_LEVEL_HEADROOM_REQUIRED_M = 1.8;
+const FLOOR_LEVEL_MAXIMUM_HEADROOM_BLOCKED_RATIO = 0.6;
 
 function metricFloorLevelCandidates(signature, {
   gridSizeM = 0.25,
@@ -1515,17 +1528,18 @@ function metricFloorLevelCandidates(signature, {
     cells.add(`${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`);
     layers.set(index, cells);
   }
+  // No compactness filter here: bounding-box density selects for exactly the
+  // wrong thing. A stair landing is compact; a real storey walked as offices off
+  // long corridors is sprawling. On the LaMAR CAB capture the genuine top storey
+  // measured density 0.27 and a density >= 0.3 gate deleted it while keeping the
+  // half-landings.
   const observed = [...layers.entries()]
     .filter(([, cells]) => cells.size >= minimumCells)
     .map(([index, cells]) => ({
       elevationM: semanticRound(index * floorBandM),
       cells,
-      supportDensity: metricHorizontalSupportDensity(cells, minimumCells),
     }));
   if (!observed.length) return [];
-  const substantial = observed
-    .filter((layer) => layer.supportDensity >= 0.3)
-    .sort((left, right) => left.elevationM - right.elevationM);
   // Storeys of an occupied building are contiguous in elevation — floor, its
   // contents, its ceiling, then the next floor, with no empty band anywhere
   // between. Grouping layers into clusters separated by empty space therefore
@@ -1533,7 +1547,7 @@ function metricFloorLevelCandidates(signature, {
   // one storey, however many it really has. Take the widest layer instead, then
   // the widest remaining layer at least a storey's height away, and so on.
   const peaks = [];
-  for (const layer of [...substantial].sort((left, right) =>
+  for (const layer of [...observed].sort((left, right) =>
     right.cells.size - left.cells.size || left.elevationM - right.elevationM)) {
     if (peaks.some((peak) =>
       Math.abs(peak.elevationM - layer.elevationM) < MINIMUM_STOREY_SEPARATION_M)) continue;
@@ -1560,44 +1574,82 @@ function metricFloorLevelCandidates(signature, {
   }));
   const bestSupport = Math.max(...scored.map((layer) => layer.wallSupport));
   const widestFootprint = Math.max(...scored.map((layer) => layer.cells.size));
+
+  // People do not stand on surfaces without head-room. The top of loaded
+  // racking, a gantry under machinery, or a shelf plane carries structure
+  // within standing height above most of its area; a storey floor is clear. A
+  // footprint gate cannot make this distinction — on CAB the real top storey and
+  // a raised plane held near-identical footprints.
+  const blockedColumns = new Map();
+  for (const layer of scored) {
+    blockedColumns.set(layer, new Set());
+  }
+  for (const [x, y, z] of points) {
+    const cellKey = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+    for (const layer of scored) {
+      const clearance = y - layer.elevationM;
+      if (clearance < FLOOR_LEVEL_HEADROOM_MINIMUM_M ||
+        clearance >= FLOOR_LEVEL_HEADROOM_REQUIRED_M) continue;
+      if (layer.cells.has(cellKey)) blockedColumns.get(layer).add(cellKey);
+    }
+  }
+
   return scored
     .filter((layer) =>
       layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO &&
-      layer.cells.size >= widestFootprint * FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO)
+      layer.cells.size >= widestFootprint * FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO &&
+      blockedColumns.get(layer).size <=
+        layer.cells.size * FLOOR_LEVEL_MAXIMUM_HEADROOM_BLOCKED_RATIO)
     .sort((left, right) => left.elevationM - right.elevationM)
     .map((layer) => layer.elevationM);
 }
 
-function metricHorizontalSupportDensity(cells, minimumCells) {
-  const components = semanticCellComponents(cells)
-    .filter((component) => component.length >= minimumCells);
-  if (!components.length) return 0;
-  return Math.max(...components.map((component) => {
-    const xs = component.map(([x]) => x);
-    const zs = component.map(([, z]) => z);
-    const boundsArea = (Math.max(...xs) - Math.min(...xs) + 1) *
-      (Math.max(...zs) - Math.min(...zs) + 1);
-    return boundsArea ? component.length / boundsArea : 0;
-  }));
-}
+// A real ceiling is rarely one clean flat band over the whole floor: beams,
+// coffers, ducts, and partial capture fragment it, so demanding a single band
+// that overlaps 35% of the floor AND forms one dense component returns null on
+// genuinely roofed storeys (the LaMAR CAB ground storey's best band covered
+// 14%). The evidence must respect occlusion — only each column's FIRST capture
+// above standing height can be this storey's ceiling; in a merged multi-storey
+// cloud the next floor up overlaps this one almost everywhere in plan, so any
+// occlusion-blind band count elects the storey above. But no single aggregate
+// of the first hits works either: clutter tops pile up right at the clearance
+// cutoff (defeating the mode), and a half-racked hall splits the distribution
+// (defeating the median). The stable reading: first hits concentrate at real
+// surfaces, clutter forms the lower concentrations, and the ceiling is the
+// HIGHEST band nearly as populated as the strongest one — anything seen above
+// it is leakage through voids.
+const CEILING_MINIMUM_COLUMN_COVERAGE = 0.35;
+const CEILING_MINIMUM_CLEARANCE_M = 1.8;
+const CEILING_MAXIMUM_CLEARANCE_M = 8;
+const CEILING_BAND_STRENGTH_RATIO = 0.55;
 
-function metricCeilingElevation(floor, credibleLayers, minimumCells) {
-  const candidates = credibleLayers
-    .filter((layer) => {
-      const clearance = layer.elevationM - floor.elevationM;
-      if (clearance < 1.8 || clearance > 8) return false;
-      if (metricHorizontalSupportDensity(layer.cells, minimumCells) < 0.3) return false;
-      let overlap = 0;
-      for (const cell of floor.cells) {
-        if (layer.cells.has(cell)) overlap += 1;
-      }
-      layer.floorOverlapRatio = overlap / Math.max(1, floor.cells.size);
-      return layer.floorOverlapRatio >= 0.35;
-    })
-    .sort((left, right) =>
-      left.elevationM - right.elevationM ||
-      right.floorOverlapRatio - left.floorOverlapRatio);
-  return candidates.length ? candidates[0].elevationM : null;
+function metricCeilingElevation(floorCells, floorElevationM, sourcePoints, gridSizeM, floorBandM) {
+  const firstHits = new Map();
+  for (const [x, y, z] of sourcePoints) {
+    const clearance = y - floorElevationM;
+    if (clearance < CEILING_MINIMUM_CLEARANCE_M || clearance > CEILING_MAXIMUM_CLEARANCE_M) {
+      continue;
+    }
+    const cellKey = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
+    if (!floorCells.has(cellKey)) continue;
+    const current = firstHits.get(cellKey);
+    if (current === undefined || clearance < current) firstHits.set(cellKey, clearance);
+  }
+  if (firstHits.size < Math.max(1, floorCells.size) * CEILING_MINIMUM_COLUMN_COVERAGE) {
+    return null;
+  }
+  const bandCounts = new Map();
+  for (const clearance of firstHits.values()) {
+    const band = Math.round((floorElevationM + clearance) / floorBandM);
+    bandCounts.set(band, (bandCounts.get(band) ?? 0) + 1);
+  }
+  const strongest = Math.max(...bandCounts.values());
+  let ceilingBand = null;
+  for (const [band, count] of bandCounts) {
+    if (count < strongest * CEILING_BAND_STRENGTH_RATIO) continue;
+    if (ceilingBand === null || band > ceilingBand) ceilingBand = band;
+  }
+  return semanticRound(ceilingBand * floorBandM);
 }
 
 function metricWallSupportScore(
@@ -1980,6 +2032,18 @@ function semanticCellComponents(cells) {
   return components;
 }
 
+function turnPreference(previous, current, target) {
+  const incomingX = current[0] - previous[0];
+  const incomingZ = current[1] - previous[1];
+  const outgoingX = target[0] - current[0];
+  const outgoingZ = target[1] - current[1];
+  const cross = incomingX * outgoingZ - incomingZ * outgoingX;
+  if (cross < 0) return 3;
+  const dot = incomingX * outgoingX + incomingZ * outgoingZ;
+  if (dot > 0) return 2;
+  return cross > 0 ? 1 : 0;
+}
+
 function semanticCellOutline(component) {
   const cells = new Set(component.map(([x, z]) => `${x},${z}`));
   const edges = [];
@@ -2007,13 +2071,23 @@ function semanticCellOutline(component) {
     const loop = [start];
     unused.delete(firstEdge);
     let guard = edges.length + 1;
+    let previous = start;
     while ((current[0] !== start[0] || current[1] !== start[1]) && guard > 0) {
       loop.push(current);
-      const targets = outgoing.get(`${current[0]},${current[1]}`) ?? [];
-      const next = targets.find((target) =>
-        unused.has(`${current[0]},${current[1]}>${target[0]},${target[1]}`));
+      const targets = (outgoing.get(`${current[0]},${current[1]}`) ?? [])
+        .filter((target) =>
+          unused.has(`${current[0]},${current[1]}>${target[0]},${target[1]}`));
+      // Where an interior void meets a notch at a single cell corner, two
+      // boundary passes share this vertex and either outgoing edge closes a
+      // loop. Taking an arbitrary one stitches a figure-eight that revisits the
+      // vertex — a self-touching ring no collision builder accepts. With the
+      // interior on the left of every directed edge, the sharpest available
+      // right turn always stays on this loop's own face and keeps it simple.
+      const next = targets.sort((left, right) =>
+        turnPreference(previous, current, right) - turnPreference(previous, current, left))[0];
       if (!next) break;
       unused.delete(`${current[0]},${current[1]}>${next[0]},${next[1]}`);
+      previous = current;
       current = next;
       guard -= 1;
     }

@@ -3,6 +3,8 @@ import {
   extractMetricFloorPlan,
   parsePlySceneSignature,
 } from "../scripts/processing-agent-core.mjs";
+// @ts-expect-error Plain ESM module has no separate declaration file.
+import { horizontalSurfaceIssue } from "../scripts/horizontal-surface.mjs";
 import { floorplanProposalReportSchema } from "../src/worker/contracts";
 
 function asciiPly(points: Array<[number, number, number]>): Uint8Array {
@@ -326,6 +328,155 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     });
 
     expect(report.levels.map((level) => level.elevationM)).toEqual([0, 3, 6]);
+  });
+
+  it("detects a ceiling that beams and coffers fragment into isolated patches", () => {
+    // A coffered or beam-crossed ceiling never forms one dense component in a
+    // single 0.15 m band, so requiring that returned null on genuinely roofed
+    // storeys and blocked automatic collision on all of them. Ceiling evidence
+    // is per column: each floor cell's first capture above standing height.
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0.125; x < 8; x += 0.25) {
+      for (let z = 0.125; z < 4; z += 0.25) points.push([x, 0, z]);
+    }
+    for (let y = 0.25; y <= 2.7; y += 0.25) {
+      for (let x = 0; x <= 8; x += 0.25) {
+        points.push([x, y, 0]);
+        points.push([x, y, 4]);
+      }
+      for (let z = 0; z <= 4; z += 0.25) {
+        points.push([0, y, z]);
+        points.push([8, y, z]);
+      }
+    }
+    // Chequered coffers: every other cell captured, none touching its
+    // neighbours, covering half the floor in plan.
+    for (let i = 0; i < 32; i += 1) {
+      for (let j = 0; j < 16; j += 1) {
+        if ((i + j) % 2 === 0) points.push([0.125 + i * 0.25, 2.7, 0.125 + j * 0.25]);
+      }
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.levels).toHaveLength(1);
+    expect(report.levels[0].ceilingElevationM).toBe(2.7);
+  });
+
+  it("does not mint a storey out of a loaded racking deck", () => {
+    // A wide storage deck holds goods within standing height above most of its
+    // area; a storey floor is clear over most of its area, furniture included.
+    // Footprint cannot make this distinction — the LaMAR CAB top storey covers
+    // 56% of the widest floor and a workshop's shelf plane 54% — but measured
+    // head-room separates them cleanly: real floors run 40-54% blocked, the
+    // loaded deck 88%.
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0.125; x < 10; x += 0.25) {
+      for (let z = 0.125; z < 6; z += 0.25) points.push([x, 0, z]);
+    }
+    for (let y = 0.25; y <= 5.5; y += 0.25) {
+      for (let x = 0; x <= 10; x += 0.25) {
+        points.push([x, y, 0]);
+        points.push([x, y, 6]);
+      }
+      for (let z = 0; z <= 6; z += 0.25) {
+        points.push([0, y, z]);
+        points.push([10, y, z]);
+      }
+    }
+    // The deck: two-thirds of the hall footprint, well above the storey
+    // separation, with goods stacked over four-fifths of it.
+    for (let i = 0; i < 32; i += 1) {
+      for (let j = 0; j < 20; j += 1) {
+        const x = 0.125 + i * 0.25;
+        const z = 0.125 + j * 0.25;
+        points.push([x, 3, z]);
+        if (i % 5 !== 4) {
+          points.push([x, 3.4, z]);
+          points.push([x, 3.7, z]);
+          points.push([x, 4.0, z]);
+        }
+      }
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.levels.map((level) => level.elevationM)).toEqual([0]);
+  });
+
+  it("traces a simple ring where an interior void meets a notch at one corner", () => {
+    // When a void inside the room and a notch in its outer edge share a single
+    // cell corner, two boundary passes meet at that vertex and an arbitrary
+    // stitch produces a figure-eight — a self-touching ring every collision
+    // builder rejects, which killed the whole automatic build on the first
+    // real building. Exercise the pinch in all four orientations.
+    for (const rotation of [0, 1, 2, 3]) {
+      const rotate = (i: number, j: number): [number, number] => {
+        if (rotation === 0) return [i, j];
+        if (rotation === 1) return [9 - j, i];
+        if (rotation === 2) return [9 - i, 9 - j];
+        return [j, 9 - i];
+      };
+      const removed = new Set<string>();
+      for (const [i, j] of [[0, 4], [1, 4], [2, 4], [3, 4]] as const) {
+        removed.add(rotate(i, j).join(","));
+      }
+      for (let i = 4; i <= 6; i += 1) {
+        for (let j = 5; j <= 7; j += 1) removed.add(rotate(i, j).join(","));
+      }
+      const points: Array<[number, number, number]> = [];
+      for (let i = 0; i < 10; i += 1) {
+        for (let j = 0; j < 10; j += 1) {
+          if (removed.has(`${i},${j}`)) continue;
+          points.push([i * 0.25 + 0.125, 0, j * 0.25 + 0.125]);
+        }
+      }
+      for (let y = 0.25; y <= 2.5; y += 0.25) {
+        for (let t = 0; t <= 2.5; t += 0.25) {
+          points.push([t, y, 0]);
+          points.push([t, y, 2.5]);
+          points.push([0, y, t]);
+          points.push([2.5, y, t]);
+        }
+      }
+
+      const signature = parsePlySceneSignature(asciiPly(points), {
+        voxelSizeM: 0.125,
+        maximumSamplePoints: 1_000_000,
+      });
+      const report = extractMetricFloorPlan(signature, {
+        gridSizeM: 0.25,
+        floorBandM: 0.15,
+        minimumWallHeightCoverage: 0.6,
+        minimumRoomAreaM2: 2,
+      });
+      for (const room of report.rooms) {
+        const issue = horizontalSurfaceIssue({
+          id: `${room.roomKey}-rotation-${rotation}`,
+          points: room.geometry.points,
+          holes: [],
+        });
+        expect(issue, `rotation ${rotation} ${room.roomKey}`).toBeNull();
+      }
+    }
   });
 
   it("rejects a source without enough vertically persistent wall evidence", () => {

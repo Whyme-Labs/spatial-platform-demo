@@ -69,7 +69,11 @@ export function automaticStructuralCollisionConfig(report, {
     const levelKey = String(room.evidence?.levelKey ?? "");
     const level = levelByKey.get(levelKey);
     const ceilingElevation = Number(level?.ceilingElevationM);
-    if (!level || !Number.isFinite(ceilingElevation) || ceilingElevation - elevation < 1.8) {
+    // The subtraction epsilon matters: a ceiling detected at exactly minimum
+    // standing clearance (-7.2 over a -9 floor) differs from 1.8 by one ulp and
+    // must not fail a >= 1.8 requirement.
+    if (!level || !Number.isFinite(ceilingElevation) ||
+      ceilingElevation - elevation < 1.8 - 1e-6) {
       throw pipelineError(
         "AUTOMATIC_COLLISION_CEILING_MISSING",
         `Floor-plan level ${levelKey || "unknown"} has no captured or operator-reviewed ceiling support`,
@@ -453,9 +457,18 @@ function horizontalRoomSurface(id, points, elevation, connectors, label) {
       continue;
     }
     if (disjoint) continue;
+    // A stairwell shaft has no floor capture, so the flood-filled room already
+    // carries a notch where the stair is, and the connector footprint normally
+    // overhangs that notch's boundary by a sliver of grid alignment. There is
+    // nothing to cut — the shaft is already outside the floor polygon. Only a
+    // connector emerging mostly INSIDE the surface, which a hole cut cannot
+    // represent without clipping, still fails closed for operator review.
+    const cornersInside = hole.filter((point) =>
+      pointInPolygon2(point, outline) && !pointOnRing2(point, outline)).length;
+    if (cornersInside * 2 <= hole.length) continue;
     throw pipelineError(
       "AUTOMATIC_COLLISION_CONNECTOR_HOLE_AMBIGUOUS",
-      `Connector ${connector.id} only partially overlaps room surface ${id}; classify the landing against the registered render before rebuilding`,
+      `Connector ${connector.id} emerges inside room surface ${id}; classify the landing against the registered render before rebuilding`,
       { connectorId: connector.id, surfaceId: id },
     );
   }

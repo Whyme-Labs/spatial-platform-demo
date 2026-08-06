@@ -82,6 +82,26 @@ floors are instead taken greedily by footprint, each at least
 `MINIMUM_STOREY_SEPARATION_M` from every candidate already taken, so a slab and
 its mezzanine or racking deck cannot both be storeys.
 
+Candidacy carries no compactness test. Bounding-box density selects for exactly
+the wrong thing — a stair landing is compact, while a real storey walked as
+offices off long corridors is sprawling; on the LaMAR CAB capture a density
+gate deleted the genuine top storey (density 0.27) and kept the half-landings.
+
+Three gates then apply, each answering a physical question:
+
+- **Wall evidence** (`FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO`): could anything
+  stand here at all? Rejects ceilings and roof planes — nothing sits above them.
+- **Footprint** (`FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO`): a storey covers ground
+  comparable to the building's widest floor. Rejects skirts and small decks.
+  This ratio cannot be pushed high enough to reject wide shelf planes — on real
+  captures a genuine top storey (56% of the widest floor) and a workshop shelf
+  plane (54%) are indistinguishable by footprint.
+- **Head-room** (`FLOOR_LEVEL_MAXIMUM_HEADROOM_BLOCKED_RATIO`): people do not
+  stand on surfaces without standing height above them. Capture between 0.25 m
+  and 1.8 m above a candidate marks columns a person cannot occupy. Measured
+  floors run 40-54% blocked, furniture included; the top of loaded racking runs
+  88%. The line sits at 0.6.
+
 ### Choosing the floor of a storey
 
 Wall evidence answers only *could anything stand here?*, which is what rejects
@@ -127,6 +147,25 @@ Reviewed room outlines remain exact concave floor and ceiling surfaces in the
 collision GLB; they are never expanded to axis-aligned room bounds. Stair/ramp
 footprints cut explicit holes, and the navigation proof targets every inferred
 room rather than only one point per storey.
+
+### Ceilings
+
+A real ceiling rarely forms one clean flat band over a whole floor — beams,
+coffers, ducts, and partial capture fragment it, and demanding a single dense
+band that overlaps 35% of the floor returned null on genuinely roofed storeys
+(the CAB ground storey's best band covered 14%), which blocked automatic
+collision on every such level. Ceiling evidence must also respect occlusion:
+in a merged multi-storey cloud the next floor up overlaps this one almost
+everywhere in plan, so any occlusion-blind band count elects the storey above.
+
+Each floor cell therefore contributes its FIRST capture above standing height.
+Whether the storey is roofed at all is the fraction of floor cells with any
+such evidence (`CEILING_MINIMUM_COLUMN_COVERAGE`). Where the ceiling is, is the
+highest band nearly as populated as the strongest one
+(`CEILING_BAND_STRENGTH_RATIO`) — clutter tops pile up at the clearance cutoff
+(defeating a mode) and a half-racked hall splits the distribution (defeating a
+median), but first hits concentrate at real surfaces, clutter forms the lower
+concentrations, and anything seen above the ceiling is leakage through voids.
 
 Missing ceiling support does not discard the floor-plan proposal, but it blocks
 the automatic collision preview until the operator supplies reviewed evidence.
