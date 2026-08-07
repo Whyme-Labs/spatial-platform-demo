@@ -1413,11 +1413,25 @@ export const navigationArtifactSchema = z.object({
           message: "Structural boundary evidence must cover both sides of every frozen barrier",
         });
       }
-      if (value.structuralValidation.cornerCount !== expectedCornerCount) {
+      // A reviewed shell's walls chain into the proving loops, so its corner
+      // evidence covers every barrier endpoint. An automatic scene's observed
+      // wall fragments cannot chain — its floors are proven by the capture
+      // fence — so the evidence there must be self-consistent and exercised,
+      // not endpoint-complete over tens of thousands of fragments.
+      const reviewedProvenance =
+        value.collisionSemantics?.provenance === "operator_reviewed";
+      if (reviewedProvenance
+        ? value.structuralValidation.cornerCount !== expectedCornerCount
+        : (value.structuralValidation.cornerCount <
+            (value.structuralValidation.boundaryTopology?.loopCount ?? 1) * 3 ||
+          value.structuralValidation.cornerCount !==
+            value.structuralValidation.cornerProbes.length)) {
         context.addIssue({
           code: "custom",
           path: ["structuralValidation", "cornerProbes"],
-          message: "Structural corner evidence must cover every unique frozen barrier endpoint",
+          message: reviewedProvenance
+            ? "Structural corner evidence must cover every unique frozen barrier endpoint"
+            : "Structural corner evidence must exercise every proving boundary loop",
         });
       }
       const expectedDynamicBarrierIds = new Set(
