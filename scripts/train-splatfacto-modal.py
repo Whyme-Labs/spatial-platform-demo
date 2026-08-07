@@ -220,7 +220,7 @@ def train(
         check=True,
     )
     exported = next(export_directory.glob("*.ply"))
-    final = export_directory / f"{scene}.splatfacto.ply"
+    final = export_directory / f"{scene.replace('/', '-')}.splatfacto.ply"
     exported.rename(final)
 
     import hashlib
