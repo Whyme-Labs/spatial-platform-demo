@@ -143,6 +143,20 @@ one level with a threshold floor spanning the gap and overlapping slightly into
 both. Thresholds are links rather than rooms, so they are exempt from the
 per-room clearance proof and earn no reachability destination of their own.
 
+### Stairs between storeys
+
+A storey-to-storey staircase is normally a switchback: a flight up, a
+half-landing, and a flight back the opposite way. Projected on any single axis
+that is a zigzag, so a straight-ramp fit alone finds flights only where a
+half-landing happened to survive as its own level. Connector inference
+therefore first strips the support window of anything locally level — the
+intervening ceiling plates, their rims, and wall lines, none of which a stair
+tread resembles, since a tread has neighbours above and below its own height —
+then fits candidate flights per component, classifies them as the lower or
+upper half of the rise, and pairs halves whose landing ends stand together.
+Flight width is padded slightly so the cooked tread strips of the two flights
+merge across the landing instead of stopping a seam apart.
+
 Reviewed room outlines remain exact concave floor and ceiling surfaces in the
 collision GLB; they are never expanded to axis-aligned room bounds. Stair/ramp
 footprints cut explicit holes, and the navigation proof targets every inferred

@@ -1792,6 +1792,26 @@ function inferMetricVerticalConnectors(signature, levels, rooms, {
         ],
       });
     }
+    // The window between two storeys contains the intervening ceiling, wall
+    // lines, and furniture tops, and any of them merged into the shaft
+    // component drags every line fit flat — which is why storey-to-storey
+    // stairs never fitted while landing-level flights did. A stair tread has
+    // neighbours above and below its own height; plates, plate rims, and wall
+    // lines are locally level. Keep only cells whose neighbourhood ascends.
+    for (const [key, value] of supportCells) {
+      const [cellX, cellZ] = value.cell;
+      let ascending = false;
+      for (let dx = -1; dx <= 1 && !ascending; dx += 1) {
+        for (let dz = -1; dz <= 1 && !ascending; dz += 1) {
+          if (!dx && !dz) continue;
+          const neighbour = supportCells.get(`${cellX + dx},${cellZ + dz}`);
+          if (!neighbour) continue;
+          const rise = Math.abs(neighbour.point[1] - value.point[1]);
+          if (rise >= 0.06 && rise <= 0.6) ascending = true;
+        }
+      }
+      if (!ascending) supportCells.delete(key);
+    }
     const components = connectedMetricSupportComponents(supportCells);
     const candidates = components
       .map((component) => fitMetricConnector(component, lower, upper, rooms, {
@@ -1800,14 +1820,104 @@ function inferMetricVerticalConnectors(signature, levels, rooms, {
       }))
       .filter(Boolean)
       .sort((left, right) => right.confidence - left.confidence || right.widthM - left.widthM);
-    if (!candidates.length) continue;
-    const connector = candidates[0];
-    connectors.push({
-      ...connector,
-      connectorKey: `connector-${String(connectors.length + 1).padStart(3, "0")}`,
-      lowerLevelKey: lower.levelKey,
-      upperLevelKey: upper.levelKey,
-    });
+    if (candidates.length) {
+      connectors.push({
+        ...candidates[0],
+        connectorKey: `connector-${String(connectors.length + 1).padStart(3, "0")}`,
+        lowerLevelKey: lower.levelKey,
+        upperLevelKey: upper.levelKey,
+      });
+      continue;
+    }
+    // A storey-to-storey staircase is normally a switchback: a flight up, a
+    // half-landing, and a flight back the other way. Projected on any single
+    // axis that is a zigzag, so the straight-ramp fit above can never accept
+    // it — and with the flat landing filtered out as non-ascending, the two
+    // flights arrive as separate components. Classify each component as the
+    // lower or upper half of the rise, then pair halves whose landing ends
+    // stand together, padding their width so the cooked tread strips merge
+    // across the landing instead of stopping a seam apart.
+    const midY = (lower.elevationM + upper.elevationM) / 2;
+    const lowerHalves = [];
+    const upperHalves = [];
+    for (const component of components) {
+      const elevations = component.map((cell) => cell.point[1]);
+      const minimum = Math.min(...elevations);
+      const maximum = Math.max(...elevations);
+      if (maximum <= midY + 0.3) {
+        const flight = fitMetricConnector(component, lower, upper, rooms, {
+          gridSizeM,
+          riseM: midY - 0.3 - lower.elevationM,
+          lowElevationM: lower.elevationM,
+          highElevationM: midY,
+          skipUpperRoomCheck: true,
+          widthPadM: 0.35,
+        });
+        if (flight) lowerHalves.push(flight);
+      } else if (minimum >= midY - 0.3) {
+        const flight = fitMetricConnector(component, lower, upper, rooms, {
+          gridSizeM,
+          riseM: upper.elevationM - midY - 0.3,
+          lowElevationM: midY,
+          highElevationM: upper.elevationM,
+          skipLowerRoomCheck: true,
+          widthPadM: 0.35,
+        });
+        if (flight) upperHalves.push(flight);
+      } else {
+        // The component spans the landing — its edge cells ascend into both
+        // flights, keeping the shaft connected. Split it at the landing band
+        // and fit each side as its own flight.
+        const lowerCells = component.filter((cell) => cell.point[1] < midY - 0.3);
+        const upperCells = component.filter((cell) => cell.point[1] > midY + 0.3);
+        if (lowerCells.length < 12 || upperCells.length < 12) continue;
+        const lowerFlight = fitMetricConnector(lowerCells, lower, upper, rooms, {
+          gridSizeM,
+          riseM: midY - 0.3 - lower.elevationM,
+          lowElevationM: lower.elevationM,
+          highElevationM: midY,
+          skipUpperRoomCheck: true,
+          widthPadM: 0.35,
+        });
+        const upperFlight = fitMetricConnector(upperCells, lower, upper, rooms, {
+          gridSizeM,
+          riseM: upper.elevationM - midY - 0.3,
+          lowElevationM: midY,
+          highElevationM: upper.elevationM,
+          skipLowerRoomCheck: true,
+          widthPadM: 0.35,
+        });
+        if (lowerFlight) lowerHalves.push(lowerFlight);
+        if (upperFlight) upperHalves.push(upperFlight);
+      }
+    }
+    const landingEnd = (flight, elevation) => flight.geometry.points
+      .filter((point) => point[1] === elevation)
+      .reduce((sum, point) => [sum[0] + point[0] / 2, sum[1] + point[2] / 2], [0, 0]);
+    let bestPair = null;
+    for (const lowerFlight of lowerHalves) {
+      for (const upperFlight of upperHalves) {
+        const lowEnd = landingEnd(lowerFlight, semanticRound(midY));
+        const highEnd = landingEnd(upperFlight, semanticRound(midY));
+        const separation = Math.hypot(lowEnd[0] - highEnd[0], lowEnd[1] - highEnd[1]);
+        if (separation > 3) continue;
+        if (!bestPair || separation < bestPair.separation) {
+          bestPair = { lowerFlight, upperFlight, separation };
+        }
+      }
+    }
+    if (bestPair) {
+      for (const [flightIndex, flight] of
+        [bestPair.lowerFlight, bestPair.upperFlight].entries()) {
+        connectors.push({
+          ...flight,
+          label: `${flight.label} (switchback flight ${flightIndex + 1} of 2)`,
+          connectorKey: `connector-${String(connectors.length + 1).padStart(3, "0")}`,
+          lowerLevelKey: lower.levelKey,
+          upperLevelKey: upper.levelKey,
+        });
+      }
+    }
   }
   return connectors;
 }
@@ -1837,7 +1947,15 @@ function connectedMetricSupportComponents(cells) {
   return components;
 }
 
-function fitMetricConnector(component, lower, upper, rooms, { gridSizeM, riseM }) {
+function fitMetricConnector(component, lower, upper, rooms, {
+  gridSizeM,
+  riseM,
+  lowElevationM = lower.elevationM,
+  highElevationM = upper.elevationM,
+  skipLowerRoomCheck = false,
+  skipUpperRoomCheck = false,
+  widthPadM = 0,
+}) {
   const points = component.map((cell) => cell.point);
   const elevationValues = points.map((point) => point[1]);
   const minimumElevation = Math.min(...elevationValues);
@@ -1886,14 +2004,16 @@ function fitMetricConnector(component, lower, upper, rooms, { gridSizeM, riseM }
   const sValues = samples.map((sample) => sample.s);
   const observedRun = Math.max(...tValues) - Math.min(...tValues);
   const widthM = Math.min(3, Math.max(...sValues) - Math.min(...sValues) + gridSizeM);
-  if (observedRun < riseM / Math.tan(42 * Math.PI / 180) || widthM < 0.65) return null;
-  const lowT = (lower.elevationM - intercept) / slope;
-  const highT = (upper.elevationM - intercept) / slope;
-  const lowCenter = [meanX + direction[0] * lowT, lower.elevationM, meanZ + direction[1] * lowT];
-  const highCenter = [meanX + direction[0] * highT, upper.elevationM, meanZ + direction[1] * highT];
-  if (!metricPointNearRooms(lowCenter, lower.levelKey, rooms, 1.25) ||
+  if (observedRun < (maximumElevation - minimumElevation) / Math.tan(42 * Math.PI / 180) || widthM < 0.65) return null;
+  const lowT = (lowElevationM - intercept) / slope;
+  const highT = (highElevationM - intercept) / slope;
+  const lowCenter = [meanX + direction[0] * lowT, lowElevationM, meanZ + direction[1] * lowT];
+  const highCenter = [meanX + direction[0] * highT, highElevationM, meanZ + direction[1] * highT];
+  if (!skipLowerRoomCheck &&
+    !metricPointNearRooms(lowCenter, lower.levelKey, rooms, 1.25)) return null;
+  if (!skipUpperRoomCheck &&
     !metricPointNearRooms(highCenter, upper.levelKey, rooms, 1.25)) return null;
-  const halfWidth = Math.min(widthM / 2, 1.25);
+  const halfWidth = Math.min(widthM / 2 + widthPadM, 1.25);
   const side = [-direction[1] * halfWidth, direction[0] * halfWidth];
   return {
     kind: "stair_or_ramp_candidate",
@@ -1907,10 +2027,10 @@ function fitMetricConnector(component, lower, upper, rooms, { gridSizeM, riseM }
     geometry: {
       type: "polygon",
       points: [
-        [semanticRound(lowCenter[0] + side[0]), lower.elevationM, semanticRound(lowCenter[2] + side[1])],
-        [semanticRound(highCenter[0] + side[0]), upper.elevationM, semanticRound(highCenter[2] + side[1])],
-        [semanticRound(highCenter[0] - side[0]), upper.elevationM, semanticRound(highCenter[2] - side[1])],
-        [semanticRound(lowCenter[0] - side[0]), lower.elevationM, semanticRound(lowCenter[2] - side[1])],
+        [semanticRound(lowCenter[0] + side[0]), lowElevationM, semanticRound(lowCenter[2] + side[1])],
+        [semanticRound(highCenter[0] + side[0]), highElevationM, semanticRound(highCenter[2] + side[1])],
+        [semanticRound(highCenter[0] - side[0]), highElevationM, semanticRound(highCenter[2] - side[1])],
+        [semanticRound(lowCenter[0] - side[0]), lowElevationM, semanticRound(lowCenter[2] - side[1])],
       ],
     },
     evidence: {

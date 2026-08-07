@@ -479,6 +479,81 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     }
   });
 
+  it("finds a switchback staircase as two flights through its half-landing", () => {
+    // A storey-to-storey staircase is normally a switchback: a flight up, a
+    // half-landing, a flight back the opposite way. Projected on any single
+    // axis that is a zigzag, so the straight-ramp fit alone can never accept
+    // it — which left whole storeys of a real four-storey capture with no
+    // connector at all. Each flight on its own is straight and must be found.
+    const points: Array<[number, number, number]> = [];
+    const add = (point: [number, number, number]) => points.push(point);
+    const addStorey = (base: number) => {
+      for (let x = 0.125; x < 6; x += 0.25) {
+        for (let z = 0.125; z < 5; z += 0.25) {
+          add([x, base, z]);
+          if (x < 2 || x > 4.6) add([x, base + 2.7, z]);
+        }
+      }
+      for (let y = base + 0.25; y <= base + 2.7; y += 0.25) {
+        for (let x = 0; x <= 6; x += 0.25) {
+          add([x, y, 0]);
+          add([x, y, 5]);
+        }
+        for (let z = 0; z <= 5; z += 0.25) {
+          add([0, y, z]);
+          add([6, y, z]);
+        }
+      }
+    };
+    addStorey(0);
+    addStorey(3);
+    // Flight one climbs +z from the ground to the half-landing...
+    for (let step = 0; step <= 10; step += 1) {
+      const elevation = step / 10 * 1.5;
+      const startZ = 0.5 + step * 0.28;
+      for (let x = 2.2; x <= 3.2; x += 0.125) {
+        for (let z = startZ; z < startZ + 0.28; z += 0.125) add([x, elevation, z]);
+      }
+    }
+    // ...the landing turns...
+    for (let x = 2.2; x <= 4.4; x += 0.125) {
+      for (let z = 3.3; z <= 4.4; z += 0.125) add([x, 1.5, z]);
+    }
+    // ...and flight two climbs back -z to the upper storey.
+    for (let step = 0; step <= 10; step += 1) {
+      const elevation = 1.5 + step / 10 * 1.5;
+      const startZ = 3.3 - step * 0.28;
+      for (let x = 3.4; x <= 4.4; x += 0.125) {
+        for (let z = startZ; z < startZ + 0.28; z += 0.125) add([x, elevation, z]);
+      }
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.1,
+      maximumSamplePoints: 2_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.levels.map((level) => level.elevationM)).toEqual([0, 3]);
+    expect(report.connectors.length).toBe(2);
+    for (const connector of report.connectors) {
+      expect(connector.kind).toBe("stair_or_ramp_candidate");
+      expect(connector.geometry.points).toHaveLength(4);
+      expect(connector.slopeDegrees).toBeGreaterThan(10);
+      expect(connector.slopeDegrees).toBeLessThan(42);
+    }
+    const elevations = report.connectors.flatMap((connector) =>
+      connector.geometry.points.map((point: number[]) => point[1]));
+    expect(Math.min(...elevations)).toBe(0);
+    expect(Math.max(...elevations)).toBe(3);
+    expect(elevations.filter((value) => value === 1.5).length).toBeGreaterThan(0);
+  });
+
   it("rejects a source without enough vertically persistent wall evidence", () => {
     const floorOnly: Array<[number, number, number]> = [];
     for (let x = 0.125; x < 4; x += 0.25) {
