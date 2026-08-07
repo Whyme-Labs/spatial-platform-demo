@@ -528,12 +528,33 @@ export async function buildRecastNavigationArtifact(input) {
       });
     const componentCount = 1 + unreachableComponentRepresentatives.length;
     const destinations = input.destinations.map((destination) => {
-      const projected = projectOptional(
+      let projected = projectOptional(
         query,
         destination.position,
         queryHalfExtents,
         maximumProjectionDistance,
       );
+      let projectionSearchM = null;
+      if (!projected && (input.acceptance ?? "strict") === "largest-component") {
+        // A destination sampled from a room polygon can land under captured
+        // clutter where no navmesh poly exists, which reads as "unreachable"
+        // when the room itself cooked fine. Widen the search laterally in
+        // steps — never vertically, so a destination cannot leak onto another
+        // storey — and record how far the search had to go, so a reviewer can
+        // judge a distant projection on its merits.
+        for (const searchM of [1.5, 3]) {
+          projected = projectOptional(
+            query,
+            destination.position,
+            { x: searchM, y: queryHalfExtents.y, z: searchM },
+            searchM,
+          );
+          if (projected) {
+            projectionSearchM = searchM;
+            break;
+          }
+        }
+      }
       const outboundRoute = projected
         ? completePath(
           query,
@@ -556,6 +577,7 @@ export async function buildRecastNavigationArtifact(input) {
         id: destination.id,
         requestedPosition: [...destination.position],
         projectedPosition: projected ? vectorTuple(projected.point) : null,
+        ...(projectionSearchM !== null ? { projectionSearchM } : {}),
         reachable: Boolean(outboundRoute && inboundRoute),
         outboundReachable: Boolean(outboundRoute),
         inboundReachable: Boolean(inboundRoute),
@@ -563,6 +585,69 @@ export async function buildRecastNavigationArtifact(input) {
         inboundPathPointCount: inboundRoute?.length ?? 0,
       };
     });
+    const tupleVector = ([x, y, z]) => ({ x, y, z });
+    let spawnRelocation = null;
+    if ((input.acceptance ?? "strict") === "largest-component") {
+      // The automatic spawn is a geometric guess — the centre of the widest
+      // floor — and a real capture can fence that exact pocket off with
+      // clutter, which reads as "almost nothing reachable" when the building's
+      // main component is simply elsewhere. The spawn's job in this mode is to
+      // stand in the best-connected place the capture offers, so score every
+      // projected destination by how many others it can reach both ways and
+      // move the spawn to the winner, disclosing the move.
+      const projectedDestinations = destinations.filter((destination) =>
+        destination.projectedPosition);
+      const mutualCounts = projectedDestinations.map((candidate) => ({
+        candidate,
+        count: projectedDestinations.filter((other) =>
+          other !== candidate &&
+          completePath(
+            query,
+            tupleVector(candidate.projectedPosition),
+            tupleVector(other.projectedPosition),
+            maximumProjectionDistance,
+            queryHalfExtents,
+          ) &&
+          completePath(
+            query,
+            tupleVector(other.projectedPosition),
+            tupleVector(candidate.projectedPosition),
+            maximumProjectionDistance,
+            queryHalfExtents,
+          )).length,
+      }));
+      const currentReachable = destinations.filter((d) => d.reachable).length;
+      const best = mutualCounts.sort((left, right) => right.count - left.count)[0];
+      if (best && best.count + 1 > currentReachable) {
+        const relocatedSpawn = tupleVector(best.candidate.projectedPosition);
+        for (const destination of destinations) {
+          if (!destination.projectedPosition) continue;
+          const outbound = completePath(
+            query,
+            relocatedSpawn,
+            tupleVector(destination.projectedPosition),
+            maximumProjectionDistance,
+            queryHalfExtents,
+          );
+          const inbound = outbound && completePath(
+            query,
+            tupleVector(destination.projectedPosition),
+            relocatedSpawn,
+            maximumProjectionDistance,
+            queryHalfExtents,
+          );
+          destination.reachable = Boolean(outbound && inbound);
+          destination.outboundReachable = Boolean(outbound);
+          destination.inboundReachable = Boolean(inbound);
+        }
+        spawnRelocation = {
+          from: [...input.spawn.position],
+          to: vectorTuple(relocatedSpawn),
+          anchorDestinationId: best.candidate.id,
+        };
+        input.spawn.position = vectorTuple(relocatedSpawn);
+      }
+    }
     const unreachableDestinationIds = destinations
       .filter((destination) => !destination.reachable)
       .map((destination) => destination.id);
@@ -597,6 +682,7 @@ export async function buildRecastNavigationArtifact(input) {
       destinationCount: destinations.length,
       unreachableDestinationIds,
       excludedDestinations,
+      ...(spawnRelocation ? { spawnRelocation } : {}),
       destinations,
     };
     if (!validation.passed) {

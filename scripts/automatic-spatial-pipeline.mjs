@@ -428,7 +428,10 @@ function automaticThresholdSurfaces(roomSurfaces, openings) {
 // showing a doorway, whether or not the opening detector recorded it.
 const ADJACENCY_MAXIMUM_GAP_M = 1.0;
 const ADJACENCY_SAMPLE_STEP_M = 0.1;
-const ADJACENCY_MINIMUM_RUN_M = 0.5;
+const ADJACENCY_MINIMUM_RUN_M = 0.7;
+// Extend the bridge past both outlines so its voxels provably merge with each
+// room's floor; ending exactly on the outline can leave a one-cell seam.
+const ADJACENCY_OVERLAP_M = 0.3;
 const ADJACENCY_RUN_BREAK_M = 0.25;
 const ADJACENCY_MAXIMUM_RUNS_PER_PAIR = 2;
 const ADJACENCY_WALL_CLEARANCE_M = 0.01;
@@ -483,11 +486,24 @@ function automaticAdjacencyThresholds(roomSurfaces, barrierSegments) {
         const head = run[0];
         const tail = run.at(-1);
         const elevation = roomA.elevation;
+        const extend = (from, towards, sign) => {
+          const dx = towards[0] - from[0];
+          const dz = towards[1] - from[1];
+          const length = Math.hypot(dx, dz) || 1;
+          return [
+            from[0] + sign * (dx / length) * ADJACENCY_OVERLAP_M,
+            from[1] + sign * (dz / length) * ADJACENCY_OVERLAP_M,
+          ];
+        };
+        const headSample = extend(head.sample, head.point, -1);
+        const tailSample = extend(tail.sample, tail.point, -1);
+        const headPoint = extend(head.point, head.sample, -1);
+        const tailPoint = extend(tail.point, tail.sample, -1);
         const corners = [
-          [head.sample[0], elevation, head.sample[1]],
-          [tail.sample[0], elevation, tail.sample[1]],
-          [tail.point[0], elevation, tail.point[1]],
-          [head.point[0], elevation, head.point[1]],
+          [headSample[0], elevation, headSample[1]],
+          [tailSample[0], elevation, tailSample[1]],
+          [tailPoint[0], elevation, tailPoint[1]],
+          [headPoint[0], elevation, headPoint[1]],
         ];
         if (quadIsDegenerate(corners)) continue;
         surfaces.push({
