@@ -330,6 +330,7 @@ export async function validateStructuralNavigation({
       artifact,
       agent,
       loops: boundaryTopologyResult.loops,
+      surfaceLoopCandidates: boundaryTopologyResult.surfaceLoopCandidates ?? [],
     });
     const dynamicBarrierProbes = await validateDynamicBarrierState({
       world,
@@ -399,6 +400,7 @@ function validateStructuralBoundaryTopology(artifact) {
   const ceilingSurfaces = structuralHorizontalSurfaces(geometry, "ceiling");
   const floorComponents = surfaceComponents(floorSurfaces);
   const acceptedLoops = new Map();
+  const surfaceLoopCandidates = [];
   for (const component of floorComponents) {
     for (const surface of component) {
       const center = horizontalSurfaceInteriorPoint(surface);
@@ -414,15 +416,19 @@ function validateStructuralBoundaryTopology(artifact) {
           { center },
         );
       }
-      const loop = containingLoops[0];
       const floorTriangles = horizontalSurfaceTriangles2(surface);
-      if (floorTriangles.some((triangle) => !triangleContainedInRing(triangle, loop.points))) {
+      const containedCandidates = containingLoops.filter((candidate) =>
+        floorTriangles.every((triangle) =>
+          triangleContainedInRing(triangle, candidate.points)));
+      if (!containedCandidates.length) {
         throw structuralFailure(
           surface.id,
           "Reviewed floor extends outside its structural boundary loop",
         );
       }
+      const loop = containedCandidates[0];
       acceptedLoops.set(loop.key, loop);
+      surfaceLoopCandidates.push({ surfaceId: surface.id, loops: containedCandidates });
       const coveredByCeiling = floorTriangles.every((triangle) =>
         ceilingSurfaces.some((ceiling) =>
           ceiling.elevation > surface.elevation &&
@@ -442,6 +448,7 @@ function validateStructuralBoundaryTopology(artifact) {
       dynamicClosureCount: 0,
     },
     loops,
+    surfaceLoopCandidates,
   };
 }
 
@@ -521,8 +528,18 @@ function validateCornerSlides({
   artifact,
   agent,
   loops,
+  surfaceLoopCandidates = [],
 }) {
-  if (!loops.length) return [];
+  // A floor is proven when any structural loop that contains it survives the
+  // corner exercise, tried tightest first. Observed walls can chain into an
+  // honest loop whose corners stand in captured clutter no capsule fits into;
+  // the capture fence enclosing the same floor is just as real a barrier, and
+  // refusing the scene because the tighter loop is unprobeable would fail
+  // captures for being honest about clutter.
+  const work = surfaceLoopCandidates.length
+    ? surfaceLoopCandidates
+    : loops.map((loop) => ({ surfaceId: loop.key, loops: [loop] }));
+  if (!work.length) return [];
   const halfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
   const shape = new RAPIER.Capsule(halfHeight, agent.radius);
   const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
@@ -536,8 +553,22 @@ function validateCornerSlides({
   controller.setMaxSlopeClimbAngle(degreesToRadians(agent.maxSlopeDegrees));
   controller.setMinSlopeSlideAngle(degreesToRadians(Math.min(89, agent.maxSlopeDegrees + 5)));
   const probes = [];
-  try {
-    for (const [loopIndex, loopRecord] of loops.entries()) {
+  const loopOutcomes = new Map();
+  const exerciseLoop = (loopRecord, loopIndex) => {
+    if (loopOutcomes.has(loopRecord.key)) return loopOutcomes.get(loopRecord.key);
+    const loopProbes = [];
+    let outcome;
+    try {
+      runCornerExercise(loopRecord, loopIndex, loopProbes);
+      outcome = { passed: true, probes: loopProbes };
+    } catch (error) {
+      outcome = { passed: false, error };
+    }
+    loopOutcomes.set(loopRecord.key, outcome);
+    return outcome;
+  };
+  const runCornerExercise = (loopRecord, loopIndex, loopProbes) => {
+    {
       const loop = loopRecord.points;
       for (const [cornerIndex, corner] of loop.entries()) {
         const cornerId = `loop-${loopIndex + 1}-corner-${cornerIndex + 1}`;
@@ -617,7 +648,7 @@ function validateCornerSlides({
             actualEnd: roundedPoint(actualEnd),
           });
         }
-        probes.push({
+        loopProbes.push({
           cornerId,
           origin: roundedPoint([selected.origin2[0], selected.floorElevation, selected.origin2[1]]),
           requestedEnd: roundedPoint([
@@ -629,6 +660,33 @@ function validateCornerSlides({
           blocked: true,
           remainedInside: true,
         });
+      }
+    }
+  };
+  try {
+    for (const entry of work) {
+      let accepted = null;
+      let firstFailure = null;
+      for (const [candidateIndex, loopRecord] of entry.loops.entries()) {
+        const outcome = exerciseLoop(loopRecord, candidateIndex);
+        if (process.env.CORNER_DEBUG) {
+          const area = Math.abs(signedPolygonArea2(loopRecord.points)).toFixed(1);
+          console.error(`[corner-debug] ${entry.surfaceId} candidate ${candidateIndex} ` +
+            `area=${area} corners=${loopRecord.points.length} passed=${outcome.passed}` +
+            (outcome.passed ? "" : ` err=${outcome.error?.details?.anchorId ?? outcome.error?.message}`));
+        }
+        if (outcome.passed) {
+          accepted = outcome;
+          break;
+        }
+        firstFailure ??= outcome.error;
+      }
+      if (!accepted) throw firstFailure;
+      for (const probe of accepted.probes) {
+        if (!probes.some((existing) => existing.cornerId === probe.cornerId &&
+          existing.origin.join() === probe.origin.join())) {
+          probes.push(probe);
+        }
       }
     }
   } finally {

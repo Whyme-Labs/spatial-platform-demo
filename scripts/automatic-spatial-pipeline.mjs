@@ -548,9 +548,21 @@ function automaticAdjacencyThresholds(roomSurfaces, barrierSegments) {
 // chained ring just outside the capture, harmless to movement because nothing
 // walkable exists beyond the observed walls it encloses, and honest because the
 // capture edge is a real boundary of the scene.
+// The structural proof needs, for every storey group, a closed chained barrier
+// loop whose corners a player capsule can stand inside of and be blocked by.
+// Observed walls cannot chain, and a fence hugging the walkable outline puts
+// probe corners inside captured clutter. The convex hull of the storey's
+// walkable geometry at a two-metre standoff satisfies every requirement at
+// once: corners stand in the clean band beyond the capture edge, the fence's
+// own barrier blocks escape, and nothing walkable exists beyond it to lose.
 const CAPTURE_RING_CELL_M = 0.125;
+// Probe offset for the largest supported agent (radius 0.3: max(4r, 0.5) = 1.2)
+// plus capsule radius plus margin. The fence is traced at this clearance beyond
+// every cooked obstacle, so a probe standing one offset inside any fence corner
+// is clear of collision by construction.
+const CAPTURE_FENCE_CLEARANCE_M = 1.7;
 
-function automaticCaptureEdgeSeals(roomSurfaces, _barrierSegments, thresholdSurfaces) {
+function automaticCaptureEdgeSeals(roomSurfaces, barrierSegments, thresholdSurfaces) {
   const byElevation = new Map();
   for (const room of roomSurfaces) {
     const key = Math.round(room.elevation * 10) / 10;
@@ -566,57 +578,75 @@ function automaticCaptureEdgeSeals(roomSurfaces, _barrierSegments, thresholdSurf
   }
   const seals = [];
   for (const [elevationKey, group] of byElevation) {
+    const storeyMiddle = elevationKey + 0.5;
+    const cellSet = new Set();
+    const cells = [];
+    const addCell = (x, z) => {
+      const key = `${x},${z}`;
+      if (!cellSet.has(key)) {
+        cellSet.add(key);
+        cells.push([x, z]);
+      }
+    };
+    const addPoint = (x, z) => addCell(
+      Math.floor(x / CAPTURE_RING_CELL_M),
+      Math.floor(z / CAPTURE_RING_CELL_M),
+    );
     const polygons = [
       ...group.rooms.map((room) => room.points.map((point) => [point[0], point[2]])),
       ...group.thresholds.map((surface) =>
         surface.points.map((point) => [point[0], point[2]])),
     ];
-    const bounds = polygons.flat().reduce((box, point) => [
-      Math.min(box[0], point[0]), Math.min(box[1], point[1]),
-      Math.max(box[2], point[0]), Math.max(box[3], point[1]),
-    ], [Infinity, Infinity, -Infinity, -Infinity]);
-    const cells = [];
-    const cellSet = new Set();
-    for (let x = Math.floor(bounds[0] / CAPTURE_RING_CELL_M) - 1;
-      x <= Math.ceil(bounds[2] / CAPTURE_RING_CELL_M) + 1; x += 1) {
-      for (let z = Math.floor(bounds[1] / CAPTURE_RING_CELL_M) - 1;
-        z <= Math.ceil(bounds[3] / CAPTURE_RING_CELL_M) + 1; z += 1) {
-        const centre = [
-          (x + 0.5) * CAPTURE_RING_CELL_M,
-          (z + 0.5) * CAPTURE_RING_CELL_M,
-        ];
-        if (polygons.some((polygon) => pointInPolygon2(centre, polygon))) {
-          cells.push([x, z]);
-          cellSet.add(`${x},${z}`);
+    for (const polygon of polygons) {
+      const xs = polygon.map((point) => point[0]);
+      const zs = polygon.map((point) => point[1]);
+      for (let x = Math.floor(Math.min(...xs) / CAPTURE_RING_CELL_M);
+        x <= Math.ceil(Math.max(...xs) / CAPTURE_RING_CELL_M); x += 1) {
+        for (let z = Math.floor(Math.min(...zs) / CAPTURE_RING_CELL_M);
+          z <= Math.ceil(Math.max(...zs) / CAPTURE_RING_CELL_M); z += 1) {
+          const centre = [
+            (x + 0.5) * CAPTURE_RING_CELL_M,
+            (z + 0.5) * CAPTURE_RING_CELL_M,
+          ];
+          if (pointInPolygon2(centre, polygon)) addCell(x, z);
         }
+      }
+    }
+    for (const barrier of barrierSegments) {
+      if (barrier.minY > storeyMiddle || barrier.maxY < storeyMiddle) continue;
+      const length = Math.hypot(
+        barrier.end[0] - barrier.start[0],
+        barrier.end[1] - barrier.start[1],
+      );
+      const steps = Math.max(1, Math.ceil(length / (CAPTURE_RING_CELL_M / 2)));
+      for (let step = 0; step <= steps; step += 1) {
+        const t = step / steps;
+        addPoint(
+          barrier.start[0] + (barrier.end[0] - barrier.start[0]) * t,
+          barrier.start[1] + (barrier.end[1] - barrier.start[1]) * t,
+        );
       }
     }
     if (cells.length < 4) continue;
-    // Morphological closing: player-sized probes cannot stand inside notches a
-    // cell or two wide, so fill them before tracing rather than emitting ring
-    // corners no capsule can exercise.
-    const closingRadius = 2;
-    const dilated = new Set(cellSet);
-    for (const key of cellSet) {
-      const [x, z] = key.split(",").map(Number);
-      for (let dx = -closingRadius; dx <= closingRadius; dx += 1) {
-        for (let dz = -closingRadius; dz <= closingRadius; dz += 1) {
-          dilated.add(`${x + dx},${z + dz}`);
+    const radius = Math.ceil(CAPTURE_FENCE_CLEARANCE_M / CAPTURE_RING_CELL_M);
+    const boundary = cells.filter(([x, z]) =>
+      !(cellSet.has(`${x - 1},${z}`) && cellSet.has(`${x + 1},${z}`) &&
+        cellSet.has(`${x},${z - 1}`) && cellSet.has(`${x},${z + 1}`)));
+    const fenceSet = new Set(cellSet);
+    const fenceCells = [...cells];
+    for (const [x, z] of boundary) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        for (let dz = -radius; dz <= radius; dz += 1) {
+          if (dx * dx + dz * dz > radius * radius) continue;
+          const key = `${x + dx},${z + dz}`;
+          if (!fenceSet.has(key)) {
+            fenceSet.add(key);
+            fenceCells.push([x + dx, z + dz]);
+          }
         }
       }
     }
-    const closedCells = [];
-    for (const key of dilated) {
-      const [x, z] = key.split(",").map(Number);
-      let interior = true;
-      for (let dx = -closingRadius; interior && dx <= closingRadius; dx += 1) {
-        for (let dz = -closingRadius; interior && dz <= closingRadius; dz += 1) {
-          if (!dilated.has(`${x + dx},${z + dz}`)) interior = false;
-        }
-      }
-      if (interior) closedCells.push([x, z]);
-    }
-    const outline = semanticCellOutline(closedCells.length >= 4 ? closedCells : cells);
+    const outline = semanticCellOutline(fenceCells);
     const ring = outline.map(([x, z]) => [
       x * CAPTURE_RING_CELL_M,
       z * CAPTURE_RING_CELL_M,
@@ -634,6 +664,28 @@ function automaticCaptureEdgeSeals(roomSurfaces, _barrierSegments, thresholdSurf
     }
   }
   return seals;
+}
+
+function convexHull2(points) {
+  const sorted = [...new Map(points.map((point) =>
+    [`${point[0].toFixed(4)},${point[1].toFixed(4)}`, point])).values()]
+    .sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  if (sorted.length < 3) return sorted;
+  const cross = (o, a, b) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower = [];
+  for (const point of sorted) {
+    while (lower.length >= 2 &&
+      cross(lower.at(-2), lower.at(-1), point) <= 0) lower.pop();
+    lower.push(point);
+  }
+  const upper = [];
+  for (const point of [...sorted].reverse()) {
+    while (upper.length >= 2 &&
+      cross(upper.at(-2), upper.at(-1), point) <= 0) upper.pop();
+    upper.push(point);
+  }
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
 function shrinkSegment(from, to, margin) {

@@ -19,7 +19,7 @@ RUN micromamba install --yes --name base --channel conda-forge "pdal=2.9.2" \
   && micromamba clean --all --yes
 
 FROM node:22-bookworm-slim
-LABEL org.opencontainers.image.version="0.12.0"
+LABEL org.opencontainers.image.version="0.12.1"
 
 ENV NODE_ENV=production \
   NODE_OPTIONS="--max-old-space-size=6144" \
