@@ -10936,7 +10936,16 @@ function renderProjectDetail(): void {
     )
   ) ?? null;
   const activeJob = detail.jobs.find((job) => ["QUEUED", "LEASED", "RUNNING"].includes(job.state)) ?? null;
-  const failedJob = detail.jobs.find((job) => ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) ?? null;
+  // A dead attempt only deserves the journey banner while it is the latest
+  // word on its stage. Retries are normal operation; surfacing a failure that a
+  // later run of the same job type already superseded turns every recovered
+  // scene into a permanent false alarm.
+  const supersededByLaterSuccess = (candidate: Job) =>
+    detail.jobs.some((other) => other.job_type === candidate.job_type &&
+      other.state === "SUCCEEDED" && other.created_at >= candidate.created_at);
+  const failedJob = detail.jobs.find((job) =>
+    ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state) &&
+    !supersededByLaterSuccess(job)) ?? null;
   const hasCapture = detail.assets.length > 0;
   const hasMetricGeometry = detail.assets.some((asset) =>
     asset.kind === "pointcloud" && ["ply", "e57", "las", "laz", "pts"].includes(asset.format)
