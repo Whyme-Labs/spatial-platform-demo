@@ -29,7 +29,12 @@ volume = modal.Volume.from_name("spatial-gaussian-examples")
 
 training_image = (
     modal.Image.from_registry("nvidia/cuda:11.8.0-devel-ubuntu22.04", add_python="3.10")
-    .apt_install("git", "libgl1", "libglib2.0-0", "colmap")
+    # build-essential, cmake, and clang: nerfstudio pulls fpsample and
+    # pyliblzfse as sdists, and both compile native extensions at install time.
+    .apt_install(
+        "git", "libgl1", "libglib2.0-0", "colmap",
+        "build-essential", "cmake", "clang",
+    )
     .pip_install(
         "torch==2.1.2+cu118",
         "torchvision==0.16.2+cu118",
