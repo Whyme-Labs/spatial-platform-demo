@@ -38,6 +38,7 @@ COPY processor/package.json processor/package-lock.json ./
 RUN npm ci --omit=optional --ignore-scripts
 COPY --from=spark-builder /spark/rust/target/release/build-lod /usr/local/bin/spark-build-lod
 COPY --from=pdal-runtime /opt/conda /opt/conda
+COPY processor/.build-stamp /etc/spatial-processor-build
 COPY scripts/processing-agent.mjs scripts/processing-agent-core.mjs scripts/poster-quality.mjs scripts/navigation-build-core.mjs scripts/physical-navigation-validation.mjs scripts/authored-collision.mjs scripts/automatic-spatial-pipeline.mjs scripts/horizontal-surface.mjs scripts/e57-structure-core.mjs ./scripts/
 RUN pdal --version \
   && pdal --drivers | grep -q "readers.e57" \

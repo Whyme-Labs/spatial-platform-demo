@@ -1,5 +1,10 @@
 export type ProcessingDispatchMessage = {
   jobId: string;
+  // Container instances are addressed by name, and a name that repeats reuses
+  // whatever instance — and whatever image — served it before. Naming each
+  // dispatch uniquely guarantees a retry after a deploy runs the deployed
+  // image instead of silently re-running the one that already failed.
+  dispatchId?: string;
 };
 
 export type ProcessorRuntimeConfiguration = {
@@ -18,7 +23,12 @@ export function parseProcessingDispatchMessage(input: unknown): ProcessingDispat
   if (!input || typeof input !== "object") return null;
   const jobId = Reflect.get(input, "jobId");
   if (typeof jobId !== "string" || !jobIdPattern.test(jobId)) return null;
-  return { jobId };
+  const dispatchId = Reflect.get(input, "dispatchId");
+  if (dispatchId !== undefined &&
+    (typeof dispatchId !== "string" || !jobIdPattern.test(dispatchId))) {
+    return null;
+  }
+  return { jobId, ...(typeof dispatchId === "string" ? { dispatchId } : {}) };
 }
 
 export function processorEnvironment(

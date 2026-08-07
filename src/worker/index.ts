@@ -12940,21 +12940,21 @@ app.post("/api/worker/jobs/lease", async (context) => {
     await context.env.DB.prepare(`
       UPDATE semantic_extraction_runs
       SET status = 'PROCESSING', updated_at = datetime('now')
-      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
+      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING', 'FAILED')
     `).bind(job.semantic_extraction_id).run();
   }
   if (job.floorplan_extraction_id) {
     await context.env.DB.prepare(`
       UPDATE floorplan_extraction_runs
       SET status = 'PROCESSING', error_json = NULL, updated_at = datetime('now')
-      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
+      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING', 'FAILED')
     `).bind(job.floorplan_extraction_id).run();
   }
   if (job.navigation_build_id) {
     await context.env.DB.prepare(`
       UPDATE scene_navigation_builds
       SET status = 'PROCESSING', updated_at = datetime('now')
-      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING')
+      WHERE id = ? AND status IN ('QUEUED', 'PROCESSING', 'FAILED')
     `).bind(job.navigation_build_id).run();
   }
   const posterCamera = storedPosterCamera(job.version_provenance_json);
@@ -13550,7 +13550,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
         review_note = CASE WHEN ? THEN ? ELSE review_note END,
         reviewed_at = CASE WHEN ? THEN datetime('now') ELSE reviewed_at END,
         updated_at = datetime('now')
-      WHERE job_id = ? AND status IN ('QUEUED', 'PROCESSING')
+      WHERE job_id = ? AND status IN ('QUEUED', 'PROCESSING', 'FAILED')
     `).bind(
       automaticAcceptance.approved ? "APPROVED" : "READY_FOR_REVIEW",
       JSON.stringify(navigationArtifact),
@@ -14102,7 +14102,7 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       UPDATE semantic_extraction_runs
       SET status = 'READY_FOR_REVIEW', report_asset_id = ?, summary_json = ?,
         candidate_count = ?, updated_at = datetime('now')
-      WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED')
+      WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED', 'FAILED')
     `).bind(
       reportAssetId,
       JSON.stringify(parsed.data.report.summary),
@@ -14546,7 +14546,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       UPDATE floorplan_extraction_runs
       SET status = 'READY_FOR_REVIEW', proposal_json = ?, proposal_hash = ?,
         report_asset_id = ?, error_json = NULL, updated_at = datetime('now')
-      WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED')
+      WHERE id = ? AND job_id = ? AND status IN ('PROCESSING', 'QUEUED', 'FAILED')
     `).bind(
       proposalJson,
       proposalHash,
@@ -16494,7 +16494,7 @@ async function authenticateWorker(context: Context<AppEnvironment>): Promise<boo
 
 function dispatchProcessingJob(context: Context<AppEnvironment>, jobId: string): void {
   context.executionCtx.waitUntil(
-    context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId })
+    context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId, dispatchId: crypto.randomUUID() })
       .then(() =>
         context.env.DB.prepare(
           "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
@@ -16535,7 +16535,7 @@ async function enqueueDispatchableProcessingJobs(env: Env): Promise<void> {
   ).all<{ id: string }>();
   await Promise.all(result.results.map(async ({ id }) => {
     try {
-      await env.PROCESSING_DISPATCH_QUEUE.send({ jobId: id });
+      await env.PROCESSING_DISPATCH_QUEUE.send({ jobId: id, dispatchId: crypto.randomUUID() });
       await env.DB.prepare(
         "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
       ).bind(id).run();

@@ -281,6 +281,19 @@ job appears in the failure dashboard instead of sitting invisible. When
 inspecting a stuck job, read `state`, `attempt_count`, `retry_count`,
 `dispatched_at`, and `lease_expires_at` together.
 
+Every processor deploy first writes `processor/.build-stamp` (git revision +
+timestamp), which the Dockerfile copies immediately before the pipeline
+scripts. Three production deploys once rebuilt a byte-identical image from a
+poisoned layer cache and silently skipped the push, so production kept
+validating with week-old pipeline code while local runs passed; the stamp makes
+every deploy's image provably fresh. Relatedly, each queue dispatch now carries
+a unique `dispatchId` that names the container instance: instances are
+addressed by name, and reusing the job id meant a retry after a deploy
+re-ran whatever image the failed attempt had used. Finally, extraction-run and
+navigation-build rows accept a successful completion over a previously recorded
+`FAILED` status, so a retried job's success is never orphaned by its own
+earlier failure.
+
 Build and validate the linux/amd64 image:
 
 ```bash

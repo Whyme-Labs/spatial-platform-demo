@@ -71,7 +71,12 @@ const worker = {
         continue;
       }
       try {
-        const container = getContainer(env.PROCESSOR_CONTAINER, dispatch.jobId);
+        // Old messages carry only a job id; fall back to it so in-flight
+        // dispatches from before the deploy still start.
+        const container = getContainer(
+          env.PROCESSOR_CONTAINER,
+          dispatch.dispatchId ?? dispatch.jobId,
+        );
         await container.start({
           entrypoint: ["node", "scripts/processing-agent.mjs", "--once"],
           envVars: processorEnvironment({

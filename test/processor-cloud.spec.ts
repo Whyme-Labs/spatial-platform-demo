@@ -14,6 +14,12 @@ describe("Cloud processor dispatch", () => {
     const jobId = "123e4567-e89b-42d3-a456-426614174000";
     expect(parseProcessingDispatchMessage({ jobId })).toEqual({ jobId });
     expect(parseProcessingDispatchMessage({ jobId: "not-a-job" })).toBeNull();
+    // A dispatch id names the container instance, so a retry after a deploy
+    // provisions the deployed image instead of reusing the failed instance.
+    const dispatchId = "223e4567-e89b-42d3-a456-426614174999";
+    expect(parseProcessingDispatchMessage({ jobId, dispatchId }))
+      .toEqual({ jobId, dispatchId });
+    expect(parseProcessingDispatchMessage({ jobId, dispatchId: "not-a-uuid" })).toBeNull();
     expect(parseProcessingDispatchMessage({ scanId: jobId })).toBeNull();
     expect(parseProcessingDispatchMessage(null)).toBeNull();
   });
