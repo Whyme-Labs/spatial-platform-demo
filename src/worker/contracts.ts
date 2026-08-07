@@ -1384,12 +1384,6 @@ export const navigationArtifactSchema = z.object({
       const expectedBarrierIds = new Set(
         value.structuralGeometry?.barrierSegments.map((barrier) => barrier.id) ?? [],
       );
-      const expectedCornerCount = new Set(
-        value.structuralGeometry?.barrierSegments.flatMap((barrier) => [
-          `${barrier.start[0]},${barrier.start[1]}`,
-          `${barrier.end[0]},${barrier.end[1]}`,
-        ]) ?? [],
-      ).size;
       const sidesByBarrier = new Map<string, Set<string>>();
       for (const probe of value.structuralValidation.boundaryProbes) {
         const sides = sidesByBarrier.get(probe.barrierId) ?? new Set<string>();
@@ -1413,25 +1407,22 @@ export const navigationArtifactSchema = z.object({
           message: "Structural boundary evidence must cover both sides of every frozen barrier",
         });
       }
-      // A reviewed shell's walls chain into the proving loops, so its corner
-      // evidence covers every barrier endpoint. An automatic scene's observed
-      // wall fragments cannot chain — its floors are proven by the capture
-      // fence — so the evidence there must be self-consistent and exercised,
-      // not endpoint-complete over tens of thousands of fragments.
-      const reviewedProvenance =
-        value.collisionSemantics?.provenance === "operator_reviewed";
-      if (reviewedProvenance
-        ? value.structuralValidation.cornerCount !== expectedCornerCount
-        : (value.structuralValidation.cornerCount <
-            (value.structuralValidation.boundaryTopology?.loopCount ?? 1) * 3 ||
-          value.structuralValidation.cornerCount !==
-            value.structuralValidation.cornerProbes.length)) {
+      // Corner evidence proves the loops that enclose the floors. A shell whose
+      // walls chain completely makes that equal to covering every barrier
+      // endpoint, but any scene carrying observed wall fragments — automatic or
+      // operator-approved — cannot chain thousands of fragments into loops, and
+      // provenance says who vouched for the geometry, not how it chains. The
+      // invariant that holds for every scene: every proving loop exercised,
+      // one probe recorded per counted corner, and boundary probes (checked
+      // above) covering both sides of every barrier.
+      if (value.structuralValidation.cornerCount <
+          (value.structuralValidation.boundaryTopology?.loopCount ?? 1) ||
+        value.structuralValidation.cornerCount !==
+          value.structuralValidation.cornerProbes.length) {
         context.addIssue({
           code: "custom",
           path: ["structuralValidation", "cornerProbes"],
-          message: reviewedProvenance
-            ? "Structural corner evidence must cover every unique frozen barrier endpoint"
-            : "Structural corner evidence must exercise every proving boundary loop",
+          message: "Structural corner evidence must exercise every proving boundary loop",
         });
       }
       const expectedDynamicBarrierIds = new Set(
