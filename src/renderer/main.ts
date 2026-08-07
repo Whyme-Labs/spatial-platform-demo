@@ -264,6 +264,7 @@ let mobileVerticalMovement = 0;
 let navigationRuntimeGeneration = 0;
 let walkableBoundarySource: WalkableBoundarySource = "none";
 let movementRuntimeReady = false;
+let authoringHostActive = false;
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
@@ -347,6 +348,17 @@ async function start(): Promise<void> {
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
     if (Reflect.get(event.data, "type") === "set-authoring-plan") {
       replaceSceneAuthoringOverlay(authoringPlanOverlay, Reflect.get(event.data, "plan"));
+      // An authoring host is a reviewer's context: the walking package under
+      // review does not exist yet, so the usual verified-runtime gate would
+      // leave the inspector pinned to one point. Reviewing a scene requires
+      // moving through it; grant free flight, collision-free by design.
+      if (!authoringHostActive) {
+        authoringHostActive = true;
+        movementMode = "fly";
+        if (!sceneAuthoringSession) {
+          controls.setTranslationEnabled(true);
+        }
+      }
       return;
     }
     if (Reflect.get(event.data, "type") === "set-authoring-mode") {
@@ -362,7 +374,7 @@ async function start(): Promise<void> {
       sceneAuthoringSession = mode ? { mode, requestId, points: [] } : null;
       authoringMarkers.clear();
       controls.setLookEnabled(!mode);
-      controls.setTranslationEnabled(mode ? false : movementRuntimeReady);
+      controls.setTranslationEnabled(mode ? false : (movementRuntimeReady || authoringHostActive));
       canvas.dataset.authoringMode = mode ?? "";
       post({
         source: "spatial-spark",
