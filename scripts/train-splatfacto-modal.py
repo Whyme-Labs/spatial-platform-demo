@@ -135,7 +135,9 @@ def train(
 
     started = time.time()
     data_root = Path("/vol/data") / scene
-    run_name = f"{scene}-{images.replace('/', '_')}-n{every_nth}-{iterations}"
+    run_name = (
+        f"{scene.replace('/', '-')}-{images.replace('/', '-')}-n{every_nth}-{iterations}"
+    )
     run_root = Path("/vol/runs") / run_name
     workspace = Path("/tmp/workspace")
     workspace.mkdir(parents=True, exist_ok=True)
@@ -195,6 +197,10 @@ def train(
             "colmap",
             "--colmap-path", "colmap/sparse/0",
             "--images-path", "images",
+            # Frames above 1600 px trigger an interactive downscale prompt,
+            # which reads EOF in a container and kills the run. The staged
+            # frames are already the size we want.
+            "--downscale-factor", "1",
             "--auto-scale-poses", "False",
             "--center-method", "none",
             "--orientation-method", "none",
