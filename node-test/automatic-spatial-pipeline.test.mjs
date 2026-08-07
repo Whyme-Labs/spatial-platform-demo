@@ -552,12 +552,71 @@ describe("automatic multi-level spatial pipeline", () => {
       connectors: [],
     };
     const config = automaticStructuralCollisionConfig(report);
-    const lower = config.barrierSegments.filter((barrier) => barrier.minY === 0);
-    const upper = config.barrierSegments.filter((barrier) => barrier.minY === 3);
+    const observed = config.barrierSegments.filter((barrier) =>
+      barrier.id.startsWith("auto-barrier-"));
+    const lower = observed.filter((barrier) => barrier.minY === 0);
+    const upper = observed.filter((barrier) => barrier.minY === 3);
     assert.equal(lower.length, 1);
     assert.deepEqual(lower[0].start, [0, 0]);
     assert.deepEqual(lower[0].end, [6, 0]);
     assert.equal(upper.length, 2);
+  });
+
+  it("rings each storey so honestly gapped walls still enclose the scene", async () => {
+    // Observed walls legitimately stop where the capture saw glass or nothing.
+    // The structural proof still demands a closed boundary loop with corners a
+    // player capsule can stand beside, so the config fences each storey along
+    // its walkable outline. The EyefulTower workshop reproduced the failure:
+    // wall gaps meant no loop, and the whole automatic build failed closed.
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.5 }],
+      rooms: [roomProposal("room-001", "level-001", 0)],
+      walls: [
+        // Three sides observed; the north side is a captured-glass gap.
+        lineProposal("wall-001", 0, [0, 0], [6, 0]),
+        lineProposal("wall-002", 0, [6, 0], [6, 6]),
+        lineProposal("wall-003", 0, [0, 6], [0, 0]),
+      ],
+      openings: [],
+      connectors: [],
+    };
+    const config = automaticStructuralCollisionConfig(report);
+    const ring = config.barrierSegments.filter((barrier) =>
+      barrier.id.startsWith("auto-capture-ring-"));
+    assert.ok(ring.length >= 4, "storey should be ringed");
+
+    const bytes = buildAuthoredStructuralCollisionGlb(config);
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    const layout = automaticNavigationLayout({
+      agent: {
+        radius: 0.25, height: 1.7, eyeHeight: 1.6, maxClimb: 0.1, maxSlopeDegrees: 45,
+      },
+      build: {
+        cellSize: 0.08, cellHeight: 0.05, tileSize: 64, maxEdgeLengthVoxels: 80,
+        maxSimplificationError: 1.3, minimumRegionSizeVoxels: 2, mergeRegionSizeVoxels: 8,
+      },
+    }, geometry);
+    const artifact = await buildRecastNavigationArtifact({
+      ...layout,
+      positions: geometry.positions,
+      indices: geometry.indices,
+      collisionSemantics: geometry.collisionSemantics,
+      structuralGeometry: geometry.structuralGeometry,
+      dynamicBarriers: geometry.dynamicBarriers,
+      source: {
+        assetId: "ringed-gap-fixture",
+        sha256: createHash("sha256").update("ringed-gap").digest("hex"),
+        authoringHash: createHash("sha256").update("ringed-gap-authoring").digest("hex"),
+        worldUnit: "metres",
+      },
+    });
+    const structural = await validateStructuralNavigation({
+      artifact,
+      positions: geometry.positions,
+      indices: geometry.indices,
+      ignoredMeshCount: geometry.ignoredMeshCount,
+    });
+    assert.equal(structural.passed, true);
   });
 
   it("cuts passable doors but keeps windows and unknown gaps physically blocked", () => {

@@ -1,4 +1,5 @@
 import { Earcut } from "three/src/extras/Earcut.js";
+import { semanticCellOutline } from "./processing-agent-core.mjs";
 import {
   pointInPolygon2,
   pointOnRing2,
@@ -132,6 +133,27 @@ export function automaticStructuralCollisionConfig(report, {
   floorSurfaces.push(
     ...automaticThresholdSurfaces(roomSurfaces, openings),
     ...automaticAdjacencyThresholds(roomSurfaces, barrierSegments),
+  );
+  const thresholdSurfaces = floorSurfaces.filter((surface) =>
+    surface.id.startsWith("auto-threshold-"));
+  // A doorway has a lintel: every threshold floor gets a matching ceiling quad
+  // at the lower of the joined storeys' ceilings, so the walking volume through
+  // the opening is bounded above like the rooms it connects.
+  for (const threshold of thresholdSurfaces) {
+    const elevation = threshold.points[0][1];
+    const ceilings = roomSurfaces
+      .filter((room) => Math.abs(room.elevation - elevation) <= 0.15)
+      .map((room) => room.ceilingElevation);
+    if (!ceilings.length) continue;
+    const lintel = Math.min(...ceilings);
+    ceilingSurfaces.push({
+      id: threshold.id.replace("auto-threshold-", "auto-threshold-ceiling-"),
+      points: threshold.points.map(([x, _y, z]) => [x, lintel, z]),
+      holes: [],
+    });
+  }
+  barrierSegments.push(
+    ...automaticCaptureEdgeSeals(roomSurfaces, barrierSegments, thresholdSurfaces),
   );
   return {
     schemaVersion: "authored-structural-collision-v2",
@@ -515,6 +537,103 @@ function automaticAdjacencyThresholds(roomSurfaces, barrierSegments) {
     }
   }
   return surfaces;
+}
+
+// Walls come only from observed cells, so a room's outer edge is open wherever
+// the capture saw glass, a window, or nothing at all. Interior gaps between
+// rooms are doorways and must stay open; the outer perimeter is the edge of the
+// captured world. The structural enclosure proof walks barriers with exactly
+// shared endpoints into closed planar loops, which scattered observed wall runs
+// can never form — so each connected group of floors gets an explicit fence: a
+// chained ring just outside the capture, harmless to movement because nothing
+// walkable exists beyond the observed walls it encloses, and honest because the
+// capture edge is a real boundary of the scene.
+const CAPTURE_RING_CELL_M = 0.125;
+
+function automaticCaptureEdgeSeals(roomSurfaces, _barrierSegments, thresholdSurfaces) {
+  const byElevation = new Map();
+  for (const room of roomSurfaces) {
+    const key = Math.round(room.elevation * 10) / 10;
+    const group = byElevation.get(key) ?? { rooms: [], thresholds: [] };
+    group.rooms.push(room);
+    byElevation.set(key, group);
+  }
+  for (const surface of thresholdSurfaces) {
+    const elevation = surface.points[0][1];
+    for (const [key, group] of byElevation) {
+      if (Math.abs(key - elevation) <= 0.15) group.thresholds.push(surface);
+    }
+  }
+  const seals = [];
+  for (const [elevationKey, group] of byElevation) {
+    const polygons = [
+      ...group.rooms.map((room) => room.points.map((point) => [point[0], point[2]])),
+      ...group.thresholds.map((surface) =>
+        surface.points.map((point) => [point[0], point[2]])),
+    ];
+    const bounds = polygons.flat().reduce((box, point) => [
+      Math.min(box[0], point[0]), Math.min(box[1], point[1]),
+      Math.max(box[2], point[0]), Math.max(box[3], point[1]),
+    ], [Infinity, Infinity, -Infinity, -Infinity]);
+    const cells = [];
+    const cellSet = new Set();
+    for (let x = Math.floor(bounds[0] / CAPTURE_RING_CELL_M) - 1;
+      x <= Math.ceil(bounds[2] / CAPTURE_RING_CELL_M) + 1; x += 1) {
+      for (let z = Math.floor(bounds[1] / CAPTURE_RING_CELL_M) - 1;
+        z <= Math.ceil(bounds[3] / CAPTURE_RING_CELL_M) + 1; z += 1) {
+        const centre = [
+          (x + 0.5) * CAPTURE_RING_CELL_M,
+          (z + 0.5) * CAPTURE_RING_CELL_M,
+        ];
+        if (polygons.some((polygon) => pointInPolygon2(centre, polygon))) {
+          cells.push([x, z]);
+          cellSet.add(`${x},${z}`);
+        }
+      }
+    }
+    if (cells.length < 4) continue;
+    // Morphological closing: player-sized probes cannot stand inside notches a
+    // cell or two wide, so fill them before tracing rather than emitting ring
+    // corners no capsule can exercise.
+    const closingRadius = 2;
+    const dilated = new Set(cellSet);
+    for (const key of cellSet) {
+      const [x, z] = key.split(",").map(Number);
+      for (let dx = -closingRadius; dx <= closingRadius; dx += 1) {
+        for (let dz = -closingRadius; dz <= closingRadius; dz += 1) {
+          dilated.add(`${x + dx},${z + dz}`);
+        }
+      }
+    }
+    const closedCells = [];
+    for (const key of dilated) {
+      const [x, z] = key.split(",").map(Number);
+      let interior = true;
+      for (let dx = -closingRadius; interior && dx <= closingRadius; dx += 1) {
+        for (let dz = -closingRadius; interior && dz <= closingRadius; dz += 1) {
+          if (!dilated.has(`${x + dx},${z + dz}`)) interior = false;
+        }
+      }
+      if (interior) closedCells.push([x, z]);
+    }
+    const outline = semanticCellOutline(closedCells.length >= 4 ? closedCells : cells);
+    const ring = outline.map(([x, z]) => [
+      x * CAPTURE_RING_CELL_M,
+      z * CAPTURE_RING_CELL_M,
+    ]);
+    const minY = Math.min(...group.rooms.map((room) => room.elevation));
+    const maxY = Math.min(...group.rooms.map((room) => room.ceilingElevation));
+    for (let index = 0; index < ring.length; index += 1) {
+      seals.push({
+        id: `auto-capture-ring-${elevationKey}-${index + 1}`,
+        start: ring[index],
+        end: ring[(index + 1) % ring.length],
+        minY,
+        maxY,
+      });
+    }
+  }
+  return seals;
 }
 
 function shrinkSegment(from, to, margin) {

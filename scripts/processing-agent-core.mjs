@@ -2164,7 +2164,7 @@ function turnPreference(previous, current, target) {
   return cross > 0 ? 1 : 0;
 }
 
-function semanticCellOutline(component) {
+export function semanticCellOutline(component) {
   const cells = new Set(component.map(([x, z]) => `${x},${z}`));
   const edges = [];
   for (const [x, z] of component) {
