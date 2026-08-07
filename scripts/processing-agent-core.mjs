@@ -1380,7 +1380,17 @@ function extractSingleLevelMetricFloorPlan(signature, {
       floor.elevationM,
       semanticRound(z * gridSizeM),
     ]);
-    const areaM2 = semanticRound(component.length * gridSizeM * gridSizeM);
+    // The reported area must agree with the polygon reviewers see and collision
+    // cooks. A pinched outline traces to a simple ring that can absorb interior
+    // voids, so the ring's area is the self-consistent value; the occupied cell
+    // count stays in evidence as the honest support measure.
+    let ringDoubledArea = 0;
+    for (let index = 0; index < points.length; index += 1) {
+      const [x1, , z1] = points[index];
+      const [x2, , z2] = points[(index + 1) % points.length];
+      ringDoubledArea += x1 * z2 - x2 * z1;
+    }
+    const areaM2 = semanticRound(Math.abs(ringDoubledArea / 2));
     return {
       roomKey: `room-${String(index + 1).padStart(3, "0")}`,
       kind: "room_candidate",
@@ -1392,6 +1402,7 @@ function extractSingleLevelMetricFloorPlan(signature, {
       geometry: { type: "polygon", points },
       evidence: {
         occupiedCellCount: component.length,
+        occupiedAreaM2: semanticRound(component.length * gridSizeM * gridSizeM),
         gridSizeM,
         openingGapsClosedForSegmentation: openingPlans.length,
       },
