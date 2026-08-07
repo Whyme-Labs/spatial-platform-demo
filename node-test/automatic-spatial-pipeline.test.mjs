@@ -292,6 +292,83 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.equal(artifact.validation.componentCount, 1);
   });
 
+  it("scopes a disconnected capture to the spawn component and names the exclusions", async () => {
+    // A real capture can hold rooms the scanner saw through glass but never
+    // walked into. Strict acceptance rightly refuses such a scene outright;
+    // the automatic proposal path instead scopes to what the spawn reaches and
+    // discloses what fell outside, so the operator reviews the exclusions
+    // rather than a hard failure.
+    const room = (key, originX) => ({
+      roomKey: key,
+      elevationM: 0,
+      geometry: { type: "polygon", points: [
+        [originX, 0, 0], [originX + 6, 0, 0], [originX + 6, 0, 6], [originX, 0, 6],
+      ] },
+      evidence: { levelKey: "level-001" },
+    });
+    const box = (keyPrefix, originX) => [
+      [originX, 0, originX, 6], [originX, 6, originX + 6, 6],
+      [originX + 6, 6, originX + 6, 0], [originX + 6, 0, originX, 0],
+    ].map(([x1, z1, x2, z2], index) =>
+      lineProposal(`${keyPrefix}-${index + 1}`, 0, [x1, z1], [x2, z2]));
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.5 }],
+      // Twenty metres apart: no adjacency threshold may bridge them.
+      rooms: [room("near", 0), room("far", 26)],
+      walls: [...box("wall-near", 0), ...box("wall-far", 26)],
+      openings: [],
+      connectors: [],
+    };
+
+    const config = automaticStructuralCollisionConfig(report);
+    const bytes = buildAuthoredStructuralCollisionGlb(config);
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    const layout = automaticNavigationLayout({
+      agent: {
+        radius: 0.25, height: 1.7, eyeHeight: 1.6, maxClimb: 0.1, maxSlopeDegrees: 45,
+      },
+      build: {
+        cellSize: 0.08, cellHeight: 0.05, tileSize: 64, maxEdgeLengthVoxels: 80,
+        maxSimplificationError: 1.3, minimumRegionSizeVoxels: 2, mergeRegionSizeVoxels: 8,
+      },
+    }, geometry);
+    const buildInput = {
+      ...layout,
+      positions: geometry.positions,
+      indices: geometry.indices,
+      collisionSemantics: geometry.collisionSemantics,
+      structuralGeometry: geometry.structuralGeometry,
+      dynamicBarriers: geometry.dynamicBarriers,
+      source: {
+        assetId: "disconnected-capture-fixture",
+        sha256: createHash("sha256").update("disconnected").digest("hex"),
+        authoringHash: createHash("sha256").update("disconnected-authoring").digest("hex"),
+        worldUnit: "metres",
+      },
+    };
+
+    await assert.rejects(
+      buildRecastNavigationArtifact(buildInput),
+      (error) => error.code === "NAVIGATION_ACCEPTANCE_FAILED",
+      "strict acceptance must refuse a disconnected scene",
+    );
+
+    const artifact = await buildRecastNavigationArtifact({
+      ...buildInput,
+      acceptance: "largest-component",
+    });
+    assert.equal(artifact.validation.acceptanceMode, "largest-component");
+    assert.equal(artifact.validation.passed, true);
+    assert.ok(artifact.validation.componentCount > 1);
+    assert.equal(artifact.validation.excludedDestinations.length, 1);
+    const excluded = artifact.validation.excludedDestinations[0];
+    assert.match(excluded.id, /far/);
+    assert.ok([
+      "disconnected_from_spawn_component",
+      "no_navigable_surface_at_destination",
+    ].includes(excluded.reason));
+  });
+
   it("cooks stair treads and proves every inferred level is reachable", async () => {
     const report = {
       levels: [

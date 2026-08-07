@@ -566,13 +566,37 @@ export async function buildRecastNavigationArtifact(input) {
     const unreachableDestinationIds = destinations
       .filter((destination) => !destination.reachable)
       .map((destination) => destination.id);
+    // Strict acceptance proves the whole scene is one walkable component — the
+    // right bar for a reviewed shell, where an island means the reviewer made a
+    // mistake. A raw capture of a real building can carry rooms the scanner saw
+    // through glass but never walked into; no honest geometry can join them, so
+    // demanding one component would mean no real capture ever cooks. The
+    // largest-component mode scopes the scene to what the spawn actually
+    // reaches and names every excluded destination and why, so the exclusions
+    // are review evidence rather than something buried by a hard failure.
+    const acceptanceMode = input.acceptance ?? "strict";
+    const excludedDestinations = acceptanceMode === "largest-component"
+      ? destinations
+        .filter((destination) => !destination.reachable)
+        .map((destination) => ({
+          id: destination.id,
+          reason: destination.projectedPosition === null
+            ? "no_navigable_surface_at_destination"
+            : "disconnected_from_spawn_component",
+        }))
+      : [];
+    const reachableCount = destinations.length - unreachableDestinationIds.length;
     const validation = {
-      passed: componentCount === 1 && unreachableDestinationIds.length === 0,
+      passed: acceptanceMode === "largest-component"
+        ? destinations.length > 0 && reachableCount > 0
+        : componentCount === 1 && unreachableDestinationIds.length === 0,
+      acceptanceMode,
       componentCount,
       rawTriangleComponentCount: triangleComponents.length,
       spawnProjectedDistance: round(distance3(input.spawn.position, projectedSpawn.point)),
       destinationCount: destinations.length,
       unreachableDestinationIds,
+      excludedDestinations,
       destinations,
     };
     if (!validation.passed) {
@@ -773,6 +797,13 @@ function recastConfigFor(agent, build) {
 function validateBuildInput(input) {
   if (!input || !Array.isArray(input.positions) || !Array.isArray(input.indices)) {
     throw new NavigationBuildError("INVALID_COLLISION_GEOMETRY", "Flat positions and indices are required");
+  }
+  if (input.acceptance !== undefined &&
+    !["strict", "largest-component"].includes(input.acceptance)) {
+    throw new NavigationBuildError(
+      "INVALID_NAVIGATION_CONFIG",
+      'acceptance must be "strict" or "largest-component"',
+    );
   }
   if (input.positions.length < 9 || input.positions.length % 3 !== 0) {
     throw new NavigationBuildError("INVALID_COLLISION_GEOMETRY", "Collision positions must contain complete vertices");

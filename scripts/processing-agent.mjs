@@ -425,7 +425,13 @@ async function processNextJob() {
       try {
         geometry = await extractCollisionGeometryFromGlb(collisionBytes);
         const navigationConfig = job.navigationBuildConfig.automaticLayout
-          ? buildAutomaticNavigationLayout(job.navigationBuildConfig, geometry)
+          ? {
+            ...buildAutomaticNavigationLayout(job.navigationBuildConfig, geometry),
+            // A raw capture can hold rooms the scanner saw but never walked
+            // into; scope the automatic proposal to the spawn's component and
+            // surface the exclusions for review instead of failing the build.
+            acceptance: "largest-component",
+          }
           : job.navigationBuildConfig;
         await reportProgress(48, "Building radius-cleared tiled Recast mesh");
         artifact = await buildRecastNavigationArtifact({
