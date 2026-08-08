@@ -14813,7 +14813,7 @@ app.post("/api/versions/:versionId/approve", async (context) => {
     // format label and integrity checks yet cannot render, which shipped a
     // release whose viewer died on "invalid gzip header". Approving a web
     // derivative is exactly the moment to prove the stored bytes are loadable.
-    const head = await context.env.SPATIAL_ASSETS.get(webAsset.storage_key, {
+    const head = await context.env.SPATIAL_ASSETS.get(webAsset.object_key, {
       range: { offset: 0, length: 2 },
     });
     const magic = head ? new Uint8Array(await head.arrayBuffer()) : null;
