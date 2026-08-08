@@ -12808,11 +12808,21 @@ async function openQaDialog(): Promise<void> {
   await loadSpatialWorkspace(state.selected.project.id);
   const select = byId<HTMLSelectElement>("qaAssetSelect");
   select.replaceChildren();
-  for (const asset of state.selected.assets.filter((candidate) =>
-    candidate.format === "rad" ||
-    candidate.format === "spz" ||
-    candidate.format === "sog"
-  )) {
+  // The Spark RAD derivative is the paged format every published viewer
+  // streams directly, so it leads the list and becomes the default choice.
+  // Creation order once put a raw NGSP SPZ first, and approving that default
+  // failed the server's loadability guard every time.
+  const webFormatRank: Record<string, number> = { rad: 0, sog: 1, spz: 2 };
+  const webCandidates = state.selected.assets
+    .filter((candidate) =>
+      candidate.format === "rad" ||
+      candidate.format === "spz" ||
+      candidate.format === "sog"
+    )
+    .sort((left, right) =>
+      (webFormatRank[left.format] ?? 3) - (webFormatRank[right.format] ?? 3)
+    );
+  for (const asset of webCandidates) {
     const option = document.createElement("option");
     option.value = asset.id;
     option.textContent = `${asset.file_name} · ${asset.format.toUpperCase()} · ${formatBytes(asset.size_bytes)}`;
@@ -13754,9 +13764,37 @@ function errorMessage(error: unknown): string {
         ? " You can retry this action."
         : "";
     const request = error.requestId ? ` Reference: ${error.requestId}.` : "";
-    return `${error.message}.${retry}${request}`.replace("..", ".");
+    // A bare "Validation failed" hides the field message that says what to
+    // change; the server always sends it in details.
+    const fields = validationFieldMessages(error.details);
+    const detail = fields.length ? ` ${fields.join(" ")}` : "";
+    return `${error.message}.${detail}${retry}${request}`.replace("..", ".");
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function validationFieldMessages(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") return [];
+  const details = Reflect.get(payload, "details");
+  if (!details || typeof details !== "object") return [];
+  const messages: string[] = [];
+  const collect = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) {
+      messages.push(value.endsWith(".") ? value : `${value}.`);
+      return;
+    }
+    if (Array.isArray(value)) value.forEach(collect);
+  };
+  // Field maps arrive either directly or in zod's { fieldErrors, formErrors }.
+  const fieldErrors = Reflect.get(details, "fieldErrors");
+  const formErrors = Reflect.get(details, "formErrors");
+  if (fieldErrors && typeof fieldErrors === "object") {
+    Object.values(fieldErrors).forEach(collect);
+    collect(formErrors);
+  } else {
+    Object.values(details).forEach(collect);
+  }
+  return messages.slice(0, 3);
 }
 
 function humanStatus(status: string): string {
