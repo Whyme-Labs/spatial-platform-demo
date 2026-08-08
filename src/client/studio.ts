@@ -2044,6 +2044,13 @@ function bindInterface(): void {
   byId("qaOpenPrivacyWorkspace").addEventListener("click", () => {
     qaDialog.close();
     activateProjectSection("scene");
+    // The privacy workspace is a card inside the scene section, below the
+    // floor-plan authoring stage. Land the reviewer on it rather than at the
+    // top of the section, where they only see the render-native editor.
+    window.requestAnimationFrame(() => {
+      document.getElementById("privacyAssuranceCard")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   });
   const resendButton = byId<HTMLButtonElement>("resendLoginCode");
   resendButton.addEventListener("click", () => {
@@ -7221,6 +7228,7 @@ function renderSpatial(): void {
   );
 
   const assurance = element("article", "workspace-card-large privacy-assurance");
+  assurance.id = "privacyAssuranceCard";
   assurance.append(
     element("span", "eyebrow", "PRIVACY EVIDENCE"),
     element("h3", "", "Automated candidates, human decisions"),

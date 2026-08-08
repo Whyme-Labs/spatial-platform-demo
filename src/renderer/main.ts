@@ -990,10 +990,15 @@ async function start(): Promise<void> {
     }
     broadcastCameraUpdate(camera);
     renderer.render(scene, camera);
-    if (!readySent && movementRuntimeReady) {
+    // The loader clears once the visual is on screen. Gating its dismissal on a
+    // verified walking runtime stranded the authoring host — which reviews the
+    // scene precisely before that runtime exists — on a permanent "Finalising
+    // the view" over a fully rendered scene. Movement stays gated on the runtime
+    // (or an authoring host's free-fly grant); only the overlay is visual-ready.
+    if (!readySent && (movementRuntimeReady || authoringHostActive || visualSceneReady)) {
       readySent = true;
       resetButton.disabled = false;
-      setMovementAvailability(controls, movementRuntimeReady);
+      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive);
       const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
       loading.classList.add("is-complete");
