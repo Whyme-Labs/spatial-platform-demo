@@ -14807,6 +14807,24 @@ app.post("/api/versions/:versionId/approve", async (context) => {
     return validationError(context, { webAssetId: ["Publishable Spark assets must be RAD, SPZ, or SOG"] });
   }
   if (webAsset.integrity_status !== "verified") return validationError(context, { webAssetId: ["Asset integrity has not been verified"] });
+  if (webAsset.format === "spz") {
+    // Spark gunzips an SPZ and accepts inner container versions 1-3. The
+    // PlayCanvas toolchain emits a raw NGSP v4 container that satisfies our
+    // format label and integrity checks yet cannot render, which shipped a
+    // release whose viewer died on "invalid gzip header". Approving a web
+    // derivative is exactly the moment to prove the stored bytes are loadable.
+    const head = await context.env.SPATIAL_ASSETS.get(webAsset.storage_key, {
+      range: { offset: 0, length: 2 },
+    });
+    const magic = head ? new Uint8Array(await head.arrayBuffer()) : null;
+    if (!magic || magic.length < 2 || magic[0] !== 0x1f || magic[1] !== 0x8b) {
+      return validationError(context, {
+        webAssetId: [
+          "This SPZ is not a Spark-loadable gzip-framed container; approve the Spark RAD derivative instead",
+        ],
+      });
+    }
+  }
   const latestPrivacyScan = await context.env.DB.prepare(`
     SELECT id, status, input_count FROM privacy_scans
     WHERE version_id = ? AND project_id = ? AND organisation_id = ?
