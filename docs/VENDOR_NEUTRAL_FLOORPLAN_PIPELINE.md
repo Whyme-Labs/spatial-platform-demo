@@ -68,9 +68,21 @@ The first production extractor uses bounded metric occupancy:
 4. close bounded gaps only for room segmentation;
 5. derive candidate room polygons and wall centre lines;
 6. preserve bounded gaps as same-level opening candidates;
-7. infer continuous stair/ramp surfaces between adjacent levels; and
-8. require an operator to correct level/ceiling evidence, labels, polygons,
+7. infer continuous stair/ramp surfaces between adjacent levels;
+8. read every proposed wall back against the capture in a doorway-height band
+   relative to its own storey (`captureAgreement` on the proposal): a wall
+   with capture support on both sides of an empty run crosses space the
+   capture shows as open, and approval requires the operator to classify it
+   (actual wall, glass wall, mirror, unobserved boundary, intentional no-go,
+   door/opening, false barrier) — never to delete it automatically, because
+   glass, mirrors, and sparse scans make real walls look unsupported; and
+9. require an operator to correct level/ceiling evidence, labels, polygons,
    wall geometry, opening type/associations, and connectors.
+
+The classification freezes with the approved revision
+(`floorplan_revisions.capture_agreement_json`), joins the navigation
+authoring hash through the floor-plan receipt, and blocks automatic
+navigation acceptance whenever a crossing finding has no frozen resolution.
 
 ### Choosing the storeys
 

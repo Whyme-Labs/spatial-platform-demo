@@ -1004,6 +1004,7 @@ type SpatialWorkspace = {
     plan_hash: string;
     source_proposal_hash: string;
     review_note: string;
+    capture_agreement_json?: string | null;
     approved_at: string;
     created_at: string;
   }>;
@@ -1466,6 +1467,17 @@ let comparisonProjectId: string | null = null;
 let comparisonVersions: Version[] = [];
 let comparisonGeneration = 0;
 let comparisonSyncAt = 0;
+type CaptureAgreementFinding = {
+  kind: string;
+  barrierId: string;
+  levelKey?: string | null;
+  spanCount: number;
+  metres: number;
+  from: [number, number];
+  to: [number, number];
+  maximumSpanPoints: number;
+};
+
 let sceneAuthoringWorkspace: {
   projectId: string;
   versionId: string;
@@ -1485,6 +1497,8 @@ let sceneAuthoringWorkspace: {
   modeButtons: HTMLButtonElement[];
   correctionDraftOperationId: string;
   correctionReviewOperationId: string;
+  captureAgreementFindings: CaptureAgreementFinding[];
+  captureAgreementClassifications: Map<string, string>;
 } | null = null;
 const comparisonFrameReady = { left: false, right: false };
 const comparisonFrameTimeouts: { left: number | null; right: number | null } = {
@@ -7560,6 +7574,7 @@ function renderSceneAuthoringWorkspace(
     .find((extraction) => extraction.status === "READY_FOR_REVIEW" && extraction.proposal_json);
   let plan: EditableFloorplan | null = null;
   let revisionId: string | null = null;
+  let frozenAgreementJson: string | null = null;
   if (reviewable?.proposal_json) {
     try {
       plan = floorplanProposalToEditablePlan(reviewable.proposal_json);
@@ -7573,6 +7588,7 @@ function renderSceneAuthoringWorkspace(
     );
     if (approved) {
       revisionId = approved.id;
+      frozenAgreementJson = approved.capture_agreement_json ?? null;
       try {
         plan = parseEditableFloorplan(approved.plan_json);
       } catch (error) {
@@ -7581,6 +7597,18 @@ function renderSceneAuthoringWorkspace(
       }
     }
   }
+  // A fresh proposal carries its findings inline; a correction of an approved
+  // revision inherits the findings and prior classifications frozen with that
+  // revision, so the correction draft the server clones can be re-approved
+  // without re-deriving what the operator already answered.
+  const frozenAgreement = frozenAgreementJson
+    ? captureAgreementFromFrozenRevision(frozenAgreementJson)
+    : null;
+  const captureAgreementFindings = reviewable?.proposal_json
+    ? captureAgreementFindingsFromProposal(reviewable.proposal_json)
+    : frozenAgreement?.findings ?? [];
+  const captureAgreementClassifications = frozenAgreement?.classifications ??
+    new Map<string, string>();
   sceneAuthoringWorkspace = {
     projectId: project.id,
     versionId: spatial.version!.id,
@@ -7600,6 +7628,8 @@ function renderSceneAuthoringWorkspace(
     modeButtons,
     correctionDraftOperationId: crypto.randomUUID(),
     correctionReviewOperationId: crypto.randomUUID(),
+    captureAgreementFindings,
+    captureAgreementClassifications,
   };
   if (!plan) {
     status.textContent = "Waiting for automatic structural reconstruction";
@@ -7608,6 +7638,12 @@ function renderSceneAuthoringWorkspace(
   }
   void loadSceneAuthoringRenderable(project.id, spatial.version!.id);
   card.append(heading, stage, legend, toolbar);
+  if (captureAgreementFindings.length) {
+    card.append(renderCaptureAgreementFindings(
+      captureAgreementFindings,
+      captureAgreementClassifications,
+    ));
+  }
   return card;
 }
 
@@ -7743,6 +7779,123 @@ function undoSceneAuthoringCorrection(): void {
   sendSceneAuthoringPlan(workspace);
 }
 
+const CAPTURE_AGREEMENT_CLASSIFICATIONS = [
+  ["actual_wall", "Actual wall · capture too sparse"],
+  ["glass_wall", "Glass wall"],
+  ["mirror", "Mirror"],
+  ["unobserved_boundary", "Unobserved boundary"],
+  ["intentional_no_go", "Intentional no-go boundary"],
+  ["door_opening", "Door or opening · corrected in the plan"],
+  ["false_barrier", "False barrier · removed in the plan"],
+] as const;
+
+function captureAgreementFindingIdentity(finding: CaptureAgreementFinding): string {
+  return `${finding.barrierId}|${finding.levelKey ?? ""}|${finding.from.join(",")}|${
+    finding.to.join(",")
+  }`;
+}
+
+function captureAgreementFromFrozenRevision(captureAgreementJson: string): {
+  findings: CaptureAgreementFinding[];
+  classifications: Map<string, string>;
+} | null {
+  try {
+    const frozen = JSON.parse(captureAgreementJson) as {
+      report?: { findings?: CaptureAgreementFinding[] } | null;
+      resolutions?: Array<CaptureAgreementFinding & { classification: string }>;
+    };
+    const findings = (frozen.report?.findings ?? []).filter((finding) =>
+      finding && typeof finding.barrierId === "string" &&
+      Array.isArray(finding.from) && Array.isArray(finding.to)
+    );
+    const classifications = new Map<string, string>();
+    for (const resolution of frozen.resolutions ?? []) {
+      if (!resolution || typeof resolution.classification !== "string") continue;
+      classifications.set(captureAgreementFindingIdentity(resolution), resolution.classification);
+    }
+    return { findings, classifications };
+  } catch {
+    return null;
+  }
+}
+
+function captureAgreementFindingsFromProposal(proposalJson: string): CaptureAgreementFinding[] {
+  try {
+    const report = JSON.parse(proposalJson) as {
+      captureAgreement?: { findings?: CaptureAgreementFinding[] };
+    };
+    return (report.captureAgreement?.findings ?? []).filter((finding) =>
+      finding && typeof finding.barrierId === "string" &&
+      Array.isArray(finding.from) && Array.isArray(finding.to)
+    );
+  } catch {
+    return [];
+  }
+}
+
+// The extractor read its own proposed walls back against the capture. A
+// crossing finding must be classified before approval; the other kinds are
+// informational — sparse capture, glass, and occlusion make real walls look
+// unsupported, so nothing here deletes a wall automatically.
+function renderCaptureAgreementFindings(
+  findings: CaptureAgreementFinding[],
+  classifications: Map<string, string>,
+): HTMLElement {
+  const section = element("div", "scene-authoring-capture-agreement");
+  const crossings = findings.filter((finding) => finding.kind === "barrier_crosses_open_capture");
+  section.append(
+    element("h4", "", "Capture disagreements"),
+    element(
+      "p",
+      "muted-copy",
+      crossings.length
+        ? `The capture shows a way through ${crossings.length} proposed wall span(s). Classify each before approving — walls are never deleted automatically; use Mark doorway or Remove structure when the capture is right.`
+        : "The capture could not confirm these wall spans. No classification is required; they are listed for awareness.",
+    ),
+  );
+  const list = element("ul", "scene-authoring-capture-findings");
+  for (const finding of findings) {
+    const item = element("li", "");
+    const where = finding.levelKey ? `${finding.levelKey} · ` : "";
+    const kindLabel = finding.kind === "barrier_crosses_open_capture"
+      ? "crosses capture that shows a way through"
+      : finding.kind === "barrier_end_without_capture"
+      ? "end of the wall has no capture behind it"
+      : "no capture anywhere behind it";
+    item.append(element(
+      "span",
+      "",
+      `${where}${finding.barrierId} · ${finding.metres} m near [${finding.from.join(", ")}] → [${
+        finding.to.join(", ")
+      }] · ${kindLabel}`,
+    ));
+    if (finding.kind === "barrier_crosses_open_capture") {
+      const select = document.createElement("select");
+      select.className = "scene-authoring-capture-classification";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Classify this wall…";
+      select.append(placeholder);
+      for (const [value, label] of CAPTURE_AGREEMENT_CLASSIFICATIONS) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      }
+      const identity = captureAgreementFindingIdentity(finding);
+      select.value = classifications.get(identity) ?? "";
+      select.addEventListener("change", () => {
+        if (select.value) classifications.set(identity, select.value);
+        else classifications.delete(identity);
+      });
+      item.append(select);
+    }
+    list.append(item);
+  }
+  section.append(list);
+  return section;
+}
+
 function sendSceneAuthoringPlan(workspace: NonNullable<typeof sceneAuthoringWorkspace>): void {
   if (!workspace.plan) return;
   workspace.frame.contentWindow?.postMessage({
@@ -7768,6 +7921,27 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
     throw new Error("The approved structure has no staged correction to save.");
   }
   parseEditableFloorplan(JSON.stringify(workspace.plan));
+  const crossings = workspace.captureAgreementFindings
+    .filter((finding) => finding.kind === "barrier_crosses_open_capture");
+  const unclassified = crossings.filter((finding) =>
+    !workspace.captureAgreementClassifications.get(captureAgreementFindingIdentity(finding))
+  );
+  if (unclassified.length) {
+    throw new Error(
+      `Classify ${unclassified.length} capture disagreement(s) before approving: the capture shows a way through ${
+        unclassified.map((finding) => finding.barrierId).join(", ")
+      }.`,
+    );
+  }
+  const captureAgreementResolutions = crossings.map((finding) => ({
+    barrierId: finding.barrierId,
+    ...(finding.levelKey ? { levelKey: finding.levelKey } : {}),
+    from: finding.from,
+    to: finding.to,
+    classification: workspace.captureAgreementClassifications.get(
+      captureAgreementFindingIdentity(finding),
+    )!,
+  }));
   let extractionId = workspace.extractionId;
   if (!extractionId) {
     if (!workspace.revisionId) {
@@ -7794,6 +7968,7 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
           ? "Corrected against the registered Gaussian render in Spatial Studio."
           : "Automatic structure inspected and approved against the registered Gaussian render in Spatial Studio.",
         plan: workspace.plan,
+        ...(captureAgreementResolutions.length ? { captureAgreementResolutions } : {}),
       }),
     },
   );

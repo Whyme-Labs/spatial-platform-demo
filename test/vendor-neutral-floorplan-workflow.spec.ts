@@ -286,6 +286,31 @@ describe("vendor-neutral floor-plan workflow", () => {
         geometry: { type: "line", points: [[1.5, 0, 0], [2.5, 0, 0]] },
         evidence: { classification: "door_or_window_unknown" },
       }],
+      // The extractor read wall-001 back against the capture and found support
+      // on both sides of an empty doorway-band run: the exact shape that traps
+      // a walker. Approval must demand an operator classification for it.
+      captureAgreement: {
+        schemaVersion: "shell-capture-agreement-v1",
+        pointSource: "voxel-centroids",
+        wallBandAboveFloorM: [1, 2],
+        settings: { spanMetres: 0.3, radiusMetres: 0.25, minimumSpanPoints: 4, minimumRunSpans: 3 },
+        capturePointsInBand: 2_400,
+        barrierCount: 4,
+        inspectedBarrierCount: 4,
+        findings: [{
+          kind: "barrier_crosses_open_capture",
+          barrierId: "wall-001",
+          levelKey: null,
+          spanCount: 3,
+          metres: 0.9,
+          from: [1.6, 0],
+          to: [2.4, 0],
+          maximumSpanPoints: 1,
+        }],
+        limitations: [
+          "Sparse capture, glass, mirrors, and occlusion leave real walls unsupported.",
+        ],
+      },
       humanReviewRequired: true,
       limitations: [
         "The operator must correct and approve every proposal before an indicative export is generated.",
@@ -569,10 +594,34 @@ describe("vendor-neutral floor-plan workflow", () => {
     };
     const reviewUrl =
       `${origin}/api/projects/${project.id}/spatial/floorplan-extractions/${created.extraction.id}/review`;
+    // Approving while the capture still disputes wall-001 must fail closed —
+    // the operator has not said what that wall is.
+    const unresolvedReview = await exports.default.fetch(reviewUrl, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        decision: "approve",
+        note: "Attempting approval without classifying the capture disagreement.",
+        plan,
+      }),
+    });
+    expect(unresolvedReview.status).toBe(422);
+    await expect(unresolvedReview.json()).resolves.toMatchObject({
+      details: {
+        captureAgreementResolutions: [expect.stringContaining("wall-001")],
+      },
+    });
     const reviewBody = {
       decision: "approve",
       note: "Operator corrected the opening classification and checked every wall against the source.",
       plan,
+      captureAgreementResolutions: [{
+        barrierId: "wall-001",
+        from: [1.6, 0],
+        to: [2.4, 0],
+        classification: "door_opening",
+      }],
     };
     const reviewResponses = await Promise.all([
       exports.default.fetch(reviewUrl, {
@@ -653,18 +702,33 @@ describe("vendor-neutral floor-plan workflow", () => {
       agent_height: 1.7,
     });
     const revisionReceipt = await env.DB.prepare(`
-      SELECT collision_asset_id, collision_sha256, navigation_receipt_version
+      SELECT collision_asset_id, collision_sha256, navigation_receipt_version,
+        capture_agreement_json
       FROM floorplan_revisions WHERE id = ?
     `).bind(reviewed.revision.id).first<{
       collision_asset_id: string;
       collision_sha256: string;
       navigation_receipt_version: string;
+      capture_agreement_json: string | null;
     }>();
-    expect(revisionReceipt).toEqual({
+    expect(revisionReceipt).toMatchObject({
       collision_asset_id: reviewed.collisionAssetId,
       collision_sha256: correctedBuild!.collision_sha256,
       navigation_receipt_version: "floorplan-navigation-receipt-v1",
     });
+    // The disagreement and its operator answer are frozen with the revision:
+    // the receipt proves wall-001 was classified, not silently accepted.
+    expect(JSON.parse(revisionReceipt!.capture_agreement_json!)).toMatchObject({
+      report: { findings: [expect.objectContaining({ barrierId: "wall-001" })] },
+      resolutions: [expect.objectContaining({
+        barrierId: "wall-001",
+        classification: "door_opening",
+      })],
+    });
+    // The frozen authoring hash was computed from the review-time override
+    // receipt; recomputing from the stored revision row — capture-agreement
+    // fragment included — must reproduce it exactly, or automatic acceptance
+    // could never pass again.
     const currentNavigation = await currentNavigationAuthoringState(
       env.DB,
       storedProject!.organisation_id,

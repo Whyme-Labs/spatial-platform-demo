@@ -89,7 +89,11 @@ A build cannot be approved unless it proves:
 - every inferred room, including rooms on the same floor, owns a frozen
   reachability destination;
 - each dynamic door is passable/open and blocked/closed in both Rapier and
-  Detour; and
+  Detour;
+- for the automatic lane, every wall the capture disputed (support on both
+  sides of an empty doorway-band run) carries a frozen operator
+  classification — the other proofs read the shell against itself and cannot
+  catch a wall crossing an opening the capture plainly shows; and
 - the resulting topology is connected for every advertised destination.
 
 These are release gates, not visual QA suggestions. Missing, failed, stale, or

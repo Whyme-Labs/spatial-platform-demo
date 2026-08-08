@@ -1983,6 +1983,64 @@ const floorplanConnectorProposalSchema = z.object({
   evidence: z.record(z.string(), z.unknown()),
 });
 
+// The extractor reads its own proposed walls back against the capture in a
+// doorway-height band. A crossing finding — capture support on both sides of
+// an empty run — is the shape that traps a walker where the scene plainly
+// shows a way through, and it must be classified by an operator before the
+// plan can be approved.
+const captureAgreementFindingSchema = z.object({
+  kind: z.enum([
+    "barrier_crosses_open_capture",
+    "barrier_end_without_capture",
+    "barrier_without_any_capture",
+  ]),
+  barrierId: floorplanKeySchema,
+  levelKey: floorplanKeySchema.nullable().optional(),
+  spanCount: z.number().int().positive().max(100_000),
+  metres: z.number().nonnegative().max(100_000),
+  from: point2MetricSchema,
+  to: point2MetricSchema,
+  maximumSpanPoints: z.number().int().nonnegative(),
+});
+
+export const floorplanCaptureAgreementSchema = z.object({
+  schemaVersion: z.literal("shell-capture-agreement-v1"),
+  pointSource: z.literal("voxel-centroids"),
+  wallBandAboveFloorM: z.tuple([boundedMetricSchema, boundedMetricSchema]),
+  settings: z.record(z.string(), z.unknown()),
+  capturePointsInBand: z.number().int().nonnegative(),
+  barrierCount: z.number().int().nonnegative(),
+  inspectedBarrierCount: z.number().int().nonnegative(),
+  findings: z.array(captureAgreementFindingSchema).max(2_000),
+  limitations: z.array(z.string().trim().min(10).max(1000)).max(20),
+});
+
+export type FloorplanCaptureAgreement = z.infer<typeof floorplanCaptureAgreementSchema>;
+
+// Glass, mirrors, occlusion, and sparse scans all leave real walls without
+// capture support, so a disagreement is never auto-deleted: the operator
+// states what the wall is, and that statement is frozen with the revision.
+export const captureAgreementClassificationSchema = z.enum([
+  "actual_wall",
+  "glass_wall",
+  "mirror",
+  "unobserved_boundary",
+  "intentional_no_go",
+  "door_opening",
+  "false_barrier",
+]);
+
+export const captureAgreementResolutionSchema = z.object({
+  barrierId: floorplanKeySchema,
+  levelKey: floorplanKeySchema.nullable().optional(),
+  from: point2MetricSchema,
+  to: point2MetricSchema,
+  classification: captureAgreementClassificationSchema,
+  note: z.string().trim().min(1).max(500).optional(),
+});
+
+export type CaptureAgreementResolution = z.infer<typeof captureAgreementResolutionSchema>;
+
 export const floorplanProposalReportSchema = z.object({
     schemaVersion: z.literal("1.0.0"),
     method: z.enum([
@@ -2010,6 +2068,7 @@ export const floorplanProposalReportSchema = z.object({
     rooms: z.array(floorplanRoomProposalSchema).min(1).max(250),
     walls: z.array(floorplanWallProposalSchema).min(1).max(5_000),
     openings: z.array(floorplanOpeningProposalSchema).max(2_000),
+    captureAgreement: floorplanCaptureAgreementSchema.optional(),
     humanReviewRequired: z.literal(true),
     limitations: z.array(z.string().trim().min(10).max(1000)).min(1).max(20),
   }).superRefine((report, context) => {
@@ -2185,6 +2244,8 @@ export const floorplanExtractionReviewSchema = z.object({
   decision: z.enum(["approve", "reject"]),
   note: z.string().trim().min(10).max(2000),
   plan: floorplanReviewPlanSchema.nullable().optional(),
+  captureAgreementResolutions: z.array(captureAgreementResolutionSchema)
+    .max(2_000).optional(),
 }).superRefine((value, context) => {
   if (value.decision === "approve" && !value.plan) {
     context.addIssue({
@@ -2201,6 +2262,80 @@ export const floorplanExtractionReviewSchema = z.object({
     });
   }
 });
+
+// A revision's frozen capture-agreement blob: `undefined` means the revision
+// predates the agreement (or had none), `null` means the blob exists but is
+// unreadable — which every consumer treats as a hard failure.
+export function parseFrozenCaptureAgreement(captureAgreementJson: string | null): {
+  report: FloorplanCaptureAgreement | null;
+  resolutions: CaptureAgreementResolution[];
+} | null | undefined {
+  if (!captureAgreementJson) return undefined;
+  let stored: unknown;
+  try {
+    stored = JSON.parse(captureAgreementJson);
+  } catch {
+    stored = null;
+  }
+  if (!stored || typeof stored !== "object") return null;
+  const report = floorplanCaptureAgreementSchema.nullable()
+    .safeParse(Reflect.get(stored, "report") ?? null);
+  const resolutions = z.array(captureAgreementResolutionSchema)
+    .safeParse(Reflect.get(stored, "resolutions") ?? []);
+  if (!report.success || !resolutions.success) return null;
+  return { report: report.data, resolutions: resolutions.data };
+}
+
+// Re-proves a revision's frozen capture-agreement blob at automatic
+// acceptance time: an unreadable blob or an unresolved crossing finding
+// blocks acceptance. Automatic acceptance never trusts that some earlier
+// endpoint enforced the rule.
+export function frozenCaptureAgreementBlockReason(
+  captureAgreementJson: string | null,
+): string | null {
+  const frozen = parseFrozenCaptureAgreement(captureAgreementJson);
+  if (frozen === undefined) return null;
+  if (frozen === null) {
+    return "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.";
+  }
+  const { unresolved } = unresolvedCaptureAgreementCrossings(frozen.report, frozen.resolutions);
+  if (unresolved.length) {
+    return `Automatic acceptance blocked: the capture disputes ${unresolved.length} barrier span(s) with no frozen operator classification: ${
+      unresolved.slice(0, 5).join("; ")
+    }.`;
+  }
+  return null;
+}
+
+// A crossing finding matches its resolution by identity, not array position:
+// the barrier, its level, and the exact reported span. Approval requires one
+// resolution per crossing finding and rejects resolutions that resolve
+// nothing, so a receipt can never claim more review than happened.
+export function unresolvedCaptureAgreementCrossings(
+  agreement: FloorplanCaptureAgreement | null | undefined,
+  resolutions: readonly CaptureAgreementResolution[],
+): { unresolved: string[]; unmatched: string[] } {
+  const findingIdentity = (finding: {
+    barrierId: string;
+    levelKey?: string | null;
+    from: readonly [number, number];
+    to: readonly [number, number];
+  }) =>
+    `${finding.barrierId}|${finding.levelKey ?? ""}|${finding.from.join(",")}|${
+      finding.to.join(",")
+    }`;
+  const crossings = (agreement?.findings ?? [])
+    .filter((finding) => finding.kind === "barrier_crosses_open_capture");
+  const crossingIdentities = new Set(crossings.map(findingIdentity));
+  const resolvedIdentities = new Set(resolutions.map(findingIdentity));
+  return {
+    unresolved: crossings
+      .map(findingIdentity)
+      .filter((identity) => !resolvedIdentities.has(identity)),
+    unmatched: [...resolvedIdentities]
+      .filter((identity) => !crossingIdentities.has(identity)),
+  };
+}
 
 export const floorplanCorrectionDraftSchema = z.object({
   clientOperationId: z.string().uuid(),

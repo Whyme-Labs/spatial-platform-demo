@@ -1,4 +1,5 @@
 import { strFromU8, unzipSync } from "fflate";
+import { compareShellToCapture } from "./shell-capture-agreement.mjs";
 
 const maximumHeaderBytes = 2 * 1024 * 1024;
 const maximumSogEntries = 128;
@@ -1119,11 +1120,106 @@ export function extractMetricFloorPlan(signature, options = {}) {
     }
   }
   if (!levelReports.length) {
-    return extractSingleLevelMetricFloorPlan(signature, options);
+    return withProposalCaptureAgreement(
+      signature,
+      extractSingleLevelMetricFloorPlan(signature, options),
+    );
   }
   levelReports.sort((left, right) =>
     left.summary.inferredFloorElevationM - right.summary.inferredFloorElevationM);
-  return combineMetricFloorPlanLevels(signature, levelReports, options);
+  return withProposalCaptureAgreement(
+    signature,
+    combineMetricFloorPlanLevels(signature, levelReports, options),
+  );
+}
+
+// Doorway-height band read back against each proposed wall. Every other
+// acceptance proof reads the shell against itself, so a wall proposed across
+// an opening the capture plainly shows survives them all and only surfaces
+// when a visitor walks into it. The offsets are relative to each storey's
+// inferred floor so a level-2 doorway is read in level-2's own band.
+const CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M = [1.0, 2.0];
+
+export function proposalCaptureAgreement(signature, report) {
+  const points = [...signature.voxels.values()]
+    .map((voxel) => voxel.centroid)
+    .filter((point) =>
+      Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)
+    );
+  const walls = Array.isArray(report.walls) ? report.walls : [];
+  const levels = Array.isArray(report.levels) && report.levels.length
+    ? report.levels.map((level) => ({
+        levelKey: level.levelKey,
+        elevationM: level.elevationM,
+        walls: walls.filter((wall) => wall.evidence?.levelKey === level.levelKey),
+      }))
+    : [{
+        levelKey: null,
+        elevationM: report.summary?.inferredFloorElevationM ?? 0,
+        walls,
+      }];
+  const findings = [];
+  let capturePointsInBand = 0;
+  let inspectedBarrierCount = 0;
+  let spanSettings = null;
+  for (const level of levels) {
+    const barriers = level.walls.flatMap((wall) => {
+      const [start, end] = wall.geometry?.points ?? [];
+      if (!Array.isArray(start) || !Array.isArray(end)) return [];
+      return [{
+        id: wall.wallKey,
+        start: [start[0], start[2]],
+        end: [end[0], end[2]],
+      }];
+    });
+    if (!barriers.length) continue;
+    const comparison = compareShellToCapture({
+      authoring: { barrierSegments: barriers },
+      points,
+      options: {
+        minHeight: level.elevationM + CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M[0],
+        maxHeight: level.elevationM + CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M[1],
+      },
+    });
+    spanSettings ??= {
+      spanMetres: comparison.settings.spanMetres,
+      radiusMetres: comparison.settings.radiusMetres,
+      minimumSpanPoints: comparison.settings.minimumSpanPoints,
+      minimumRunSpans: comparison.settings.minimumRunSpans,
+    };
+    capturePointsInBand += comparison.capturePointsInBand;
+    inspectedBarrierCount += comparison.inspectedBarrierCount;
+    findings.push(...comparison.findings.map((finding) => ({
+      ...finding,
+      levelKey: level.levelKey,
+    })));
+  }
+  const rank = {
+    barrier_crosses_open_capture: 0,
+    barrier_end_without_capture: 1,
+    barrier_without_any_capture: 2,
+  };
+  findings.sort((left, right) =>
+    rank[left.kind] - rank[right.kind] || right.metres - left.metres
+  );
+  return {
+    schemaVersion: "shell-capture-agreement-v1",
+    pointSource: "voxel-centroids",
+    wallBandAboveFloorM: [...CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M],
+    settings: spanSettings ?? {},
+    capturePointsInBand,
+    barrierCount: walls.length,
+    inspectedBarrierCount,
+    findings,
+    limitations: [
+      "Sparse capture, glass, mirrors, and occlusion leave real walls unsupported; a finding asks whether a proposed wall belongs, it does not prove it does not.",
+      "Walls added or moved during operator review are not re-read against the capture here; the offline verify:shell-capture tool covers reviewed shells.",
+    ],
+  };
+}
+
+function withProposalCaptureAgreement(signature, report) {
+  return { ...report, captureAgreement: proposalCaptureAgreement(signature, report) };
 }
 
 function extractSingleLevelMetricFloorPlan(signature, {

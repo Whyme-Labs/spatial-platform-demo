@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractMetricFloorPlan,
   parsePlySceneSignature,
+  proposalCaptureAgreement,
 } from "../scripts/processing-agent-core.mjs";
 // @ts-expect-error Plain ESM module has no separate declaration file.
 import { horizontalSurfaceIssue } from "../scripts/horizontal-surface.mjs";
@@ -608,5 +609,96 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     expect(report.connectors[0].geometry.points).toHaveLength(4);
     const parsed = floorplanProposalReportSchema.safeParse(report);
     expect(parsed.success, parsed.success ? "" : parsed.error.message).toBe(true);
+  });
+});
+
+describe("shell-capture agreement in the automatic proposal", () => {
+  it("attaches an agreement report and raises no crossing on a well-captured shell", () => {
+    const signature = parsePlySceneSignature(rectangularTwoRoomFixture(), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      wallMinHeightM: 0.25,
+      wallMaxHeightM: 2.5,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+      maximumOpeningWidthM: 1.25,
+      maximumRooms: 20,
+      maximumSamplePoints: 1_000_000,
+    });
+    expect(report.captureAgreement).toMatchObject({
+      schemaVersion: "shell-capture-agreement-v1",
+      pointSource: "voxel-centroids",
+    });
+    expect(report.captureAgreement.inspectedBarrierCount).toBeGreaterThan(0);
+    // The extractor builds its walls from observed cells, so its own capture
+    // must never dispute them where the capture is dense.
+    expect(report.captureAgreement.findings.filter(
+      (finding: { kind: string }) => finding.kind === "barrier_crosses_open_capture",
+    )).toHaveLength(0);
+  });
+
+  it("reports a wall that crosses a doorway the capture plainly shows open", () => {
+    // A wall band along z=0 from x=0..4 with a 1.2 m hole in the middle —
+    // exactly the shape that traps a walker in a rendered doorway.
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0; x <= 4; x += 0.1) {
+      if (x > 1.4 && x < 2.6) continue;
+      for (const y of [1.1, 1.4, 1.7]) points.push([x, y, 0]);
+    }
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const proposal = {
+      summary: { inferredFloorElevationM: 0 },
+      walls: [{
+        wallKey: "wall-001",
+        geometry: { type: "line", points: [[0, 0, 0], [4, 0, 0]] },
+        evidence: {},
+      }],
+    };
+    const agreement = proposalCaptureAgreement(signature, proposal);
+    expect(agreement.findings).toEqual([expect.objectContaining({
+      kind: "barrier_crosses_open_capture",
+      barrierId: "wall-001",
+      levelKey: null,
+    })]);
+    expect(agreement.findings[0].metres).toBeGreaterThan(0.6);
+  });
+
+  it("reads each storey's walls in that storey's own doorway band", () => {
+    // Wall support exists only in the level-002 band (floor at 3 m), with the
+    // same doorway hole. A flat absolute band would miss it entirely.
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0; x <= 4; x += 0.1) {
+      if (x > 1.4 && x < 2.6) continue;
+      for (const y of [4.1, 4.4, 4.7]) points.push([x, y, 0]);
+    }
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const proposal = {
+      summary: { inferredFloorElevationM: 0 },
+      levels: [
+        { levelKey: "level-001", elevationM: 0 },
+        { levelKey: "level-002", elevationM: 3 },
+      ],
+      walls: [{
+        wallKey: "wall-007",
+        geometry: { type: "line", points: [[0, 3, 0], [4, 3, 0]] },
+        evidence: { levelKey: "level-002" },
+      }],
+    };
+    const agreement = proposalCaptureAgreement(signature, proposal);
+    expect(agreement.findings).toEqual([expect.objectContaining({
+      kind: "barrier_crosses_open_capture",
+      barrierId: "wall-007",
+      levelKey: "level-002",
+    })]);
   });
 });

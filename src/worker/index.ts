@@ -71,6 +71,10 @@ import {
   floorplanExportSchema,
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
+  floorplanCaptureAgreementSchema,
+  frozenCaptureAgreementBlockReason,
+  parseFrozenCaptureAgreement,
+  unresolvedCaptureAgreementCrossings,
   sceneRouteSchema,
   privacyRegionSchema,
   privacyRegionDecisionSchema,
@@ -8518,6 +8522,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
     context.env.DB.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
+        revision.capture_agreement_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -10192,7 +10197,56 @@ app.post(
       const planIssue = floorplanPlanIssue(parsed.data.plan);
       if (planIssue) return unprocessable(context, { plan: [planIssue] });
     }
+    // The extractor reads its proposed walls back against the capture. A wall
+    // the capture disputes — support on both sides of an empty doorway-band
+    // run — cannot be approved silently: the operator classifies each one
+    // (actual wall, glass, mirror, unobserved boundary, intentional no-go,
+    // door/opening, false barrier) and the classification freezes with the
+    // revision. Disagreements are never auto-deleted: glass, mirrors, and
+    // sparse scans make real walls look unsupported.
+    const proposalReportStored = parseStoredObject(extraction.proposal_json ?? "null");
+    const proposalAgreementRaw = proposalReportStored && typeof proposalReportStored === "object"
+      ? Reflect.get(proposalReportStored, "captureAgreement")
+      : undefined;
+    const proposalAgreementParse = floorplanCaptureAgreementSchema.optional()
+      .safeParse(proposalAgreementRaw ?? undefined);
+    if (!proposalAgreementParse.success) {
+      return conflict(
+        context,
+        "This proposal's capture-agreement report is unreadable and cannot be reviewed",
+      );
+    }
+    const proposalAgreement = proposalAgreementParse.data ?? null;
+    const agreementResolutions = parsed.data.captureAgreementResolutions ?? [];
+    if (parsed.data.decision === "reject" && agreementResolutions.length) {
+      return validationError(context, {
+        captureAgreementResolutions: [
+          "A rejected proposal must not freeze capture-agreement resolutions",
+        ],
+      });
+    }
+    if (parsed.data.decision === "approve") {
+      const { unresolved, unmatched } = unresolvedCaptureAgreementCrossings(
+        proposalAgreement,
+        agreementResolutions,
+      );
+      if (unresolved.length || unmatched.length) {
+        return unprocessable(context, {
+          captureAgreementResolutions: [
+            ...unresolved.map((identity) =>
+              `The capture disputes barrier span ${identity} and it has no operator classification`
+            ),
+            ...unmatched.map((identity) =>
+              `Resolution ${identity} matches no crossing finding in this proposal`
+            ),
+          ],
+        });
+      }
+    }
     const revisionId = parsed.data.decision === "approve" ? crypto.randomUUID() : null;
+    const captureAgreementJson = revisionId && (proposalAgreement || agreementResolutions.length)
+      ? JSON.stringify({ report: proposalAgreement, resolutions: agreementResolutions })
+      : null;
     const planJson = parsed.data.plan ? JSON.stringify(parsed.data.plan) : null;
     const planHash = planJson ? await sha256Hex(planJson) : null;
     const extractionParameters = parseStoredObject(extraction.parameters_json);
@@ -10228,6 +10282,16 @@ app.post(
         }) as Uint8Array;
         const collisionSha256 = await sha256Hex(bytes);
         const collisionAssetId = crypto.randomUUID();
+        // This override receipt freezes the authoring hash the queued build
+        // must later reproduce from the database row, so it appends exactly
+        // the same capture-agreement fragment floorplanNavigationReceipt will.
+        const overrideAgreementFragment = captureAgreementReceiptFragment(captureAgreementJson);
+        if (overrideAgreementFragment === "invalid") {
+          return conflict(
+            context,
+            "The capture-agreement resolutions could not be frozen into a valid receipt",
+          );
+        }
         const automaticState = await currentNavigationAuthoringState(
           context.env.DB,
           auth.organisationId,
@@ -10239,6 +10303,7 @@ app.post(
             planHash,
             collisionAssetId,
             collisionSha256,
+            ...overrideAgreementFragment,
           },
         );
         if (automaticState.profile.worldUnit !== "metres") {
@@ -10416,9 +10481,10 @@ app.post(
             INSERT INTO floorplan_revisions (
               id, organisation_id, project_id, version_id, extraction_id,
               revision_number, plan_json, plan_hash, source_proposal_hash,
-              review_note, created_by, navigation_receipt_version
+              review_note, created_by, capture_agreement_json,
+              navigation_receipt_version
             )
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               'floorplan-navigation-receipt-v1'
             WHERE EXISTS (
               SELECT 1 FROM floorplan_extraction_runs
@@ -10438,6 +10504,7 @@ app.post(
             extraction.proposal_hash,
             parsed.data.note,
             auth.userId,
+            captureAgreementJson,
             extraction.id,
             parsed.data.clientOperationId,
             requestHash,
@@ -13507,7 +13574,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       const automaticLayout = Reflect.get(navigationParameters as object, "automaticLayout") as object;
       const floorplanRevisionId = String(Reflect.get(automaticLayout, "floorplanRevisionId"));
       const revision = await context.env.DB.prepare(`
-        SELECT status, plan_hash
+        SELECT status, plan_hash, capture_agreement_json
         FROM floorplan_revisions
         WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
       `).bind(
@@ -13515,7 +13582,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
         job.organisation_id,
         job.project_id,
         job.version_id,
-      ).first<{ status: string; plan_hash: string }>();
+      ).first<{ status: string; plan_hash: string; capture_agreement_json: string | null }>();
       let currentAuthoringHash: string | null = null;
       let currentAuthoringError: string | null = null;
       try {
@@ -13536,7 +13603,11 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
         : approvedFloorplanNavigationAcceptanceDecision({
           parameters: navigationParameters,
           revision: revision
-            ? { status: revision.status, planHash: revision.plan_hash }
+            ? {
+              status: revision.status,
+              planHash: revision.plan_hash,
+              captureAgreementJson: revision.capture_agreement_json,
+            }
             : null,
           frozenAuthoringHash: job.navigation_authoring_hash,
           currentAuthoringHash,
@@ -13585,6 +13656,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
             "recast-reachability",
             "rapier-physical",
             "structural-shell",
+            "shell-capture-agreement",
             "authoring-hash",
           ],
         }),
@@ -20856,7 +20928,7 @@ export function approvedFloorplanNavigationCanAutoAccept(parameters: unknown): b
 
 export function approvedFloorplanNavigationAcceptanceDecision(input: {
   parameters: unknown;
-  revision: { status: string; planHash: string } | null;
+  revision: { status: string; planHash: string; captureAgreementJson?: string | null } | null;
   frozenAuthoringHash: string | null;
   currentAuthoringHash: string | null;
 }): { approved: boolean; reason: string } {
@@ -20880,6 +20952,16 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
       reason: `Automatic acceptance blocked: expected_plan_hash=${expectedPlanHash}, asked_plan_hash=${input.revision.planHash}.`,
     };
   }
+  // The review endpoint already refuses to approve a plan while the capture
+  // disputes a wall without an operator classification. Re-proving it from
+  // the revision's own frozen blob keeps automatic acceptance objective: it
+  // never trusts that some earlier endpoint enforced the rule.
+  const agreementBlock = frozenCaptureAgreementBlockReason(
+    input.revision.captureAgreementJson ?? null,
+  );
+  if (agreementBlock) {
+    return { approved: false, reason: agreementBlock };
+  }
   if (
     !input.frozenAuthoringHash || !input.currentAuthoringHash ||
     input.frozenAuthoringHash !== input.currentAuthoringHash
@@ -20891,9 +20973,10 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
   }
   return {
     approved: true,
-    reason: "Automatically accepted after schema, Recast reachability, Rapier physical, structural, revision, and authoring-hash validation passed.",
+    reason: "Automatically accepted after schema, Recast reachability, Rapier physical, structural, revision, capture-agreement, and authoring-hash validation passed.",
   };
 }
+
 
 function storedPosterCamera(value: string): unknown {
   const provenance = parseStoredObject(value);
@@ -21874,6 +21957,7 @@ async function captureSpatialSnapshot(
     database.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
+        revision.capture_agreement_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -22260,6 +22344,7 @@ export async function currentNavigationAuthoringState(
     database.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
+        revision.capture_agreement_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -22314,6 +22399,32 @@ export async function currentNavigationAuthoringState(
   };
 }
 
+// Distils a revision's frozen capture-agreement blob into the receipt shape.
+// The exact same fragment is appended at review time (when the frozen
+// authoring hash is computed) and here (when the current hash is recomputed),
+// so the two hashes can only agree when the frozen resolutions still stand.
+// Returns "invalid" for an unreadable blob or an unresolved crossing finding.
+export function captureAgreementReceiptFragment(
+  captureAgreementJson: string | null,
+): { captureAgreement?: Record<string, unknown> } | "invalid" {
+  const frozen = parseFrozenCaptureAgreement(captureAgreementJson);
+  if (frozen === undefined) return {};
+  if (frozen === null) return "invalid";
+  if (unresolvedCaptureAgreementCrossings(frozen.report, frozen.resolutions).unresolved.length) {
+    return "invalid";
+  }
+  const findings = frozen.report?.findings ?? [];
+  return {
+    captureAgreement: {
+      schemaVersion: "shell-capture-agreement-receipt-v1",
+      findingCount: findings.length,
+      crossingCount: findings
+        .filter((finding) => finding.kind === "barrier_crosses_open_capture").length,
+      resolutions: frozen.resolutions,
+    },
+  };
+}
+
 function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | null {
   if (!row || typeof row !== "object") return null;
   const floorplanRevisionId = readStringProperty(row, "id");
@@ -22326,12 +22437,16 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
     ?.toLowerCase();
   const collisionIntegrityStatus = readStringProperty(row, "collision_integrity_status");
   const collisionDeletedAt = Reflect.get(row, "collision_deleted_at");
+  const agreementFragment = captureAgreementReceiptFragment(
+    readStringProperty(row, "capture_agreement_json") ?? null,
+  );
   if (
     receiptVersion === "floorplan-navigation-receipt-v1" &&
     floorplanRevisionId && planHash && /^[a-f0-9]{64}$/.test(planHash) &&
     collisionAssetId && collisionSha256 && /^[a-f0-9]{64}$/.test(collisionSha256) &&
     currentCollisionSha256 === collisionSha256 &&
-    collisionIntegrityStatus === "verified" && collisionDeletedAt === null
+    collisionIntegrityStatus === "verified" && collisionDeletedAt === null &&
+    agreementFragment !== "invalid"
   ) {
     return {
       schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
@@ -22339,6 +22454,7 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
       planHash,
       collisionAssetId,
       collisionSha256,
+      ...agreementFragment,
     };
   }
   return {
@@ -22351,6 +22467,7 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
     currentCollisionSha256: currentCollisionSha256 ?? null,
     collisionIntegrityStatus: collisionIntegrityStatus ?? null,
     collisionDeleted: collisionDeletedAt !== null,
+    captureAgreementInvalid: agreementFragment === "invalid",
   };
 }
 
