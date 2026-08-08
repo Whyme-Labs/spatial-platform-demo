@@ -4,8 +4,9 @@ import {
   approvedFloorplanNavigationCanAutoAccept,
 } from "../src/worker/index";
 import {
+  finalAgreementFindingIdentity,
   finalCaptureAgreementBlockReason,
-  unmatchedFinalAgreementResolutions,
+  invalidFinalAgreementResolutionIssues,
 } from "../src/worker/contracts";
 
 const planHash = "b".repeat(64);
@@ -102,6 +103,7 @@ describe("automatic navigation acceptance", () => {
   const crossingResolution = {
     barrierId: "wall-001",
     levelKey: "level-001",
+    elevationM: 0,
     from: [1.5, 0],
     to: [2.7, 0],
     classification: "glass_wall",
@@ -249,7 +251,8 @@ describe("automatic navigation acceptance", () => {
       finalCaptureAgreement: finalAgreement([finalCrossing]),
     });
     expect(decision).toMatchObject({ approved: false });
-    expect(decision.reason).toContain("classified door_opening yet still stands");
+    expect(decision.reason).toContain("classified door_opening");
+    expect(decision.reason).toContain("re-reviewing the floor plan");
   });
 
   it("accepts a wall-affirming classification covering the surviving crossing", () => {
@@ -282,9 +285,10 @@ describe("automatic navigation acceptance", () => {
 });
 
 // The reconciliation matcher must be strict enough that one classification
-// cannot leak onto a different wall. Each case here is a concrete
+// cannot leak onto a different wall or storey. Each case here is a concrete
 // false-approval shape: stacked storeys, nearby parallel walls, corners,
-// and resolution reuse beyond the classified span.
+// resolution reuse beyond the classified span, and the frozen-contradiction
+// override the merged-pool design permitted.
 describe("final capture-agreement geometry matching", () => {
   const agreement = (findings: unknown[]) => ({
     schemaVersion: "shell-capture-agreement-v1",
@@ -302,6 +306,7 @@ describe("final capture-agreement geometry matching", () => {
     kind: "barrier_crosses_open_capture",
     barrierId: "auto-barrier-wall-1",
     levelKey: null,
+    elevationM: 0,
     spanCount: 3,
     metres: 0.9,
     from: [4, 2],
@@ -315,10 +320,19 @@ describe("final capture-agreement geometry matching", () => {
   });
   const glassAt = (overrides: Record<string, unknown>) => ({
     barrierId: "wall-1",
+    elevationM: 0,
     from: [4, 2],
     to: [6, 2],
     classification: "glass_wall",
     ...overrides,
+  });
+  const manualFor = (
+    finding: Record<string, unknown>,
+    classification = "glass_wall",
+  ) => ({
+    findingId: finalAgreementFindingIdentity(finding as never),
+    classification,
+    note: "Verified against the registered render during approval.",
   });
 
   it("refuses to replay a ground-floor classification onto the storey above", () => {
@@ -334,12 +348,27 @@ describe("final capture-agreement geometry matching", () => {
     expect(reason).toContain("no frozen operator classification");
   });
 
-  it("matches classifications without elevation the way pre-elevation receipts froze them", () => {
-    expect(finalCaptureAgreementBlockReason({
+  it("fails closed on a legacy resolution frozen without its storey elevation", () => {
+    // Pre-elevation receipts cannot prove which storey they classified, so
+    // they no longer match at all: the revision needs re-review, not a
+    // matcher that guesses the floor.
+    const reason = finalCaptureAgreementBlockReason({
       captureExpected: true,
-      finalAgreement: agreement([crossing({ elevationM: 0 })]),
+      finalAgreement: agreement([crossing({})]),
+      captureAgreementJson: frozen([
+        { ...glassAt({}), elevationM: undefined },
+      ]),
+    });
+    expect(reason).toContain("no frozen operator classification");
+  });
+
+  it("blocks a split-level offset beyond half a metre", () => {
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([crossing({ elevationM: 0.75 })]),
       captureAgreementJson: frozen([glassAt({})]),
-    })).toBeNull();
+    });
+    expect(reason).toContain("no frozen operator classification");
   });
 
   it("refuses one classification for two nearby parallel walls", () => {
@@ -352,6 +381,46 @@ describe("final capture-agreement geometry matching", () => {
       captureAgreementJson: frozen([glassAt({})]),
     });
     expect(reason).toContain("auto-barrier-wall-2");
+  });
+
+  it("refuses migration onto a parallel wall even when the original is gone", () => {
+    // Only ONE crossing survives, 0.8 m from the classified line and on a
+    // different wall: nothing competes for the resolution, so only the
+    // tightened lateral gate stops the classification from migrating.
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([
+        crossing({ barrierId: "auto-barrier-wall-2", from: [4, 2.8], to: [6, 2.8] }),
+      ]),
+      captureAgreementJson: frozen([glassAt({})]),
+    });
+    expect(reason).toContain("no frozen operator classification");
+  });
+
+  it("lets the same reviewed wall keep its classification through a larger nudge", () => {
+    // Lineage: the surviving barrier was cooked from the very wall the
+    // operator classified, so the envelope is generous where a different
+    // wall's would be tight.
+    expect(finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([
+        crossing({ barrierId: "auto-barrier-wall-9-1", from: [4, 2.8], to: [6, 2.8] }),
+      ]),
+      captureAgreementJson: frozen([glassAt({ barrierId: "wall-9" })]),
+    })).toBeNull();
+  });
+
+  it("refuses a classification for an acute wall rotated past the angle gate", () => {
+    // 20° about the same midpoint: inside the old 30° tolerance, outside the
+    // tightened 15° gate for a different wall.
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([
+        crossing({ from: [4.06, 1.66], to: [5.94, 2.34] }),
+      ]),
+      captureAgreementJson: frozen([glassAt({})]),
+    });
+    expect(reason).toContain("no frozen operator classification");
   });
 
   it("refuses a classification for the perpendicular wall through the same midpoint", () => {
@@ -404,46 +473,97 @@ describe("final capture-agreement geometry matching", () => {
     })).toBeNull();
   });
 
-  it("accepts a final-only crossing through an explicit manual resolution", () => {
-    const finalOnly = agreement([
-      crossing({ barrierId: "auto-barrier-wall-new-1", from: [10, 5], to: [12, 5] }),
-    ]);
+  it("keeps a frozen door decision monotonic against a better-scoring manual answer", () => {
+    // The floor-plan review said this span should be OPEN. The wall still
+    // stands, and the approving operator supplies a pixel-perfect glass
+    // answer. The frozen contradiction must win: superseding it means
+    // re-reviewing the floor plan, not out-scoring it at approval.
+    const survivor = crossing({ from: [4.1, 2.3], to: [6.1, 2.3] });
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([survivor]),
+      captureAgreementJson: frozen([glassAt({ classification: "door_opening" })]),
+      manualResolutions: [manualFor(survivor)],
+    });
+    expect(reason).toContain("classified door_opening");
+    expect(reason).toContain("re-reviewing the floor plan");
+  });
+
+  it("refuses a manual answer that restates a crossing a frozen classification covers", () => {
+    const covered = crossing({});
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([covered]),
+      captureAgreementJson: frozen([glassAt({})]),
+      manualResolutions: [manualFor(covered)],
+    });
+    expect(reason).toContain("cannot restate or replace");
+  });
+
+  it("accepts a final-only crossing through an exact finding-id manual resolution", () => {
+    const finalOnly = crossing({
+      barrierId: "auto-barrier-wall-new-1",
+      from: [10, 5],
+      to: [12, 5],
+    });
     expect(finalCaptureAgreementBlockReason({
       captureExpected: true,
-      finalAgreement: finalOnly,
+      finalAgreement: agreement([finalOnly]),
       captureAgreementJson: frozen([]),
     })).toContain("no frozen operator classification");
     expect(finalCaptureAgreementBlockReason({
       captureExpected: true,
-      finalAgreement: finalOnly,
+      finalAgreement: agreement([finalOnly]),
       captureAgreementJson: frozen([]),
-      additionalResolutions: [
-        glassAt({ barrierId: "wall-new", from: [10, 5], to: [12, 5] }) as never,
-      ],
+      manualResolutions: [manualFor(finalOnly)],
     })).toBeNull();
   });
 
+  it("refuses one manual statement stretched across two independent findings", () => {
+    // A broad caller-drawn span once satisfied both crossings via
+    // containment reuse; finding ids make that impossible — the second
+    // finding has no resolution of its own.
+    const first = crossing({ barrierId: "auto-barrier-wall-a-1", from: [10, 0], to: [11, 0] });
+    const second = crossing({ barrierId: "auto-barrier-wall-b-1", from: [20, 0], to: [21, 0] });
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([first, second]),
+      captureAgreementJson: frozen([]),
+      manualResolutions: [manualFor(first)],
+    });
+    expect(reason).toContain("auto-barrier-wall-b-1");
+  });
+
   it("still refuses a door classification supplied manually for a standing wall", () => {
+    const survivor = crossing({});
     expect(finalCaptureAgreementBlockReason({
       captureExpected: true,
-      finalAgreement: agreement([crossing({})]),
+      finalAgreement: agreement([survivor]),
       captureAgreementJson: frozen([]),
-      additionalResolutions: [
-        glassAt({ classification: "door_opening" }) as never,
-      ],
+      manualResolutions: [manualFor(survivor, "door_opening")],
     })).toContain("classified door_opening yet still stands");
   });
 
-  it("rejects manual resolutions that resolve no actual final crossing", () => {
-    const unmatched = unmatchedFinalAgreementResolutions(
-      agreement([crossing({})]),
-      [glassAt({ barrierId: "wall-elsewhere", from: [40, 40], to: [42, 40] }) as never],
+  it("rejects unknown and duplicated manual finding ids", () => {
+    const survivor = crossing({});
+    const issues = invalidFinalAgreementResolutionIssues(
+      agreement([survivor]),
+      [
+        manualFor(survivor),
+        manualFor(survivor, "mirror"),
+        {
+          findingId: "not-a-real-finding",
+          classification: "glass_wall",
+          note: "Names nothing in the frozen agreement.",
+        },
+      ] as never,
     );
-    expect(unmatched).toHaveLength(1);
-    expect(unmatched[0]).toContain("wall-elsewhere");
-    expect(unmatchedFinalAgreementResolutions(
-      agreement([crossing({})]),
-      [glassAt({}) as never],
+    expect(issues).toHaveLength(2);
+    expect(issues.some((issue) => issue.includes("more than once"))).toBe(true);
+    expect(issues.some((issue) => issue.includes("not-a-real-finding"))).toBe(true);
+    expect(invalidFinalAgreementResolutionIssues(
+      agreement([survivor]),
+      [manualFor(survivor)] as never,
     )).toHaveLength(0);
   });
 });

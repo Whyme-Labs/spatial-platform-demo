@@ -148,6 +148,33 @@ describe("shell capture agreement", () => {
     assert.ok(blind.findings.some((f) => f.kind === "barrier_without_any_capture"));
   });
 
+  it("refuses slab-interior clutter as thick-wall support", () => {
+    // A scanner cannot see inside a real wall, so dense points running along
+    // the CENTRELINE of a claimed 0.8 m wall are clutter in open space the
+    // wall was wrongly drawn across — not evidence of the wall. With both
+    // faces absent, every span must stay unsupported and the whole barrier
+    // reads as standing in unscanned space.
+    const report = compareShellToCapture({
+      authoring: {
+        barrierSegments: [{
+          id: "hollow-claim",
+          start: [0, 0],
+          end: [6, 0],
+          minY: 0.15,
+          maxY: 3,
+          thicknessM: 0.8,
+        }],
+      },
+      points: wallPoints([0, 0], [6, 0]),
+    });
+    assert.equal(
+      report.findings.filter((f) => f.kind === "barrier_crosses_open_capture").length,
+      0,
+    );
+    assert.ok(report.findings.some((f) =>
+      f.kind === "barrier_without_any_capture" && f.barrierId === "hollow-claim"));
+  });
+
   it("does not let one scanned patch vouch for a doorway further along a thick wall", () => {
     // Support exists only on the first two metres of the wall's faces; the
     // rest is open. Per-span longitudinal evaluation must keep the empty run

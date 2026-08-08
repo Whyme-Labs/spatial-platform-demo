@@ -807,11 +807,13 @@ export const navigationBuildReviewSchema = z.object({
   // Manual approval must clear the same final capture-agreement gate as
   // automatic acceptance. A crossing the capture only revealed on the FINAL
   // corrected barriers has no proposal-time classification to inherit, so the
-  // approving operator states one here, per finding — a generic approval note
-  // is never an implicit override. (z.lazy: the resolution schema is declared
-  // with the rest of the capture-agreement contracts later in this module.)
+  // approving operator classifies it here by the finding's immutable id — the
+  // server copies the canonical geometry from the frozen agreement itself, a
+  // note is mandatory per finding, and a generic approval note is never an
+  // implicit override. (z.lazy: the resolution schema is declared with the
+  // rest of the capture-agreement contracts later in this module.)
   finalCaptureAgreementResolutions: z.array(
-    z.lazy(() => captureAgreementResolutionSchema),
+    z.lazy(() => finalCaptureAgreementResolutionSchema),
   ).max(2_000).optional(),
 });
 
@@ -2318,6 +2320,19 @@ export const floorplanExtractionReviewSchema = z.object({
       message: "A rejected proposal must not create an approved plan",
     });
   }
+  // Every NEW resolution freezes its storey elevation. The stored blob's
+  // parser keeps the field optional so receipts frozen before it existed
+  // still read, but those legacy receipts fail closed at final matching —
+  // this refinement stops the platform from minting more of them.
+  for (const [index, resolution] of (value.captureAgreementResolutions ?? []).entries()) {
+    if (resolution.elevationM === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["captureAgreementResolutions", index, "elevationM"],
+        message: "A capture-agreement resolution must freeze its storey elevation",
+      });
+    }
+  }
 });
 
 // A revision's frozen capture-agreement blob: `undefined` means the revision
@@ -2377,15 +2392,19 @@ const WALL_AFFIRMING_CLASSIFICATIONS = new Set([
 ]);
 
 // Operator edits renumber and split walls, so a final crossing matches its
-// frozen resolution by geometry, not by name. The match must be strict enough
-// that one classification cannot leak onto a different wall: stacked storeys
-// share X/Z footprints (elevation gate), corners share midpoints (orientation
-// gate), and nearby parallel walls sit within any lateral tolerance
-// (one-to-one assignment). A resolution may cover several final crossings
-// only when splitting left them all inside the span the operator classified.
-const FINAL_MATCH_ELEVATION_TOLERANCE_M = 1.0;
-const FINAL_MATCH_ANGLE_TOLERANCE_RADIANS = Math.PI / 6;
-const FINAL_MATCH_LATERAL_TOLERANCE_M = 1.0;
+// frozen resolution by lineage and geometry, not by trust. A final barrier's
+// id embeds the reviewed wall it was cooked from (`auto-barrier-<wall>-<n>`),
+// so a resolution for that same wall may match generously — the operator
+// nudged their own wall — while a resolution for a DIFFERENT wall must sit
+// essentially on the crossing's line before it can speak for it. Elevation is
+// mandatory on both sides: a resolution frozen without its storey elevation
+// fails closed and the revision needs re-review, because "matches without a
+// level gate" is exactly the cross-storey leak this matcher exists to stop.
+const FINAL_MATCH_ELEVATION_TOLERANCE_M = 0.5;
+const FINAL_MATCH_LINEAGE_ANGLE_TOLERANCE_RADIANS = Math.PI / 6;
+const FINAL_MATCH_LINEAGE_LATERAL_TOLERANCE_M = 1.0;
+const FINAL_MATCH_ANGLE_TOLERANCE_RADIANS = Math.PI / 12;
+const FINAL_MATCH_LATERAL_TOLERANCE_M = 0.4;
 const FINAL_MATCH_MINIMUM_OVERLAP_M = 0.2;
 const FINAL_MATCH_MINIMUM_OVERLAP_RATIO = 0.3;
 const FINAL_MATCH_CONTAINMENT_SLACK_M = 0.5;
@@ -2394,6 +2413,27 @@ const FINAL_MATCH_CONTAINMENT_SLACK_M = 0.5;
 // projects "inside" longitudinally, so containment demands the crossing sit
 // tight on the classified run laterally as well.
 const FINAL_MATCH_CONTAINMENT_LATERAL_M = 0.3;
+
+// The reviewed wall a final barrier segment was cooked from.
+function finalBarrierSourceWallId(barrierId: string): string | null {
+  const match = /^auto-barrier-(.+)-\d+$/.exec(barrierId);
+  return match ? match[1]! : null;
+}
+
+// The immutable identity of a final capture finding, derived entirely from
+// the frozen final agreement. Manual approval resolutions reference findings
+// by this id, so the server copies the canonical geometry itself and a caller
+// can never smuggle in a span of their own drawing.
+export function finalAgreementFindingIdentity(finding: {
+  barrierId: string;
+  elevationM?: number | undefined;
+  from: readonly [number, number];
+  to: readonly [number, number];
+}): string {
+  return `${finding.barrierId}|${finding.elevationM ?? ""}|${finding.from.join(",")}|${
+    finding.to.join(",")
+  }`;
+}
 
 type AgreementSpan = {
   elevationM?: number | undefined;
@@ -2464,11 +2504,22 @@ function spanMatchGeometry(
   };
 }
 
-function spanMatchQualifies(geometry: SpanMatchGeometry): boolean {
-  return (geometry.elevationErrorM === null ||
-    geometry.elevationErrorM <= FINAL_MATCH_ELEVATION_TOLERANCE_M) &&
-    geometry.angleRadians <= FINAL_MATCH_ANGLE_TOLERANCE_RADIANS &&
-    geometry.lateralM <= FINAL_MATCH_LATERAL_TOLERANCE_M &&
+// Missing elevation on either side disqualifies the pair outright: an
+// elevation-blind match is a cross-storey leak, not a compatibility feature.
+// Same-wall lineage relaxes the lateral/angle envelope (an operator nudging
+// their own reviewed wall); across different walls the crossing must sit
+// essentially on the classified line.
+function spanMatchQualifies(geometry: SpanMatchGeometry, sameWall: boolean): boolean {
+  if (geometry.elevationErrorM === null ||
+    geometry.elevationErrorM > FINAL_MATCH_ELEVATION_TOLERANCE_M) return false;
+  const angleTolerance = sameWall
+    ? FINAL_MATCH_LINEAGE_ANGLE_TOLERANCE_RADIANS
+    : FINAL_MATCH_ANGLE_TOLERANCE_RADIANS;
+  const lateralTolerance = sameWall
+    ? FINAL_MATCH_LINEAGE_LATERAL_TOLERANCE_M
+    : FINAL_MATCH_LATERAL_TOLERANCE_M;
+  return geometry.angleRadians <= angleTolerance &&
+    geometry.lateralM <= lateralTolerance &&
     (geometry.overlapM >= FINAL_MATCH_MINIMUM_OVERLAP_M ||
       geometry.overlapRatio >= FINAL_MATCH_MINIMUM_OVERLAP_RATIO);
 }
@@ -2478,22 +2529,33 @@ function spanMatchScore(geometry: SpanMatchGeometry): number {
     geometry.angleRadians + (1 - Math.min(1, geometry.overlapRatio));
 }
 
+// A manual approval resolution names an exact final finding; the server
+// copies the canonical geometry from the frozen agreement itself.
+export const finalCaptureAgreementResolutionSchema = z.object({
+  findingId: z.string().min(1).max(400),
+  classification: captureAgreementClassificationSchema,
+  note: z.string().trim().min(10).max(500),
+});
+
+export type FinalCaptureAgreementResolution =
+  z.infer<typeof finalCaptureAgreementResolutionSchema>;
+
 // Reconciles the navigation build's final capture agreement — computed on the
-// exact barrier set the collision GLB was cooked from — with the operator
-// classifications frozen at approval, plus any explicit resolutions supplied
-// by the approving operator for final-only crossings. Matching is a
-// one-to-one assignment on qualified pairs, so one classification can never
-// silently satisfy a second wall; the only permitted reuse is a crossing
-// whose span lies inside an already-consumed resolution's own classified run
-// (operator edits split walls without changing what was reviewed). Every
-// surviving crossing must resolve to a wall-affirming classification; a
-// door/false-barrier classification over a still-standing wall, or a crossing
-// with no classification at all, blocks acceptance.
+// exact barrier set the collision GLB was cooked from — in two strictly
+// separated phases. Frozen proposal classifications are matched first, by
+// lineage-aware one-to-one geometry; a qualifying frozen door_opening or
+// false_barrier is a MONOTONIC contradiction — the earlier review said that
+// span should be open or gone, and no later answer, however well it scores,
+// can quietly out-compete it (superseding it means re-reviewing the floor
+// plan, which freezes a new revision). Manual approval resolutions form the
+// second phase: they reference exact finding ids, may only address crossings
+// that no frozen classification qualified for, and never reuse or stretch —
+// each id resolves exactly one finding.
 export function finalCaptureAgreementBlockReason(input: {
   captureExpected: boolean;
   finalAgreement: unknown;
   captureAgreementJson: string | null;
-  additionalResolutions?: readonly CaptureAgreementResolution[];
+  manualResolutions?: readonly FinalCaptureAgreementResolution[];
 }): string | null {
   if (!input.captureExpected) return null;
   const parsedFinal = floorplanCaptureAgreementSchema.safeParse(input.finalAgreement);
@@ -2504,10 +2566,7 @@ export function finalCaptureAgreementBlockReason(input: {
   if (frozen === null) {
     return "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.";
   }
-  const resolutions = [
-    ...(frozen?.resolutions ?? []),
-    ...(input.additionalResolutions ?? []),
-  ];
+  const frozenResolutions = frozen?.resolutions ?? [];
   const crossings = parsedFinal.data.findings
     .filter((finding) => finding.kind === "barrier_crosses_open_capture");
   const candidates: Array<{
@@ -2515,11 +2574,18 @@ export function finalCaptureAgreementBlockReason(input: {
     resolutionIndex: number;
     geometry: SpanMatchGeometry;
   }> = [];
+  const contradictedBy = new Map<number, CaptureAgreementResolution>();
   for (const [crossingIndex, finding] of crossings.entries()) {
-    for (const [resolutionIndex, resolution] of resolutions.entries()) {
+    const sourceWallId = finalBarrierSourceWallId(finding.barrierId);
+    for (const [resolutionIndex, resolution] of frozenResolutions.entries()) {
       const geometry = spanMatchGeometry(finding, resolution);
-      if (geometry && spanMatchQualifies(geometry)) {
-        candidates.push({ crossingIndex, resolutionIndex, geometry });
+      if (!geometry) continue;
+      const sameWall = sourceWallId !== null && sourceWallId === resolution.barrierId;
+      if (!spanMatchQualifies(geometry, sameWall)) continue;
+      candidates.push({ crossingIndex, resolutionIndex, geometry });
+      if (!WALL_AFFIRMING_CLASSIFICATIONS.has(resolution.classification) &&
+        !contradictedBy.has(crossingIndex)) {
+        contradictedBy.set(crossingIndex, resolution);
       }
     }
   }
@@ -2539,10 +2605,30 @@ export function finalCaptureAgreementBlockReason(input: {
     if (!candidate.geometry.containedInResolution) continue;
     matchedByCrossing.set(candidate.crossingIndex, candidate.resolutionIndex);
   }
+  const manualByFindingId = new Map<string, FinalCaptureAgreementResolution>();
+  for (const manual of input.manualResolutions ?? []) {
+    manualByFindingId.set(manual.findingId, manual);
+  }
   const failures: string[] = [];
   for (const [crossingIndex, finding] of crossings.entries()) {
+    const contradiction = contradictedBy.get(crossingIndex);
+    if (contradiction) {
+      failures.push(
+        `${finding.barrierId} stands across a span the review classified ${contradiction.classification}; superseding that decision requires re-reviewing the floor plan`,
+      );
+      continue;
+    }
     const resolutionIndex = matchedByCrossing.get(crossingIndex);
-    if (resolutionIndex === undefined) {
+    const manual = manualByFindingId.get(finalAgreementFindingIdentity(finding));
+    if (resolutionIndex !== undefined) {
+      if (manual) {
+        failures.push(
+          `${finding.barrierId} already carries a frozen classification; a manual approval resolution cannot restate or replace it`,
+        );
+      }
+      continue;
+    }
+    if (!manual) {
       failures.push(
         `${finding.barrierId} crosses open capture near [${finding.from.join(", ")}]→[${
           finding.to.join(", ")
@@ -2550,10 +2636,9 @@ export function finalCaptureAgreementBlockReason(input: {
       );
       continue;
     }
-    const matched = resolutions[resolutionIndex]!;
-    if (!WALL_AFFIRMING_CLASSIFICATIONS.has(matched.classification)) {
+    if (!WALL_AFFIRMING_CLASSIFICATIONS.has(manual.classification)) {
       failures.push(
-        `${finding.barrierId} is classified ${matched.classification} yet still stands across open capture`,
+        `${finding.barrierId} is classified ${manual.classification} yet still stands across open capture`,
       );
     }
   }
@@ -2563,38 +2648,49 @@ export function finalCaptureAgreementBlockReason(input: {
   return null;
 }
 
-// Approving with explicit final-agreement resolutions must never record more
-// review than happened: every supplied resolution has to qualify against at
-// least one actual final crossing, or the approval is rejected.
-export function unmatchedFinalAgreementResolutions(
+// Validates manual approval resolutions against the immutable final
+// agreement before the gate runs: every findingId must name a real final
+// crossing, and no finding may be resolved twice — a duplicate with a
+// different classification is a contradiction, not a choice.
+export function invalidFinalAgreementResolutionIssues(
   finalAgreement: unknown,
-  resolutions: readonly CaptureAgreementResolution[],
+  resolutions: readonly FinalCaptureAgreementResolution[],
 ): string[] {
   const parsedFinal = floorplanCaptureAgreementSchema.safeParse(finalAgreement);
-  const crossings = parsedFinal.success
-    ? parsedFinal.data.findings
-      .filter((finding) => finding.kind === "barrier_crosses_open_capture")
-    : [];
-  return resolutions
-    .filter((resolution) =>
-      !crossings.some((finding) => {
-        const geometry = spanMatchGeometry(finding, resolution);
-        return geometry !== null && spanMatchQualifies(geometry);
-      })
-    )
-    .map((resolution) =>
-      `${resolution.barrierId}|${resolution.from.join(",")}|${resolution.to.join(",")}`
-    );
+  const crossingIds = new Set(
+    parsedFinal.success
+      ? parsedFinal.data.findings
+        .filter((finding) => finding.kind === "barrier_crosses_open_capture")
+        .map(finalAgreementFindingIdentity)
+      : [],
+  );
+  const issues: string[] = [];
+  const seen = new Set<string>();
+  for (const resolution of resolutions) {
+    if (!crossingIds.has(resolution.findingId)) {
+      issues.push(
+        `Resolution ${resolution.findingId} names no crossing in this build's final capture agreement`,
+      );
+    }
+    if (seen.has(resolution.findingId)) {
+      issues.push(`Resolution ${resolution.findingId} is supplied more than once`);
+    }
+    seen.add(resolution.findingId);
+  }
+  return issues;
 }
 
 // A crossing finding matches its resolution by identity, not array position:
 // the barrier, its level, and the exact reported span. Approval requires one
-// resolution per crossing finding and rejects resolutions that resolve
-// nothing, so a receipt can never claim more review than happened.
+// resolution per crossing finding, rejects resolutions that resolve nothing,
+// and rejects the same span resolved twice — two entries with different
+// classifications are a contradiction that would otherwise be decided by
+// array order, and even agreeing duplicates would freeze a receipt claiming
+// more review than happened.
 export function unresolvedCaptureAgreementCrossings(
   agreement: FloorplanCaptureAgreement | null | undefined,
   resolutions: readonly CaptureAgreementResolution[],
-): { unresolved: string[]; unmatched: string[] } {
+): { unresolved: string[]; unmatched: string[]; duplicated: string[] } {
   const findingIdentity = (finding: {
     barrierId: string;
     levelKey?: string | null;
@@ -2607,13 +2703,20 @@ export function unresolvedCaptureAgreementCrossings(
   const crossings = (agreement?.findings ?? [])
     .filter((finding) => finding.kind === "barrier_crosses_open_capture");
   const crossingIdentities = new Set(crossings.map(findingIdentity));
-  const resolvedIdentities = new Set(resolutions.map(findingIdentity));
+  const resolvedIdentities = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const resolution of resolutions) {
+    const identity = findingIdentity(resolution);
+    if (resolvedIdentities.has(identity)) duplicated.add(identity);
+    resolvedIdentities.add(identity);
+  }
   return {
     unresolved: crossings
       .map(findingIdentity)
       .filter((identity) => !resolvedIdentities.has(identity)),
     unmatched: [...resolvedIdentities]
       .filter((identity) => !crossingIdentities.has(identity)),
+    duplicated: [...duplicated],
   };
 }
 

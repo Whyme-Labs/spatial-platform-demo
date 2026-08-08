@@ -72,7 +72,7 @@ import {
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
   finalCaptureAgreementBlockReason,
-  unmatchedFinalAgreementResolutions,
+  invalidFinalAgreementResolutionIssues,
   floorplanCaptureAgreementSchema,
   frozenCaptureAgreementBlockReason,
   parseFrozenCaptureAgreement,
@@ -8815,22 +8815,20 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
           auth.organisationId,
         ).first<{ capture_agreement_json: string | null }>()
         : null;
-      const unmatched = unmatchedFinalAgreementResolutions(
+      const resolutionIssues = invalidFinalAgreementResolutionIssues(
         artifact.data.finalCaptureAgreement,
         manualResolutions,
       );
-      if (unmatched.length) {
+      if (resolutionIssues.length) {
         return unprocessable(context, {
-          finalCaptureAgreementResolutions: unmatched.map((identity) =>
-            `Resolution ${identity} matches no crossing in this build's final capture agreement`
-          ),
+          finalCaptureAgreementResolutions: resolutionIssues,
         });
       }
       const finalBlock = finalCaptureAgreementBlockReason({
         captureExpected,
         finalAgreement: artifact.data.finalCaptureAgreement,
         captureAgreementJson: agreementRevision?.capture_agreement_json ?? null,
-        additionalResolutions: manualResolutions,
+        manualResolutions,
       });
       if (finalBlock) {
         return unprocessable(context, {
@@ -10292,11 +10290,11 @@ app.post(
       });
     }
     if (parsed.data.decision === "approve") {
-      const { unresolved, unmatched } = unresolvedCaptureAgreementCrossings(
+      const { unresolved, unmatched, duplicated } = unresolvedCaptureAgreementCrossings(
         proposalAgreement,
         agreementResolutions,
       );
-      if (unresolved.length || unmatched.length) {
+      if (unresolved.length || unmatched.length || duplicated.length) {
         return unprocessable(context, {
           captureAgreementResolutions: [
             ...unresolved.map((identity) =>
@@ -10304,6 +10302,9 @@ app.post(
             ),
             ...unmatched.map((identity) =>
               `Resolution ${identity} matches no crossing finding in this proposal`
+            ),
+            ...duplicated.map((identity) =>
+              `Barrier span ${identity} is resolved more than once; one classification per span`
             ),
           ],
         });

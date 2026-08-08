@@ -9516,19 +9516,26 @@ async function queueNavigationBuild(form: FormData): Promise<void> {
 }
 
 type FinalAgreementResolution = {
-  barrierId: string;
-  elevationM?: number;
-  from: [number, number];
-  to: [number, number];
+  findingId: string;
   classification: string;
-  note?: string;
+  note: string;
 };
+
+// The immutable identity of a final capture finding — must byte-match the
+// Worker's finalAgreementFindingIdentity so a resolution names exactly the
+// finding the operator saw.
+function finalAgreementFindingId(finding: CaptureAgreementFinding): string {
+  return `${finding.barrierId}|${finding.elevationM ?? ""}|${finding.from.join(",")}|${
+    finding.to.join(",")
+  }`;
+}
 
 // The build's own final capture agreement can carry crossings the floor-plan
 // review never saw — walls added or moved during correction. Approval walks
-// each one so the operator states what the wall is; an empty answer defers to
-// the classification frozen with the revision, and the Worker decides whether
-// that actually covers the span.
+// each one so the operator states what the wall is, per finding, with a note;
+// an empty answer defers to the classification frozen with the revision, and
+// the Worker decides whether that actually covers the span. Only the finding
+// id travels — the Worker copies the geometry from the frozen agreement.
 function collectFinalAgreementResolutions(
   artifactJson: string | null,
 ): FinalAgreementResolution[] | null {
@@ -9560,13 +9567,15 @@ function collectFinalAgreementResolutions(
     if (answer === null) return null;
     const classification = answer.trim();
     if (!classification) continue;
+    const note = window.prompt(
+      `Record what you verified about ${finding.barrierId} (minimum 10 characters).`,
+      "Verified against the registered render during navigation approval.",
+    );
+    if (note === null) return null;
     resolutions.push({
-      barrierId: finding.barrierId,
-      ...(typeof finding.elevationM === "number" ? { elevationM: finding.elevationM } : {}),
-      from: finding.from,
-      to: finding.to,
+      findingId: finalAgreementFindingId(finding),
       classification,
-      note: "Classified during navigation build approval in Spatial Studio.",
+      note,
     });
   }
   return resolutions;

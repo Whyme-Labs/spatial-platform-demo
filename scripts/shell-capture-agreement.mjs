@@ -90,14 +90,17 @@ function pointsNear(index, x, z, radius, minHeight, maxHeight) {
 // centreline radius that stays honest for thin walls, and a comparator blind
 // to them would misread the wall as standing in empty space, demoting a
 // release-blocking crossing to an informational finding. A point counts as
-// support when it falls inside the wall's own volume or within the noise
-// tolerance of either face, and only within its own longitudinal span so one
-// scanned patch cannot vouch for a doorway-sized run further along the wall.
+// support only when its lateral offset is close to a face: the slab interior
+// is deliberately excluded, because a scanner cannot see inside a real wall —
+// points "inside" a thick wall's footprint are clutter in open space that the
+// wall was wrongly drawn across, the very evidence a crossing finding exists
+// to report. Support also counts only within its own longitudinal span, so
+// one scanned patch cannot vouch for a doorway-sized run further along.
 function pointsNearFace(index, x, z, direction, halfThickness, settings) {
   const { buckets, cell } = index;
-  const lateralReach = halfThickness + settings.radiusMetres;
+  const outerReach = halfThickness + settings.radiusMetres;
   const alongReach = settings.radiusMetres;
-  const gather = Math.hypot(lateralReach, alongReach);
+  const gather = Math.hypot(outerReach, alongReach);
   let count = 0;
   const minBucketY = Math.floor(settings.minHeight / cell);
   const maxBucketY = Math.floor(settings.maxHeight / cell);
@@ -111,7 +114,8 @@ function pointsNearFace(index, x, z, direction, halfThickness, settings) {
           const dz = pz - z;
           const along = Math.abs(dx * direction[0] + dz * direction[1]);
           const lateral = Math.abs(-dx * direction[1] + dz * direction[0]);
-          if (along <= alongReach && lateral <= lateralReach) count += 1;
+          if (along <= alongReach &&
+            Math.abs(lateral - halfThickness) <= settings.radiusMetres) count += 1;
         }
       }
     }

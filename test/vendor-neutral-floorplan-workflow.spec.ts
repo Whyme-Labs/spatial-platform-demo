@@ -301,6 +301,7 @@ describe("vendor-neutral floor-plan workflow", () => {
           kind: "barrier_crosses_open_capture",
           barrierId: "wall-001",
           levelKey: null,
+          elevationM: 0,
           spanCount: 3,
           metres: 0.9,
           from: [1.6, 0],
@@ -618,6 +619,7 @@ describe("vendor-neutral floor-plan workflow", () => {
       plan,
       captureAgreementResolutions: [{
         barrierId: "wall-001",
+        elevationM: 0,
         from: [1.6, 0],
         to: [2.4, 0],
         classification: "door_opening",
@@ -768,6 +770,243 @@ describe("vendor-neutral floor-plan workflow", () => {
       WHERE extraction_id = ? AND status = 'approved'
     `).bind(created.extraction.id).first<{ count: number }>();
     expect(approvedRevisionCount?.count).toBe(1);
+
+    // ── Manual approval must clear the final capture-agreement gate ──
+    // The build pins a capture, so its artifact carries a final agreement.
+    // A final-only crossing needs an exact finding-id classification from
+    // the approving operator; a crossing tight on the span the review froze
+    // as door_opening is a monotonic contradiction no manual answer beats.
+    await env.DB.prepare(
+      "UPDATE scene_navigation_profiles SET max_speed = 1.6 WHERE version_id = ?",
+    ).bind(versionId).run();
+    expect(JSON.parse(correctedBuild!.parameters_json).automaticLayout.capture)
+      .toMatchObject({ sourceFormat: expect.any(String) });
+    const finalOnlyCrossing = {
+      kind: "barrier_crosses_open_capture",
+      barrierId: "auto-barrier-wall-added-1",
+      levelKey: null,
+      elevationM: 0,
+      spanCount: 3,
+      metres: 0.9,
+      from: [8.5, 4],
+      to: [9.4, 4],
+      maximumSpanPoints: 1,
+    };
+    const finalOnlyFindingId = `${finalOnlyCrossing.barrierId}|0|8.5,4|9.4,4`;
+    const gateArtifact = (findings: unknown[]) => ({
+      schemaVersion: "spatial-navigation-v6",
+      generator: {
+        name: "recast-navigation-js",
+        version: "0.43.1",
+        nativeRecastCommit: "599fd0f023181c0a484df2a18cf1d75a3553852e",
+        mode: "tiled",
+      },
+      coordinateSystem: {
+        handedness: "right",
+        upAxis: "Y",
+        worldUnit: "metres",
+        triangleWinding: "counter-clockwise",
+      },
+      source: {
+        assetId: reviewed.collisionAssetId,
+        sha256: correctedBuild!.collision_sha256,
+        authoringHash: correctedBuild!.authoring_hash,
+        triangleCount: 2,
+        vertexCount: 4,
+      },
+      agent: {
+        radius: 0.25,
+        height: 1.7,
+        eyeHeight: 1.6,
+        maxClimb: 0.2,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        maxEdgeLengthVoxels: 12,
+        maxSimplificationError: 1.3,
+        minimumRegionSizeVoxels: 8,
+        mergeRegionSizeVoxels: 20,
+      },
+      recastConfig: { walkableRadius: 3 },
+      bounds: [[0, 0, 0], [10, 3, 10]],
+      spawn: {
+        id: "opening",
+        requestedPosition: [0.5, 0, 0.5],
+        projectedPosition: [0.5, 0, 0.5],
+      },
+      offMeshConnections: [],
+      navMesh: {
+        clearanceApplied: true,
+        vertices: [[0.3, 0, 0.3], [9.7, 0, 0.3], [0.3, 0, 9.7]],
+        indices: [0, 1, 2],
+      },
+      detour: {
+        format: "recast-navigation-js-export-v1",
+        byteLength: 64,
+        bytesBase64: btoa("x".repeat(64)),
+      },
+      validation: {
+        passed: true,
+        componentCount: 1,
+        rawTriangleComponentCount: 1,
+        spawnProjectedDistance: 0,
+        destinationCount: 0,
+        unreachableDestinationIds: [],
+        destinations: [],
+      },
+      physicalValidation: {
+        passed: true,
+        engine: "rapier3d",
+        version: "0.19.3",
+        controller: "kinematic-capsule",
+        spawnOccupancyPassed: true,
+        routeCount: 0,
+        failedDestinationIds: [],
+        routes: [],
+      },
+      finalCaptureAgreement: {
+        schemaVersion: "shell-capture-agreement-v1",
+        scope: "final-structural-barriers",
+        pointSource: "voxel-centroids",
+        wallBandAboveFloorM: [1, 2],
+        settings: {},
+        capturePointsInBand: 2_000,
+        barrierCount: 4,
+        inspectedBarrierCount: 4,
+        findings,
+        limitations: [],
+      },
+    });
+    const reviewNavigation = (body: Record<string, unknown>) =>
+      exports.default.fetch(
+        `${origin}/api/projects/${project.id}/spatial/navigation-builds/` +
+          `${reviewed.automaticNavigation.id}/review`,
+        {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+    const stageBuild = (findings: unknown[]) =>
+      env.DB.prepare(
+        "UPDATE scene_navigation_builds SET status = 'READY_FOR_REVIEW', artifact_json = ? WHERE id = ?",
+      ).bind(JSON.stringify(gateArtifact(findings)), reviewed.automaticNavigation.id).run();
+
+    await stageBuild([finalOnlyCrossing]);
+    const unresolvedApproval = await reviewNavigation({
+      decision: "approve",
+      note: "Attempting approval without classifying the final-only crossing.",
+    });
+    expect(unresolvedApproval.status).toBe(422);
+    await expect(unresolvedApproval.json()).resolves.toMatchObject({
+      details: {
+        finalCaptureAgreementResolutions: [
+          expect.stringContaining("auto-barrier-wall-added-1"),
+        ],
+      },
+    });
+    const unknownFindingApproval = await reviewNavigation({
+      decision: "approve",
+      note: "Resolution names a finding that does not exist.",
+      finalCaptureAgreementResolutions: [{
+        findingId: "not-a-finding",
+        classification: "glass_wall",
+        note: "This should be rejected as naming nothing.",
+      }],
+    });
+    expect(unknownFindingApproval.status).toBe(422);
+    await expect(unknownFindingApproval.json()).resolves.toMatchObject({
+      details: {
+        finalCaptureAgreementResolutions: [
+          expect.stringContaining("names no crossing"),
+        ],
+      },
+    });
+    const duplicateApproval = await reviewNavigation({
+      decision: "approve",
+      note: "Duplicate classifications for one finding must fail closed.",
+      finalCaptureAgreementResolutions: [{
+        findingId: finalOnlyFindingId,
+        classification: "glass_wall",
+        note: "First answer for the finding.",
+      }, {
+        findingId: finalOnlyFindingId,
+        classification: "door_opening",
+        note: "Contradictory second answer for the same finding.",
+      }],
+    });
+    expect(duplicateApproval.status).toBe(422);
+    await expect(duplicateApproval.json()).resolves.toMatchObject({
+      details: {
+        finalCaptureAgreementResolutions: [
+          expect.stringContaining("more than once"),
+        ],
+      },
+    });
+    const manualApproval = await reviewNavigation({
+      decision: "approve",
+      note: "Classified the final-only wall against the registered render.",
+      finalCaptureAgreementResolutions: [{
+        findingId: finalOnlyFindingId,
+        classification: "glass_wall",
+        note: "Verified as the west atrium glazing on the registered render.",
+      }],
+    });
+    expect(manualApproval.status).toBe(200);
+    await expect(manualApproval.json()).resolves.toMatchObject({
+      build: { status: "APPROVED" },
+    });
+    // The per-finding receipt freezes with the build the operator approved.
+    const manualReceipt = await env.DB.prepare(
+      "SELECT status, final_capture_agreement_json FROM scene_navigation_builds WHERE id = ?",
+    ).bind(reviewed.automaticNavigation.id).first<{
+      status: string;
+      final_capture_agreement_json: string | null;
+    }>();
+    expect(manualReceipt?.status).toBe("APPROVED");
+    expect(JSON.parse(manualReceipt!.final_capture_agreement_json!)).toMatchObject({
+      resolutions: [{
+        findingId: finalOnlyFindingId,
+        classification: "glass_wall",
+      }],
+    });
+
+    // A crossing tight on the span the review classified door_opening is a
+    // frozen contradiction: the wall should be open, it still stands, and no
+    // manual classification supersedes that without re-reviewing the plan.
+    const contradictionCrossing = {
+      ...finalOnlyCrossing,
+      barrierId: "auto-barrier-wall-001-1",
+      from: [1.6, 0],
+      to: [2.4, 0],
+    };
+    await stageBuild([contradictionCrossing]);
+    const contradictionApproval = await reviewNavigation({
+      decision: "approve",
+      note: "Attempting to out-vote the frozen door classification manually.",
+      finalCaptureAgreementResolutions: [{
+        findingId: "auto-barrier-wall-001-1|0|1.6,0|2.4,0",
+        classification: "glass_wall",
+        note: "This must not supersede the frozen door decision.",
+      }],
+    });
+    expect(contradictionApproval.status).toBe(422);
+    await expect(contradictionApproval.json()).resolves.toMatchObject({
+      details: {
+        finalCaptureAgreementResolutions: [
+          expect.stringContaining("re-reviewing the floor plan"),
+        ],
+      },
+    });
+    // Park the forged build so nothing downstream mistakes it for evidence.
+    await env.DB.prepare(
+      "UPDATE scene_navigation_builds SET status = 'REJECTED', final_capture_agreement_json = NULL WHERE id = ?",
+    ).bind(reviewed.automaticNavigation.id).run();
 
     const exportOperationId = crypto.randomUUID();
     const exportRequest = { clientOperationId: exportOperationId, formats: ["svg", "pdf", "dxf"] };

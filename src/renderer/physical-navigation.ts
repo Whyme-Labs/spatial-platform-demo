@@ -2,6 +2,7 @@ import RAPIER from "@dimforge/rapier3d-compat";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { Vector3Tuple } from "../shared/navigation-runtime";
+import { attributeBlockedBarrier } from "./barrier-attribution";
 
 type PhysicalAgentProfile = {
   radius: number;
@@ -274,57 +275,18 @@ export class PhysicalNavigationRuntime {
 
   // Names the wall a contact belongs to. Distance alone misfires at corners
   // and T-junctions, where two walls are equally near the contact point but
-  // only one of them faces the walker — so the score also asks whether the
-  // contact normal is perpendicular to the candidate's run, the way a push
-  // against that wall's face would be.
+  // only one of them faces the walker — the pure scorer weighs contact-normal
+  // alignment and declines to answer when two different walls genuinely tie.
   #nearestBarrierSegment(
     point: Vector3Tuple,
     contactNormal: Vector3Tuple | null = null,
   ): string | null {
-    let best: string | null = null;
-    let bestScore = Math.max(0.4, this.#agent.radius * 1.5);
-    for (const barrier of this.#structuralBarriers) {
-      if (point[1] < barrier.minY - 0.1 || point[1] > barrier.maxY + 0.1) continue;
-      const distanceToSegment = pointToSegmentDistance2D(
-        point[0],
-        point[2],
-        barrier.start,
-        barrier.end,
-      );
-      // A thick wall's contact lands on its face, half a thickness away from
-      // the centreline the segment records; measure from the face.
-      const distanceToFace = Math.max(
-        0,
-        distanceToSegment - (barrier.thicknessM ?? 0) / 2,
-      );
-      const score = distanceToFace +
-        this.#barrierNormalMisalignment(barrier, contactNormal) * 0.3;
-      if (score < bestScore) {
-        bestScore = score;
-        best = barrier.id;
-      }
-    }
-    return best;
-  }
-
-  // 0 when the contact normal is exactly the candidate wall's face normal,
-  // 1 when it runs along the wall instead; contacts without a usable
-  // horizontal normal contribute nothing so pure distance still decides.
-  #barrierNormalMisalignment(
-    barrier: StructuralBarrierSegment,
-    contactNormal: Vector3Tuple | null,
-  ): number {
-    if (!contactNormal) return 0;
-    const horizontal = Math.hypot(contactNormal[0], contactNormal[2]);
-    if (horizontal < 0.3) return 0;
-    const deltaX = barrier.end[0] - barrier.start[0];
-    const deltaZ = barrier.end[1] - barrier.start[1];
-    const length = Math.hypot(deltaX, deltaZ);
-    if (length <= 1e-6) return 0;
-    const wallNormalDot = Math.abs(
-      (contactNormal[0] * -deltaZ + contactNormal[2] * deltaX) / (length * horizontal),
+    return attributeBlockedBarrier(
+      this.#structuralBarriers,
+      point,
+      contactNormal,
+      Math.max(0.4, this.#agent.radius * 1.5),
     );
-    return 1 - Math.min(1, wallNormalDot);
   }
 
   setMode(mode: PhysicalMovementMode, cameraPosition: Vector3Tuple): boolean {
@@ -699,21 +661,6 @@ function parseStructuralBlockerBoxes(artifact: unknown): StructuralBlockerBox[] 
     }
   }
   return parsed;
-}
-
-function pointToSegmentDistance2D(
-  x: number,
-  z: number,
-  start: [number, number],
-  end: [number, number],
-): number {
-  const deltaX = end[0] - start[0];
-  const deltaZ = end[1] - start[1];
-  const lengthSquared = deltaX * deltaX + deltaZ * deltaZ;
-  const t = lengthSquared > 0
-    ? Math.max(0, Math.min(1, ((x - start[0]) * deltaX + (z - start[1]) * deltaZ) / lengthSquared))
-    : 0;
-  return Math.hypot(x - (start[0] + deltaX * t), z - (start[1] + deltaZ * t));
 }
 
 function createPlayer(
