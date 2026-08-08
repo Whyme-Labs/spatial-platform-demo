@@ -1213,13 +1213,90 @@ export function proposalCaptureAgreement(signature, report) {
     findings,
     limitations: [
       "Sparse capture, glass, mirrors, and occlusion leave real walls unsupported; a finding asks whether a proposed wall belongs, it does not prove it does not.",
-      "Walls added or moved during operator review are not re-read against the capture here; the offline verify:shell-capture tool covers reviewed shells.",
+      "This report reads the machine proposal only; the navigation build re-reads the final corrected barriers in its own capture agreement.",
     ],
   };
 }
 
 function withProposalCaptureAgreement(signature, report) {
   return { ...report, captureAgreement: proposalCaptureAgreement(signature, report) };
+}
+
+// Reads the FINAL structural barriers — after every operator correction —
+// back against the capture. The proposal-time agreement cannot see walls an
+// operator adds or moves during review, so this second read runs in the
+// navigation build on the exact barrier set the collision GLB was cooked
+// from, and its crossings must reconcile with the classifications frozen at
+// approval before the build can be accepted automatically.
+export function finalShellCaptureAgreement(signature, structuralGeometry) {
+  const points = [...signature.voxels.values()]
+    .map((voxel) => voxel.centroid)
+    .filter((point) =>
+      Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)
+    );
+  // Only reviewed wall barriers are in scope. The capture-edge fence rings
+  // sit deliberately in empty space and threshold lintels span reviewed
+  // openings; reading those back against the capture reports the design,
+  // not a defect.
+  const barriers = (structuralGeometry?.barrierSegments ?? [])
+    .filter((barrier) => String(barrier.id).startsWith("auto-barrier-"));
+  const groups = new Map();
+  for (const barrier of barriers) {
+    const elevationKey = (Math.round(barrier.minY * 100) / 100).toFixed(2);
+    const group = groups.get(elevationKey) ?? { elevationM: barrier.minY, barriers: [] };
+    group.barriers.push(barrier);
+    groups.set(elevationKey, group);
+  }
+  const findings = [];
+  let capturePointsInBand = 0;
+  let inspectedBarrierCount = 0;
+  let spanSettings = null;
+  for (const group of groups.values()) {
+    const comparison = compareShellToCapture({
+      authoring: { barrierSegments: group.barriers },
+      points,
+      options: {
+        minHeight: group.elevationM + CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M[0],
+        maxHeight: group.elevationM + CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M[1],
+      },
+    });
+    spanSettings ??= {
+      spanMetres: comparison.settings.spanMetres,
+      radiusMetres: comparison.settings.radiusMetres,
+      minimumSpanPoints: comparison.settings.minimumSpanPoints,
+      minimumRunSpans: comparison.settings.minimumRunSpans,
+    };
+    capturePointsInBand += comparison.capturePointsInBand;
+    inspectedBarrierCount += comparison.inspectedBarrierCount;
+    findings.push(...comparison.findings.map((finding) => ({
+      ...finding,
+      levelKey: null,
+      elevationM: group.elevationM,
+    })));
+  }
+  const rank = {
+    barrier_crosses_open_capture: 0,
+    barrier_end_without_capture: 1,
+    barrier_without_any_capture: 2,
+  };
+  findings.sort((left, right) =>
+    rank[left.kind] - rank[right.kind] || right.metres - left.metres
+  );
+  return {
+    schemaVersion: "shell-capture-agreement-v1",
+    scope: "final-structural-barriers",
+    pointSource: "voxel-centroids",
+    wallBandAboveFloorM: [...CAPTURE_AGREEMENT_BAND_ABOVE_FLOOR_M],
+    settings: spanSettings ?? {},
+    capturePointsInBand,
+    barrierCount: barriers.length,
+    inspectedBarrierCount,
+    findings,
+    limitations: [
+      "Sparse capture, glass, mirrors, and occlusion leave real walls unsupported; a finding asks whether a reviewed wall belongs, it does not prove it does not.",
+      "Capture-edge fences and threshold lintels are excluded: they stand in empty space or span reviewed openings by design.",
+    ],
+  };
 }
 
 function extractSingleLevelMetricFloorPlan(signature, {

@@ -157,4 +157,122 @@ describe("automatic navigation acceptance", () => {
       currentAuthoringHash: "c".repeat(64),
     })).toMatchObject({ approved: true });
   });
+
+  const capturePinnedParameters = {
+    automaticLayout: {
+      ...automaticParameters.automaticLayout,
+      capture: {
+        assetId: crypto.randomUUID(),
+        sourceFormat: "ply",
+        sourceUpAxis: "y",
+      },
+    },
+  };
+  const finalAgreement = (findings: unknown[]) => ({
+    schemaVersion: "shell-capture-agreement-v1",
+    scope: "final-structural-barriers",
+    pointSource: "voxel-centroids",
+    wallBandAboveFloorM: [1, 2],
+    settings: {},
+    capturePointsInBand: 2_000,
+    barrierCount: 6,
+    inspectedBarrierCount: 6,
+    findings,
+    limitations: [],
+  });
+  const finalCrossing = {
+    kind: "barrier_crosses_open_capture",
+    barrierId: "auto-barrier-wall-2-1",
+    levelKey: null,
+    elevationM: 0,
+    spanCount: 3,
+    metres: 0.9,
+    from: [1.6, 0],
+    to: [2.4, 0],
+    maximumSpanPoints: 1,
+  };
+  const frozenWith = (classification: string) => JSON.stringify({
+    report: agreementReport,
+    resolutions: [{ ...crossingResolution, classification }],
+  });
+
+  it("blocks a capture-pinned build that carries no final agreement", () => {
+    const decision = approvedFloorplanNavigationAcceptanceDecision({
+      parameters: capturePinnedParameters,
+      revision: {
+        status: "approved",
+        planHash,
+        captureAgreementJson: frozenWith("glass_wall"),
+      },
+      frozenAuthoringHash: "c".repeat(64),
+      currentAuthoringHash: "c".repeat(64),
+    });
+    expect(decision).toMatchObject({ approved: false });
+    expect(decision.reason).toContain("no readable final capture agreement");
+  });
+
+  it("blocks a final crossing on a wall added after classification", () => {
+    const decision = approvedFloorplanNavigationAcceptanceDecision({
+      parameters: capturePinnedParameters,
+      revision: {
+        status: "approved",
+        planHash,
+        captureAgreementJson: frozenWith("glass_wall"),
+      },
+      frozenAuthoringHash: "c".repeat(64),
+      currentAuthoringHash: "c".repeat(64),
+      finalCaptureAgreement: finalAgreement([{
+        ...finalCrossing,
+        barrierId: "auto-barrier-wall-added-1",
+        from: [8.5, 4],
+        to: [9.4, 4],
+      }]),
+    });
+    expect(decision).toMatchObject({ approved: false });
+    expect(decision.reason).toContain("no frozen operator classification");
+  });
+
+  it("blocks a door classification whose wall still stands across open capture", () => {
+    const decision = approvedFloorplanNavigationAcceptanceDecision({
+      parameters: capturePinnedParameters,
+      revision: {
+        status: "approved",
+        planHash,
+        captureAgreementJson: frozenWith("door_opening"),
+      },
+      frozenAuthoringHash: "c".repeat(64),
+      currentAuthoringHash: "c".repeat(64),
+      finalCaptureAgreement: finalAgreement([finalCrossing]),
+    });
+    expect(decision).toMatchObject({ approved: false });
+    expect(decision.reason).toContain("classified door_opening yet still stands");
+  });
+
+  it("accepts a wall-affirming classification covering the surviving crossing", () => {
+    expect(approvedFloorplanNavigationAcceptanceDecision({
+      parameters: capturePinnedParameters,
+      revision: {
+        status: "approved",
+        planHash,
+        captureAgreementJson: frozenWith("glass_wall"),
+      },
+      frozenAuthoringHash: "c".repeat(64),
+      currentAuthoringHash: "c".repeat(64),
+      finalCaptureAgreement: finalAgreement([finalCrossing]),
+    })).toMatchObject({ approved: true });
+  });
+
+  it("accepts a clean final agreement after the operator opened the doorway", () => {
+    expect(approvedFloorplanNavigationAcceptanceDecision({
+      parameters: capturePinnedParameters,
+      revision: {
+        status: "approved",
+        planHash,
+        captureAgreementJson: frozenWith("door_opening"),
+      },
+      frozenAuthoringHash: "c".repeat(64),
+      currentAuthoringHash: "c".repeat(64),
+      finalCaptureAgreement: finalAgreement([]),
+    })).toMatchObject({ approved: true });
+  });
 });

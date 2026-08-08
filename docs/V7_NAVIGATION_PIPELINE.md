@@ -93,7 +93,11 @@ A build cannot be approved unless it proves:
 - for the automatic lane, every wall the capture disputed (support on both
   sides of an empty doorway-band run) carries a frozen operator
   classification — the other proofs read the shell against itself and cannot
-  catch a wall crossing an opening the capture plainly shows; and
+  catch a wall crossing an opening the capture plainly shows;
+- the navigation build re-reads the final corrected barrier set against the
+  pinned capture, and automatic acceptance refuses a surviving crossing whose
+  classification claims the wall should be open or gone, or that has no
+  classification at all; and
 - the resulting topology is connected for every advertised destination.
 
 These are release gates, not visual QA suggestions. Missing, failed, stale, or

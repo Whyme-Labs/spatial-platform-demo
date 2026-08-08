@@ -1302,6 +1302,12 @@ export const navigationArtifactSchema = z.object({
       });
     }
   }).optional(),
+  // The FINAL structural barriers read back against the capture, produced by
+  // the navigation build after every operator correction. Automatic
+  // acceptance reconciles its crossings against the classifications frozen
+  // with the revision. (Lazy: the agreement schema is declared later in this
+  // module beside the floor-plan contracts it belongs to.)
+  finalCaptureAgreement: z.lazy(() => floorplanCaptureAgreementSchema).optional(),
 }).superRefine((value, context) => {
   if (["spatial-navigation-v7", "spatial-navigation-v8", "spatial-navigation-v9"].includes(value.schemaVersion)) {
     if (!value.collisionSemantics) {
@@ -1996,6 +2002,7 @@ const captureAgreementFindingSchema = z.object({
   ]),
   barrierId: floorplanKeySchema,
   levelKey: floorplanKeySchema.nullable().optional(),
+  elevationM: boundedMetricSchema.optional(),
   spanCount: z.number().int().positive().max(100_000),
   metres: z.number().nonnegative().max(100_000),
   from: point2MetricSchema,
@@ -2005,6 +2012,7 @@ const captureAgreementFindingSchema = z.object({
 
 export const floorplanCaptureAgreementSchema = z.object({
   schemaVersion: z.literal("shell-capture-agreement-v1"),
+  scope: z.enum(["proposal-walls", "final-structural-barriers"]).optional(),
   pointSource: z.literal("voxel-centroids"),
   wallBandAboveFloorM: z.tuple([boundedMetricSchema, boundedMetricSchema]),
   settings: z.record(z.string(), z.unknown()),
@@ -2303,6 +2311,77 @@ export function frozenCaptureAgreementBlockReason(
     return `Automatic acceptance blocked: the capture disputes ${unresolved.length} barrier span(s) with no frozen operator classification: ${
       unresolved.slice(0, 5).join("; ")
     }.`;
+  }
+  return null;
+}
+
+// A classification is a human statement about a wall, and only some
+// statements are compatible with that wall still standing. A wall classified
+// as a door or a false barrier that nevertheless survives into the final
+// collision geometry is a contradiction, not a resolution.
+const WALL_AFFIRMING_CLASSIFICATIONS = new Set([
+  "actual_wall",
+  "glass_wall",
+  "mirror",
+  "unobserved_boundary",
+  "intentional_no_go",
+]);
+
+// Operator edits renumber and split walls, so a final crossing matches its
+// frozen resolution by where it is, not what it is called.
+const FINAL_AGREEMENT_MATCH_TOLERANCE_M = 1.0;
+
+function spanMidpoint(from: readonly [number, number], to: readonly [number, number]):
+  [number, number] {
+  return [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+}
+
+// Reconciles the navigation build's final capture agreement — computed on the
+// exact barrier set the collision GLB was cooked from — with the operator
+// classifications frozen at approval. Every surviving crossing must sit near
+// a wall-affirming classification; a door/false-barrier classification over a
+// still-standing wall, or a crossing with no classification at all (a wall
+// added or moved during review), blocks automatic acceptance.
+export function finalCaptureAgreementBlockReason(input: {
+  captureExpected: boolean;
+  finalAgreement: unknown;
+  captureAgreementJson: string | null;
+}): string | null {
+  if (!input.captureExpected) return null;
+  const parsedFinal = floorplanCaptureAgreementSchema.safeParse(input.finalAgreement);
+  if (!parsedFinal.success) {
+    return "Automatic acceptance blocked: a capture was pinned for this build but it carries no readable final capture agreement.";
+  }
+  const frozen = parseFrozenCaptureAgreement(input.captureAgreementJson);
+  if (frozen === null) {
+    return "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.";
+  }
+  const resolutions = frozen?.resolutions ?? [];
+  const failures: string[] = [];
+  for (const finding of parsedFinal.data.findings) {
+    if (finding.kind !== "barrier_crosses_open_capture") continue;
+    const midpoint = spanMidpoint(finding.from, finding.to);
+    const matched = resolutions.find((resolution) => {
+      const resolved = spanMidpoint(resolution.from, resolution.to);
+      return Math.hypot(resolved[0] - midpoint[0], resolved[1] - midpoint[1]) <=
+        FINAL_AGREEMENT_MATCH_TOLERANCE_M;
+    });
+    if (!matched) {
+      failures.push(
+        `${finding.barrierId} crosses open capture near [${finding.from.join(", ")}]→[${
+          finding.to.join(", ")
+        }] with no frozen operator classification`,
+      );
+      continue;
+    }
+    if (!WALL_AFFIRMING_CLASSIFICATIONS.has(matched.classification)) {
+      failures.push(
+        `${finding.barrierId} is classified ${matched.classification} yet still stands across open capture`,
+      );
+    }
+  }
+  if (failures.length) {
+    return `Automatic acceptance blocked: ${failures.slice(0, 3).join("; ")}.`;
   }
   return null;
 }

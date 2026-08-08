@@ -49,6 +49,7 @@ import {
   compareRegisteredScenes,
   extractMetricFloorPlan,
   extractWalkableSemanticCandidates,
+  finalShellCaptureAgreement,
   inspectSpzContainer,
   parsePosterCameraJson,
   parsePlySceneSignature,
@@ -64,7 +65,7 @@ import {
 } from "./processing-agent-core.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const processorVersion = "spatial-processor/0.13.0";
+const processorVersion = "spatial-processor/0.14.0";
 const sparkVersion = "2.1.0";
 const maximumBufferedSogBytes = 256 * 1024 * 1024;
 const once = process.argv.includes("--once");
@@ -369,7 +370,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes + (collisionOutput?.sizeBytes ?? 0),
             toolVersions: {
               node: process.version,
-              processor: "0.13.0",
+              processor: "0.14.0",
               extractor: "metric-pointcloud-floorplan-v2",
               normalizer: normalized.tool,
               ...(collisionOutput
@@ -483,6 +484,37 @@ async function processNextJob() {
             ignoredMeshCount: geometry.ignoredMeshCount,
           });
         }
+        const pinnedCapture = job.navigationBuildConfig.automaticLayout?.capture;
+        if (pinnedCapture && geometry.structuralGeometry) {
+          // The proposal-time capture agreement cannot see walls the operator
+          // added or moved during review. This reads the FINAL barrier set —
+          // the exact geometry this collision GLB was cooked from — back
+          // against the capture, and the Worker refuses automatic acceptance
+          // when a crossing here lacks a frozen wall-affirming classification.
+          await reportProgress(74, "Reading the final structural shell back against its capture");
+          const capturePath = join(workDirectory, "navigation-capture-input");
+          await downloadLeasedFile(
+            `/api/worker/jobs/${job.id}/inputs/capture`,
+            lease.leaseToken,
+            capturePath,
+          );
+          const normalizedCapture = await normalizeMetricPointCloud({
+            sourcePath: capturePath,
+            sourceFormat: String(pinnedCapture.sourceFormat ?? "ply").toLowerCase(),
+            sourceUpAxis: pinnedCapture.sourceUpAxis === "z" ? "z" : "y",
+            workDirectory,
+            pdalBinary: configuration.pdalBinary,
+            timeoutMs: configuration.maxRuntimeMs,
+          });
+          const captureSignature = parsePlySceneSignature(
+            await readFile(normalizedCapture.path),
+            { voxelSizeM: 0.05, maximumSamplePoints: 2_000_000 },
+          );
+          artifact.finalCaptureAgreement = finalShellCaptureAgreement(
+            captureSignature,
+            geometry.structuralGeometry,
+          );
+        }
       } catch (error) {
         if (error instanceof NavigationBuildError) {
           throw new ProcessingAgentError(error.code, error.message, {
@@ -537,7 +569,7 @@ async function processNextJob() {
             outputBytes: navmeshOutput.sizeBytes + reportOutput.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.13.0",
+              processor: "0.14.0",
               recastNavigationJs: "0.43.1",
               nativeRecast: artifact.generator.nativeRecastCommit,
               rapier3d: artifact.physicalValidation.version,
@@ -632,7 +664,7 @@ async function processNextJob() {
             outputBytes: output.sizeBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.13.0",
+              processor: "0.14.0",
               extractor: sourceToWorld
                 ? "registered-ply-walkable-candidates-v2"
                 : "registered-ply-walkable-candidates-v1",
@@ -837,7 +869,7 @@ async function processNextJob() {
             outputBytes,
             toolVersions: {
               node: process.version,
-              processor: "0.13.0",
+              processor: "0.14.0",
               validator: "bounded-file-signature-v1",
               ...(structureEvidence.attempted
                 ? { e57Structure: "e57-structure-parser-v1" }
@@ -1012,7 +1044,7 @@ async function processNextJob() {
             buildLod: "spark-v2.1.0-quality",
             splatTransform: "3.1.7",
             node: process.version,
-            processor: "0.13.0",
+            processor: "0.14.0",
             posterCamera: posterCamera ? "authored" : "auto",
           },
         },
@@ -1229,7 +1261,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
         outputBytes: output.sizeBytes,
         toolVersions: {
           node: process.version,
-          processor: "0.13.0",
+          processor: "0.14.0",
           method: "registered-ply-voxel-change-v1",
         },
       },
@@ -1355,7 +1387,11 @@ function verifyDownloadedInput(expected, actual, label) {
 }
 
 async function downloadSource(job, leaseToken, destination) {
-  const response = await fetchWithRetry(job.input.downloadUrl, {
+  return downloadLeasedFile(job.input.downloadUrl, leaseToken, destination);
+}
+
+async function downloadLeasedFile(url, leaseToken, destination) {
+  const response = await fetchWithRetry(url, {
     headers: { "X-Job-Lease": leaseToken },
   });
   if (!response.body) throw new ProcessingAgentError(

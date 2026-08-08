@@ -84,6 +84,18 @@ The classification freezes with the approved revision
 authoring hash through the floor-plan receipt, and blocks automatic
 navigation acceptance whenever a crossing finding has no frozen resolution.
 
+The agreement runs twice. The proposal report guides the reviewer; the
+navigation build then re-reads the **final** barrier set — after every
+operator correction, on the exact geometry the collision GLB was cooked
+from — against the same capture (`finalCaptureAgreement` on the navigation
+artifact; the container fetches the pinned capture through its job lease).
+Automatic acceptance reconciles surviving crossings with the frozen
+classifications: a crossing covered by a wall-affirming answer (actual wall,
+glass, mirror, unobserved boundary, intentional no-go) passes; a crossing on
+a wall classified door/opening or false barrier — the wall should be open or
+gone, yet still stands — blocks; a crossing on a wall added or moved after
+classification blocks until an operator reviews it.
+
 ### Choosing the storeys
 
 Storeys of an occupied building are contiguous in elevation: floor, contents,

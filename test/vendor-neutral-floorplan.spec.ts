@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   extractMetricFloorPlan,
+  finalShellCaptureAgreement,
   parsePlySceneSignature,
   proposalCaptureAgreement,
 } from "../scripts/processing-agent-core.mjs";
@@ -699,6 +700,58 @@ describe("shell-capture agreement in the automatic proposal", () => {
       kind: "barrier_crosses_open_capture",
       barrierId: "wall-007",
       levelKey: "level-002",
+    })]);
+  });
+
+  it("re-reads the final structural barriers and skips fences and thresholds", () => {
+    // Capture along z=0 with the same doorway hole; the final shell carries
+    // the reviewed wall, a capture-edge fence ring segment in empty space,
+    // and a threshold lintel — only the wall may raise a finding.
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0; x <= 4; x += 0.1) {
+      if (x > 1.4 && x < 2.6) continue;
+      for (const y of [1.1, 1.4, 1.7]) points.push([x, y, 0]);
+    }
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const structuralGeometry = {
+      barrierSegments: [
+        { id: "auto-barrier-wall-1-1", start: [0, 0], end: [4, 0], minY: 0, maxY: 2.5 },
+        { id: "auto-capture-ring-0-1", start: [-2, -2], end: [6, -2], minY: 0, maxY: 2.5 },
+        { id: "auto-threshold-opening-1", start: [1.5, 0], end: [2.5, 0], minY: 2.1, maxY: 2.5 },
+      ],
+    };
+    const agreement = finalShellCaptureAgreement(signature, structuralGeometry);
+    expect(agreement.scope).toBe("final-structural-barriers");
+    expect(agreement.barrierCount).toBe(1);
+    expect(agreement.findings).toEqual([expect.objectContaining({
+      kind: "barrier_crosses_open_capture",
+      barrierId: "auto-barrier-wall-1-1",
+      elevationM: 0,
+    })]);
+  });
+
+  it("reads final barriers of an upper storey in that storey's own band", () => {
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0; x <= 4; x += 0.1) {
+      if (x > 1.4 && x < 2.6) continue;
+      for (const y of [4.1, 4.4, 4.7]) points.push([x, y, 0]);
+    }
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const agreement = finalShellCaptureAgreement(signature, {
+      barrierSegments: [
+        { id: "auto-barrier-wall-9-1", start: [0, 0], end: [4, 0], minY: 3, maxY: 5.5 },
+      ],
+    });
+    expect(agreement.findings).toEqual([expect.objectContaining({
+      kind: "barrier_crosses_open_capture",
+      barrierId: "auto-barrier-wall-9-1",
+      elevationM: 3,
     })]);
   });
 });

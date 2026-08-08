@@ -71,6 +71,7 @@ import {
   floorplanExportSchema,
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
+  finalCaptureAgreementBlockReason,
   floorplanCaptureAgreementSchema,
   frozenCaptureAgreementBlockReason,
   parseFrozenCaptureAgreement,
@@ -10340,6 +10341,19 @@ app.post(
         const navigationJobId = crypto.randomUUID();
         const navigationClientOperationId = crypto.randomUUID();
         const navigationAuthoringHash = automaticState.authoringHash;
+        // The proposal-time capture agreement cannot see walls the operator
+        // added or moved in this very review, so the navigation build re-reads
+        // the FINAL barriers against the capture. Pinning the capture asset
+        // identity here lets the container fetch it through its job lease.
+        const captureAsset = await context.env.DB.prepare(
+          "SELECT id, format FROM assets WHERE id = ? AND organisation_id = ? AND deleted_at IS NULL",
+        ).bind(extraction.input_asset_id, auth.organisationId)
+          .first<{ id: string; format: string }>();
+        const extractionSourceUpAxis =
+          extractionParameters && typeof extractionParameters === "object" &&
+            Reflect.get(extractionParameters, "sourceUpAxis") === "z"
+            ? "z"
+            : "y";
         const navigationParameters = {
           provisional: false,
           automaticLayout: {
@@ -10347,6 +10361,15 @@ app.post(
             floorplanExtractionId: extraction.id,
             floorplanRevisionId: revisionId,
             planHash,
+            ...(captureAsset
+              ? {
+                capture: {
+                  assetId: captureAsset.id,
+                  sourceFormat: captureAsset.format,
+                  sourceUpAxis: extractionSourceUpAxis,
+                },
+              }
+              : {}),
           },
           bounds: null,
           spawn: null,
@@ -13107,6 +13130,45 @@ app.get("/api/worker/jobs/:jobId/inputs/:role", async (context) => {
   const lease = await requireWorkerLease(context, context.req.param("jobId"));
   if (lease instanceof Response) return lease;
   const role = context.req.param("role");
+  // A navigation build re-reads the final structural barriers against the
+  // capture the floor plan was extracted from. The capture asset is not the
+  // job's input (that is the cooked collision GLB); it is pinned by id in the
+  // build's frozen automaticLayout, and this role serves exactly that asset
+  // under the same job lease.
+  if (role === "capture") {
+    const build = await context.env.DB.prepare(`
+      SELECT parameters_json FROM scene_navigation_builds
+      WHERE job_id = ? AND organisation_id = ? AND project_id = ?
+    `).bind(lease.id, lease.organisation_id, lease.project_id)
+      .first<{ parameters_json: string | null }>();
+    const parameters = parseStoredObject(build?.parameters_json ?? "{}");
+    const automaticLayout = parameters && typeof parameters === "object"
+      ? Reflect.get(parameters, "automaticLayout")
+      : null;
+    const capture = automaticLayout && typeof automaticLayout === "object"
+      ? Reflect.get(automaticLayout, "capture")
+      : null;
+    const captureAssetId = capture && typeof capture === "object"
+      ? Reflect.get(capture, "assetId")
+      : null;
+    if (typeof captureAssetId !== "string" || !captureAssetId) {
+      return notFound(context, "This navigation build has no pinned capture input");
+    }
+    const captureAsset = await context.env.DB.prepare(`
+      SELECT * FROM assets
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+        AND integrity_status = 'verified' AND deleted_at IS NULL
+    `).bind(captureAssetId, lease.organisation_id, lease.project_id, lease.version_id)
+      .first<AssetRow>();
+    if (!captureAsset) return notFound(context, "Pinned capture asset not found");
+    const response = await serveR2Object(context, captureAsset.object_key);
+    response.headers.set(
+      "Content-Disposition",
+      `attachment; filename="${captureAsset.file_name.replaceAll("\"", "")}"`,
+    );
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
+  }
   if (role !== "baseline" && role !== "candidate") {
     return notFound(context, "Registered comparison input role not found");
   }
@@ -13611,6 +13673,10 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
             : null,
           frozenAuthoringHash: job.navigation_authoring_hash,
           currentAuthoringHash,
+          finalCaptureAgreement: Reflect.get(
+            navigationArtifact as object,
+            "finalCaptureAgreement",
+          ),
         });
     }
     navigationStatements.push(context.env.DB.prepare(`
@@ -20931,6 +20997,7 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
   revision: { status: string; planHash: string; captureAgreementJson?: string | null } | null;
   frozenAuthoringHash: string | null;
   currentAuthoringHash: string | null;
+  finalCaptureAgreement?: unknown;
 }): { approved: boolean; reason: string } {
   if (!approvedFloorplanNavigationCanAutoAccept(input.parameters)) {
     return {
@@ -20961,6 +21028,21 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
   );
   if (agreementBlock) {
     return { approved: false, reason: agreementBlock };
+  }
+  // The proposal agreement above cannot see walls added or moved during the
+  // review itself. When a capture was pinned for this build, the build's own
+  // final agreement — computed on the exact barrier set the collision was
+  // cooked from — must reconcile with the frozen classifications.
+  const finalAgreementBlock = finalCaptureAgreementBlockReason({
+    captureExpected: Boolean(
+      Reflect.get(automaticLayout, "capture") &&
+        typeof Reflect.get(automaticLayout, "capture") === "object",
+    ),
+    finalAgreement: input.finalCaptureAgreement,
+    captureAgreementJson: input.revision.captureAgreementJson ?? null,
+  });
+  if (finalAgreementBlock) {
+    return { approved: false, reason: finalAgreementBlock };
   }
   if (
     !input.frozenAuthoringHash || !input.currentAuthoringHash ||
