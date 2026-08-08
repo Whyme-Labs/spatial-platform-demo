@@ -14,11 +14,52 @@ concurrency:
   group: release-gate-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The gate is split into parallel jobs so a dependency advisory cannot erase
+# the functional diagnostic signal: an audit failure still blocks the workflow
+# (and therefore staging), but typecheck, tests, browser proofs, and the
+# deployment dry-runs report their own results alongside it.
 jobs:
-  verify:
-    name: Verify application and processor
+  functional:
+    name: Typecheck, tests, browser proofs, deploy dry-run
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      CI: "true"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the application release gate
+        run: npm run check
+
+      - name: Upload browser test evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  security:
+    name: Audit dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       CI: "true"
 
@@ -38,22 +79,25 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=low
 
-      - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+  processor:
+    name: Validate the processor deployment bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: "true"
 
-      - name: Run the application release gate
-        run: npm run check
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Upload browser test evidence
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          name: playwright-report
-          path: |
-            playwright-report/
-            test-results/
-          retention-days: 14
-          if-no-files-found: ignore
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
 
       - name: Validate the processor deployment bundle
         run: npm run processor:cloud:dry-run
