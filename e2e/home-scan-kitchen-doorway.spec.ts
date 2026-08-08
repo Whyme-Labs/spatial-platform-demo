@@ -177,9 +177,13 @@ async function mountScene(
       maxAcceleration: 8,
     },
   });
-  await expect(page.frameLocator("#renderer").locator("#sparkLoading")).toBeHidden({
-    timeout: 20_000,
-  });
+  // The loading overlay clears on visual readiness alone; walking is live
+  // only once the movement runtime reports itself. Waiting on the status text
+  // keeps keyboard input from racing the Rapier/Detour build on a cold start.
+  await expect(page.frameLocator("#renderer").locator("#controlStatus")).toHaveText(
+    "Walk enabled · structural shell collision · furniture ignored",
+    { timeout: 20_000 },
+  );
 }
 
 async function captureCamera(page: import("@playwright/test").Page): Promise<CameraPose> {

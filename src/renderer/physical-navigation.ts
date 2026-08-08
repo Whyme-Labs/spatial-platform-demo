@@ -181,7 +181,7 @@ export class PhysicalNavigationRuntime {
   }
 
   setMode(mode: PhysicalMovementMode, cameraPosition: Vector3Tuple): boolean {
-    if (mode === this.#mode) return this.placeCamera(cameraPosition);
+    if (mode === this.#mode) return this.placeCamera(cameraPosition) !== null;
     const center = this.#cameraToCenter(cameraPosition, mode);
     if (!this.#canPlaceCenter(center, mode) ||
       (mode === "walk" && !this.#hasSafeGroundForWalk(cameraPosition))) return false;
@@ -197,15 +197,53 @@ export class PhysicalNavigationRuntime {
     return true;
   }
 
-  placeCamera(position: Vector3Tuple): boolean {
-    if (!this.canPlaceCamera(position)) return false;
-    // Walk placements need a floor beneath them: overlap alone accepts any
-    // point in the void outside the shell, where there is nothing to overlap.
-    if (this.#mode === "walk" && !this.#hasSafeGroundForWalk(position)) return false;
-    const center = this.#cameraToCenter(position, this.#mode);
-    this.#body.setTranslation(toRapierVector(center), true);
+  // Returns the physically resolved camera position, or null when the
+  // placement is invalid. Walk placements are grounded first: navmesh
+  // quantisation routinely hands over feet a few millimetres inside the
+  // floor, and a full-size overlap test would truthfully reject the real
+  // opening. Resting the capsule on its support answers with the height the
+  // body will actually occupy, so callers must adopt the returned position.
+  placeCamera(position: Vector3Tuple): Vector3Tuple | null {
+    if (this.#mode === "fly") {
+      const center = this.#cameraToCenter(position, "fly");
+      if (!this.#canPlaceCenter(center, "fly")) return null;
+      this.#body.setTranslation(toRapierVector(center), true);
+      this.#verticalVelocity = 0;
+      return [...position];
+    }
+    const requested = this.#cameraToCenter(position, "walk");
+    const grounded = this.#groundedCenterNear(requested);
+    if (!grounded || !this.#canPlaceCenter(grounded, "walk")) return null;
+    this.#body.setTranslation(toRapierVector(grounded), true);
     this.#verticalVelocity = 0;
-    return true;
+    return this.#centerToCamera(grounded, "walk");
+  }
+
+  // Rests the full-size capsule on whatever supports it near the requested
+  // centre. Returns null when nothing supports the capsule within the step
+  // tolerance — the void outside the shell has no floor to rest on.
+  #groundedCenterNear(center: Vector3Tuple): Vector3Tuple | null {
+    const halfHeight = Math.max(0.01, this.#agent.height / 2 - this.#agent.radius);
+    const lift = Math.max(this.#agent.maxClimb, 0.05) + 0.03;
+    const contactOffset = Math.max(0.002, Math.min(0.02, this.#agent.radius * 0.05));
+    const start: Vector3Tuple = [center[0], center[1] + lift, center[2]];
+    const hit = this.#world.castShape(
+      toRapierVector(start),
+      { x: 0, y: 0, z: 0, w: 1 },
+      { x: 0, y: -1, z: 0 },
+      new RAPIER.Capsule(halfHeight, this.#agent.radius),
+      0,
+      lift * 2,
+      true,
+      undefined,
+      undefined,
+      this.#collider,
+      this.#body,
+    );
+    if (!hit) return null;
+    const restingY = start[1] - hit.time_of_impact + contactOffset;
+    if (Math.abs(restingY - center[1]) > lift) return null;
+    return [center[0], restingY, center[2]];
   }
 
   canPlaceCamera(position: Vector3Tuple): boolean {
@@ -213,10 +251,15 @@ export class PhysicalNavigationRuntime {
   }
 
   #canPlaceCenter(center: Vector3Tuple, mode: PhysicalMovementMode): boolean {
-    const halfHeight = Math.max(0.01, (this.#agent.height - this.#agent.radius * 2) / 2);
+    // Placement validates the full-size player shape: a shrunken probe can
+    // accept a position the real capsule slightly overlaps, which starts the
+    // next frame in penetration against geometry with no volume to recover
+    // from. Height is preserved by deriving the half-height from the same
+    // radius the probe uses.
+    const halfHeight = Math.max(0.01, this.#agent.height / 2 - this.#agent.radius);
     const clearanceShape = mode === "fly"
-      ? new RAPIER.Ball(this.#agent.radius * 0.98)
-      : new RAPIER.Capsule(halfHeight, this.#agent.radius * 0.98);
+      ? new RAPIER.Ball(this.#agent.radius)
+      : new RAPIER.Capsule(halfHeight, this.#agent.radius);
     return !this.#world.intersectionWithShape(
       toRapierVector(center),
       { x: 0, y: 0, z: 0, w: 1 },
@@ -230,13 +273,13 @@ export class PhysicalNavigationRuntime {
 
   #hasSafeGroundForWalk(cameraPosition: Vector3Tuple): boolean {
     const center = this.#cameraToCenter(cameraPosition, "walk");
-    const halfHeight = Math.max(0.01, (this.#agent.height - this.#agent.radius * 2) / 2);
+    const halfHeight = Math.max(0.01, this.#agent.height / 2 - this.#agent.radius);
     const maximumLandingDistance = Math.max(this.#agent.maxClimb, 0.05) + 0.03;
     const hit = this.#world.castShape(
       toRapierVector(center),
       { x: 0, y: 0, z: 0, w: 1 },
       { x: 0, y: -1, z: 0 },
-      new RAPIER.Capsule(halfHeight, this.#agent.radius * 0.98),
+      new RAPIER.Capsule(halfHeight, this.#agent.radius),
       0,
       maximumLandingDistance,
       true,

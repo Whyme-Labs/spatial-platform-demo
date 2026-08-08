@@ -551,12 +551,13 @@ async function start(): Promise<void> {
               physicalRuntime.canPlaceCamera(authoredPosition)
               ? authoredPosition
               : runtime.projectCamera(authoredPosition) ?? runtime.openingCamera();
-            camera.position.fromArray(projected);
-            if (!physicalRuntime.placeCamera(projected)) {
+            const placed = physicalRuntime.placeCamera(projected);
+            if (!placed) {
               runtime.destroy();
               physicalRuntime.destroy();
               throw new Error("Opening camera overlaps reviewed collision geometry");
             }
+            camera.position.fromArray(placed);
             detourNavigationRuntime = runtime;
             physicalNavigationRuntime = physicalRuntime;
             authoredTraversalOverlay = new AuthoredTraversalOverlay(
@@ -748,21 +749,24 @@ async function start(): Promise<void> {
         }
         return;
       }
-      if (
-        physicalNavigationRuntime &&
-        !physicalNavigationRuntime.placeCamera(acceptedPosition.toArray() as Vector3Tuple)
-      ) {
-        if (requestId) {
-          post({
-            source: "spatial-spark",
-            type: "camera-set",
-            requestId,
-            accepted: false,
-            message: "The requested room camera overlaps reviewed collision geometry.",
-            cameraPose: cameraPose(camera),
-          });
+      if (physicalNavigationRuntime) {
+        const placedPosition = physicalNavigationRuntime.placeCamera(
+          acceptedPosition.toArray() as Vector3Tuple,
+        );
+        if (!placedPosition) {
+          if (requestId) {
+            post({
+              source: "spatial-spark",
+              type: "camera-set",
+              requestId,
+              accepted: false,
+              message: "The requested room camera overlaps reviewed collision geometry.",
+              cameraPose: cameraPose(camera),
+            });
+          }
+          return;
         }
-        return;
+        acceptedPosition = new THREE.Vector3().fromArray(placedPosition);
       }
       camera.position.copy(acceptedPosition);
       camera.up.fromArray(pose.up ?? [0, 1, 0]).normalize();
@@ -1396,11 +1400,12 @@ function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
     // silently follows a camera through reviewed collision geometry.
     const requested = camera.position.toArray() as Vector3Tuple;
     const projected = detourNavigationRuntime?.projectCamera(requested) ?? requested;
-    if (physicalNavigationRuntime.placeCamera(projected)) {
+    const placed = physicalNavigationRuntime.placeCamera(projected);
+    if (placed) {
       const adjusted = camera.position.distanceToSquared(
-        new THREE.Vector3().fromArray(projected),
+        new THREE.Vector3().fromArray(placed),
       ) > 1e-12;
-      camera.position.fromArray(projected);
+      camera.position.fromArray(placed);
       lastWalkablePosition = camera.position.clone();
       return adjusted;
     }
@@ -1697,13 +1702,16 @@ function resetView(): void {
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
-  if (
-    physicalNavigationRuntime &&
-    !physicalNavigationRuntime.placeCamera(camera.position.toArray() as Vector3Tuple)
-  ) {
-    const opening = detourNavigationRuntime?.openingCamera();
-    if (opening && physicalNavigationRuntime.placeCamera(opening)) {
-      camera.position.fromArray(opening);
+  if (physicalNavigationRuntime) {
+    const restored = physicalNavigationRuntime.placeCamera(
+      camera.position.toArray() as Vector3Tuple,
+    );
+    if (restored) {
+      camera.position.fromArray(restored);
+    } else {
+      const opening = detourNavigationRuntime?.openingCamera();
+      const placedOpening = opening ? physicalNavigationRuntime.placeCamera(opening) : null;
+      if (placedOpening) camera.position.fromArray(placedOpening);
     }
   }
   rendererControls?.align(camera);
