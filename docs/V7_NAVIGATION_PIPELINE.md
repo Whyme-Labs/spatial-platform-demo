@@ -111,6 +111,25 @@ Fly mode uses a no-gravity sphere against the same structural barriers. Detour
 remains authoritative for route topology and guided destinations; Rapier is
 authoritative for physical motion.
 
+Three runtime invariants hold at this boundary:
+
+- **`ready` means movement-ready.** The renderer posts `ready` to its host only
+  once the visual is on screen *and* the Rapier/Detour runtime is verified (or
+  an authoring host has granted collision-free inspection). The local loading
+  overlay clears on visual readiness alone, but a host must never enable room
+  navigation from a visual-only state, and a fatal walking-map error is
+  terminal: no `ready` ever follows it.
+- **The Rapier body is the authority on player position.** Externally supplied
+  cameras (`sync-camera`, `set-camera`) are teleport requests that pass full
+  placement validation — overlap and, in Walk mode, ground support. A rejected
+  placement recovers the camera from the body; the body is never silently
+  relocated to a camera, because that would skip the collision sweep and could
+  embed the capsule beyond a zero-thickness wall.
+- **A door never closes on the player.** Activating a dynamic barrier that
+  overlaps the capsule is refused in Rapier and, because Detour only follows an
+  accepted change, the route planner and the collision world cannot disagree
+  about a door's state.
+
 Desktop controls:
 
 - `WASD` or arrow keys: move;

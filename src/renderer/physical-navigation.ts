@@ -39,7 +39,11 @@ export class PhysicalNavigationRuntime {
   readonly #controlledController: RAPIER.KinematicCharacterController;
   readonly #agent: PhysicalAgentProfile;
   readonly #recoveryBounds: Record<PhysicalMovementMode, RecoveryBounds>;
-  readonly #dynamicBarrierColliders: Map<string, RAPIER.Collider>;
+  readonly #dynamicBarrierColliders: Map<string, {
+    collider: RAPIER.Collider;
+    min: Vector3Tuple;
+    max: Vector3Tuple;
+  }>;
   #mode: PhysicalMovementMode;
   #verticalVelocity = 0;
   #controlledFailure: string | null = null;
@@ -53,7 +57,11 @@ export class PhysicalNavigationRuntime {
     agent: PhysicalAgentProfile,
     mode: PhysicalMovementMode,
     recoveryBounds: Record<PhysicalMovementMode, RecoveryBounds>,
-    dynamicBarrierColliders: Map<string, RAPIER.Collider>,
+    dynamicBarrierColliders: Map<string, {
+      collider: RAPIER.Collider;
+      min: Vector3Tuple;
+      max: Vector3Tuple;
+    }>,
   ) {
     this.#world = world;
     this.#body = body;
@@ -101,11 +109,19 @@ export class PhysicalNavigationRuntime {
     if (!geometry.structuralSemantics) {
       for (const rawBox of obstacleBoxes) addObstacleBox(world, rawBox);
     }
-    const dynamicBarrierColliders = new Map<string, RAPIER.Collider>();
+    const dynamicBarrierColliders = new Map<string, {
+      collider: RAPIER.Collider;
+      min: Vector3Tuple;
+      max: Vector3Tuple;
+    }>();
     for (const barrier of parseDynamicBarriers(artifact)) {
       const collider = addBoxCollider(world, barrier.min, barrier.max);
       collider.setEnabled(barrier.defaultActive);
-      dynamicBarrierColliders.set(barrier.id, collider);
+      dynamicBarrierColliders.set(barrier.id, {
+        collider,
+        min: barrier.min,
+        max: barrier.max,
+      });
     }
 
     const body = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
@@ -139,11 +155,29 @@ export class PhysicalNavigationRuntime {
   }
 
   setDynamicBarrierState(id: string, active: boolean): boolean {
-    const collider = this.#dynamicBarrierColliders.get(id);
-    if (!collider) return false;
-    collider.setEnabled(active);
+    const barrier = this.#dynamicBarrierColliders.get(id);
+    if (!barrier) return false;
+    // A door must never close on the player: enabling a barrier that overlaps
+    // the capsule would start every following frame from penetration, and a
+    // penetrating capsule can be pushed through the wall it belongs to.
+    if (active && this.#playerOverlapsBox(barrier.min, barrier.max)) return false;
+    barrier.collider.setEnabled(active);
     this.#world.step();
     return true;
+  }
+
+  #playerOverlapsBox(min: Vector3Tuple, max: Vector3Tuple): boolean {
+    const center = this.#body.translation();
+    const radius = this.#agent.radius;
+    const halfY = this.#mode === "fly" ? radius : this.#agent.height / 2;
+    return center.x + radius > min[0] && center.x - radius < max[0] &&
+      center.y + halfY > min[1] && center.y - halfY < max[1] &&
+      center.z + radius > min[2] && center.z - radius < max[2];
+  }
+
+  cameraPosition(): Vector3Tuple {
+    const center = this.#body.translation();
+    return this.#centerToCamera([center.x, center.y, center.z], this.#mode);
   }
 
   setMode(mode: PhysicalMovementMode, cameraPosition: Vector3Tuple): boolean {
@@ -165,6 +199,9 @@ export class PhysicalNavigationRuntime {
 
   placeCamera(position: Vector3Tuple): boolean {
     if (!this.canPlaceCamera(position)) return false;
+    // Walk placements need a floor beneath them: overlap alone accepts any
+    // point in the void outside the shell, where there is nothing to overlap.
+    if (this.#mode === "walk" && !this.#hasSafeGroundForWalk(position)) return false;
     const center = this.#cameraToCenter(position, this.#mode);
     this.#body.setTranslation(toRapierVector(center), true);
     this.#verticalVelocity = 0;
@@ -216,12 +253,26 @@ export class PhysicalNavigationRuntime {
     desired: Vector3Tuple,
     deltaSeconds = 1 / 60,
   ): Vector3Tuple | null {
-    const currentCenter = this.#cameraToCenter(from, this.#mode);
+    // The body is the authority on where the player physically is. A camera
+    // that drifted away from it — an external overwrite that skipped
+    // placeCamera — is recovered from the body; teleporting the body to the
+    // camera instead would skip the sweep entirely, and a capsule embedded in
+    // a zero-thickness wall has no volume to push it back out.
     const bodyPosition = this.#body.translation();
-    if (distance(currentCenter, bodyPosition) > Math.max(0.05, this.#agent.radius * 0.25)) {
-      this.#body.setTranslation(toRapierVector(currentCenter), true);
+    const currentCenter: Vector3Tuple = [bodyPosition.x, bodyPosition.y, bodyPosition.z];
+    const cameraCenter = this.#cameraToCenter(from, this.#mode);
+    if (distance(cameraCenter, bodyPosition) > Math.max(0.05, this.#agent.radius * 0.25)) {
+      this.#verticalVelocity = 0;
+      return this.#centerToCamera(currentCenter, this.#mode);
     }
-    const desiredCenter = this.#cameraToCenter(desired, this.#mode);
+    // Input is the camera's requested displacement; it is applied from the
+    // body's own centre because computeColliderMovement sweeps the collider
+    // from where the collider actually is.
+    const desiredCenter: Vector3Tuple = [
+      currentCenter[0] + (desired[0] - from[0]),
+      currentCenter[1] + (desired[1] - from[1]),
+      currentCenter[2] + (desired[2] - from[2]),
+    ];
     if (this.#mode === "walk") {
       this.#verticalVelocity = Math.max(
         -30,
@@ -250,7 +301,6 @@ export class PhysicalNavigationRuntime {
       this.#mode,
     );
     if (!insideBounds(nextCamera, this.#recoveryBounds[this.#mode])) {
-      this.#body.setTranslation(toRapierVector(currentCenter), true);
       this.#verticalVelocity = 0;
       return null;
     }
@@ -270,8 +320,18 @@ export class PhysicalNavigationRuntime {
       this.#controlledFailure = `controlled_traversal_mode required=walk, asked=${this.#mode}`;
       return null;
     }
-    const currentCenter = this.#cameraToCenter(from, "walk");
-    this.#body.setTranslation(toRapierVector(currentCenter), true);
+    // Same body authority as moveCamera: a controlled traversal must start
+    // from where the capsule physically is, never teleport the capsule to a
+    // camera that something else moved.
+    const bodyPosition = this.#body.translation();
+    const currentCenter: Vector3Tuple = [bodyPosition.x, bodyPosition.y, bodyPosition.z];
+    const cameraCenter = this.#cameraToCenter(from, "walk");
+    if (distance(cameraCenter, bodyPosition) > Math.max(0.05, this.#agent.radius * 0.25)) {
+      this.#controlledFailure = `controlled_traversal_desync camera=${
+        JSON.stringify(cameraCenter)
+      }, body=${JSON.stringify(currentCenter)}`;
+      return null;
+    }
     const desiredCenter = this.#cameraToCenter(desired, "walk");
     const translation = {
       x: desiredCenter[0] - currentCenter[0],
@@ -286,7 +346,6 @@ export class PhysicalNavigationRuntime {
         translation.y,
         translation.z,
       ])}, corrected=${JSON.stringify([corrected.x, corrected.y, corrected.z])}`;
-      this.#body.setTranslation(toRapierVector(currentCenter), true);
       return null;
     }
     // The sweep proves that the complete requested displacement is clear. Use

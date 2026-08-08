@@ -253,6 +253,12 @@ let rendererControls: ReturnType<typeof createSpatialLookControls> | null = null
 let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
+let visualReadyHandled = false;
+let firstFrameMs: number | null = null;
+// A posted error is terminal for the ready protocol: the host treats "ready"
+// as permission to enable navigation, so a ready after a failure would hide
+// the failure behind live controls that have no runtime beneath them.
+let fatalFailure = false;
 let walkableBoxes: Array<{ min: THREE.Vector3; max: THREE.Vector3 }> = [];
 let navigationRuntime: NavigationRuntime | null = null;
 let detourNavigationRuntime: DetourNavigationRuntime | null = null;
@@ -619,9 +625,13 @@ async function start(): Promise<void> {
         detourNavigationRuntime?.hasDynamicBarrier(barrierId) &&
         physicalNavigationRuntime?.hasDynamicBarrier(barrierId),
       );
-      if (supported) {
-        detourNavigationRuntime!.setDynamicBarrierState(barrierId, active as boolean);
+      // The physical world decides first: it refuses to close a barrier on a
+      // player standing in it. Detour only follows an accepted change so the
+      // route planner and the collision world can never disagree.
+      const applied = supported &&
         physicalNavigationRuntime!.setDynamicBarrierState(barrierId, active as boolean);
+      if (applied) {
+        detourNavigationRuntime!.setDynamicBarrierState(barrierId, active as boolean);
       }
       if (requestId) {
         post({
@@ -629,11 +639,13 @@ async function start(): Promise<void> {
           type: "dynamic-barrier-state",
           requestId,
           barrierId,
-          active: active === true,
-          accepted: supported,
-          message: supported
+          active: applied ? active === true : active !== true,
+          accepted: applied,
+          message: !supported
+            ? "The requested dynamic barrier is not part of this verified runtime."
+            : applied
             ? `${barrierId} is now ${active ? "closed" : "open"}`
-            : "The requested dynamic barrier is not part of this verified runtime.",
+            : `${barrierId} cannot close while the player is standing in it`,
         });
       }
       return;
@@ -990,30 +1002,38 @@ async function start(): Promise<void> {
     }
     broadcastCameraUpdate(camera);
     renderer.render(scene, camera);
-    // The loader clears once the visual is on screen. Gating its dismissal on a
-    // verified walking runtime stranded the authoring host — which reviews the
-    // scene precisely before that runtime exists — on a permanent "Finalising
-    // the view" over a fully rendered scene. Movement stays gated on the runtime
-    // (or an authoring host's free-fly grant); only the overlay is visual-ready.
-    if (!readySent && (movementRuntimeReady || authoringHostActive || visualSceneReady)) {
-      readySent = true;
+    // The loader clears once the visual is on screen: the authoring host
+    // reviews the scene precisely before a walking runtime exists, and gating
+    // the overlay on that runtime stranded it on a permanent "Finalising the
+    // view" over a fully rendered scene. But the visual alone must never post
+    // "ready" — the host treats ready as movement-ready and enables room
+    // navigation on it, so ready waits for the verified runtime (or an
+    // authoring host's free-fly grant), and never follows a fatal error.
+    if (!visualReadyHandled && visualSceneReady && !fatalFailure) {
+      visualReadyHandled = true;
       resetButton.disabled = false;
-      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive);
-      const timeToFirstFrameMs = Math.round(performance.now() - startedAt);
+      firstFrameMs = Math.round(performance.now() - startedAt);
       setProgress(100, "Spatial scene ready");
       loading.classList.add("is-complete");
       loading.setAttribute("aria-hidden", "true");
       loading.hidden = true;
+      canvas.focus({ preventScroll: true });
+    }
+    if (
+      !readySent && !fatalFailure && visualSceneReady &&
+      (movementRuntimeReady || authoringHostActive)
+    ) {
+      readySent = true;
+      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive);
       post({
         source: "spatial-spark",
         type: "ready",
         runtime: "spark",
         version: SPARK_RUNTIME_VERSION,
-        timeToFirstFrameMs,
+        timeToFirstFrameMs: firstFrameMs ?? Math.round(performance.now() - startedAt),
         format: config.format,
         splatBudget: budgetSplats,
       });
-      canvas.focus({ preventScroll: true });
     }
   };
   renderer.setAnimationLoop(renderLoop);
@@ -1369,6 +1389,25 @@ function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
     lastWalkablePosition = camera.position.clone();
     return false;
   }
+  if (collisionDrivenMovement && physicalNavigationRuntime) {
+    // Walk mode: an externally supplied camera is a teleport request, and a
+    // teleport must pass the same placement validation as any other. A
+    // rejected placement recovers the camera from the body — the body never
+    // silently follows a camera through reviewed collision geometry.
+    const requested = camera.position.toArray() as Vector3Tuple;
+    const projected = detourNavigationRuntime?.projectCamera(requested) ?? requested;
+    if (physicalNavigationRuntime.placeCamera(projected)) {
+      const adjusted = camera.position.distanceToSquared(
+        new THREE.Vector3().fromArray(projected),
+      ) > 1e-12;
+      camera.position.fromArray(projected);
+      lastWalkablePosition = camera.position.clone();
+      return adjusted;
+    }
+    camera.position.fromArray(physicalNavigationRuntime.cameraPosition());
+    lastWalkablePosition = camera.position.clone();
+    return true;
+  }
   if (detourNavigationRuntime) {
     const nearest = detourNavigationRuntime.projectCamera(
       camera.position.toArray() as Vector3Tuple,
@@ -1490,6 +1529,7 @@ function setProgress(progress: number, detail: string): void {
 }
 
 function fail(code: string, message: string): void {
+  fatalFailure = true;
   resetButton.disabled = true;
   mobileControls.setReady(false);
   if (rendererControls) setMovementAvailability(rendererControls, false);

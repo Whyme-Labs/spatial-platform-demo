@@ -102,11 +102,23 @@ viewports. It fails when:
 8. Playwright E2E;
 9. Cloudflare production deployment dry run.
 
+The `Release gate` GitHub workflow runs this suite in a `functional` job that
+executes in parallel with a `security` job (`npm audit`) and a `processor` job
+(processor bundle dry-run). All three block the workflow — and therefore
+staging — but a dependency advisory can no longer erase the functional
+diagnostic signal by failing before it runs.
+
 The v7+ view gate treats navigation as immutable production evidence. Private
 preview, immutable-version comparison, publication, rollback, and manifest
 delivery all fail closed before Spark can be viewed when the exact-version
-collision or walking-map derivatives are absent. The renderer reports ready
-only after Detour and Rapier initialize; there is no camera-only mode. A build
+collision or walking-map derivatives are absent. The renderer clears its local
+loading overlay on visual readiness, but posts `ready` to the host only after
+Detour and Rapier initialize (or an authoring host grants collision-free
+inspection), and never after a fatal error; there is no camera-only public
+mode. `e2e/movement-integrity.spec.ts` pins this protocol along with body
+authority (a synced camera cannot drag the physics body through reviewed
+geometry) and door-occupancy refusal (a dynamic barrier will not close on the
+player). A build
 must prove room-anchor enclosure, both-direction Walk/Fly wall sweeps, capsule
 corner sliding, room-route replay, and open/closed door parity before Studio can
 approve it or a movement-enabled release can be published.
