@@ -26,6 +26,15 @@ type StructuralBarrierSegment = {
   end: [number, number];
   minY: number;
   maxY: number;
+  // Half the frozen wall thickness: contacts land on the prism's face, this
+  // far from the centreline the segment coordinates describe.
+  thicknessM?: number;
+};
+type StructuralBlockerBox = {
+  id: string;
+  kind: "solid_furniture" | "no_go";
+  min: Vector3Tuple;
+  max: Vector3Tuple;
 };
 type MovementContact = {
   colliderHandle: number | null;
@@ -60,6 +69,7 @@ export class PhysicalNavigationRuntime {
   #verticalVelocity = 0;
   #controlledFailure: string | null = null;
   #structuralBarriers: StructuralBarrierSegment[] = [];
+  #structuralBlockerBoxes: StructuralBlockerBox[] = [];
   #lastContacts: MovementContact[] = [];
 
   private constructor(
@@ -155,6 +165,7 @@ export class PhysicalNavigationRuntime {
       dynamicBarrierColliders,
     );
     runtime.#structuralBarriers = parseStructuralBarrierSegments(artifact);
+    runtime.#structuralBlockerBoxes = parseStructuralBlockerBoxes(artifact);
     return runtime;
   }
 
@@ -218,7 +229,10 @@ export class PhysicalNavigationRuntime {
   // "blocked by the walking map". Dynamic doors resolve by their own collider
   // handle; the merged structural trimesh resolves by matching the contact
   // point against the frozen barrier segments the artifact carries.
-  lastBlockedBarrier(): { id: string; kind: "dynamic" | "structural" } | null {
+  lastBlockedBarrier(): {
+    id: string;
+    kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
+  } | null {
     for (const contact of this.#lastContacts) {
       if (contact.colliderHandle !== null) {
         for (const [id, barrier] of this.#dynamicBarrierColliders) {
@@ -234,8 +248,26 @@ export class PhysicalNavigationRuntime {
       // A mostly vertical contact normal is the floor or a ceiling, not the
       // wall the walker is asking about.
       if (Math.abs(contact.normal[1]) > 0.7) continue;
+      // A contact on a reviewed box is more specific than the nearest wall
+      // centreline — a solid cabinet often stands right against a wall.
+      const box = this.#blockerBoxAt(contact.point);
+      if (box) return { id: box.id, kind: box.kind };
       const nearest = this.#nearestBarrierSegment(contact.point);
       if (nearest) return { id: nearest, kind: "structural" };
+    }
+    return null;
+  }
+
+  #blockerBoxAt(point: Vector3Tuple): StructuralBlockerBox | null {
+    const tolerance = 0.05;
+    for (const box of this.#structuralBlockerBoxes) {
+      if (
+        point[0] >= box.min[0] - tolerance && point[0] <= box.max[0] + tolerance &&
+        point[1] >= box.min[1] - tolerance && point[1] <= box.max[1] + tolerance &&
+        point[2] >= box.min[2] - tolerance && point[2] <= box.max[2] + tolerance
+      ) {
+        return box;
+      }
     }
     return null;
   }
@@ -251,8 +283,11 @@ export class PhysicalNavigationRuntime {
         barrier.start,
         barrier.end,
       );
-      if (distanceToSegment < bestDistance) {
-        bestDistance = distanceToSegment;
+      // A thick wall's contact lands on its face, half a thickness away from
+      // the centreline the segment records; measure from the face.
+      const distanceToFace = distanceToSegment - (barrier.thicknessM ?? 0) / 2;
+      if (distanceToFace < bestDistance) {
+        bestDistance = distanceToFace;
         best = barrier.id;
       }
     }
@@ -597,13 +632,38 @@ function parseStructuralBarrierSegments(artifact: unknown): StructuralBarrierSeg
       !Array.isArray(end) || end.length !== 2 || !end.every(Number.isFinite) ||
       !Number.isFinite(minY) || !Number.isFinite(maxY)
     ) continue;
+    const thicknessM = Number(Reflect.get(segment, "thicknessM"));
     parsed.push({
       id,
       start: [Number(start[0]), Number(start[1])],
       end: [Number(end[0]), Number(end[1])],
       minY: Number(minY),
       maxY: Number(maxY),
+      ...(Number.isFinite(thicknessM) && thicknessM > 0 ? { thicknessM } : {}),
     });
+  }
+  return parsed;
+}
+
+function parseStructuralBlockerBoxes(artifact: unknown): StructuralBlockerBox[] {
+  if (!artifact || typeof artifact !== "object") return [];
+  const structural = Reflect.get(artifact, "structuralGeometry");
+  if (!structural || typeof structural !== "object") return [];
+  const parsed: StructuralBlockerBox[] = [];
+  for (const [property, kind] of [
+    ["solidFurnitureBoxes", "solid_furniture"],
+    ["noGoVolumes", "no_go"],
+  ] as const) {
+    const boxes = Reflect.get(structural, property);
+    if (!Array.isArray(boxes)) continue;
+    for (const box of boxes) {
+      if (!box || typeof box !== "object") continue;
+      const id = Reflect.get(box, "id");
+      const min = finitePoint(Reflect.get(box, "min"));
+      const max = finitePoint(Reflect.get(box, "max"));
+      if (typeof id !== "string" || !id || !min || !max) continue;
+      parsed.push({ id, kind, min, max });
+    }
   }
   return parsed;
 }

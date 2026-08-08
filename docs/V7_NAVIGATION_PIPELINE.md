@@ -42,12 +42,30 @@ The structural asset classifies each primitive independently:
 - `structural_floor`;
 - `structural_barrier` for walls and ceilings;
 - `dynamic_barrier` for doors whose open/closed state changes;
-- `ignored_furniture` for geometry excluded from a public movement profile; or
+- `ignored_furniture` for geometry excluded from a public movement profile;
+- `solid_furniture` for furniture that physically blocks movement and carves
+  the navmesh (a furniture box opts in with `passability: "solid"`);
+- `no_go_volume` for a reviewed keep-out box that blocks movement as policy
+  rather than observed structure; or
 - a trigger that carries semantics without physical collision.
 
 No wall is extruded from a floor edge. Furniture exclusion is explicit and does
 not weaken structural barriers. The example contract is
 [`../assets/home-scan-structural-v7.json`](../assets/home-scan-structural-v7.json).
+
+A barrier segment may carry a frozen wall thickness. A segment without one
+cooks the legacy zero-depth surface (`surface_only`) so every pre-thickness
+revision keeps its exact cooked bytes and authoring hash; a segment with
+`thicknessM` (0.01–2 m) cooks a closed prism centred on its reviewed
+centreline, and freezes where the value came from — `estimated` for a machine
+value the operator merely accepted, `operator_reviewed` for a value the
+operator corrected or a wall they added, `registered_mesh` for measured
+registered geometry. Wall tops are never walkable surfaces, and blocking
+volumes seal their interiors so no navmesh island can survive inside reviewed
+collision. Thickness narrows approach lanes honestly: a doorway or stair foot
+closer than the eroded agent clearance to a wall's *face* (not its centreline)
+now fails reachability instead of silently passing through the wall's own
+footprint.
 
 ## Offline build
 
@@ -140,11 +158,14 @@ Three runtime invariants hold at this boundary:
 
 A stopped walker is told which reviewed geometry stopped them. The character
 controller's computed contacts resolve against the artifact's frozen barrier
-segments (dynamic doors resolve by their own collider), so the status names
-the wall — "Blocked by east-wall · reviewed structural wall", "Blocked by
-wall-284 · automatic structural wall", "Blocked by door-to-far-side · this
-door is closed", or "Blocked at the reviewed edge of the captured world" —
-instead of a generic refusal an operator cannot act on.
+segments and blocking boxes (dynamic doors resolve by their own collider), so
+the status names the blocker — "Blocked by east-wall · reviewed structural
+wall", "Blocked by wall-284 · automatic structural wall", "Blocked by
+door-to-far-side · this door is closed", "Blocked by wardrobe · solid
+furniture", "Blocked by exhibit-keep-out · reviewed no-go volume", or
+"Blocked at the reviewed edge of the captured world" — instead of a generic
+refusal an operator cannot act on. Thick walls attribute from their face, half
+a frozen thickness from the centreline the segment records.
 
 Desktop controls:
 
@@ -211,7 +232,11 @@ operator-reviewed ceiling support and does not manufacture ceilings from wall
 height. It does not infer unobserved circulation, elevators, ladders, or moving
 platforms. Those discontinuities require explicit reviewed V8 paths. V7 does not
 provide moving-furniture physics, survey accuracy, clearance certification,
-accessibility certification, or native XGRIDS/FJD reconstruction.
+accessibility certification, or native XGRIDS/FJD reconstruction. Passability
+is deliberately binary per primitive: crouch-only volumes and per-profile
+collision masks are out of scope because no reviewed movement profile carries
+crouch semantics — schema for a consumer that does not exist would freeze
+unproven promises into receipts.
 
 Provisional `SU` scenes are valid interaction demonstrations but not real-world
 measurements. A metric release requires a separately measured scene version and

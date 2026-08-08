@@ -276,7 +276,13 @@ export async function validateStructuralNavigation({
       ];
       const probeRadius = agent.radius * 0.98;
       const capsuleHalfHeight = Math.max(0.01, (agent.height - agent.radius * 2) / 2);
-      const originDistance = Math.max(agent.radius * 2.25, 0.08);
+      // Barrier coordinates are the wall's centreline, but a barrier with
+      // frozen thickness cooked as a prism whose face sits half a thickness
+      // closer to the probe. Standing the origin that much further out keeps
+      // the sweep an honest approach to the face instead of a cast that
+      // begins inside the wall and trivially reports contact.
+      const halfThickness = (barrier.thicknessM ?? 0) / 2;
+      const originDistance = Math.max(agent.radius * 2.25, 0.08) + halfThickness;
       const travelDistance = originDistance * 2;
       if (barrier.maxY - barrier.minY + 1e-6 < agent.height) {
         throw structuralFailure(barrier.id, "Reviewed barrier is shorter than the production Walk capsule");

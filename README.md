@@ -371,7 +371,13 @@ The v7 navigation lane requires operator-authored shells to use
 `authored-structural-collision-v2`: floors, ceilings, and wall segments are
 separate reviewed inputs, so the publisher cannot manufacture walls by
 extruding a floor edge. Primitives are classified as structural floor,
-structural barrier, dynamic barrier, or ignored furniture. The processor builds
+structural barrier, dynamic barrier, ignored furniture, solid furniture, or
+no-go volume; furniture blocks movement only when a box explicitly opts into
+`passability: "solid"`. A wall segment may freeze a `thicknessM` (with
+`estimated` / `operator_reviewed` / `registered_mesh` provenance) and then
+cooks as a closed prism on its centreline; segments without one keep the
+legacy zero-depth surface so existing cooked bytes and authoring hashes never
+change. The processor builds
 Detour topology, replays all room routes with a Rapier capsule, proves every
 room anchor is enclosed in all six directions, sweeps both sides of every
 reviewed wall with both the production Walk capsule and Fly sphere, probes

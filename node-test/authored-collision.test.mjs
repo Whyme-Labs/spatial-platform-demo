@@ -508,6 +508,270 @@ describe("authored walkable collision", () => {
   });
 });
 
+describe("wall thickness and passability semantics", () => {
+  // Existing approved revisions freeze their cooked GLB bytes in R2 and bind
+  // them into authoring hashes. A config with no thickness or passability
+  // fields — the shape every pre-thickness revision has — must therefore cook
+  // byte-identically forever. If an intentional cook change ever breaks this
+  // digest, it must be versioned to apply to new revisions only.
+  it("cooks a legacy-shaped config to byte-identical output", async () => {
+    const config = JSON.parse(await readFile(
+      new URL("../assets/home-scan-structural-v7.json", import.meta.url),
+      "utf8",
+    ));
+    const bytes = buildAuthoredStructuralCollisionGlb(config, {
+      generator: "Spatial Studio authored-structural-collision-v2",
+      source: config.source ?? null,
+    });
+    assert.equal(bytes.byteLength, 14768);
+    assert.equal(
+      createHash("sha256").update(bytes).digest("hex"),
+      "8ba8ea877c7926fee72222ec5efa957708489b3d91765d04dcd6815ecd77f96f",
+    );
+  });
+
+  it("cooks a thick wall as a closed prism on its centreline and freezes the evidence", async () => {
+    const bytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorRectangles: [{ id: "floor", min: [0, 0], max: [6, 4], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [6, 4], elevation: 2.8 }],
+      barrierSegments: [
+        { id: "thin", start: [0, 0], end: [0, 4], minY: 0, maxY: 2.8 },
+        {
+          id: "thick",
+          start: [6, 0],
+          end: [6, 4],
+          minY: 0,
+          maxY: 2.8,
+          thicknessM: 0.3,
+          thicknessProvenance: "operator_reviewed",
+        },
+      ],
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [],
+    });
+    const decoded = await extractCollisionGeometryFromGlb(bytes);
+    assert.deepEqual(decoded.structuralGeometry.barrierSegments, [
+      { id: "thin", start: [0, 0], end: [0, 4], minY: 0, maxY: 2.8 },
+      {
+        id: "thick",
+        start: [6, 0],
+        end: [6, 4],
+        minY: 0,
+        maxY: 2.8,
+        thicknessM: 0.3,
+        thicknessProvenance: "operator_reviewed",
+      },
+    ]);
+    // The prism's faces stand half a thickness either side of x = 6, so the
+    // barrier geometry must reach 5.85 and 6.15 (float32-quantised) and no
+    // further.
+    const barrierXs = decoded.positions
+      .filter((_, index) => index % 3 === 0)
+      .filter((x) => x > 5);
+    assert.ok(Math.abs(Math.min(...barrierXs) - 5.85) < 1e-6);
+    assert.ok(Math.abs(Math.max(...barrierXs) - 6.15) < 1e-6);
+  });
+
+  it("rejects thickness outside the cookable range and unknown provenance", () => {
+    const base = {
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorRectangles: [{ id: "floor", min: [0, 0], max: [4, 4], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [4, 4], elevation: 2.8 }],
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [],
+    };
+    assert.throws(
+      () => buildAuthoredStructuralCollisionGlb({
+        ...base,
+        barrierSegments: [{
+          id: "wall",
+          start: [0, 0],
+          end: [4, 0],
+          minY: 0,
+          maxY: 2.8,
+          thicknessM: 3,
+        }],
+      }),
+      /thickness must be between/,
+    );
+    assert.throws(
+      () => buildAuthoredStructuralCollisionGlb({
+        ...base,
+        barrierSegments: [{
+          id: "wall",
+          start: [0, 0],
+          end: [4, 0],
+          minY: 0,
+          maxY: 2.8,
+          thicknessM: 0.2,
+          thicknessProvenance: "guessed",
+        }],
+      }),
+      /unsupported thickness provenance/,
+    );
+  });
+
+  it("blocks with solid furniture and no-go volumes while decorative furniture stays passable", async () => {
+    const bytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorRectangles: [{ id: "floor", min: [0, 0], max: [8, 6], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [8, 6], elevation: 2.8 }],
+      barrierSegments: [
+        { id: "west", start: [0, 0], end: [0, 6], minY: 0, maxY: 2.8 },
+        { id: "east", start: [8, 0], end: [8, 6], minY: 0, maxY: 2.8 },
+        { id: "north", start: [0, 0], end: [8, 0], minY: 0, maxY: 2.8 },
+        { id: "south", start: [0, 6], end: [8, 6], minY: 0, maxY: 2.8 },
+      ],
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [
+        { id: "rug-sofa", min: [1, 0, 1], max: [2, 1, 2] },
+        { id: "wardrobe", min: [5, 0, 2], max: [6, 2.2, 4], passability: "solid" },
+      ],
+      noGoVolumes: [{ id: "exhibit-keep-out", min: [3, 0, 4.5], max: [4, 2.8, 5.5] }],
+    });
+    const decoded = await extractCollisionGeometryFromGlb(bytes);
+    assert.deepEqual(decoded.collisionSemantics.includedGroups, [
+      "STRUCTURAL_FLOOR",
+      "STRUCTURAL_BARRIER",
+      "SOLID_FURNITURE",
+      "NO_GO_VOLUME",
+    ]);
+    assert.deepEqual(decoded.meshGroups, [
+      "STRUCTURAL_FLOOR",
+      "STRUCTURAL_BARRIER",
+      "FURNITURE",
+      "SOLID_FURNITURE",
+      "NO_GO_VOLUME",
+    ]);
+    assert.equal(decoded.ignoredMeshCount, 1);
+    // Shell (floor + ceiling + 4 walls = 12) plus two blocking boxes at 12
+    // triangles each plus each box's interior anti-island cap (2 triangles);
+    // the decorative sofa contributes nothing.
+    assert.equal(decoded.indices.length / 3, 40);
+    assert.deepEqual(decoded.structuralGeometry.solidFurnitureBoxes, [
+      { id: "wardrobe", min: [5, 0, 2], max: [6, 2.2, 4] },
+    ]);
+    assert.deepEqual(decoded.structuralGeometry.noGoVolumes, [
+      { id: "exhibit-keep-out", min: [3, 0, 4.5], max: [4, 2.8, 5.5] },
+    ]);
+  });
+
+  it("rejects a solid furniture box without a stable id and unknown passability", () => {
+    const base = {
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorRectangles: [{ id: "floor", min: [0, 0], max: [4, 4], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [4, 4], elevation: 2.8 }],
+      barrierSegments: [{ id: "wall", start: [0, 0], end: [4, 0], minY: 0, maxY: 2.8 }],
+      dynamicBarrierBoxes: [],
+    };
+    assert.throws(
+      () => buildAuthoredStructuralCollisionGlb({
+        ...base,
+        furnitureBoxes: [{ min: [1, 0, 1], max: [2, 1, 2], passability: "solid" }],
+      }),
+      /solid furniture box needs a unique stable id/,
+    );
+    assert.throws(
+      () => buildAuthoredStructuralCollisionGlb({
+        ...base,
+        furnitureBoxes: [{ id: "ghost", min: [1, 0, 1], max: [2, 1, 2], passability: "ghost" }],
+      }),
+      /unsupported passability/,
+    );
+  });
+
+  it("proves a shell with a prism wall, solid furniture, and a no-go volume end to end", async () => {
+    const bytes = buildAuthoredStructuralCollisionGlb({
+      schemaVersion: "authored-structural-collision-v2",
+      provenance: "operator_reviewed",
+      floorRectangles: [{ id: "floor", min: [0, 0], max: [8, 6], elevation: 0 }],
+      ceilingRectangles: [{ id: "ceiling", min: [0, 0], max: [8, 6], elevation: 2.8 }],
+      barrierSegments: [
+        {
+          id: "west",
+          start: [0, 0],
+          end: [0, 6],
+          minY: 0,
+          maxY: 2.8,
+          thicknessM: 0.24,
+          thicknessProvenance: "registered_mesh",
+        },
+        { id: "east", start: [8, 0], end: [8, 6], minY: 0, maxY: 2.8 },
+        { id: "north", start: [0, 0], end: [8, 0], minY: 0, maxY: 2.8 },
+        { id: "south", start: [0, 6], end: [8, 6], minY: 0, maxY: 2.8 },
+      ],
+      dynamicBarrierBoxes: [],
+      furnitureBoxes: [
+        { id: "wardrobe", min: [5, 0, 2.5], max: [6, 2.2, 3.5], passability: "solid" },
+      ],
+      noGoVolumes: [{ id: "keep-out", min: [2.5, 0, 4.8], max: [3.5, 2.8, 5.8] }],
+    });
+    const geometry = await extractCollisionGeometryFromGlb(bytes);
+    const artifact = await buildRecastNavigationArtifact({
+      positions: geometry.positions,
+      indices: geometry.indices,
+      collisionSemantics: geometry.collisionSemantics,
+      structuralGeometry: geometry.structuralGeometry,
+      dynamicBarriers: geometry.dynamicBarriers,
+      source: {
+        assetId: "passability-fixture",
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        authoringHash: "c".repeat(64),
+        worldUnit: "metres",
+      },
+      bounds: [[-0.7, -0.25, -0.5], [8.5, 3.1, 6.5]],
+      agent: {
+        radius: 0.2,
+        height: 1.7,
+        eyeHeight: 1.6,
+        maxClimb: 0.2,
+        maxSlopeDegrees: 45,
+        maxSpeed: 1.6,
+        maxAcceleration: 8,
+      },
+      build: {
+        cellSize: 0.1,
+        cellHeight: 0.05,
+        tileSize: 32,
+        minimumRegionSizeVoxels: 2,
+        mergeRegionSizeVoxels: 4,
+      },
+      spawn: { id: "middle", position: [2, 0, 2] },
+      destinations: [{ id: "far-corner", position: [7, 0, 5] }],
+    });
+    assert.equal(artifact.validation.passed, true);
+    assert.ok(artifact.collisionSemantics.includedGroups.includes("SOLID_FURNITURE"));
+    assert.ok(artifact.collisionSemantics.includedGroups.includes("NO_GO_VOLUME"));
+    const structural = await validateStructuralNavigation({
+      artifact,
+      positions: geometry.positions,
+      indices: geometry.indices,
+    });
+    assert.equal(structural.passed, true);
+    assert.equal(structural.boundaryCount, 4);
+    assert.ok(structural.boundaryProbes.every((probe) => probe.blocked));
+    // The navmesh must carve around blocking boxes: no walkable triangle
+    // centroid may fall inside the wardrobe or the no-go footprint.
+    const navVertices = artifact.navMesh.vertices;
+    for (let index = 0; index < artifact.navMesh.indices.length; index += 3) {
+      const centroid = [0, 1, 2].map((axis) =>
+        [0, 1, 2].reduce((sum, point) =>
+          sum + navVertices[artifact.navMesh.indices[index + point]][axis], 0) / 3);
+      const insideWardrobe = centroid[0] > 5 && centroid[0] < 6 &&
+        centroid[2] > 2.5 && centroid[2] < 3.5;
+      const insideKeepOut = centroid[0] > 2.5 && centroid[0] < 3.5 &&
+        centroid[2] > 4.8 && centroid[2] < 5.8;
+      assert.ok(!insideWardrobe, "navmesh crossed solid furniture");
+      assert.ok(!insideKeepOut, "navmesh crossed a no-go volume");
+    }
+  });
+});
+
 function triangleNormalY(positions, [first, second, third]) {
   const a = positions.slice(first * 3, first * 3 + 3);
   const b = positions.slice(second * 3, second * 3 + 3);

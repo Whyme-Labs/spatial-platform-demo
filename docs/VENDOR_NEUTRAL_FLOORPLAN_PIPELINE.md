@@ -96,6 +96,14 @@ a wall classified door/opening or false barrier — the wall should be open or
 gone, yet still stands — blocks; a crossing on a wall added or moved after
 classification blocks until an operator reviews it.
 
+Approved walls cook as full-thickness prisms. Each surviving barrier segment
+freezes its `thicknessM` together with a provenance the Worker derives from
+evidence rather than client declaration: a plan value still equal to the
+machine proposal's is `estimated`, a value the operator changed — or a wall
+the proposal never had — is `operator_reviewed`. The Rapier boundary sweeps
+stand their probe origins half a thickness further out so they approach the
+wall's face instead of starting inside it.
+
 ### Choosing the storeys
 
 Storeys of an occupied building are contiguous in elevation: floor, contents,

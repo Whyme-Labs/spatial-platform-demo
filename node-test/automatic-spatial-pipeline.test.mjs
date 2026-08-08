@@ -392,7 +392,12 @@ describe("automatic multi-level spatial pipeline", () => {
         connectorKey: "connector-001",
         geometry: {
           type: "polygon",
-          points: [[2.5, 0, 0.5], [2.5, 3, 4.8], [3.5, 3, 4.8], [3.5, 0, 0.5]],
+          // The stair foot stands 0.9 from the wall centreline: walls cook as
+          // full-thickness prisms, so a foot at 0.5 would leave only 0.4 of
+          // approach lane past the 0.2-thick wall's face — honestly below the
+          // eroded clearance a 0.25-radius walker needs to reach the first
+          // tread.
+          points: [[2.5, 0, 0.9], [2.5, 3, 4.8], [3.5, 3, 4.8], [3.5, 0, 0.9]],
         },
       }],
     };
@@ -560,6 +565,89 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.deepEqual(lower[0].start, [0, 0]);
     assert.deepEqual(lower[0].end, [6, 0]);
     assert.equal(upper.length, 2);
+  });
+
+  it("threads wall thickness onto barrier segments but never onto fences or thresholds", () => {
+    const report = {
+      levels: [{ levelKey: "level-001", elevationM: 0, ceilingElevationM: 2.5 }],
+      rooms: [roomProposal("room-001", "level-001", 0)],
+      walls: [lineProposal("wall-001", 0, [0, 0], [6, 0])],
+      openings: [],
+      connectors: [],
+    };
+    const config = automaticStructuralCollisionConfig(report);
+    const observed = config.barrierSegments.filter((barrier) =>
+      barrier.id.startsWith("auto-barrier-"));
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].thicknessM, 0.2);
+    assert.equal(observed[0].thicknessProvenance, "estimated");
+    const synthetic = config.barrierSegments.filter((barrier) =>
+      !barrier.id.startsWith("auto-barrier-"));
+    assert.ok(synthetic.length > 0);
+    assert.ok(synthetic.every((barrier) =>
+      barrier.thicknessM === undefined && barrier.thicknessProvenance === undefined));
+  });
+
+  it("marks reviewed thickness as the operator's own assertion only when it changed", () => {
+    const plan = {
+      schemaVersion: "1.0.0",
+      units: "metres",
+      coordinateFrame: "registered_y_up_metric_frame",
+      levels: [{
+        id: "level-001",
+        label: "Level 1",
+        elevationM: 0,
+        ceilingElevationM: 2.5,
+        rooms: [{
+          id: "room-001",
+          label: "Room 1",
+          points: [[0, 0], [6, 0], [6, 6], [0, 6]],
+        }],
+        walls: [
+          {
+            id: "wall-machine",
+            label: "Machine wall",
+            start: [0, 0],
+            end: [6, 0],
+            thicknessM: 0.2,
+            heightM: 3,
+          },
+          {
+            id: "wall-corrected",
+            label: "Corrected wall",
+            start: [6, 0],
+            end: [6, 6],
+            thicknessM: 0.35,
+            heightM: 3,
+          },
+          {
+            id: "wall-added",
+            label: "Operator-added wall",
+            start: [0, 6],
+            end: [0, 0],
+            thicknessM: 0.2,
+            heightM: 3,
+          },
+        ],
+        openings: [],
+      }],
+      connectors: [],
+    };
+    const config = structuralCollisionConfigFromReviewPlan(plan, {
+      proposedWallThicknessByKey: new Map([
+        ["wall-machine", 0.2],
+        ["wall-corrected", 0.2],
+      ]),
+    });
+    const provenanceByWall = new Map(config.barrierSegments
+      .filter((barrier) => barrier.id.startsWith("auto-barrier-"))
+      .map((barrier) => [
+        barrier.id.replace(/^auto-barrier-/, "").replace(/-\d+$/, ""),
+        barrier.thicknessProvenance,
+      ]));
+    assert.equal(provenanceByWall.get("wall-machine"), "estimated");
+    assert.equal(provenanceByWall.get("wall-corrected"), "operator_reviewed");
+    assert.equal(provenanceByWall.get("wall-added"), "operator_reviewed");
   });
 
   it("rings each storey so honestly gapped walls still enclose the scene", async () => {

@@ -43,6 +43,22 @@ export async function extractCollisionGeometryFromGlb(bytes) {
       "DYNAMIC_BARRIER semantics must exactly match the embedded dynamic barrier list",
     );
   }
+  // A declared solid-furniture or no-go group must be backed by the authoring
+  // boxes that name each blocker, and vice versa — a group without its box
+  // list would collide anonymously, a box list without its group would name
+  // geometry that never cooked.
+  for (const [group, boxes] of [
+    ["SOLID_FURNITURE", structuralGeometry?.solidFurnitureBoxes ?? []],
+    ["NO_GO_VOLUME", structuralGeometry?.noGoVolumes ?? []],
+  ]) {
+    if (collisionSemantics &&
+      collisionSemantics.includedGroups.includes(group) !== Boolean(boxes.length)) {
+      throw new NavigationBuildError(
+        "INVALID_COLLISION_SEMANTICS",
+        `${group} semantics must exactly match the frozen authoring box list`,
+      );
+    }
+  }
   const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
   let gltf;
   try {
@@ -257,6 +273,8 @@ function structuralGeometryReview(document) {
   const dynamicBarrierIds = canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier");
   const barrierSegments = canonicalBarrierSegments(value.barrierSegments);
   const connectorSurfaces = canonicalConnectorSurfaces(value.connectorSurfaces ?? []);
+  const solidFurnitureBoxes = canonicalCollisionBoxes(value.solidFurnitureBoxes, "solid furniture");
+  const noGoVolumes = canonicalCollisionBoxes(value.noGoVolumes, "no-go volume");
   return {
     schemaVersion: "authored-structural-collision-v2",
     floorRectangles,
@@ -265,6 +283,8 @@ function structuralGeometryReview(document) {
     ...(ceilingSurfaces.length ? { ceilingSurfaces } : {}),
     barrierSegments,
     ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
+    ...(solidFurnitureBoxes.length ? { solidFurnitureBoxes } : {}),
+    ...(noGoVolumes.length ? { noGoVolumes } : {}),
     dynamicBarrierIds,
   };
 }
@@ -285,6 +305,12 @@ function canonicalIds(values, label) {
   }
   return normalized;
 }
+
+const BARRIER_THICKNESS_PROVENANCES = new Set([
+  "estimated",
+  "operator_reviewed",
+  "registered_mesh",
+]);
 
 function canonicalBarrierSegments(values) {
   if (!Array.isArray(values) || !values.length) {
@@ -309,7 +335,54 @@ function canonicalBarrierSegments(values) {
       );
     }
     ids.add(id);
-    return { id, start, end, minY, maxY };
+    if (value?.thicknessM === undefined || value?.thicknessM === null) {
+      return { id, start, end, minY, maxY };
+    }
+    // A barrier that cooked as a prism must carry the thickness and its
+    // provenance it was cooked with — the Rapier sweep origins below depend on
+    // standing outside the wall's face, not its centreline.
+    const thicknessM = Number(value.thicknessM);
+    if (!Number.isFinite(thicknessM) || thicknessM < 0.01 || thicknessM > 2 ||
+      !BARRIER_THICKNESS_PROVENANCES.has(value?.thicknessProvenance)) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural barrier ${id} has invalid thickness evidence`,
+      );
+    }
+    return {
+      id,
+      start,
+      end,
+      minY,
+      maxY,
+      thicknessM,
+      thicknessProvenance: value.thicknessProvenance,
+    };
+  });
+}
+
+function canonicalCollisionBoxes(values, label) {
+  if (values === undefined || values === null) return [];
+  if (!Array.isArray(values)) {
+    throw new NavigationBuildError(
+      "INVALID_STRUCTURAL_AUTHORING",
+      `Explicit structural ${label} boxes must be an array`,
+    );
+  }
+  const ids = new Set();
+  return values.map((value) => {
+    const id = typeof value?.id === "string" ? value.id.trim() : "";
+    const min = pointTuple(value?.min);
+    const max = pointTuple(value?.max);
+    if (!id || ids.has(id) || !min || !max ||
+      min.some((coordinate, axis) => coordinate >= max[axis])) {
+      throw new NavigationBuildError(
+        "INVALID_STRUCTURAL_AUTHORING",
+        `Explicit structural ${label} box ${id || "unknown"} is invalid`,
+      );
+    }
+    ids.add(id);
+    return { id, min, max };
   });
 }
 
@@ -959,6 +1032,8 @@ function canonicalCollisionSemantics(value) {
       "STRUCTURAL_FLOOR",
       "STRUCTURAL_BARRIER",
       ...(includedGroups.includes("DYNAMIC_BARRIER") ? ["DYNAMIC_BARRIER"] : []),
+      ...(includedGroups.includes("SOLID_FURNITURE") ? ["SOLID_FURNITURE"] : []),
+      ...(includedGroups.includes("NO_GO_VOLUME") ? ["NO_GO_VOLUME"] : []),
     ]) ||
     !sameStringSet(ignoredGroups, ["FURNITURE", "TRIGGER"])
   ) {
@@ -1020,6 +1095,8 @@ function canonicalStructuralGeometry(value) {
   const ceilingRectangles = canonicalHorizontalRectangles(value.ceilingRectangles, "ceiling");
   assertHorizontalSurfaceBoundsMatch(floorSurfaces, floorRectangles, "floor");
   assertHorizontalSurfaceBoundsMatch(ceilingSurfaces, ceilingRectangles, "ceiling");
+  const solidFurnitureBoxes = canonicalCollisionBoxes(value.solidFurnitureBoxes, "solid furniture");
+  const noGoVolumes = canonicalCollisionBoxes(value.noGoVolumes, "no-go volume");
   return {
     schemaVersion: "authored-structural-collision-v2",
     floorRectangles,
@@ -1028,6 +1105,8 @@ function canonicalStructuralGeometry(value) {
     ...(ceilingSurfaces.length ? { ceilingSurfaces } : {}),
     barrierSegments: canonicalBarrierSegments(value.barrierSegments),
     ...(connectorSurfaces.length ? { connectorSurfaces } : {}),
+    ...(solidFurnitureBoxes.length ? { solidFurnitureBoxes } : {}),
+    ...(noGoVolumes.length ? { noGoVolumes } : {}),
     dynamicBarrierIds: canonicalIds(value.dynamicBarrierIds ?? [], "dynamic barrier"),
   };
 }
@@ -1113,6 +1192,8 @@ const COLLISION_GROUPS = new Set([
   "STRUCTURAL_FLOOR",
   "STRUCTURAL_BARRIER",
   "FURNITURE",
+  "SOLID_FURNITURE",
+  "NO_GO_VOLUME",
   "DYNAMIC_BARRIER",
   "TRIGGER",
 ]);

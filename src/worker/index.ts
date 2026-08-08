@@ -10272,7 +10272,26 @@ app.post(
     if (automaticPipeline && revisionId && planHash && parsed.data.plan) {
       let writingCorrectedCollision = false;
       try {
-        const structuralConfig = structuralCollisionConfigFromReviewPlan(parsed.data.plan);
+        // Wall-thickness provenance is derived from evidence, not declared by
+        // the client: a plan value that still matches the machine proposal is
+        // an accepted estimate, anything else is the operator's own assertion.
+        const proposedWalls = proposalReportStored && typeof proposalReportStored === "object"
+          ? Reflect.get(proposalReportStored, "walls")
+          : null;
+        const proposedWallThicknessByKey = new Map<string, number>(
+          (Array.isArray(proposedWalls) ? proposedWalls : []).flatMap((wall) => {
+            if (!wall || typeof wall !== "object") return [];
+            const wallKey = Reflect.get(wall, "wallKey");
+            const thicknessM = Number(Reflect.get(wall, "thicknessM"));
+            return typeof wallKey === "string" && Number.isFinite(thicknessM)
+              ? [[wallKey, thicknessM] as [string, number]]
+              : [];
+          }),
+        );
+        const structuralConfig = structuralCollisionConfigFromReviewPlan(
+          parsed.data.plan,
+          { proposedWallThicknessByKey },
+        );
         const bytes = buildAuthoredStructuralCollisionGlb(structuralConfig, {
           generator: "Spatial Studio reviewed-floorplan-collision-v2",
           source: {

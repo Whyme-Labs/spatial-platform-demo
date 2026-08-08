@@ -952,6 +952,8 @@ export const navigationArtifactSchema = z.object({
       "STRUCTURAL_FLOOR",
       "STRUCTURAL_BARRIER",
       "DYNAMIC_BARRIER",
+      "SOLID_FURNITURE",
+      "NO_GO_VOLUME",
     ])).min(2),
     ignoredGroups: z.array(z.enum(["FURNITURE", "TRIGGER"])).min(1),
   }).optional(),
@@ -991,7 +993,32 @@ export const navigationArtifactSchema = z.object({
       end: z.tuple([z.number().finite(), z.number().finite()]),
       minY: z.number().finite(),
       maxY: z.number().finite(),
+      // Absent thickness means the legacy zero-depth surface ("surface_only");
+      // both fields travel together when the barrier cooked as a prism.
+      thicknessM: z.number().min(0.01).max(2).optional(),
+      thicknessProvenance: z.enum([
+        "estimated",
+        "operator_reviewed",
+        "registered_mesh",
+      ]).optional(),
+    }).superRefine((value, context) => {
+      if ((value.thicknessM === undefined) !== (value.thicknessProvenance === undefined)) {
+        context.addIssue({
+          code: "custom",
+          message: "Barrier thickness and its provenance must be frozen together",
+        });
+      }
     })).min(1).max(5000),
+    solidFurnitureBoxes: z.array(z.object({
+      id: z.string().min(1).max(120),
+      min: point3Schema,
+      max: point3Schema,
+    })).min(1).max(2000).optional(),
+    noGoVolumes: z.array(z.object({
+      id: z.string().min(1).max(120),
+      min: point3Schema,
+      max: point3Schema,
+    })).min(1).max(2000).optional(),
     dynamicBarrierIds: z.array(z.string().min(1).max(120)).max(500),
   }).optional(),
   movementProfiles: z.object({
@@ -1009,6 +1036,8 @@ export const navigationArtifactSchema = z.object({
         "STRUCTURAL_FLOOR",
         "STRUCTURAL_BARRIER",
         "DYNAMIC_BARRIER",
+        "SOLID_FURNITURE",
+        "NO_GO_VOLUME",
       ])).min(2),
       input: z.object({
         forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
@@ -1029,6 +1058,8 @@ export const navigationArtifactSchema = z.object({
         "STRUCTURAL_FLOOR",
         "STRUCTURAL_BARRIER",
         "DYNAMIC_BARRIER",
+        "SOLID_FURNITURE",
+        "NO_GO_VOLUME",
       ])).min(2),
       input: z.object({
         forward: z.tuple([z.literal("KeyW"), z.literal("ArrowUp")]),
@@ -2187,7 +2218,11 @@ const floorplanWallSchema = z.object({
   label: z.string().trim().min(1).max(120),
   start: point2MetricSchema,
   end: point2MetricSchema,
-  thicknessM: z.number().positive().max(10),
+  // A reviewed wall cooks as a full-thickness prism, so the plan bound is the
+  // cookable range — no real wall is thicker than two metres, and anything
+  // wider is a tracing mistake better rejected with a field message here than
+  // failed deep inside the collision cook.
+  thicknessM: z.number().min(0.01).max(2),
   heightM: z.number().positive().max(100),
 });
 const floorplanOpeningSchema = z.object({

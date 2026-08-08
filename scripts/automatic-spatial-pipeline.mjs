@@ -1,6 +1,11 @@
 import { Earcut } from "three/src/extras/Earcut.js";
 import { semanticCellOutline } from "./processing-agent-core.mjs";
 import {
+  BARRIER_THICKNESS_MAXIMUM_M,
+  BARRIER_THICKNESS_MINIMUM_M,
+  BARRIER_THICKNESS_PROVENANCES,
+} from "./authored-collision.mjs";
+import {
   pointInPolygon2,
   pointOnRing2,
   segmentsIntersect2,
@@ -109,6 +114,17 @@ export function automaticStructuralCollisionConfig(report, {
     if (![...start, ...end].every(Number.isFinite)) return [];
     const minY = Number(wall.elevationM);
     const maxY = minY + Number(wall.heightM);
+    // A wall with a usable thickness cooks as a prism; the provenance says
+    // whether the value is the extractor's estimate or an operator's reviewed
+    // correction. Out-of-range thickness falls back to the legacy surface
+    // rather than inventing a plausible number.
+    const thicknessM = Number(wall.thicknessM);
+    const usableThickness = Number.isFinite(thicknessM) &&
+      thicknessM >= BARRIER_THICKNESS_MINIMUM_M &&
+      thicknessM <= BARRIER_THICKNESS_MAXIMUM_M;
+    const thicknessProvenance = BARRIER_THICKNESS_PROVENANCES.has(wall.thicknessProvenance)
+      ? wall.thicknessProvenance
+      : "estimated";
     return splitBarrierAroundOpenings(
       start,
       end,
@@ -122,6 +138,7 @@ export function automaticStructuralCollisionConfig(report, {
         end: segment.end,
         minY,
         maxY,
+        ...(usableThickness ? { thicknessM, thicknessProvenance } : {}),
       }));
   });
   if (!barrierSegments.length) {
@@ -167,13 +184,24 @@ export function automaticStructuralCollisionConfig(report, {
   };
 }
 
-export function structuralCollisionConfigFromReviewPlan(plan) {
+export function structuralCollisionConfigFromReviewPlan(plan, {
+  proposedWallThicknessByKey = new Map(),
+} = {}) {
   const levels = plan.levels.map((level) => ({
     levelKey: level.id,
     label: level.label,
     elevationM: level.elevationM,
     ceilingElevationM: level.ceilingElevationM,
   }));
+  // A wall whose thickness still equals the machine proposal carries an
+  // estimate the operator merely accepted; a changed value — or a wall the
+  // proposal never had — is the operator's own reviewed assertion.
+  const wallThicknessProvenance = (wall) => {
+    const proposed = proposedWallThicknessByKey.get(wall.id);
+    return Number.isFinite(proposed) && Math.abs(proposed - wall.thicknessM) <= 1e-6
+      ? "estimated"
+      : "operator_reviewed";
+  };
   return automaticStructuralCollisionConfig({
     levels,
     rooms: plan.levels.flatMap((level) => level.rooms.map((room) => ({
@@ -190,6 +218,7 @@ export function structuralCollisionConfigFromReviewPlan(plan) {
       elevationM: level.elevationM,
       heightM: wall.heightM,
       thicknessM: wall.thicknessM,
+      thicknessProvenance: wallThicknessProvenance(wall),
       geometry: {
         type: "line",
         points: [

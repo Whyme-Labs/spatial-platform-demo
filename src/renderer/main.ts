@@ -1669,11 +1669,20 @@ function noteMovementResistance(
 // identical from inside, and only the name tells an operator whether the
 // scene or the walker is wrong.
 function blockedMovementMessage(
-  blocker: { id: string; kind: "dynamic" | "structural" } | null,
+  blocker: {
+    id: string;
+    kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
+  } | null,
 ): string {
   if (!blocker) return "Blocked by the walking map · this surface has no reviewed opening";
   if (blocker.kind === "dynamic") {
     return `Blocked by ${blocker.id} · this door is closed`;
+  }
+  if (blocker.kind === "solid_furniture") {
+    return `Blocked by ${blocker.id} · solid furniture`;
+  }
+  if (blocker.kind === "no_go") {
+    return `Blocked by ${blocker.id} · reviewed no-go volume`;
   }
   if (blocker.id.startsWith("auto-capture-ring-")) {
     return "Blocked at the reviewed edge of the captured world";

@@ -99,7 +99,16 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
   const barrierGeometry = emptyGeometry();
   appendGeometry(barrierGeometry, reverseTriangleWinding(triangulateAuthoredSurfaces(ceilings)));
   appendGeometry(barrierGeometry, barrierSegmentsGeometry(barriers));
-  const furniture = boxesGeometry(config?.furnitureBoxes ?? [], "furniture");
+  const { ignoredFurniture, solidFurniture } = partitionFurnitureBoxes(
+    config?.furnitureBoxes ?? [],
+    ids,
+  );
+  const furniture = boxesGeometry(ignoredFurniture, "furniture");
+  const solidFurnitureGeometry = boxesGeometry(solidFurniture, "solid furniture", {
+    blocking: true,
+  });
+  const noGoVolumes = normalizeNoGoVolumes(config?.noGoVolumes ?? [], ids);
+  const noGoGeometry = boxesGeometry(noGoVolumes, "no-go volume", { blocking: true });
   const dynamicBarriers = normalizeDynamicBarriers(config?.dynamicBarrierBoxes ?? [], ids);
   const semantics = {
     schemaVersion: "spatial-structural-collision-v1",
@@ -109,6 +118,8 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
       "STRUCTURAL_FLOOR",
       "STRUCTURAL_BARRIER",
       ...(dynamicBarriers.length ? ["DYNAMIC_BARRIER"] : []),
+      ...(solidFurniture.length ? ["SOLID_FURNITURE"] : []),
+      ...(noGoVolumes.length ? ["NO_GO_VOLUME"] : []),
     ],
     ignoredGroups: ["FURNITURE", "TRIGGER"],
   };
@@ -116,6 +127,10 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
     { group: "STRUCTURAL_FLOOR", geometry: floorGeometry },
     { group: "STRUCTURAL_BARRIER", geometry: barrierGeometry },
     ...(furniture.indices.length ? [{ group: "FURNITURE", geometry: furniture }] : []),
+    ...(solidFurnitureGeometry.indices.length
+      ? [{ group: "SOLID_FURNITURE", geometry: solidFurnitureGeometry }]
+      : []),
+    ...(noGoGeometry.indices.length ? [{ group: "NO_GO_VOLUME", geometry: noGoGeometry }] : []),
   ], {
     generator: metadata.generator ?? "Spatial Studio authored-structural-collision-v2",
     source: metadata.source ?? null,
@@ -129,6 +144,24 @@ function buildExplicitStructuralCollisionGlb(config, metadata) {
       barrierSegments: barriers,
       connectorSurfaces: connectors,
       dynamicBarrierIds: dynamicBarriers.map((barrier) => barrier.id),
+      ...(solidFurniture.length
+        ? {
+            solidFurnitureBoxes: solidFurniture.map((box) => ({
+              id: box.id,
+              min: box.min,
+              max: box.max,
+            })),
+          }
+        : {}),
+      ...(noGoVolumes.length
+        ? {
+            noGoVolumes: noGoVolumes.map((volume) => ({
+              id: volume.id,
+              min: volume.min,
+              max: volume.max,
+            })),
+          }
+        : {}),
     },
     dynamicBarriers,
   });
@@ -316,6 +349,19 @@ function horizontalSurfaceBounds(surfaces) {
   }));
 }
 
+// Where a barrier's cross-section came from. A segment without thickness is a
+// zero-depth surface ("surface_only") and cooks the legacy quad, which keeps
+// every pre-thickness config byte-identical; a segment with thickness cooks a
+// closed prism and must say whether the value is a machine estimate, an
+// operator's reviewed correction, or measured registered geometry.
+export const BARRIER_THICKNESS_PROVENANCES = new Set([
+  "estimated",
+  "operator_reviewed",
+  "registered_mesh",
+]);
+export const BARRIER_THICKNESS_MINIMUM_M = 0.01;
+export const BARRIER_THICKNESS_MAXIMUM_M = 2;
+
 function normalizeBarrierSegments(values, ids) {
   if (!Array.isArray(values)) throw new Error("barrier segments must be an array");
   return values.map((value) => {
@@ -328,7 +374,21 @@ function normalizeBarrierSegments(values, ids) {
       minY >= maxY || Math.hypot(end[0] - start[0], end[1] - start[1]) <= 1e-6) {
       throw new Error(`barrier segment ${id} has invalid geometry`);
     }
-    return { id, start, end, minY, maxY };
+    if (value?.thicknessM === undefined || value?.thicknessM === null) {
+      return { id, start, end, minY, maxY };
+    }
+    const thicknessM = Number(value.thicknessM);
+    if (!Number.isFinite(thicknessM) || thicknessM < BARRIER_THICKNESS_MINIMUM_M ||
+      thicknessM > BARRIER_THICKNESS_MAXIMUM_M) {
+      throw new Error(
+        `barrier segment ${id} thickness must be between ${BARRIER_THICKNESS_MINIMUM_M} and ${BARRIER_THICKNESS_MAXIMUM_M} metres`,
+      );
+    }
+    const thicknessProvenance = value?.thicknessProvenance ?? "operator_reviewed";
+    if (!BARRIER_THICKNESS_PROVENANCES.has(thicknessProvenance)) {
+      throw new Error(`barrier segment ${id} has an unsupported thickness provenance`);
+    }
+    return { id, start, end, minY, maxY, thicknessM, thicknessProvenance };
   });
 }
 
@@ -381,15 +441,72 @@ function reverseTriangleWinding(geometry) {
 function barrierSegmentsGeometry(barriers) {
   const geometry = emptyGeometry();
   for (const barrier of barriers) {
-    appendQuad(
-      geometry,
-      [barrier.start[0], barrier.minY, barrier.start[1]],
-      [barrier.start[0], barrier.maxY, barrier.start[1]],
-      [barrier.end[0], barrier.maxY, barrier.end[1]],
-      [barrier.end[0], barrier.minY, barrier.end[1]],
-    );
+    if (barrier.thicknessM === undefined) {
+      appendQuad(
+        geometry,
+        [barrier.start[0], barrier.minY, barrier.start[1]],
+        [barrier.start[0], barrier.maxY, barrier.start[1]],
+        [barrier.end[0], barrier.maxY, barrier.end[1]],
+        [barrier.end[0], barrier.minY, barrier.end[1]],
+      );
+      continue;
+    }
+    appendBarrierPrism(geometry, barrier);
   }
   return geometry;
+}
+
+// A blocking volume rasterizes as a hollow shell, and the reviewed floor
+// running underneath it would survive inside as an enclosed walkable island
+// that breaks whole-scene reachability. One down-facing diaphragm above the
+// volume's base starves that interior of headroom without touching any
+// geometry a walker can actually reach. The lift must clear the largest
+// permitted agent climb (0.5) — Recast promotes an obstacle within climb
+// height of a walkable floor to a steppable surface — while staying under
+// the smallest permitted agent height so the floor beneath reads as cramped.
+const INTERIOR_CAP_LIFT_M = 0.55;
+
+// A thick wall is a closed box centred on its reviewed centreline: the walker
+// meets the wall's face where the building's face is, not a sheet floating in
+// the middle of the wall's footprint. Every horizontal face winds downward —
+// a wall top is never a reviewed walkable surface, and an up-facing cap at
+// ceiling height would manufacture unreachable roof-strip navmesh islands.
+function appendBarrierPrism(geometry, barrier) {
+  const deltaX = barrier.end[0] - barrier.start[0];
+  const deltaZ = barrier.end[1] - barrier.start[1];
+  const length = Math.hypot(deltaX, deltaZ);
+  const half = barrier.thicknessM / 2;
+  const normalX = (-deltaZ / length) * half;
+  const normalZ = (deltaX / length) * half;
+  const corners = [
+    [barrier.start[0] - normalX, barrier.start[1] - normalZ],
+    [barrier.end[0] - normalX, barrier.end[1] - normalZ],
+    [barrier.end[0] + normalX, barrier.end[1] + normalZ],
+    [barrier.start[0] + normalX, barrier.start[1] + normalZ],
+  ];
+  const at = (corner, y) => [corner[0], y, corner[1]];
+  for (let index = 0; index < corners.length; index += 1) {
+    const from = corners[index];
+    const to = corners[(index + 1) % corners.length];
+    appendQuad(
+      geometry,
+      at(from, barrier.minY),
+      at(from, barrier.maxY),
+      at(to, barrier.maxY),
+      at(to, barrier.minY),
+    );
+  }
+  const capY = barrier.minY +
+    Math.min(INTERIOR_CAP_LIFT_M, (barrier.maxY - barrier.minY) / 2);
+  for (const y of [barrier.maxY, barrier.minY, capY]) {
+    appendQuad(
+      geometry,
+      at(corners[0], y),
+      at(corners[1], y),
+      at(corners[2], y),
+      at(corners[3], y),
+    );
+  }
 }
 
 // Loop-based extent: Math.min(...values) turns every element into a call
@@ -506,7 +623,52 @@ function structuralShellGeometry(volumes) {
   return { floor, barrier };
 }
 
-function boxesGeometry(values, label) {
+// Furniture is non-blocking unless a box explicitly opts into "solid". A solid
+// box physically blocks movement and carves the navmesh, so unlike decorative
+// footprints it needs a stable id the runtime can name when it stops a walker.
+function partitionFurnitureBoxes(values, ids) {
+  if (!Array.isArray(values)) throw new Error("furniture boxes must be an array");
+  const ignoredFurniture = [];
+  const solidFurniture = [];
+  for (const value of values) {
+    const passability = value?.passability ?? "non_blocking";
+    if (passability === "non_blocking") {
+      ignoredFurniture.push(value);
+      continue;
+    }
+    if (passability !== "solid") {
+      throw new Error(
+        `furniture box ${value?.id ?? "unknown"} has an unsupported passability`,
+      );
+    }
+    const id = stableUniqueId(value, "solid furniture box", ids);
+    const min = finitePoint(value?.min);
+    const max = finitePoint(value?.max);
+    if (!min || !max || min.some((coordinate, axis) => coordinate >= max[axis])) {
+      throw new Error(`solid furniture box ${id} has invalid bounds`);
+    }
+    solidFurniture.push({ id, min, max });
+  }
+  return { ignoredFurniture, solidFurniture };
+}
+
+// An intentional no-go volume blocks movement without claiming to be observed
+// structure: a reviewed "do not walk here", honest about being policy rather
+// than geometry.
+function normalizeNoGoVolumes(values, ids) {
+  if (!Array.isArray(values)) throw new Error("no-go volumes must be an array");
+  return values.map((value) => {
+    const id = stableUniqueId(value, "no-go volume", ids);
+    const min = finitePoint(value?.min);
+    const max = finitePoint(value?.max);
+    if (!min || !max || min.some((coordinate, axis) => coordinate >= max[axis])) {
+      throw new Error(`no-go volume ${id} has invalid bounds`);
+    }
+    return { id, min, max };
+  });
+}
+
+function boxesGeometry(values, label, { blocking = false } = {}) {
   const geometry = emptyGeometry();
   if (!Array.isArray(values)) throw new Error(`${label} boxes must be an array`);
   for (const value of values) {
@@ -516,6 +678,18 @@ function boxesGeometry(values, label) {
       throw new Error(`${label} box ${value?.id ?? "unknown"} has invalid bounds`);
     }
     appendBox(geometry, min, max);
+    if (blocking) {
+      // Starve the enclosed floor of headroom so a blocking volume cannot
+      // leave a walkable island inside its own footprint.
+      const capY = min[1] + Math.min(INTERIOR_CAP_LIFT_M, (max[1] - min[1]) / 2);
+      appendQuad(
+        geometry,
+        [min[0], capY, min[2]],
+        [max[0], capY, min[2]],
+        [max[0], capY, max[2]],
+        [min[0], capY, max[2]],
+      );
+    }
   }
   return geometry;
 }
