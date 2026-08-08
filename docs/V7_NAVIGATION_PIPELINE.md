@@ -138,6 +138,14 @@ Three runtime invariants hold at this boundary:
   accepted change, the route planner and the collision world cannot disagree
   about a door's state.
 
+A stopped walker is told which reviewed geometry stopped them. The character
+controller's computed contacts resolve against the artifact's frozen barrier
+segments (dynamic doors resolve by their own collider), so the status names
+the wall — "Blocked by east-wall · reviewed structural wall", "Blocked by
+wall-284 · automatic structural wall", "Blocked by door-to-far-side · this
+door is closed", or "Blocked at the reviewed edge of the captured world" —
+instead of a generic refusal an operator cannot act on.
+
 Desktop controls:
 
 - `WASD` or arrow keys: move;

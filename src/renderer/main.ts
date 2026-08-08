@@ -1658,10 +1658,34 @@ function noteMovementResistance(
   if (blockedMovementSeconds >= BLOCKED_MOVEMENT_HINT_SECONDS && !blockedMovementHintShown) {
     blockedMovementHintShown = true;
     setControlStatus(
-      "Blocked by the walking map · this surface has no reviewed opening",
+      blockedMovementMessage(physicalNavigationRuntime?.lastBlockedBarrier() ?? null),
       "info",
     );
   }
+}
+
+// A stopped walker deserves to know which reviewed geometry stopped them:
+// a real wall, a closed door, and the edge of the captured world all feel
+// identical from inside, and only the name tells an operator whether the
+// scene or the walker is wrong.
+function blockedMovementMessage(
+  blocker: { id: string; kind: "dynamic" | "structural" } | null,
+): string {
+  if (!blocker) return "Blocked by the walking map · this surface has no reviewed opening";
+  if (blocker.kind === "dynamic") {
+    return `Blocked by ${blocker.id} · this door is closed`;
+  }
+  if (blocker.id.startsWith("auto-capture-ring-")) {
+    return "Blocked at the reviewed edge of the captured world";
+  }
+  const automaticWall = blocker.id.match(/^auto-barrier-(.+)-\d+$/);
+  if (automaticWall) {
+    return `Blocked by ${automaticWall[1]} · automatic structural wall`;
+  }
+  if (blocker.id.startsWith("auto-threshold-")) {
+    return `Blocked by ${blocker.id} · reviewed threshold`;
+  }
+  return `Blocked by ${blocker.id} · reviewed structural wall`;
 }
 
 function startFlyAscend(event: PointerEvent): void {

@@ -20,6 +20,18 @@ type DynamicBarrier = {
 };
 
 type MovementVector = { x: number; y: number; z: number };
+type StructuralBarrierSegment = {
+  id: string;
+  start: [number, number];
+  end: [number, number];
+  minY: number;
+  maxY: number;
+};
+type MovementContact = {
+  colliderHandle: number | null;
+  point: Vector3Tuple | null;
+  normal: Vector3Tuple | null;
+};
 
 export type PhysicalMovementMode = "walk" | "fly";
 
@@ -47,6 +59,8 @@ export class PhysicalNavigationRuntime {
   #mode: PhysicalMovementMode;
   #verticalVelocity = 0;
   #controlledFailure: string | null = null;
+  #structuralBarriers: StructuralBarrierSegment[] = [];
+  #lastContacts: MovementContact[] = [];
 
   private constructor(
     world: RAPIER.World,
@@ -129,7 +143,7 @@ export class PhysicalNavigationRuntime {
     const { collider, controller } = createPlayer(world, body, agent, mode);
     const controlledController = createControlledPlayerController(world, agent);
     world.step();
-    return new PhysicalNavigationRuntime(
+    const runtime = new PhysicalNavigationRuntime(
       world,
       body,
       collider,
@@ -140,6 +154,8 @@ export class PhysicalNavigationRuntime {
       recoveryBounds,
       dynamicBarrierColliders,
     );
+    runtime.#structuralBarriers = parseStructuralBarrierSegments(artifact);
+    return runtime;
   }
 
   get mode(): PhysicalMovementMode {
@@ -178,6 +194,69 @@ export class PhysicalNavigationRuntime {
   cameraPosition(): Vector3Tuple {
     const center = this.#body.translation();
     return this.#centerToCamera([center.x, center.y, center.z], this.#mode);
+  }
+
+  #recordMovementContacts(): void {
+    this.#lastContacts = [];
+    for (let index = 0; index < this.#controller.numComputedCollisions(); index += 1) {
+      const collision = this.#controller.computedCollision(index);
+      if (!collision) continue;
+      this.#lastContacts.push({
+        colliderHandle: collision.collider ? collision.collider.handle : null,
+        point: collision.witness1
+          ? [collision.witness1.x, collision.witness1.y, collision.witness1.z]
+          : null,
+        normal: collision.normal1
+          ? [collision.normal1.x, collision.normal1.y, collision.normal1.z]
+          : null,
+      });
+    }
+  }
+
+  // Names the specific reviewed geometry the last movement leaned on, so a
+  // stopped walker can be told which wall stopped them instead of a generic
+  // "blocked by the walking map". Dynamic doors resolve by their own collider
+  // handle; the merged structural trimesh resolves by matching the contact
+  // point against the frozen barrier segments the artifact carries.
+  lastBlockedBarrier(): { id: string; kind: "dynamic" | "structural" } | null {
+    for (const contact of this.#lastContacts) {
+      if (contact.colliderHandle !== null) {
+        for (const [id, barrier] of this.#dynamicBarrierColliders) {
+          if (
+            barrier.collider.handle === contact.colliderHandle &&
+            barrier.collider.isEnabled()
+          ) {
+            return { id, kind: "dynamic" };
+          }
+        }
+      }
+      if (!contact.point || !contact.normal) continue;
+      // A mostly vertical contact normal is the floor or a ceiling, not the
+      // wall the walker is asking about.
+      if (Math.abs(contact.normal[1]) > 0.7) continue;
+      const nearest = this.#nearestBarrierSegment(contact.point);
+      if (nearest) return { id: nearest, kind: "structural" };
+    }
+    return null;
+  }
+
+  #nearestBarrierSegment(point: Vector3Tuple): string | null {
+    let best: string | null = null;
+    let bestDistance = Math.max(0.4, this.#agent.radius * 1.5);
+    for (const barrier of this.#structuralBarriers) {
+      if (point[1] < barrier.minY - 0.1 || point[1] > barrier.maxY + 0.1) continue;
+      const distanceToSegment = pointToSegmentDistance2D(
+        point[0],
+        point[2],
+        barrier.start,
+        barrier.end,
+      );
+      if (distanceToSegment < bestDistance) {
+        bestDistance = distanceToSegment;
+        best = barrier.id;
+      }
+    }
+    return best;
   }
 
   setMode(mode: PhysicalMovementMode, cameraPosition: Vector3Tuple): boolean {
@@ -331,6 +410,7 @@ export class PhysicalNavigationRuntime {
     };
     this.#controller.computeColliderMovement(this.#collider, translation);
     const corrected = this.#controller.computedMovement();
+    this.#recordMovementContacts();
     if (this.#mode === "walk" && this.#controller.computedGrounded()) {
       this.#verticalVelocity = 0;
     }
@@ -495,6 +575,52 @@ function insideBounds(position: Vector3Tuple, [minimum, maximum]: RecoveryBounds
   return position.every((coordinate, axis) =>
     coordinate >= minimum[axis]! && coordinate <= maximum[axis]!
   );
+}
+
+function parseStructuralBarrierSegments(artifact: unknown): StructuralBarrierSegment[] {
+  if (!artifact || typeof artifact !== "object") return [];
+  const structural = Reflect.get(artifact, "structuralGeometry");
+  if (!structural || typeof structural !== "object") return [];
+  const segments = Reflect.get(structural, "barrierSegments");
+  if (!Array.isArray(segments)) return [];
+  const parsed: StructuralBarrierSegment[] = [];
+  for (const segment of segments) {
+    if (!segment || typeof segment !== "object") continue;
+    const id = Reflect.get(segment, "id");
+    const start = Reflect.get(segment, "start");
+    const end = Reflect.get(segment, "end");
+    const minY = Reflect.get(segment, "minY");
+    const maxY = Reflect.get(segment, "maxY");
+    if (
+      typeof id !== "string" || !id ||
+      !Array.isArray(start) || start.length !== 2 || !start.every(Number.isFinite) ||
+      !Array.isArray(end) || end.length !== 2 || !end.every(Number.isFinite) ||
+      !Number.isFinite(minY) || !Number.isFinite(maxY)
+    ) continue;
+    parsed.push({
+      id,
+      start: [Number(start[0]), Number(start[1])],
+      end: [Number(end[0]), Number(end[1])],
+      minY: Number(minY),
+      maxY: Number(maxY),
+    });
+  }
+  return parsed;
+}
+
+function pointToSegmentDistance2D(
+  x: number,
+  z: number,
+  start: [number, number],
+  end: [number, number],
+): number {
+  const deltaX = end[0] - start[0];
+  const deltaZ = end[1] - start[1];
+  const lengthSquared = deltaX * deltaX + deltaZ * deltaZ;
+  const t = lengthSquared > 0
+    ? Math.max(0, Math.min(1, ((x - start[0]) * deltaX + (z - start[1]) * deltaZ) / lengthSquared))
+    : 0;
+  return Math.hypot(x - (start[0] + deltaX * t), z - (start[1] + deltaZ * t));
 }
 
 function createPlayer(

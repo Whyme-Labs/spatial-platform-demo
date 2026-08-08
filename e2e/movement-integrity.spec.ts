@@ -123,6 +123,25 @@ test("a dynamic door refuses to close on a player standing in it", async ({ page
   });
 });
 
+test("a walker stopped by a closed door is told which door", async ({ page }) => {
+  const fixture = await buildFixture();
+  await mountFixture(page, fixture, { sendRuntime: true });
+
+  await expect(setDynamicBarrier(page, "door-to-far-side", true)).resolves.toMatchObject({
+    accepted: true,
+    active: true,
+  });
+  await page.frameLocator("#renderer").locator("#sparkCanvas").focus();
+  await page.keyboard.down("ShiftLeft");
+  await page.keyboard.down("ArrowUp");
+  await expect(page.frameLocator("#renderer").locator("#controlStatus")).toHaveText(
+    "Blocked by door-to-far-side · this door is closed",
+    { timeout: 8_000 },
+  );
+  await page.keyboard.up("ArrowUp");
+  await page.keyboard.up("ShiftLeft");
+});
+
 async function buildFixture(): Promise<{
   collision: Uint8Array;
   navigationArtifact: Record<string, unknown> & { navMesh: unknown };

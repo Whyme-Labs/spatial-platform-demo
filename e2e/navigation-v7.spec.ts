@@ -60,11 +60,12 @@ test("v7 ignores furniture while Walk and Fly remain inside the structural shell
   const stillAgainstWall = await captureCamera(page);
   expect(stillAgainstWall.position[0] - againstWall.position[0]).toBeLessThan(0.08);
 
-  // Leaning on a reviewed wall has to say so: the capture can show a door the
-  // shell never opened, and silent refusal reads as broken input. Approach it
-  // off-perpendicular so the capsule slides along the surface — raw
-  // displacement keeps changing there, so only progress along the requested
-  // heading distinguishes a slide from real travel.
+  // Leaning on a reviewed wall has to say so — and name the wall: the capture
+  // can show a door the shell never opened, and a generic refusal cannot tell
+  // an operator which barrier to inspect. Approach it off-perpendicular so
+  // the capsule slides along the surface — raw displacement keeps changing
+  // there, so only progress along the requested heading distinguishes a
+  // slide from real travel.
   const slidingApproach = await setCamera(page, [7.2, 1.6, 2.4]);
   expect(slidingApproach.accepted).toBe(true);
   await page.keyboard.down("ArrowLeft");
@@ -74,7 +75,7 @@ test("v7 ignores furniture while Walk and Fly remain inside the structural shell
   await page.keyboard.down("ArrowUp");
   const slidStart = await captureCamera(page);
   await expect(renderer.locator("#controlStatus")).toHaveText(
-    "Blocked by the walking map · this surface has no reviewed opening",
+    "Blocked by east-wall · reviewed structural wall",
     { timeout: 6_000 },
   );
   const slidEnd = await captureCamera(page);
