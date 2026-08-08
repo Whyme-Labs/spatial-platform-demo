@@ -1166,10 +1166,15 @@ export function proposalCaptureAgreement(signature, report) {
     const barriers = level.walls.flatMap((wall) => {
       const [start, end] = wall.geometry?.points ?? [];
       if (!Array.isArray(start) || !Array.isArray(end)) return [];
+      const thicknessM = Number(wall.thicknessM);
       return [{
         id: wall.wallKey,
         start: [start[0], start[2]],
         end: [end[0], end[2]],
+        // The comparator reads support at the wall's faces when a thickness
+        // is known; a thick wall's scanned skin lies outside any honest
+        // centreline radius.
+        ...(Number.isFinite(thicknessM) && thicknessM > 0 ? { thicknessM } : {}),
       }];
     });
     if (!barriers.length) continue;
@@ -1189,9 +1194,13 @@ export function proposalCaptureAgreement(signature, report) {
     };
     capturePointsInBand += comparison.capturePointsInBand;
     inspectedBarrierCount += comparison.inspectedBarrierCount;
+    // Findings carry their storey elevation as well as the level key: stacked
+    // storeys share X/Z footprints, and the final-agreement reconciliation
+    // needs elevation to keep a classification from replaying one floor up.
     findings.push(...comparison.findings.map((finding) => ({
       ...finding,
       levelKey: level.levelKey,
+      elevationM: level.elevationM,
     })));
   }
   const rank = {

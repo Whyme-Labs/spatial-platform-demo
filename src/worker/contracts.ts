@@ -804,6 +804,15 @@ export const navigationBuildSchema = z.object({
 export const navigationBuildReviewSchema = z.object({
   decision: z.enum(["approve", "reject"]),
   note: z.string().trim().min(10).max(2000),
+  // Manual approval must clear the same final capture-agreement gate as
+  // automatic acceptance. A crossing the capture only revealed on the FINAL
+  // corrected barriers has no proposal-time classification to inherit, so the
+  // approving operator states one here, per finding — a generic approval note
+  // is never an implicit override. (z.lazy: the resolution schema is declared
+  // with the rest of the capture-agreement contracts later in this module.)
+  finalCaptureAgreementResolutions: z.array(
+    z.lazy(() => captureAgreementResolutionSchema),
+  ).max(2_000).optional(),
 });
 
 const frozenNavigationAssetSchema = <Format extends "json" | "bin">(format: Format) =>
@@ -2072,6 +2081,11 @@ export const captureAgreementClassificationSchema = z.enum([
 export const captureAgreementResolutionSchema = z.object({
   barrierId: floorplanKeySchema,
   levelKey: floorplanKeySchema.nullable().optional(),
+  // The storey elevation of the classified span. Stacked storeys share X/Z
+  // footprints, so a classification without its elevation could be replayed
+  // onto the same wall one floor up; resolutions frozen before this field
+  // existed match without it, but new ones always carry it.
+  elevationM: boundedMetricSchema.optional(),
   from: point2MetricSchema,
   to: point2MetricSchema,
   classification: captureAgreementClassificationSchema,
@@ -2363,24 +2377,123 @@ const WALL_AFFIRMING_CLASSIFICATIONS = new Set([
 ]);
 
 // Operator edits renumber and split walls, so a final crossing matches its
-// frozen resolution by where it is, not what it is called.
-const FINAL_AGREEMENT_MATCH_TOLERANCE_M = 1.0;
+// frozen resolution by geometry, not by name. The match must be strict enough
+// that one classification cannot leak onto a different wall: stacked storeys
+// share X/Z footprints (elevation gate), corners share midpoints (orientation
+// gate), and nearby parallel walls sit within any lateral tolerance
+// (one-to-one assignment). A resolution may cover several final crossings
+// only when splitting left them all inside the span the operator classified.
+const FINAL_MATCH_ELEVATION_TOLERANCE_M = 1.0;
+const FINAL_MATCH_ANGLE_TOLERANCE_RADIANS = Math.PI / 6;
+const FINAL_MATCH_LATERAL_TOLERANCE_M = 1.0;
+const FINAL_MATCH_MINIMUM_OVERLAP_M = 0.2;
+const FINAL_MATCH_MINIMUM_OVERLAP_RATIO = 0.3;
+const FINAL_MATCH_CONTAINMENT_SLACK_M = 0.5;
+// Reuse of a consumed resolution is only for the halves of a split wall,
+// which lie exactly on the parent's line — a parallel wall 0.8 m away also
+// projects "inside" longitudinally, so containment demands the crossing sit
+// tight on the classified run laterally as well.
+const FINAL_MATCH_CONTAINMENT_LATERAL_M = 0.3;
 
-function spanMidpoint(from: readonly [number, number], to: readonly [number, number]):
-  [number, number] {
-  return [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+type AgreementSpan = {
+  elevationM?: number | undefined;
+  from: readonly [number, number];
+  to: readonly [number, number];
+};
+
+type SpanMatchGeometry = {
+  angleRadians: number;
+  lateralM: number;
+  overlapM: number;
+  overlapRatio: number;
+  elevationErrorM: number | null;
+  containedInResolution: boolean;
+};
+
+// Measures a final crossing against a classified span in the resolution's
+// own frame: the crossing's endpoints are projected onto the resolution line
+// to get longitudinal overlap and containment, and their perpendicular
+// offsets give the lateral separation. Endpoint order never matters.
+function spanMatchGeometry(
+  finding: AgreementSpan,
+  resolution: AgreementSpan,
+): SpanMatchGeometry | null {
+  const axis = [
+    resolution.to[0] - resolution.from[0],
+    resolution.to[1] - resolution.from[1],
+  ];
+  const axisLength = Math.hypot(axis[0]!, axis[1]!);
+  const findingVector = [
+    finding.to[0] - finding.from[0],
+    finding.to[1] - finding.from[1],
+  ];
+  const findingLength = Math.hypot(findingVector[0]!, findingVector[1]!);
+  if (axisLength <= 1e-6 || findingLength <= 1e-6) return null;
+  const cosine = Math.abs(
+    (axis[0]! * findingVector[0]! + axis[1]! * findingVector[1]!) /
+      (axisLength * findingLength),
+  );
+  const angleRadians = Math.acos(Math.min(1, cosine));
+  const project = (point: readonly [number, number]) => ({
+    along: ((point[0] - resolution.from[0]) * axis[0]! +
+      (point[1] - resolution.from[1]) * axis[1]!) / axisLength,
+    lateral: Math.abs(
+      ((point[0] - resolution.from[0]) * -axis[1]! +
+        (point[1] - resolution.from[1]) * axis[0]!) / axisLength,
+    ),
+  });
+  const first = project(finding.from);
+  const second = project(finding.to);
+  const low = Math.min(first.along, second.along);
+  const high = Math.max(first.along, second.along);
+  const overlapM = Math.min(high, axisLength) - Math.max(low, 0);
+  const shorterSpanM = Math.min(axisLength, findingLength);
+  const elevationErrorM =
+    finding.elevationM !== undefined && resolution.elevationM !== undefined
+      ? Math.abs(finding.elevationM - resolution.elevationM)
+      : null;
+  return {
+    angleRadians,
+    lateralM: Math.max(first.lateral, second.lateral),
+    overlapM: Math.max(0, overlapM),
+    overlapRatio: shorterSpanM > 1e-6 ? Math.max(0, overlapM) / shorterSpanM : 0,
+    elevationErrorM,
+    containedInResolution: low >= -FINAL_MATCH_CONTAINMENT_SLACK_M &&
+      high <= axisLength + FINAL_MATCH_CONTAINMENT_SLACK_M &&
+      Math.max(first.lateral, second.lateral) <= FINAL_MATCH_CONTAINMENT_LATERAL_M,
+  };
+}
+
+function spanMatchQualifies(geometry: SpanMatchGeometry): boolean {
+  return (geometry.elevationErrorM === null ||
+    geometry.elevationErrorM <= FINAL_MATCH_ELEVATION_TOLERANCE_M) &&
+    geometry.angleRadians <= FINAL_MATCH_ANGLE_TOLERANCE_RADIANS &&
+    geometry.lateralM <= FINAL_MATCH_LATERAL_TOLERANCE_M &&
+    (geometry.overlapM >= FINAL_MATCH_MINIMUM_OVERLAP_M ||
+      geometry.overlapRatio >= FINAL_MATCH_MINIMUM_OVERLAP_RATIO);
+}
+
+function spanMatchScore(geometry: SpanMatchGeometry): number {
+  return (geometry.elevationErrorM ?? 0) + geometry.lateralM +
+    geometry.angleRadians + (1 - Math.min(1, geometry.overlapRatio));
 }
 
 // Reconciles the navigation build's final capture agreement — computed on the
 // exact barrier set the collision GLB was cooked from — with the operator
-// classifications frozen at approval. Every surviving crossing must sit near
-// a wall-affirming classification; a door/false-barrier classification over a
-// still-standing wall, or a crossing with no classification at all (a wall
-// added or moved during review), blocks automatic acceptance.
+// classifications frozen at approval, plus any explicit resolutions supplied
+// by the approving operator for final-only crossings. Matching is a
+// one-to-one assignment on qualified pairs, so one classification can never
+// silently satisfy a second wall; the only permitted reuse is a crossing
+// whose span lies inside an already-consumed resolution's own classified run
+// (operator edits split walls without changing what was reviewed). Every
+// surviving crossing must resolve to a wall-affirming classification; a
+// door/false-barrier classification over a still-standing wall, or a crossing
+// with no classification at all, blocks acceptance.
 export function finalCaptureAgreementBlockReason(input: {
   captureExpected: boolean;
   finalAgreement: unknown;
   captureAgreementJson: string | null;
+  additionalResolutions?: readonly CaptureAgreementResolution[];
 }): string | null {
   if (!input.captureExpected) return null;
   const parsedFinal = floorplanCaptureAgreementSchema.safeParse(input.finalAgreement);
@@ -2391,17 +2504,45 @@ export function finalCaptureAgreementBlockReason(input: {
   if (frozen === null) {
     return "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.";
   }
-  const resolutions = frozen?.resolutions ?? [];
+  const resolutions = [
+    ...(frozen?.resolutions ?? []),
+    ...(input.additionalResolutions ?? []),
+  ];
+  const crossings = parsedFinal.data.findings
+    .filter((finding) => finding.kind === "barrier_crosses_open_capture");
+  const candidates: Array<{
+    crossingIndex: number;
+    resolutionIndex: number;
+    geometry: SpanMatchGeometry;
+  }> = [];
+  for (const [crossingIndex, finding] of crossings.entries()) {
+    for (const [resolutionIndex, resolution] of resolutions.entries()) {
+      const geometry = spanMatchGeometry(finding, resolution);
+      if (geometry && spanMatchQualifies(geometry)) {
+        candidates.push({ crossingIndex, resolutionIndex, geometry });
+      }
+    }
+  }
+  candidates.sort((left, right) =>
+    spanMatchScore(left.geometry) - spanMatchScore(right.geometry)
+  );
+  const matchedByCrossing = new Map<number, number>();
+  const consumedResolutions = new Set<number>();
+  for (const candidate of candidates) {
+    if (matchedByCrossing.has(candidate.crossingIndex) ||
+      consumedResolutions.has(candidate.resolutionIndex)) continue;
+    matchedByCrossing.set(candidate.crossingIndex, candidate.resolutionIndex);
+    consumedResolutions.add(candidate.resolutionIndex);
+  }
+  for (const candidate of candidates) {
+    if (matchedByCrossing.has(candidate.crossingIndex)) continue;
+    if (!candidate.geometry.containedInResolution) continue;
+    matchedByCrossing.set(candidate.crossingIndex, candidate.resolutionIndex);
+  }
   const failures: string[] = [];
-  for (const finding of parsedFinal.data.findings) {
-    if (finding.kind !== "barrier_crosses_open_capture") continue;
-    const midpoint = spanMidpoint(finding.from, finding.to);
-    const matched = resolutions.find((resolution) => {
-      const resolved = spanMidpoint(resolution.from, resolution.to);
-      return Math.hypot(resolved[0] - midpoint[0], resolved[1] - midpoint[1]) <=
-        FINAL_AGREEMENT_MATCH_TOLERANCE_M;
-    });
-    if (!matched) {
+  for (const [crossingIndex, finding] of crossings.entries()) {
+    const resolutionIndex = matchedByCrossing.get(crossingIndex);
+    if (resolutionIndex === undefined) {
       failures.push(
         `${finding.barrierId} crosses open capture near [${finding.from.join(", ")}]→[${
           finding.to.join(", ")
@@ -2409,6 +2550,7 @@ export function finalCaptureAgreementBlockReason(input: {
       );
       continue;
     }
+    const matched = resolutions[resolutionIndex]!;
     if (!WALL_AFFIRMING_CLASSIFICATIONS.has(matched.classification)) {
       failures.push(
         `${finding.barrierId} is classified ${matched.classification} yet still stands across open capture`,
@@ -2419,6 +2561,30 @@ export function finalCaptureAgreementBlockReason(input: {
     return `Automatic acceptance blocked: ${failures.slice(0, 3).join("; ")}.`;
   }
   return null;
+}
+
+// Approving with explicit final-agreement resolutions must never record more
+// review than happened: every supplied resolution has to qualify against at
+// least one actual final crossing, or the approval is rejected.
+export function unmatchedFinalAgreementResolutions(
+  finalAgreement: unknown,
+  resolutions: readonly CaptureAgreementResolution[],
+): string[] {
+  const parsedFinal = floorplanCaptureAgreementSchema.safeParse(finalAgreement);
+  const crossings = parsedFinal.success
+    ? parsedFinal.data.findings
+      .filter((finding) => finding.kind === "barrier_crosses_open_capture")
+    : [];
+  return resolutions
+    .filter((resolution) =>
+      !crossings.some((finding) => {
+        const geometry = spanMatchGeometry(finding, resolution);
+        return geometry !== null && spanMatchQualifies(geometry);
+      })
+    )
+    .map((resolution) =>
+      `${resolution.barrierId}|${resolution.from.join(",")}|${resolution.to.join(",")}`
+    );
 }
 
 // A crossing finding matches its resolution by identity, not array position:

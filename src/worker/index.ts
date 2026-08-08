@@ -72,6 +72,7 @@ import {
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
   finalCaptureAgreementBlockReason,
+  unmatchedFinalAgreementResolutions,
   floorplanCaptureAgreementSchema,
   frozenCaptureAgreementBlockReason,
   parseFrozenCaptureAgreement,
@@ -8780,12 +8781,75 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
         "Navigation artifact traversal payload does not match the Worker-frozen build parameters.",
       );
     }
+    // Manual approval clears the exact final capture-agreement gate that
+    // automatic acceptance enforces — an operator's Approve button is not a
+    // bypass. A crossing the capture only revealed on the final corrected
+    // barriers has no proposal classification to inherit, so the operator
+    // resolves it per finding in this very request; each supplied resolution
+    // must also qualify against a real final crossing, so the receipt can
+    // never claim more review than happened.
+    const manualResolutions = parsed.data.finalCaptureAgreementResolutions ?? [];
+    const captureExpected = Boolean(
+      automaticLayout && typeof automaticLayout === "object" &&
+        Reflect.get(automaticLayout, "capture") &&
+        typeof Reflect.get(automaticLayout, "capture") === "object",
+    );
+    if (!captureExpected && manualResolutions.length) {
+      return unprocessable(context, {
+        finalCaptureAgreementResolutions: [
+          "This build pins no capture, so there are no final crossings to resolve",
+        ],
+      });
+    }
+    if (captureExpected) {
+      const revisionId = automaticLayout && typeof automaticLayout === "object"
+        ? Reflect.get(automaticLayout, "floorplanRevisionId")
+        : null;
+      const agreementRevision = typeof revisionId === "string"
+        ? await context.env.DB.prepare(`
+          SELECT capture_agreement_json FROM floorplan_revisions
+          WHERE id = ? AND project_id = ? AND organisation_id = ?
+        `).bind(
+          revisionId,
+          context.req.param("projectId"),
+          auth.organisationId,
+        ).first<{ capture_agreement_json: string | null }>()
+        : null;
+      const unmatched = unmatchedFinalAgreementResolutions(
+        artifact.data.finalCaptureAgreement,
+        manualResolutions,
+      );
+      if (unmatched.length) {
+        return unprocessable(context, {
+          finalCaptureAgreementResolutions: unmatched.map((identity) =>
+            `Resolution ${identity} matches no crossing in this build's final capture agreement`
+          ),
+        });
+      }
+      const finalBlock = finalCaptureAgreementBlockReason({
+        captureExpected,
+        finalAgreement: artifact.data.finalCaptureAgreement,
+        captureAgreementJson: agreementRevision?.capture_agreement_json ?? null,
+        additionalResolutions: manualResolutions,
+      });
+      if (finalBlock) {
+        return unprocessable(context, {
+          finalCaptureAgreementResolutions: [
+            finalBlock.replace(/^Automatic acceptance blocked/, "Approval blocked"),
+          ],
+        });
+      }
+    }
   }
   const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
+  const manualAgreementJson = parsed.data.decision === "approve" &&
+      parsed.data.finalCaptureAgreementResolutions?.length
+    ? JSON.stringify({ resolutions: parsed.data.finalCaptureAgreementResolutions })
+    : null;
   const build = await context.env.DB.prepare(`
     UPDATE scene_navigation_builds
     SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = datetime('now'),
-      updated_at = datetime('now')
+      final_capture_agreement_json = ?, updated_at = datetime('now')
     WHERE id = ? AND project_id = ? AND organisation_id = ?
       AND status = 'READY_FOR_REVIEW' AND artifact_json IS NOT NULL
     RETURNING id, status, reviewed_at
@@ -8793,6 +8857,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
     status,
     auth.userId,
     parsed.data.note,
+    manualAgreementJson,
     context.req.param("buildId"),
     context.req.param("projectId"),
     auth.organisationId,

@@ -1471,6 +1471,7 @@ type CaptureAgreementFinding = {
   kind: string;
   barrierId: string;
   levelKey?: string | null;
+  elevationM?: number;
   spanCount: number;
   metres: number;
   from: [number, number];
@@ -7141,11 +7142,13 @@ function renderSpatial(): void {
           "Reviewed whole-scene reachability and capsule-collision evidence.",
         );
         if (note === null) return;
+        const finalResolutions = collectFinalAgreementResolutions(build.artifact_json);
+        if (finalResolutions === null) return;
         void runAction({
           key: `approve-navigation-build:${build.id}`,
           trigger: approve,
           pendingLabel: "Approving…",
-        }, () => reviewNavigationBuild(build.id, "approve", note));
+        }, () => reviewNavigationBuild(build.id, "approve", note, finalResolutions));
       });
       const reject = element("button", "danger-button", "Reject");
       reject.addEventListener("click", () => {
@@ -7936,6 +7939,10 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
   const captureAgreementResolutions = crossings.map((finding) => ({
     barrierId: finding.barrierId,
     ...(finding.levelKey ? { levelKey: finding.levelKey } : {}),
+    // The elevation pins the classification to its storey: stacked floors
+    // share X/Z footprints and a resolution without height could otherwise
+    // satisfy the same wall one level up.
+    ...(typeof finding.elevationM === "number" ? { elevationM: finding.elevationM } : {}),
     from: finding.from,
     to: finding.to,
     classification: workspace.captureAgreementClassifications.get(
@@ -9508,16 +9515,80 @@ async function queueNavigationBuild(form: FormData): Promise<void> {
   await loadSpatialWorkspace(project.id);
 }
 
+type FinalAgreementResolution = {
+  barrierId: string;
+  elevationM?: number;
+  from: [number, number];
+  to: [number, number];
+  classification: string;
+  note?: string;
+};
+
+// The build's own final capture agreement can carry crossings the floor-plan
+// review never saw — walls added or moved during correction. Approval walks
+// each one so the operator states what the wall is; an empty answer defers to
+// the classification frozen with the revision, and the Worker decides whether
+// that actually covers the span.
+function collectFinalAgreementResolutions(
+  artifactJson: string | null,
+): FinalAgreementResolution[] | null {
+  if (!artifactJson) return [];
+  let crossings: CaptureAgreementFinding[] = [];
+  try {
+    const artifact = JSON.parse(artifactJson) as {
+      finalCaptureAgreement?: { findings?: CaptureAgreementFinding[] } | null;
+    };
+    crossings = (artifact.finalCaptureAgreement?.findings ?? []).filter((finding) =>
+      finding && finding.kind === "barrier_crosses_open_capture" &&
+      typeof finding.barrierId === "string" &&
+      Array.isArray(finding.from) && Array.isArray(finding.to)
+    );
+  } catch {
+    return [];
+  }
+  const resolutions: FinalAgreementResolution[] = [];
+  const options = CAPTURE_AGREEMENT_CLASSIFICATIONS.map(([value]) => value).join(" / ");
+  for (const finding of crossings) {
+    const answer = window.prompt(
+      `Final capture check: ${finding.barrierId} still crosses open capture near [${
+        finding.from.join(", ")
+      }]→[${finding.to.join(", ")}]${
+        typeof finding.elevationM === "number" ? ` at ${finding.elevationM} m` : ""
+      }.\nClassify it (${options}), or leave empty if the floor-plan review already classified this span.`,
+      "",
+    );
+    if (answer === null) return null;
+    const classification = answer.trim();
+    if (!classification) continue;
+    resolutions.push({
+      barrierId: finding.barrierId,
+      ...(typeof finding.elevationM === "number" ? { elevationM: finding.elevationM } : {}),
+      from: finding.from,
+      to: finding.to,
+      classification,
+      note: "Classified during navigation build approval in Spatial Studio.",
+    });
+  }
+  return resolutions;
+}
+
 async function reviewNavigationBuild(
   buildId: string,
   decision: "approve" | "reject",
   note: string,
+  finalCaptureAgreementResolutions: FinalAgreementResolution[] = [],
 ): Promise<void> {
   const project = state.selected?.project;
   if (!project) throw new Error("Open a project first.");
   await api(`/api/projects/${project.id}/spatial/navigation-builds/${buildId}/review`, {
     method: "POST",
-    body: JSON.stringify({ decision, note }),
+    body: JSON.stringify({
+      decision,
+      note,
+      ...(finalCaptureAgreementResolutions.length
+        ? { finalCaptureAgreementResolutions }
+        : {}),
+    }),
   });
   showToast(decision === "approve" ? "Walking map approved" : "Walking map rejected");
   await loadSpatialWorkspace(project.id);

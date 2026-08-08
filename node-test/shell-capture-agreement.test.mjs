@@ -103,4 +103,77 @@ describe("shell capture agreement", () => {
     assert.equal(report.schemaVersion, "shell-capture-agreement-v1");
     assert.ok(report.limitations.some((line) => /glass|mirror|occlusion/i.test(line)));
   });
+
+  it("reads a thick wall's support at its faces, keeping the crossing release-blocking", () => {
+    // A 0.8 m wall's scanned faces sit 0.4 m from the recorded centreline —
+    // outside the 0.25 m centreline radius. A comparator blind to the faces
+    // sees "no support anywhere" and demotes the doorway crossing to the
+    // informational barrier_without_any_capture, evading the mandatory gate.
+    const faceOffset = 0.4;
+    const points = [
+      ...wallPoints([0, faceOffset], [6, faceOffset], { gapFrom: 2.5, gapTo: 3.7 }),
+      ...wallPoints([0, -faceOffset], [6, -faceOffset], { gapFrom: 2.5, gapTo: 3.7 }),
+    ];
+    const thick = compareShellToCapture({
+      authoring: {
+        barrierSegments: [{
+          id: "thick-wall",
+          start: [0, 0],
+          end: [6, 0],
+          minY: 0.15,
+          maxY: 3,
+          thicknessM: 0.8,
+        }],
+      },
+      points,
+    });
+    const crossings = thick.findings.filter((f) => f.kind === "barrier_crosses_open_capture");
+    assert.equal(crossings.length, 1);
+    assert.equal(crossings[0].barrierId, "thick-wall");
+    assert.ok(crossings[0].from[0] >= 2.3 && crossings[0].to[0] <= 3.9);
+
+    // The same geometry without its thickness is the failure the fix removes:
+    // the centreline radius sees nothing and the crossing degrades to the
+    // informational kind.
+    const blind = compareShellToCapture({
+      authoring: {
+        barrierSegments: [{ id: "thick-wall", start: [0, 0], end: [6, 0], minY: 0.15, maxY: 3 }],
+      },
+      points,
+    });
+    assert.equal(
+      blind.findings.filter((f) => f.kind === "barrier_crosses_open_capture").length,
+      0,
+    );
+    assert.ok(blind.findings.some((f) => f.kind === "barrier_without_any_capture"));
+  });
+
+  it("does not let one scanned patch vouch for a doorway further along a thick wall", () => {
+    // Support exists only on the first two metres of the wall's faces; the
+    // rest is open. Per-span longitudinal evaluation must keep the empty run
+    // reported instead of smearing the patch along the wall.
+    const faceOffset = 0.3;
+    const points = [
+      ...wallPoints([0, faceOffset], [2, faceOffset]),
+      ...wallPoints([0, -faceOffset], [2, -faceOffset]),
+      ...wallPoints([5.4, faceOffset], [6, faceOffset]),
+      ...wallPoints([5.4, -faceOffset], [6, -faceOffset]),
+    ];
+    const report = compareShellToCapture({
+      authoring: {
+        barrierSegments: [{
+          id: "patched-wall",
+          start: [0, 0],
+          end: [6, 0],
+          minY: 0.15,
+          maxY: 3,
+          thicknessM: 0.6,
+        }],
+      },
+      points,
+    });
+    const crossings = report.findings.filter((f) => f.kind === "barrier_crosses_open_capture");
+    assert.equal(crossings.length, 1);
+    assert.ok(crossings[0].metres >= 2.5, `expected the long open run, got ${crossings[0].metres}`);
+  });
 });

@@ -85,6 +85,40 @@ function pointsNear(index, x, z, radius, minHeight, maxHeight) {
   return count;
 }
 
+// Support for a thick wall lives at its scanned FACES, half a thickness from
+// the centreline the barrier records — a 0.8 m wall's faces sit outside any
+// centreline radius that stays honest for thin walls, and a comparator blind
+// to them would misread the wall as standing in empty space, demoting a
+// release-blocking crossing to an informational finding. A point counts as
+// support when it falls inside the wall's own volume or within the noise
+// tolerance of either face, and only within its own longitudinal span so one
+// scanned patch cannot vouch for a doorway-sized run further along the wall.
+function pointsNearFace(index, x, z, direction, halfThickness, settings) {
+  const { buckets, cell } = index;
+  const lateralReach = halfThickness + settings.radiusMetres;
+  const alongReach = settings.radiusMetres;
+  const gather = Math.hypot(lateralReach, alongReach);
+  let count = 0;
+  const minBucketY = Math.floor(settings.minHeight / cell);
+  const maxBucketY = Math.floor(settings.maxHeight / cell);
+  for (let bx = Math.floor((x - gather) / cell); bx <= Math.floor((x + gather) / cell); bx += 1) {
+    for (let bz = Math.floor((z - gather) / cell); bz <= Math.floor((z + gather) / cell); bz += 1) {
+      for (let by = minBucketY; by <= maxBucketY; by += 1) {
+        const bucket = buckets.get(`${bx},${by},${bz}`);
+        if (!bucket) continue;
+        for (const [px, , pz] of bucket) {
+          const dx = px - x;
+          const dz = pz - z;
+          const along = Math.abs(dx * direction[0] + dz * direction[1]);
+          const lateral = Math.abs(-dx * direction[1] + dz * direction[0]);
+          if (along <= alongReach && lateral <= lateralReach) count += 1;
+        }
+      }
+    }
+  }
+  return count;
+}
+
 function barrierLength(barrier) {
   return Math.hypot(barrier.end[0] - barrier.start[0], barrier.end[1] - barrier.start[1]);
 }
@@ -100,19 +134,24 @@ export function unsupportedBarrierRuns(barrier, index, options = {}) {
   const spanCount = Math.max(1, Math.round(length / settings.spanMetres));
   const [x1, z1] = barrier.start;
   const [x2, z2] = barrier.end;
+  const thickness = Number(barrier.thicknessM);
+  const faceAware = Number.isFinite(thickness) && thickness > 0;
+  const direction = [(x2 - x1) / length, (z2 - z1) / length];
   const spans = [];
   for (let step = 0; step < spanCount; step += 1) {
     const t = (step + 0.5) / spanCount;
     const x = x1 + (x2 - x1) * t;
     const z = z1 + (z2 - z1) * t;
-    const points = pointsNear(
-      index,
-      x,
-      z,
-      settings.radiusMetres,
-      settings.minHeight,
-      settings.maxHeight,
-    );
+    const points = faceAware
+      ? pointsNearFace(index, x, z, direction, thickness / 2, settings)
+      : pointsNear(
+        index,
+        x,
+        z,
+        settings.radiusMetres,
+        settings.minHeight,
+        settings.maxHeight,
+      );
     spans.push({ t, x, z, points, supported: points >= settings.minimumSpanPoints });
   }
   const runs = [];

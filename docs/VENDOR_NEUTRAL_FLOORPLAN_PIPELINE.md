@@ -102,7 +102,30 @@ evidence rather than client declaration: a plan value still equal to the
 machine proposal's is `estimated`, a value the operator changed — or a wall
 the proposal never had — is `operator_reviewed`. The Rapier boundary sweeps
 stand their probe origins half a thickness further out so they approach the
-wall's face instead of starting inside it.
+wall's face instead of starting inside it, and the capture comparator reads a
+thick wall's support at its faces per longitudinal span — a 0.8 m wall's
+scanned skin lies outside any honest centreline radius, and a comparator
+blind to it would demote a release-blocking crossing to an informational
+finding.
+
+Crossing reconciliation matches by geometry, one-to-one: a classification and
+a surviving crossing pair up only when their storey elevations, orientations,
+lateral separation, and longitudinal overlap all agree, and each frozen
+classification is consumed at most once — the only permitted reuse is a
+crossing lying tight on the same classified run that an opening later split.
+Stacked storeys, nearby parallel walls, and corners can therefore never share
+one classification. Findings and resolutions freeze their `elevationM`;
+resolutions frozen before that field match without it.
+
+Manual navigation approval clears the same final-agreement gate as automatic
+acceptance — the Approve button is not a bypass. A crossing the capture only
+revealed on the final corrected barriers has no proposal classification to
+inherit, so the approving operator resolves it per finding in the approval
+request itself; each supplied resolution must qualify against a real final
+crossing, the receipt freezes with the build
+(`scene_navigation_builds.final_capture_agreement_json`), and a
+door/false-barrier answer over a still-standing wall blocks manual approval
+exactly as it blocks automatic acceptance.
 
 ### Choosing the storeys
 

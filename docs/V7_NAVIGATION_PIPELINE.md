@@ -113,9 +113,11 @@ A build cannot be approved unless it proves:
   classification — the other proofs read the shell against itself and cannot
   catch a wall crossing an opening the capture plainly shows;
 - the navigation build re-reads the final corrected barrier set against the
-  pinned capture, and automatic acceptance refuses a surviving crossing whose
-  classification claims the wall should be open or gone, or that has no
-  classification at all; and
+  pinned capture, and approval — automatic or manual, the gate is the same —
+  refuses a surviving crossing whose classification claims the wall should be
+  open or gone, or that has no classification at all; a final-only crossing
+  needs an explicit per-finding classification from the approving operator;
+  and
 - the resulting topology is connected for every advertised destination.
 
 These are release gates, not visual QA suggestions. Missing, failed, stale, or
@@ -178,9 +180,11 @@ Movement runs through a first-person motor rather than constant-speed
 translation: input sets a target velocity, a kick-start answers a single tap
 perceptibly, the profile's `maxAcceleration` closes the gap to full speed,
 and braking is stronger than acceleration so releasing a key stops crisply.
-The motor integrates on a fixed 120 Hz step so feel does not vary with frame
-rate, momentum never survives a teleport or mode switch, and the Rapier
-character controller still constrains every resulting displacement.
+Each frame integrates its own real delta in bounded substeps of at most
+1/120 s, the last one fractional — deterministic simulations at 30–240 Hz pin
+speed, distance, stopping, reversal, and boost as rate-independent — momentum
+never survives a teleport or mode switch, and the Rapier character controller
+still constrains every resulting displacement.
 
 Touch devices use the on-screen movement pad plus explicit Rise/Lower controls
 in Fly mode. Walk and Fly are public. The frozen Noclip profile is operator-only

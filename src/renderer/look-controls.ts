@@ -59,7 +59,6 @@ export class SpatialNavigationControls {
   };
   private maxAcceleration = DEFAULT_MAX_ACCELERATION_UNITS_PER_SECOND_SQUARED;
   private readonly motorVelocity = new THREE.Vector3();
-  private motorAccumulatorSeconds = 0;
   private translationEnabled = true;
   private lookEnabled = true;
   private lookPointerId: number | null = null;
@@ -92,7 +91,6 @@ export class SpatialNavigationControls {
     // Alignment follows teleports and authored pose changes; momentum must
     // never carry through a teleport.
     this.motorVelocity.set(0, 0, 0);
-    this.motorAccumulatorSeconds = 0;
   }
 
   setNavigationBounds(bounds: NavigationBounds[]): void {
@@ -480,8 +478,12 @@ export class SpatialNavigationControls {
   // A first-person motor rather than a constant-speed translation: input sets
   // a target velocity, a kick-start answers a single tap perceptibly, the
   // authored maxAcceleration closes the gap to full speed, and braking is
-  // stronger than acceleration so releasing a key stops crisply. Integration
-  // runs on a fixed step so game feel does not vary with frame rate; the
+  // stronger than acceleration so releasing a key stops crisply. Each frame
+  // integrates its own real delta in bounded substeps, the last one
+  // fractional — a cross-frame fixed-step accumulator freezes velocity on any
+  // display faster than the step (144 Hz frames never fill a 1/120 s budget),
+  // and dropping the remainder instead makes fast frames emit zero
+  // displacement, which resistance tracking reads as released keys. The
   // Rapier character controller still constrains the resulting displacement.
   private applyMovement(
     camera: THREE.PerspectiveCamera,
@@ -528,32 +530,21 @@ export class SpatialNavigationControls {
 
     const displacement = new THREE.Vector3();
     const difference = new THREE.Vector3();
-    this.motorAccumulatorSeconds = Math.min(
-      this.motorAccumulatorSeconds + Math.min(MOTOR_MAX_STEP_SECONDS, deltaSeconds),
-      MOTOR_MAX_STEP_SECONDS * 2,
-    );
-    while (this.motorAccumulatorSeconds >= MOTOR_FIXED_STEP_SECONDS) {
-      this.motorAccumulatorSeconds -= MOTOR_FIXED_STEP_SECONDS;
+    let remaining = Math.min(deltaSeconds, MOTOR_MAX_STEP_SECONDS);
+    while (remaining > 0) {
+      const step = Math.min(MOTOR_FIXED_STEP_SECONDS, remaining);
+      remaining -= step;
       difference.copy(targetVelocity).sub(this.motorVelocity);
       const rate = targetSpeed > MOVEMENT_EPSILON
         ? this.maxAcceleration
         : this.maxAcceleration * MOTOR_BRAKING_MULTIPLIER;
-      const maximumChange = rate * MOTOR_FIXED_STEP_SECONDS;
+      const maximumChange = rate * step;
       if (difference.length() <= maximumChange) {
         this.motorVelocity.copy(targetVelocity);
       } else {
         this.motorVelocity.addScaledVector(difference.normalize(), maximumChange);
       }
-      displacement.addScaledVector(this.motorVelocity, MOTOR_FIXED_STEP_SECONDS);
-    }
-    // The fractional remainder is integrated with the settled velocity so the
-    // camera advances every frame. Velocity dynamics stay quantised to the
-    // fixed step; leaving the remainder for the next frame instead makes
-    // frames faster than the step emit zero displacement, which downstream
-    // resistance tracking reads as "no input".
-    if (this.motorAccumulatorSeconds > 0) {
-      displacement.addScaledVector(this.motorVelocity, this.motorAccumulatorSeconds);
-      this.motorAccumulatorSeconds = 0;
+      displacement.addScaledVector(this.motorVelocity, step);
     }
     if (displacement.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
       return this.motorVelocity.lengthSq() >= MOVEMENT_EPSILON;
