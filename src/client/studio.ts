@@ -12906,6 +12906,13 @@ async function approveVersion(form: FormData): Promise<void> {
     qaDialog.close();
     showToast("Version approved");
     await refreshAll();
+    // Publication is the natural next act after QA, so the release dialog
+    // opens itself with the reviewed transform evidence pre-selected instead
+    // of making the operator hunt for the publish button. Publishing stays
+    // its own explicit submit: it binds source-to-world evidence, rotation,
+    // and audience, and rollback operates on releases — its receipt cannot
+    // be folded into the QA approval's.
+    await openReleaseDialog();
   } catch (error) {
     byId("qaError").textContent = errorMessage(error);
   }
