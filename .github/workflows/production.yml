@@ -1,0 +1,153 @@
+name: Deploy and attest production
+
+# Production deploys are operator-initiated, but their evidence must not be
+# operator-attested: this workflow binds the exact Git SHA to the D1 migration
+# result, both Worker version IDs, the deployed health response, and the
+# public-scene navigation verification, publishes the bundle as a SHA-named
+# artifact, and records a GitHub production deployment for the revision.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: spatial-production-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy-and-attest:
+    name: Deploy exact main revision and attest Cloudflare production
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    environment: production
+    env:
+      CI: "true"
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      DEPLOY_SHA: ${{ github.sha }}
+      PRODUCTION_ORIGIN: https://spatial.whymelabs.com
+      ATTESTATION: .cache/production-attestation/attestation.json
+
+    steps:
+      - name: Check out the verified revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          fetch-depth: 1
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Require scoped Cloudflare deployment credentials
+        run: |
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+
+      - name: Require green release gate and staging acceptance for this revision
+        run: |
+          for workflow in "Release gate" "Deploy and accept staging"; do
+            conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow "$workflow" --commit "$DEPLOY_SHA" \
+              --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
+            if [ "$conclusion" -lt 1 ]; then
+              echo "::error::$workflow has no successful run for $DEPLOY_SHA"
+              exit 1
+            fi
+          done
+
+      - name: Install locked dependencies and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy the application Worker with production migrations
+        id: app
+        run: |
+          mkdir -p "$(dirname "$ATTESTATION")"
+          npm run deploy:production -- \
+            --message "Verified GitHub revision ${DEPLOY_SHA}" \
+            --tag "git-${DEPLOY_SHA:0:12}" | tee .cache/production-attestation/app-deploy.log
+          version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
+            .cache/production-attestation/app-deploy.log | tail -1 | awk '{print $4}')
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy the processor Worker and Container
+        id: processor
+        run: |
+          npm run processor:cloud:production -- \
+            --message "Verified GitHub revision ${DEPLOY_SHA}" \
+            --tag "git-${DEPLOY_SHA:0:12}" | tee .cache/production-attestation/processor-deploy.log
+          version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
+            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $4}')
+          digest=$(grep -oE 'writing image sha256:[0-9a-f]+' \
+            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $3}' || true)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest:-unrecorded}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployed production health
+        id: health
+        run: |
+          response=$(curl -fsS "$PRODUCTION_ORIGIN/api/health")
+          echo "$response" | tee .cache/production-attestation/health.json
+          echo "$response" | grep -q '"status":"ok"'
+
+      - name: Verify the published navigation manifest end to end
+        run: >-
+          npm run verify:navigation --
+          "$PRODUCTION_ORIGIN/api/releases/home-scan-spark-multi-room-demo/manifest"
+
+      - name: Assemble the SHA-bound attestation
+        run: |
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const attestation = {
+              schemaVersion: "production-deployment-attestation-v1",
+              gitSha: process.env.DEPLOY_SHA,
+              repository: process.env.GITHUB_REPOSITORY,
+              workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+              migrations: "applied via deploy:production (wrangler d1 migrations apply DB --env production --remote)",
+              applicationWorkerVersionId: process.env.APP_VERSION,
+              processorWorkerVersionId: process.env.PROCESSOR_VERSION,
+              processorImageDigest: process.env.PROCESSOR_DIGEST,
+              health: JSON.parse(readFileSync(".cache/production-attestation/health.json", "utf8")),
+              publicSceneManifest: `${process.env.PRODUCTION_ORIGIN}/api/releases/home-scan-spark-multi-room-demo/manifest`,
+              deployedAt: new Date().toISOString(),
+            };
+            writeFileSync(process.env.ATTESTATION, JSON.stringify(attestation, null, 2));
+          '
+        env:
+          APP_VERSION: ${{ steps.app.outputs.version }}
+          PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
+          PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
+
+      - name: Record the GitHub production deployment
+        run: |
+          deployment=$(jq -n \
+            --arg ref "$DEPLOY_SHA" \
+            --arg description "Attested production deployment of $DEPLOY_SHA" \
+            '{ref: $ref, environment: "production", auto_merge: false,
+              required_contexts: [], description: $description}' |
+            gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
+            -f state=success \
+            -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            -f "environment_url=$PRODUCTION_ORIGIN" > /dev/null
+
+      - name: Upload the attestation artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: production-attestation-${{ env.DEPLOY_SHA }}
+          path: .cache/production-attestation/
+          retention-days: 90
+          if-no-files-found: error

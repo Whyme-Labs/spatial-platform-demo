@@ -95,6 +95,22 @@ describe("blocked-barrier attribution", () => {
     expect(id).toBeNull();
   });
 
+  it("stays ambiguous when a rival wall hides behind two segments of the winner", () => {
+    // Both of wall-7's split segments outscore wall-8's, but wall-8 is well
+    // inside the ambiguity margin of the winner: comparing raw segments
+    // would crowd it out of the top two and answer confidently anyway.
+    const winnerFirst = wall("auto-barrier-wall-7-1", [0, 0], [4, 0]);
+    const winnerSecond = wall("auto-barrier-wall-7-2", [4.01, 0], [8, 0]);
+    const rival = wall("auto-barrier-wall-8-1", [4, 0.02], [4, 6]);
+    const id = attributeBlockedBarrier(
+      [winnerFirst, winnerSecond, rival],
+      [4, 1, 0],
+      null,
+      TOLERANCE,
+    );
+    expect(id).toBeNull();
+  });
+
   it("keeps naming the wall when the tied candidates are segments of that same wall", () => {
     const first = wall("auto-barrier-wall-7-1", [0, 0], [4, 0]);
     const second = wall("auto-barrier-wall-7-2", [4.01, 0], [8, 0]);

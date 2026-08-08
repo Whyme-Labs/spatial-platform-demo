@@ -1171,10 +1171,15 @@ export function proposalCaptureAgreement(signature, report) {
         id: wall.wallKey,
         start: [start[0], start[2]],
         end: [end[0], end[2]],
-        // The comparator reads support at the wall's faces when a thickness
-        // is known; a thick wall's scanned skin lies outside any honest
-        // centreline radius.
-        ...(Number.isFinite(thicknessM) && thicknessM > 0 ? { thicknessM } : {}),
+        // The comparator reads reviewed thickness at the wall's faces and
+        // estimated thickness at the centreline the extractor fit through
+        // the evidence; it needs both the value and where it came from.
+        ...(Number.isFinite(thicknessM) && thicknessM > 0
+          ? {
+            thicknessM,
+            thicknessProvenance: wall.thicknessProvenance ?? "estimated",
+          }
+          : {}),
       }];
     });
     if (!barriers.length) continue;

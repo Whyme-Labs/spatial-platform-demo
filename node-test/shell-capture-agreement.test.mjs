@@ -175,6 +175,75 @@ describe("shell capture agreement", () => {
       f.kind === "barrier_without_any_capture" && f.barrierId === "hollow-claim"));
   });
 
+  it("never lets the centreline qualify as a face for any reviewed thickness", () => {
+    // The invariant across the permitted range: dense centreline and
+    // mid-slab clutter is never support for a wall whose thickness an
+    // operator asserted, while genuine points on both faces always are.
+    for (const thicknessM of [0.1, 0.2, 0.25, 0.5, 0.8]) {
+      const half = thicknessM / 2;
+      const barrier = {
+        id: `wall-${thicknessM}`,
+        start: [0, 0],
+        end: [6, 0],
+        minY: 0.15,
+        maxY: 3,
+        thicknessM,
+        thicknessProvenance: "operator_reviewed",
+      };
+      const interior = compareShellToCapture({
+        authoring: { barrierSegments: [barrier] },
+        points: [
+          ...wallPoints([0, 0], [6, 0]),
+          ...wallPoints([0, half / 2], [6, half / 2]),
+        ],
+      });
+      assert.equal(
+        interior.findings.filter((f) => f.kind === "barrier_crosses_open_capture").length,
+        0,
+        `t=${thicknessM}: interior clutter must not create face support`,
+      );
+      assert.ok(
+        interior.findings.some((f) => f.kind === "barrier_without_any_capture"),
+        `t=${thicknessM}: an unscanned reviewed wall must read as unscanned`,
+      );
+      const faces = compareShellToCapture({
+        authoring: { barrierSegments: [barrier] },
+        points: [
+          ...wallPoints([0, half], [6, half]),
+          ...wallPoints([0, -half], [6, -half]),
+        ],
+      });
+      assert.equal(
+        faces.findings.length,
+        0,
+        `t=${thicknessM}: genuine face returns must fully support the wall`,
+      );
+    }
+  });
+
+  it("keeps centreline support for machine-estimated thickness", () => {
+    // The extractor fit this wall's centreline through the observed returns;
+    // its "thickness" is the grid size, not a measured face offset. Reading
+    // it face-only would blind the comparator to its own source data.
+    const report = compareShellToCapture({
+      authoring: {
+        barrierSegments: [{
+          id: "estimated-wall",
+          start: [0, 0],
+          end: [6, 0],
+          minY: 0.15,
+          maxY: 3,
+          thicknessM: 0.2,
+          thicknessProvenance: "estimated",
+        }],
+      },
+      points: wallPoints([0, 0], [6, 0], { gapFrom: 2.5, gapTo: 3.7 }),
+    });
+    const crossings = report.findings.filter((f) => f.kind === "barrier_crosses_open_capture");
+    assert.equal(crossings.length, 1);
+    assert.ok(crossings[0].from[0] >= 2.3 && crossings[0].to[0] <= 3.9);
+  });
+
   it("does not let one scanned patch vouch for a doorway further along a thick wall", () => {
     // Support exists only on the first two metres of the wall's faces; the
     // rest is open. Per-span longitudinal evaluation must keep the empty run

@@ -83,6 +83,13 @@ The classification freezes with the approved revision
 (`floorplan_revisions.capture_agreement_json`), joins the navigation
 authoring hash through the floor-plan receipt, and blocks automatic
 navigation acceptance whenever a crossing finding has no frozen resolution.
+What freezes is the proposal's own record of each disputed span, never the
+caller's: the identity check forces barrier, level, and endpoints to
+byte-match a real finding, elevation is copied from that finding (or its
+reviewed plan level), and a submitted elevation that disagrees is rejected at
+the minting boundary — a forged elevation would otherwise freeze a
+classification that can never match the final geometry, silently converting a
+contradiction into a manually-resolvable final-only crossing.
 
 The agreement runs twice. The proposal report guides the reviewer; the
 navigation build then re-reads the **final** barrier set — after every
@@ -115,8 +122,9 @@ a barrier cooked from the very wall the operator classified
 (`auto-barrier-<wall>-<n>`) matches generously, a different wall must lie
 essentially on the classified line (elevation ≤ 0.5 m, angle ≤ 15°, lateral
 ≤ 0.4 m, real overlap), and each classification is consumed once — the only
-reuse is a crossing tight on the same classified run that an opening later
-split. Elevation is mandatory on both sides: findings and resolutions freeze
+reuse is a crossing that descends BY LINEAGE from the classified wall and
+lies tight on its run: a neighbouring wall 0.2 m away also projects "inside"
+the span, and geometry alone cannot tell a split half from a neighbour. Elevation is mandatory on both sides: findings and resolutions freeze
 `elevationM`, and a legacy resolution frozen without it fails closed — the
 revision needs re-review, because an elevation-blind match is exactly the
 cross-storey leak the matcher exists to stop. A qualifying frozen
@@ -132,10 +140,23 @@ inherit, so the approving operator classifies it by the finding's immutable
 id (`barrierId|elevation|from|to`, derived from the frozen agreement — the
 Worker copies the canonical geometry itself, so a caller can never submit a
 span of their own drawing); unknown or duplicated ids are rejected, one id
-resolves exactly one finding, a per-finding note is mandatory, a crossing a
-frozen classification already covers cannot be restated, and the receipt
-freezes with the build
-(`scene_navigation_builds.final_capture_agreement_json`).
+resolves exactly one finding, a per-finding note is mandatory, and a crossing
+a frozen classification already covers cannot be restated. Every approval of
+a capture-pinned build — with or without manual resolutions — freezes a
+`final-capture-approval-v2` receipt in
+`scene_navigation_builds.final_capture_agreement_json`, hash-bound to the
+exact final agreement and artifact it cleared, naming each crossing with its
+canonical geometry and whether frozen proposal evidence or an explicit manual
+classification covered it.
+
+Capture support reads by thickness provenance: an `estimated` thickness is
+the extractor's grid size and the wall's centreline was fit through the
+observed returns, so the centreline band is where its evidence honestly
+lives; a reviewed or registered thickness reads at the wall's faces only —
+outside up to the noise radius, inside within a tolerance capped at 49% of
+the half-thickness — so the centreline never qualifies as a face for any
+positive thickness and slab-interior clutter can never hide a wall drawn
+through an opening.
 
 ### Choosing the storeys
 

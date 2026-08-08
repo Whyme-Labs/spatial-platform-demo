@@ -85,22 +85,30 @@ function pointsNear(index, x, z, radius, minHeight, maxHeight) {
   return count;
 }
 
-// Support for a thick wall lives at its scanned FACES, half a thickness from
-// the centreline the barrier records — a 0.8 m wall's faces sit outside any
-// centreline radius that stays honest for thin walls, and a comparator blind
-// to them would misread the wall as standing in empty space, demoting a
-// release-blocking crossing to an informational finding. A point counts as
-// support only when its lateral offset is close to a face: the slab interior
-// is deliberately excluded, because a scanner cannot see inside a real wall —
-// points "inside" a thick wall's footprint are clutter in open space that the
-// wall was wrongly drawn across, the very evidence a crossing finding exists
-// to report. Support also counts only within its own longitudinal span, so
-// one scanned patch cannot vouch for a doorway-sized run further along.
+// Registration noise reaches a short way INSIDE an estimated face; deeper
+// slab-interior points are clutter, and the centreline must never qualify as
+// a face for any positive wall thickness — the cap at 49% of the
+// half-thickness guarantees the exclusion zone survives on thin walls too.
+const INTERIOR_FACE_TOLERANCE_M = 0.1;
+
+// Support for a wall with REVIEWED thickness lives at its scanned FACES, half
+// a thickness from the centreline the barrier records — a 0.8 m wall's faces
+// sit outside any centreline radius that stays honest for thin walls, and a
+// comparator blind to them would misread the wall as standing in empty space,
+// demoting a release-blocking crossing to an informational finding. A point
+// counts as support only near a face: outside up to the noise radius, inside
+// only within the capped interior tolerance, never at the centreline — a
+// scanner cannot see inside a real wall, so deep-interior points are clutter
+// in open space the wall was wrongly drawn across, the very evidence a
+// crossing finding exists to report. Support also counts only within its own
+// longitudinal span, so one scanned patch cannot vouch for a doorway-sized
+// run further along.
 function pointsNearFace(index, x, z, direction, halfThickness, settings) {
   const { buckets, cell } = index;
   const outerReach = halfThickness + settings.radiusMetres;
   const alongReach = settings.radiusMetres;
   const gather = Math.hypot(outerReach, alongReach);
+  const interiorReach = Math.min(INTERIOR_FACE_TOLERANCE_M, halfThickness * 0.49);
   let count = 0;
   const minBucketY = Math.floor(settings.minHeight / cell);
   const maxBucketY = Math.floor(settings.maxHeight / cell);
@@ -113,9 +121,14 @@ function pointsNearFace(index, x, z, direction, halfThickness, settings) {
           const dx = px - x;
           const dz = pz - z;
           const along = Math.abs(dx * direction[0] + dz * direction[1]);
+          if (along > alongReach) continue;
           const lateral = Math.abs(-dx * direction[1] + dz * direction[0]);
-          if (along <= alongReach &&
-            Math.abs(lateral - halfThickness) <= settings.radiusMetres) count += 1;
+          const signedFromFace = lateral - halfThickness;
+          const nearExteriorFace = signedFromFace >= 0 &&
+            signedFromFace <= settings.radiusMetres;
+          const nearInteriorFace = signedFromFace < 0 &&
+            -signedFromFace <= interiorReach;
+          if (nearExteriorFace || nearInteriorFace) count += 1;
         }
       }
     }
@@ -139,7 +152,14 @@ export function unsupportedBarrierRuns(barrier, index, options = {}) {
   const [x1, z1] = barrier.start;
   const [x2, z2] = barrier.end;
   const thickness = Number(barrier.thicknessM);
-  const faceAware = Number.isFinite(thickness) && thickness > 0;
+  // Face-only reading applies to REVIEWED thickness — a value an operator
+  // asserted or a registered mesh measured. An "estimated" thickness is the
+  // extractor's grid size, and the extractor fit the wall's centreline
+  // through the observed returns: for those walls the centreline band IS
+  // where the evidence lives, and pushing it out to imaginary faces would
+  // blind the comparator to its own source data.
+  const faceAware = Number.isFinite(thickness) && thickness > 0 &&
+    barrier.thicknessProvenance !== "estimated";
   const direction = [(x2 - x1) / length, (z2 - z1) / length];
   const spans = [];
   for (let step = 0; step < spanCount; step += 1) {

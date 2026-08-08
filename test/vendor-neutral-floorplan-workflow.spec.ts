@@ -613,6 +613,35 @@ describe("vendor-neutral floor-plan workflow", () => {
         captureAgreementResolutions: [expect.stringContaining("wall-001")],
       },
     });
+    // A forged elevation would mint a frozen classification that can never
+    // match the final geometry — silently converting a contradiction into a
+    // manually-resolvable final-only crossing. The server canonicalizes from
+    // the proposal finding and rejects the lie at the minting boundary.
+    const forgedElevationReview = await exports.default.fetch(reviewUrl, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        decision: "approve",
+        note: "Attempting to freeze the classification one storey up.",
+        plan,
+        captureAgreementResolutions: [{
+          barrierId: "wall-001",
+          elevationM: 3,
+          from: [1.6, 0],
+          to: [2.4, 0],
+          classification: "door_opening",
+        }],
+      }),
+    });
+    expect(forgedElevationReview.status).toBe(422);
+    await expect(forgedElevationReview.json()).resolves.toMatchObject({
+      details: {
+        captureAgreementResolutions: [
+          expect.stringContaining("declares elevation 3"),
+        ],
+      },
+    });
     const reviewBody = {
       decision: "approve",
       note: "Operator corrected the opening classification and checked every wall against the source.",
@@ -969,11 +998,27 @@ describe("vendor-neutral floor-plan workflow", () => {
       final_capture_agreement_json: string | null;
     }>();
     expect(manualReceipt?.status).toBe("APPROVED");
+    // The receipt stands on its own: hash-bound to the exact final agreement
+    // and artifact it cleared, with the canonical finding geometry copied in.
     expect(JSON.parse(manualReceipt!.final_capture_agreement_json!)).toMatchObject({
-      resolutions: [{
+      schemaVersion: "final-capture-approval-v2",
+      finalAgreementSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      navigationArtifactSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      matcherVersion: "capture-reconciliation-v2",
+      result: "passed",
+      resolvedFindings: [{
         findingId: finalOnlyFindingId,
+        canonicalFinding: {
+          barrierId: "auto-barrier-wall-added-1",
+          elevationM: 0,
+          from: [8.5, 4],
+          to: [9.4, 4],
+        },
+        source: "manual-approval-resolution",
         classification: "glass_wall",
       }],
+      reviewedBy: expect.any(String),
+      reviewedAt: expect.any(String),
     });
 
     // A crossing tight on the span the review classified door_opening is a

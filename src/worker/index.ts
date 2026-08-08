@@ -71,6 +71,7 @@ import {
   floorplanExportSchema,
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
+  finalAgreementFindingIdentity,
   finalCaptureAgreementBlockReason,
   invalidFinalAgreementResolutionIssues,
   floorplanCaptureAgreementSchema,
@@ -8840,10 +8841,59 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
     }
   }
   const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
-  const manualAgreementJson = parsed.data.decision === "approve" &&
-      parsed.data.finalCaptureAgreementResolutions?.length
-    ? JSON.stringify({ resolutions: parsed.data.finalCaptureAgreementResolutions })
-    : null;
+  // Every approval of a capture-pinned build freezes a receipt bound by hash
+  // to the exact final agreement and artifact it cleared, naming each
+  // crossing with its canonical geometry and whether frozen proposal
+  // evidence or an explicit manual classification covered it. The receipt
+  // must stand on its own: proving what was approved cannot depend on later
+  // re-interpreting a mutable column elsewhere.
+  let manualAgreementJson: string | null = null;
+  if (parsed.data.decision === "approve") {
+    const storedArtifact = parseStoredObject(reviewable.artifact_json ?? "null");
+    const finalAgreement = storedArtifact && typeof storedArtifact === "object"
+      ? Reflect.get(storedArtifact, "finalCaptureAgreement")
+      : undefined;
+    const parsedAgreement = floorplanCaptureAgreementSchema.optional()
+      .safeParse(finalAgreement ?? undefined);
+    if (parsedAgreement.success && parsedAgreement.data) {
+      const manualByFindingId = new Map(
+        (parsed.data.finalCaptureAgreementResolutions ?? [])
+          .map((resolution) => [resolution.findingId, resolution] as const),
+      );
+      manualAgreementJson = JSON.stringify({
+        schemaVersion: "final-capture-approval-v2",
+        finalAgreementSha256: await sha256Hex(JSON.stringify(parsedAgreement.data)),
+        navigationArtifactSha256: await sha256Hex(reviewable.artifact_json ?? ""),
+        matcherVersion: "capture-reconciliation-v2",
+        result: "passed",
+        resolvedFindings: parsedAgreement.data.findings
+          .filter((finding) => finding.kind === "barrier_crosses_open_capture")
+          .map((finding) => {
+            const findingId = finalAgreementFindingIdentity(finding);
+            const manual = manualByFindingId.get(findingId);
+            return {
+              findingId,
+              canonicalFinding: {
+                barrierId: finding.barrierId,
+                ...(finding.elevationM !== undefined
+                  ? { elevationM: finding.elevationM }
+                  : {}),
+                from: finding.from,
+                to: finding.to,
+              },
+              source: manual
+                ? "manual-approval-resolution"
+                : "frozen-proposal-resolution",
+              ...(manual
+                ? { classification: manual.classification, note: manual.note }
+                : {}),
+            };
+          }),
+        reviewedBy: auth.userId,
+        reviewedAt: new Date().toISOString(),
+      });
+    }
+  }
   const build = await context.env.DB.prepare(`
     UPDATE scene_navigation_builds
     SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = datetime('now'),
@@ -10289,6 +10339,7 @@ app.post(
         ],
       });
     }
+    let frozenResolutions = agreementResolutions;
     if (parsed.data.decision === "approve") {
       const { unresolved, unmatched, duplicated } = unresolvedCaptureAgreementCrossings(
         proposalAgreement,
@@ -10309,10 +10360,67 @@ app.post(
           ],
         });
       }
+      // What freezes is the PROPOSAL's own record of each disputed span, never
+      // the caller's. The identity check above already forces barrier, level,
+      // and endpoints to byte-match a real finding; elevation is copied from
+      // that finding (or its reviewed plan level), and a caller-supplied
+      // elevation that disagrees is rejected outright — a forged elevation
+      // would otherwise mint a frozen classification that can never match the
+      // final geometry, silently converting a contradiction into a
+      // manually-resolvable final-only crossing.
+      const findingIdentity = (finding: {
+        barrierId: string;
+        levelKey?: string | null;
+        from: readonly [number, number];
+        to: readonly [number, number];
+      }) =>
+        `${finding.barrierId}|${finding.levelKey ?? ""}|${finding.from.join(",")}|${
+          finding.to.join(",")
+        }`;
+      const crossingsByIdentity = new Map(
+        (proposalAgreement?.findings ?? [])
+          .filter((finding) => finding.kind === "barrier_crosses_open_capture")
+          .map((finding) => [findingIdentity(finding), finding] as const),
+      );
+      const planLevelElevation = new Map(
+        (parsed.data.plan?.levels ?? []).map((level) => [level.id, level.elevationM] as const),
+      );
+      const canonicalIssues: string[] = [];
+      frozenResolutions = agreementResolutions.map((resolution) => {
+        const finding = crossingsByIdentity.get(findingIdentity(resolution));
+        if (!finding) return resolution;
+        const canonicalElevation = finding.elevationM ??
+          (finding.levelKey ? planLevelElevation.get(finding.levelKey) : undefined);
+        if (canonicalElevation === undefined) {
+          canonicalIssues.push(
+            `Barrier span ${findingIdentity(resolution)} has no provable storey elevation; re-run the extraction before approving`,
+          );
+          return resolution;
+        }
+        if (resolution.elevationM !== undefined &&
+          Math.abs(resolution.elevationM - canonicalElevation) > 1e-6) {
+          canonicalIssues.push(
+            `Resolution ${findingIdentity(resolution)} declares elevation ${resolution.elevationM} but the proposal finding sits at ${canonicalElevation}`,
+          );
+          return resolution;
+        }
+        return {
+          barrierId: finding.barrierId,
+          ...(finding.levelKey ? { levelKey: finding.levelKey } : {}),
+          elevationM: canonicalElevation,
+          from: [...finding.from] as [number, number],
+          to: [...finding.to] as [number, number],
+          classification: resolution.classification,
+          ...(resolution.note !== undefined ? { note: resolution.note } : {}),
+        };
+      });
+      if (canonicalIssues.length) {
+        return unprocessable(context, { captureAgreementResolutions: canonicalIssues });
+      }
     }
     const revisionId = parsed.data.decision === "approve" ? crypto.randomUUID() : null;
-    const captureAgreementJson = revisionId && (proposalAgreement || agreementResolutions.length)
-      ? JSON.stringify({ report: proposalAgreement, resolutions: agreementResolutions })
+    const captureAgreementJson = revisionId && (proposalAgreement || frozenResolutions.length)
+      ? JSON.stringify({ report: proposalAgreement, resolutions: frozenResolutions })
       : null;
     const planJson = parsed.data.plan ? JSON.stringify(parsed.data.plan) : null;
     const planHash = planJson ? await sha256Hex(planJson) : null;

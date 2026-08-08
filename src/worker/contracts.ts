@@ -2573,6 +2573,7 @@ export function finalCaptureAgreementBlockReason(input: {
     crossingIndex: number;
     resolutionIndex: number;
     geometry: SpanMatchGeometry;
+    sameWall: boolean;
   }> = [];
   const contradictedBy = new Map<number, CaptureAgreementResolution>();
   for (const [crossingIndex, finding] of crossings.entries()) {
@@ -2582,7 +2583,7 @@ export function finalCaptureAgreementBlockReason(input: {
       if (!geometry) continue;
       const sameWall = sourceWallId !== null && sourceWallId === resolution.barrierId;
       if (!spanMatchQualifies(geometry, sameWall)) continue;
-      candidates.push({ crossingIndex, resolutionIndex, geometry });
+      candidates.push({ crossingIndex, resolutionIndex, geometry, sameWall });
       if (!WALL_AFFIRMING_CLASSIFICATIONS.has(resolution.classification) &&
         !contradictedBy.has(crossingIndex)) {
         contradictedBy.set(crossingIndex, resolution);
@@ -2600,8 +2601,14 @@ export function finalCaptureAgreementBlockReason(input: {
     matchedByCrossing.set(candidate.crossingIndex, candidate.resolutionIndex);
     consumedResolutions.add(candidate.resolutionIndex);
   }
+  // Split reuse is for the halves an opening left of the very wall the
+  // operator classified — the crossing must descend from that wall by
+  // lineage, not merely sit within the containment tolerance. A different
+  // wall 0.2 m away projects "inside" too, and geometry alone cannot tell a
+  // split half from a neighbour.
   for (const candidate of candidates) {
     if (matchedByCrossing.has(candidate.crossingIndex)) continue;
+    if (!candidate.sameWall) continue;
     if (!candidate.geometry.containedInResolution) continue;
     matchedByCrossing.set(candidate.crossingIndex, candidate.resolutionIndex);
   }

@@ -70,8 +70,12 @@ export function attributeBlockedBarrier(
   contactNormal: readonly [number, number, number] | null,
   maximumDistanceM: number,
 ): string | null {
-  let best: { id: string; score: number } | null = null;
-  let runnerUp: { id: string; score: number } | null = null;
+  // Candidates aggregate by WALL identity before any comparison: two split
+  // segments of one wall are one answer, and a runner-up wall hiding behind
+  // its rival's second segment must still count as ambiguity — comparing raw
+  // segments would let wall-7's two segments crowd wall-8 out of the top two
+  // while wall-8 sits well inside the margin.
+  const bestPerWall = new Map<string, { segmentId: string; score: number }>();
   for (const barrier of barriers) {
     if (point[1] < barrier.minY - 0.1 || point[1] > barrier.maxY + 0.1) continue;
     const distanceToSegment = pointToSegmentDistance2D(
@@ -89,17 +93,23 @@ export function attributeBlockedBarrier(
     if (distanceToFace >= maximumDistanceM) continue;
     const score = distanceToFace +
       barrierNormalMisalignment(barrier, contactNormal) * NORMAL_MISALIGNMENT_WEIGHT;
-    if (!best || score < best.score) {
-      runnerUp = best;
-      best = { id: barrier.id, score };
-    } else if (!runnerUp || score < runnerUp.score) {
-      runnerUp = { id: barrier.id, score };
+    const identity = attributionIdentity(barrier.id);
+    const existing = bestPerWall.get(identity);
+    if (!existing || score < existing.score) {
+      bestPerWall.set(identity, { segmentId: barrier.id, score });
+    }
+  }
+  let best: { segmentId: string; score: number } | null = null;
+  let runnerUpScore = Number.POSITIVE_INFINITY;
+  for (const candidate of bestPerWall.values()) {
+    if (!best || candidate.score < best.score) {
+      runnerUpScore = best?.score ?? Number.POSITIVE_INFINITY;
+      best = candidate;
+    } else if (candidate.score < runnerUpScore) {
+      runnerUpScore = candidate.score;
     }
   }
   if (!best || best.score >= maximumDistanceM) return null;
-  if (runnerUp && runnerUp.score - best.score < AMBIGUITY_SCORE_MARGIN &&
-    attributionIdentity(runnerUp.id) !== attributionIdentity(best.id)) {
-    return null;
-  }
-  return best.id;
+  if (runnerUpScore - best.score < AMBIGUITY_SCORE_MARGIN) return null;
+  return best.segmentId;
 }

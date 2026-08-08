@@ -445,6 +445,23 @@ describe("final capture-agreement geometry matching", () => {
     })).toBeNull();
   });
 
+  it("refuses split reuse for a neighbouring wall inside the containment tolerance", () => {
+    // Crossing A descends from the classified wall and consumes the frozen
+    // resolution; crossing B belongs to a DIFFERENT wall 0.2 m away, fully
+    // contained in the classified span longitudinally. Geometry alone cannot
+    // tell a split half from a neighbour — lineage must gate the reuse.
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([
+        crossing({ barrierId: "auto-barrier-wall-1-1", from: [4, 2], to: [4.8, 2] }),
+        crossing({ barrierId: "auto-barrier-wall-2-1", from: [5.2, 2.2], to: [6, 2.2] }),
+      ]),
+      captureAgreementJson: frozen([glassAt({})]),
+    });
+    expect(reason).toContain("auto-barrier-wall-2-1");
+    expect(reason).toContain("no frozen operator classification");
+  });
+
   it("refuses reuse on a second crossing outside the classified span", () => {
     const reason = finalCaptureAgreementBlockReason({
       captureExpected: true,
