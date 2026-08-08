@@ -153,6 +153,14 @@ Desktop controls:
 - Fly mode `Space`/`E`: rise; and
 - Fly mode `C`/`Q`: descend.
 
+Movement runs through a first-person motor rather than constant-speed
+translation: input sets a target velocity, a kick-start answers a single tap
+perceptibly, the profile's `maxAcceleration` closes the gap to full speed,
+and braking is stronger than acceleration so releasing a key stops crisply.
+The motor integrates on a fixed 120 Hz step so feel does not vary with frame
+rate, momentum never survives a teleport or mode switch, and the Rapier
+character controller still constrains every resulting displacement.
+
 Touch devices use the on-screen movement pad plus explicit Rise/Lower controls
 in Fly mode. Walk and Fly are public. The frozen Noclip profile is operator-only
 diagnostic evidence and is never exposed in the published viewer.

@@ -22,6 +22,16 @@ const TRACKPAD_METRES_PER_PIXEL = 0.0025;
 const MAX_TRACKPAD_DELTA_PIXELS = 80;
 const MOVEMENT_EPSILON = 1e-6;
 const CLICK_MAX_TRAVEL_PIXELS = 4;
+// First-person motor tuning. The motor owns a velocity state instead of
+// translating at constant speed: input kick-starts to a fraction of the
+// target speed (a single tap must still advance perceptibly), acceleration
+// closes the rest, and braking is stronger than acceleration so releasing a
+// key stops crisply instead of drifting.
+const MOTOR_FIXED_STEP_SECONDS = 1 / 120;
+const MOTOR_MAX_STEP_SECONDS = 0.05;
+const MOTOR_KICKSTART_FRACTION = 0.4;
+const MOTOR_BRAKING_MULTIPLIER = 2.5;
+const DEFAULT_MAX_ACCELERATION_UNITS_PER_SECOND_SQUARED = 8;
 
 /**
  * A single, scene-aware input owner for the Spark renderer. Primary drag looks
@@ -47,6 +57,9 @@ export class SpatialNavigationControls {
     walk: DEFAULT_BOOST_MULTIPLIER,
     fly: DEFAULT_BOOST_MULTIPLIER,
   };
+  private maxAcceleration = DEFAULT_MAX_ACCELERATION_UNITS_PER_SECOND_SQUARED;
+  private readonly motorVelocity = new THREE.Vector3();
+  private motorAccumulatorSeconds = 0;
   private translationEnabled = true;
   private lookEnabled = true;
   private lookPointerId: number | null = null;
@@ -76,6 +89,10 @@ export class SpatialNavigationControls {
     this.lookDeltaY = 0;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
+    // Alignment follows teleports and authored pose changes; momentum must
+    // never carry through a teleport.
+    this.motorVelocity.set(0, 0, 0);
+    this.motorAccumulatorSeconds = 0;
   }
 
   setNavigationBounds(bounds: NavigationBounds[]): void {
@@ -102,10 +119,18 @@ export class SpatialNavigationControls {
     this.clearKeyboardState();
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
+    this.motorVelocity.set(0, 0, 0);
   }
 
   configureMovementProfiles(artifact: unknown): void {
     if (!artifact || typeof artifact !== "object") return;
+    const agent = Reflect.get(artifact, "agent");
+    if (agent && typeof agent === "object") {
+      const acceleration = Number(Reflect.get(agent, "maxAcceleration"));
+      if (Number.isFinite(acceleration) && acceleration > 0) {
+        this.maxAcceleration = acceleration;
+      }
+    }
     const profiles = Reflect.get(artifact, "movementProfiles");
     if (!profiles || typeof profiles !== "object") return;
     for (const mode of ["walk", "fly"] as const) {
@@ -124,6 +149,7 @@ export class SpatialNavigationControls {
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     this.clearKeyboardState();
+    this.motorVelocity.set(0, 0, 0);
   }
 
   setLookEnabled(enabled: boolean): void {
@@ -175,6 +201,7 @@ export class SpatialNavigationControls {
       !this.isInsideNavigationBounds(camera.position)
     ) {
       camera.position.copy(positionBeforeMovement);
+      this.motorVelocity.set(0, 0, 0);
       return lookUpdated;
     }
     return lookUpdated || translated;
@@ -450,28 +477,88 @@ export class SpatialNavigationControls {
     };
   }
 
+  // A first-person motor rather than a constant-speed translation: input sets
+  // a target velocity, a kick-start answers a single tap perceptibly, the
+  // authored maxAcceleration closes the gap to full speed, and braking is
+  // stronger than acceleration so releasing a key stops crisply. Integration
+  // runs on a fixed step so game feel does not vary with frame rate; the
+  // Rapier character controller still constrains the resulting displacement.
   private applyMovement(
     camera: THREE.PerspectiveCamera,
     movement: Required<MovementInput>,
     deltaSeconds: number,
   ): boolean {
+    if (deltaSeconds <= 0) return false;
     const inputMagnitude = Math.hypot(movement.x, movement.y, movement.z);
-    if (inputMagnitude < MOVEMENT_EPSILON || deltaSeconds <= 0) return false;
+    const hasInput = inputMagnitude >= MOVEMENT_EPSILON;
+    if (!hasInput && this.motorVelocity.lengthSq() < MOVEMENT_EPSILON) {
+      this.motorVelocity.set(0, 0, 0);
+      return false;
+    }
 
-    const normalisation = inputMagnitude > 1 ? 1 / inputMagnitude : 1;
-    const basis = this.movementBasis(camera);
-    if (!basis) return false;
-    const speedMultiplier = this.hasKeyboardKey("ShiftLeft") ||
-        this.hasKeyboardKey("ShiftRight")
-      ? this.boostMultipliers[this.movementMode]
-      : 1;
-    const distance = this.movementSpeeds[this.movementMode] *
-      speedMultiplier *
-      Math.min(0.05, deltaSeconds);
-    camera.position
-      .addScaledVector(basis.right, movement.x * normalisation * distance)
-      .addScaledVector(basis.forward, -movement.z * normalisation * distance)
-      .addScaledVector(this.navigationUp, movement.y * normalisation * distance);
+    const targetVelocity = new THREE.Vector3();
+    if (hasInput) {
+      const basis = this.movementBasis(camera);
+      if (!basis && this.motorVelocity.lengthSq() < MOVEMENT_EPSILON) return false;
+      if (basis) {
+        const normalisation = inputMagnitude > 1 ? 1 / inputMagnitude : 1;
+        const speedMultiplier = this.hasKeyboardKey("ShiftLeft") ||
+            this.hasKeyboardKey("ShiftRight")
+          ? this.boostMultipliers[this.movementMode]
+          : 1;
+        const targetSpeed = this.movementSpeeds[this.movementMode] * speedMultiplier;
+        targetVelocity
+          .addScaledVector(basis.right, movement.x * normalisation)
+          .addScaledVector(basis.forward, -movement.z * normalisation)
+          .addScaledVector(this.navigationUp, movement.y * normalisation)
+          .multiplyScalar(targetSpeed);
+      }
+    }
+
+    const targetSpeed = targetVelocity.length();
+    if (
+      targetSpeed > MOVEMENT_EPSILON &&
+      this.motorVelocity.length() < targetSpeed * MOTOR_KICKSTART_FRACTION &&
+      this.motorVelocity.dot(targetVelocity) >= 0
+    ) {
+      this.motorVelocity
+        .copy(targetVelocity)
+        .setLength(targetSpeed * MOTOR_KICKSTART_FRACTION);
+    }
+
+    const displacement = new THREE.Vector3();
+    const difference = new THREE.Vector3();
+    this.motorAccumulatorSeconds = Math.min(
+      this.motorAccumulatorSeconds + Math.min(MOTOR_MAX_STEP_SECONDS, deltaSeconds),
+      MOTOR_MAX_STEP_SECONDS * 2,
+    );
+    while (this.motorAccumulatorSeconds >= MOTOR_FIXED_STEP_SECONDS) {
+      this.motorAccumulatorSeconds -= MOTOR_FIXED_STEP_SECONDS;
+      difference.copy(targetVelocity).sub(this.motorVelocity);
+      const rate = targetSpeed > MOVEMENT_EPSILON
+        ? this.maxAcceleration
+        : this.maxAcceleration * MOTOR_BRAKING_MULTIPLIER;
+      const maximumChange = rate * MOTOR_FIXED_STEP_SECONDS;
+      if (difference.length() <= maximumChange) {
+        this.motorVelocity.copy(targetVelocity);
+      } else {
+        this.motorVelocity.addScaledVector(difference.normalize(), maximumChange);
+      }
+      displacement.addScaledVector(this.motorVelocity, MOTOR_FIXED_STEP_SECONDS);
+    }
+    // The fractional remainder is integrated with the settled velocity so the
+    // camera advances every frame. Velocity dynamics stay quantised to the
+    // fixed step; leaving the remainder for the next frame instead makes
+    // frames faster than the step emit zero displacement, which downstream
+    // resistance tracking reads as "no input".
+    if (this.motorAccumulatorSeconds > 0) {
+      displacement.addScaledVector(this.motorVelocity, this.motorAccumulatorSeconds);
+      this.motorAccumulatorSeconds = 0;
+    }
+    if (displacement.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
+      return this.motorVelocity.lengthSq() >= MOVEMENT_EPSILON;
+    }
+    camera.position.add(displacement);
     return true;
   }
 
