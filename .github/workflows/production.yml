@@ -82,6 +82,64 @@ jobs:
           echo "app=$app_rollback" >> "$GITHUB_OUTPUT"
           echo "processor=$processor_rollback" >> "$GITHUB_OUTPUT"
 
+      - name: Scan frozen capture agreements for pre-canonicalization rows
+        run: |
+          npx wrangler d1 execute DB --env production --remote --json --command \
+            "SELECT id, capture_agreement_json FROM floorplan_revisions WHERE capture_agreement_json IS NOT NULL" \
+            > .cache/production-attestation/integrity-rows.json
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const rows = JSON.parse(readFileSync(".cache/production-attestation/integrity-rows.json", "utf8"))[0].results;
+            const identity = (s) => `${s.barrierId}|${s.levelKey ?? ""}|${s.from.join(",")}|${s.to.join(",")}`;
+            let invalid = 0;
+            for (const row of rows) {
+              const blob = JSON.parse(row.capture_agreement_json);
+              const findings = (blob.report?.findings ?? [])
+                .filter((f) => f.kind === "barrier_crosses_open_capture");
+              const byId = new Map(findings.map((f) => [identity(f), f]));
+              const seen = new Set();
+              for (const r of blob.resolutions ?? []) {
+                const key = identity(r);
+                const finding = byId.get(key);
+                if (seen.has(key) || !finding ||
+                  (r.elevationM !== undefined && (finding.elevationM === undefined ||
+                    Math.abs(r.elevationM - finding.elevationM) > 1e-6))) {
+                  invalid += 1;
+                  break;
+                }
+                seen.add(key);
+              }
+            }
+            writeFileSync(".cache/production-attestation/integrity-scan.json", JSON.stringify({
+              schemaVersion: "legacy-capture-agreement-integrity-scan-v1",
+              database: "spatial-studio-production",
+              gitSha: process.env.DEPLOY_SHA,
+              rowsWithCaptureAgreement: rows.length,
+              validRows: rows.length - invalid,
+              invalidRows: invalid,
+              note: "Invalid rows fail closed at runtime (parseFrozenCaptureAgreement) and require operator re-review.",
+              scannedAt: new Date().toISOString(),
+            }, null, 2));
+          '
+          rm .cache/production-attestation/integrity-rows.json
+
+      # The pending deployment record exists BEFORE any Cloudflare mutation,
+      # so even a failure inside the first deploy step has a record to mark
+      # failed — a failed production deployment must never be silence.
+      - name: Create the pending GitHub production deployment
+        id: deployment
+        run: |
+          deployment=$(jq -n \
+            --arg ref "$DEPLOY_SHA" \
+            --arg description "Attested production deployment of $DEPLOY_SHA" \
+            '{ref: $ref, environment: "production", auto_merge: false,
+              required_contexts: [], description: $description}' |
+            gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
+            -f state=in_progress \
+            -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
+          echo "id=$deployment" >> "$GITHUB_OUTPUT"
+
       - name: Deploy the application Worker with production migrations
         id: app
         run: |
@@ -146,6 +204,9 @@ jobs:
                 command: "wrangler versions deploy <id> --env production (and -c wrangler.processor.jsonc for the processor)",
               },
               health: JSON.parse(readFileSync(".cache/production-attestation/health.json", "utf8")),
+              legacyCaptureAgreementIntegrityScan: JSON.parse(
+                readFileSync(".cache/production-attestation/integrity-scan.json", "utf8"),
+              ),
               publicSceneManifest: `${process.env.PRODUCTION_ORIGIN}/api/releases/home-scan-spark-multi-room-demo/manifest`,
               deployedAt: new Date().toISOString(),
             };
@@ -158,18 +219,31 @@ jobs:
           APP_ROLLBACK: ${{ steps.rollback.outputs.app }}
           PROCESSOR_ROLLBACK: ${{ steps.rollback.outputs.processor }}
 
-      - name: Record the GitHub production deployment
+      - name: Mark the production deployment successful
         run: |
-          deployment=$(jq -n \
-            --arg ref "$DEPLOY_SHA" \
-            --arg description "Attested production deployment of $DEPLOY_SHA" \
-            '{ref: $ref, environment: "production", auto_merge: false,
-              required_contexts: [], description: $description}' |
-            gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
-          gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
+          gh api "repos/$GITHUB_REPOSITORY/deployments/${{ steps.deployment.outputs.id }}/statuses" \
             -f state=success \
             -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -f "environment_url=$PRODUCTION_ORIGIN" > /dev/null
+
+      # A failure after either Worker moved restores the recorded pair and
+      # proves production answers again before this run ends — a partial
+      # deployment must not be left serving mixed revisions.
+      - name: Roll back to the recorded pair on failure
+        if: ${{ failure() && steps.rollback.outputs.app != '' && steps.app.outcome != 'skipped' }}
+        run: |
+          npx wrangler versions deploy "${{ steps.rollback.outputs.app }}@100%" \
+            --env production -y \
+            --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" |
+            tee .cache/production-attestation/rollback-app.log
+          if [ "${{ steps.processor.outcome }}" != "skipped" ]; then
+            npx wrangler versions deploy "${{ steps.rollback.outputs.processor }}@100%" \
+              -c wrangler.processor.jsonc --env production -y \
+              --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" |
+              tee .cache/production-attestation/rollback-processor.log
+          fi
+          curl -fsS "$PRODUCTION_ORIGIN/api/health" |
+            tee .cache/production-attestation/rollback-health.json | grep -q '"status":"ok"'
 
       - name: Upload the attestation artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -180,15 +254,18 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Record the failed production deployment
+      - name: Mark the production deployment failed
         if: ${{ failure() }}
         run: |
-          deployment=$(jq -n \
-            --arg ref "$DEPLOY_SHA" \
-            --arg description "FAILED production deployment of $DEPLOY_SHA — see the run log; roll back with the recorded pair if traffic moved" \
-            '{ref: $ref, environment: "production", auto_merge: false,
-              required_contexts: [], description: $description}' |
-            gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          deployment="${{ steps.deployment.outputs.id }}"
+          if [ -z "$deployment" ]; then
+            deployment=$(jq -n \
+              --arg ref "$DEPLOY_SHA" \
+              --arg description "FAILED before any Cloudflare mutation for $DEPLOY_SHA" \
+              '{ref: $ref, environment: "production", auto_merge: false,
+                required_contexts: [], description: $description}' |
+              gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          fi
           gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
             -f state=failure \
             -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
