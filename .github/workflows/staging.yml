@@ -35,7 +35,6 @@ jobs:
     env:
       CI: "true"
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       STAGING_ACCEPTANCE_REPORT: .cache/staging-acceptance/report.json
 
@@ -45,6 +44,7 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_SHA }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Use Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -52,27 +52,33 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Require scoped Cloudflare deployment credentials
-        run: |
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+      - name: Require the checked-out revision to match
+        run: test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
 
+      # No credentials during dependency installation or build: package
+      # lifecycle scripts must never be able to read deployment-capable
+      # tokens.
       - name: Install locked dependencies and build
         run: |
           npm ci
           npm run build
 
       - name: Apply staging D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npm run db:migrate:staging
 
       - name: Deploy the application Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: >-
           npm run deploy:staging --
           --message "Verified GitHub revision ${DEPLOY_SHA}"
           --tag "git-${DEPLOY_SHA:0:12}"
 
       - name: Deploy the processor Worker and Container
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: >-
           npm run processor:cloud:staging --
           --message "Verified GitHub revision ${DEPLOY_SHA}"
@@ -80,6 +86,8 @@ jobs:
 
       - name: Run deployed Cloudflare acceptance
         id: acceptance
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npm run verify:staging
 
       - name: Upload staging acceptance evidence

@@ -548,6 +548,16 @@ curl --fail https://spatial.whymelabs.com/api/health
 the Worker. Do not replace it with a direct `wrangler deploy`: that would let
 application code reach production before its schema. D1 migrations are
 append-only after production deployment; do not edit an already applied file.
+
+Migrations follow **expand and contract**, because Worker rollback restores
+code but never data: a migration shipped with a deployment may only add
+nullable columns, new tables, or backwards-compatible indexes, so the frozen
+rollback Worker pair recorded in the production attestation remains
+schema-compatible if the deployment fails after migrating. Code that needs the
+new shape ships in the same or a later release; dropping or constraining
+retired columns happens only in a release after every running Worker version
+has stopped reading them. The production attestation records the migrations
+each deployment applied so a reviewer can check the contract was honoured.
 The current release requires `0037_refresh_rotation_replay.sql`,
 `0038_recast_navigation_builds.sql`, and
 `0039_numeric_release_revisions.sql` in both environments before deploying the

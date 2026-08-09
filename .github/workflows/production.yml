@@ -2,9 +2,18 @@ name: Deploy and attest production
 
 # Production deploys are operator-initiated, but their evidence must not be
 # operator-attested: this workflow binds the exact Git SHA to the D1 migration
-# result, both Worker version IDs, the deployed health response, and the
-# public-scene navigation verification, publishes the bundle as a SHA-named
-# artifact, and records a GitHub production deployment for the revision.
+# result, both Worker version IDs, the immutable processor image digest, the
+# deployed health response, and the public-release verifications, then
+# publishes the bundle as a SHA-named artifact and records a GitHub production
+# deployment for the revision.
+#
+# Two invariants shape the step order. Evidence atomicity: the mandatory
+# success attestation uploads INSIDE the rollback boundary and the success
+# status is the last successful-path side effect, so an artifact-service
+# outage rolls production back instead of leaving new traffic behind a red
+# run. Least privilege: no credential exists at job scope — Cloudflare and
+# GitHub tokens are introduced only at the exact steps that need them, and
+# checkout never persists its token.
 
 on:
   workflow_dispatch:
@@ -23,14 +32,12 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
-    environment: production
     env:
       CI: "true"
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
       DEPLOY_SHA: ${{ github.sha }}
       PRODUCTION_ORIGIN: https://spatial.whymelabs.com
+      EVIDENCE_DIR: .cache/production-attestation
       ATTESTATION: .cache/production-attestation/attestation.json
 
     steps:
@@ -39,6 +46,7 @@ jobs:
         with:
           ref: ${{ env.DEPLOY_SHA }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Use Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -46,14 +54,11 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Require scoped Cloudflare deployment credentials
-        run: |
-          test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$CLOUDFLARE_API_TOKEN"
-          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
-
       - name: Require green release gate and staging acceptance for this revision
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
           for workflow in "Release gate" "Deploy and accept staging"; do
             conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" \
               --workflow "$workflow" --commit "$DEPLOY_SHA" \
@@ -64,70 +69,88 @@ jobs:
             fi
           done
 
+      # No credentials during dependency installation or build: package
+      # lifecycle scripts must never be able to read deployment-capable
+      # tokens.
       - name: Install locked dependencies and build
         run: |
           npm ci
           npm run build
 
-      - name: Record the rollback pair before touching production
+      # The rollback receipt freezes the ACTIVE deployment distribution —
+      # deployment id plus every version and its traffic percentage — for both
+      # Workers. The numerically newest uploaded version is NOT the active
+      # deployment: an uploaded-but-never-activated candidate must never
+      # become a "rollback" target.
+      - name: Freeze the active deployment distribution as the rollback receipt
         id: rollback
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          mkdir -p "$(dirname "$ATTESTATION")"
-          app_rollback=$(npx wrangler versions list --env production --json |
-            node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const v=JSON.parse(d);const latest=v.reduce((a,b)=>a.number>b.number?a:b);console.log(latest.id)})')
-          processor_rollback=$(npx wrangler versions list -c wrangler.processor.jsonc --env production --json |
-            node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const v=JSON.parse(d);const latest=v.reduce((a,b)=>a.number>b.number?a:b);console.log(latest.id)})')
-          test -n "$app_rollback"
-          test -n "$processor_rollback"
-          echo "app=$app_rollback" >> "$GITHUB_OUTPUT"
-          echo "processor=$processor_rollback" >> "$GITHUB_OUTPUT"
+          mkdir -p "$EVIDENCE_DIR"
+          capture() {
+            npx wrangler deployments list "$@" --json | node -e '
+              let d = "";
+              process.stdin.on("data", (c) => d += c).on("end", () => {
+                const deployments = JSON.parse(d);
+                const active = deployments.reduce((a, b) =>
+                  new Date(a.created_on) > new Date(b.created_on) ? a : b);
+                const spec = active.versions
+                  .map((v) => `${v.version_id}@${v.percentage}%`).join(" ");
+                console.log(JSON.stringify({
+                  deploymentId: active.id,
+                  createdOn: active.created_on,
+                  versions: active.versions,
+                  spec,
+                }));
+              })'
+          }
+          app=$(capture --env production)
+          processor=$(capture -c wrangler.processor.jsonc --env production)
+          test -n "$app"
+          test -n "$processor"
+          jq -n --argjson app "$app" --argjson processor "$processor" \
+            '{schemaVersion: "production-rollback-receipt-v1",
+              application: $app, processor: $processor}' \
+            > "$EVIDENCE_DIR/rollback-receipt.json"
+          echo "app_spec=$(echo "$app" | jq -r .spec)" >> "$GITHUB_OUTPUT"
+          echo "processor_spec=$(echo "$processor" | jq -r .spec)" >> "$GITHUB_OUTPUT"
 
-      - name: Scan frozen capture agreements for pre-canonicalization rows
+      # Raw rows stay in runner-temporary storage and are validated with the
+      # EXACT runtime parser (bundled from src/worker/contracts) so scan
+      # validity equals runtime-consumption validity; only the aggregate
+      # enters the evidence directory.
+      - name: Scan frozen capture agreements with the runtime parser
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          RAW_SCAN="$RUNNER_TEMP/capture-agreement-rows.json"
+          trap 'rm -f "$RAW_SCAN"' EXIT
           npx wrangler d1 execute DB --env production --remote --json --command \
-            "SELECT id, capture_agreement_json FROM floorplan_revisions WHERE capture_agreement_json IS NOT NULL" \
-            > .cache/production-attestation/integrity-rows.json
-          node -e '
-            const { readFileSync, writeFileSync } = require("node:fs");
-            const rows = JSON.parse(readFileSync(".cache/production-attestation/integrity-rows.json", "utf8"))[0].results;
-            const identity = (s) => `${s.barrierId}|${s.levelKey ?? ""}|${s.from.join(",")}|${s.to.join(",")}`;
-            let invalid = 0;
-            for (const row of rows) {
-              const blob = JSON.parse(row.capture_agreement_json);
-              const findings = (blob.report?.findings ?? [])
-                .filter((f) => f.kind === "barrier_crosses_open_capture");
-              const byId = new Map(findings.map((f) => [identity(f), f]));
-              const seen = new Set();
-              for (const r of blob.resolutions ?? []) {
-                const key = identity(r);
-                const finding = byId.get(key);
-                if (seen.has(key) || !finding ||
-                  (r.elevationM !== undefined && (finding.elevationM === undefined ||
-                    Math.abs(r.elevationM - finding.elevationM) > 1e-6))) {
-                  invalid += 1;
-                  break;
-                }
-                seen.add(key);
-              }
-            }
-            writeFileSync(".cache/production-attestation/integrity-scan.json", JSON.stringify({
-              schemaVersion: "legacy-capture-agreement-integrity-scan-v1",
-              database: "spatial-studio-production",
-              gitSha: process.env.DEPLOY_SHA,
-              rowsWithCaptureAgreement: rows.length,
-              validRows: rows.length - invalid,
-              invalidRows: invalid,
-              note: "Invalid rows fail closed at runtime (parseFrozenCaptureAgreement) and require operator re-review.",
-              scannedAt: new Date().toISOString(),
-            }, null, 2));
-          '
-          rm .cache/production-attestation/integrity-rows.json
+            "SELECT capture_agreement_json FROM floorplan_revisions WHERE capture_agreement_json IS NOT NULL" \
+            > "$RAW_SCAN"
+          npx esbuild scripts/scan-frozen-agreements.ts --bundle --format=esm \
+            --platform=node --outfile="$RUNNER_TEMP/scan.mjs" --log-level=warning
+          node "$RUNNER_TEMP/scan.mjs" < "$RAW_SCAN" \
+            > "$EVIDENCE_DIR/integrity-scan.json"
+          cat "$EVIDENCE_DIR/integrity-scan.json"
+
+      - name: Record the migrations this deployment will apply
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npx wrangler d1 migrations list DB --env production --remote \
+            > "$EVIDENCE_DIR/migrations-pending.txt" 2>&1 || true
+          cat "$EVIDENCE_DIR/migrations-pending.txt"
 
       # The pending deployment record exists BEFORE any Cloudflare mutation,
-      # so even a failure inside the first deploy step has a record to mark
-      # failed — a failed production deployment must never be silence.
+      # and its id is persisted before the first status call — a failed
+      # production deployment must never be silence, even one that fails
+      # while announcing itself.
       - name: Create the pending GitHub production deployment
         id: deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           deployment=$(jq -n \
             --arg ref "$DEPLOY_SHA" \
@@ -135,38 +158,41 @@ jobs:
             '{ref: $ref, environment: "production", auto_merge: false,
               required_contexts: [], description: $description}' |
             gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          echo "id=$deployment" >> "$GITHUB_OUTPUT"
           gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
             -f state=in_progress \
             -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null
-          echo "id=$deployment" >> "$GITHUB_OUTPUT"
 
       - name: Deploy the application Worker with production migrations
         id: app
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          mkdir -p "$(dirname "$ATTESTATION")"
           npm run deploy:production -- \
             --message "Verified GitHub revision ${DEPLOY_SHA}" \
-            --tag "git-${DEPLOY_SHA:0:12}" | tee .cache/production-attestation/app-deploy.log
+            --tag "git-${DEPLOY_SHA:0:12}" | tee "$EVIDENCE_DIR/app-deploy.log"
           version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
-            .cache/production-attestation/app-deploy.log | tail -1 | awk '{print $4}')
+            "$EVIDENCE_DIR/app-deploy.log" | tail -1 | awk '{print $4}')
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Deploy the processor Worker and Container
         id: processor
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           npm run processor:cloud:production -- \
             --message "Verified GitHub revision ${DEPLOY_SHA}" \
-            --tag "git-${DEPLOY_SHA:0:12}" | tee .cache/production-attestation/processor-deploy.log
+            --tag "git-${DEPLOY_SHA:0:12}" | tee "$EVIDENCE_DIR/processor-deploy.log"
           version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
-            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $4}')
+            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | awk '{print $4}')
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # The immutable container digest is mandatory evidence: an
           # attestation that cannot prove which image runs is not an
           # attestation, so the deployment fails closed without it.
           digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' \
-            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $2}' || true)
+            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | awk '{print $2}' || true)
           if ! printf '%s' "$digest" | grep -qE '^sha256:[0-9a-f]{64}$'; then
             echo "::error::Could not prove the deployed processor image digest"
             exit 1
@@ -174,18 +200,30 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify deployed production health
-        id: health
         run: |
-          response=$(curl -fsS "$PRODUCTION_ORIGIN/api/health")
-          echo "$response" | tee .cache/production-attestation/health.json
+          response=$(curl -fsS --max-time 30 "$PRODUCTION_ORIGIN/api/health")
+          echo "$response" | tee "$EVIDENCE_DIR/health.json"
           echo "$response" | grep -q '"status":"ok"'
 
-      - name: Verify the published navigation manifest end to end
-        run: >-
-          npm run verify:navigation --
-          "$PRODUCTION_ORIGIN/api/releases/home-scan-spark-multi-room-demo/manifest"
+      - name: Verify every active public release manifest
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          npx wrangler d1 execute DB --env production --remote --json --command \
+            "SELECT c.slug FROM release_channels c JOIN releases r ON r.id = c.active_release_id WHERE r.revoked_at IS NULL AND r.access_policy = 'public'" \
+            > "$RUNNER_TEMP/release-slugs.json"
+          slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/release-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
+          test -n "$slugs"
+          printf '%s\n' "$slugs" | tee "$EVIDENCE_DIR/verified-releases.txt"
+          while IFS= read -r slug; do
+            npm run verify:navigation -- "$PRODUCTION_ORIGIN/api/releases/$slug/manifest"
+          done <<< "$slugs"
 
       - name: Assemble the SHA-bound attestation
+        env:
+          APP_VERSION: ${{ steps.app.outputs.version }}
+          PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
+          PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
         run: |
           node -e '
             const { readFileSync, writeFileSync } = require("node:fs");
@@ -194,68 +232,143 @@ jobs:
               gitSha: process.env.DEPLOY_SHA,
               repository: process.env.GITHUB_REPOSITORY,
               workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
-              migrations: "applied via deploy:production (wrangler d1 migrations apply DB --env production --remote)",
+              migrations: {
+                policy: "expand-and-contract: a migration in this deploy must keep the frozen rollback Worker pair schema-compatible; contraction ships in a later release",
+                pendingBeforeDeploy: readFileSync(".cache/production-attestation/migrations-pending.txt", "utf8").trim(),
+              },
               applicationWorkerVersionId: process.env.APP_VERSION,
               processorWorkerVersionId: process.env.PROCESSOR_VERSION,
               processorImageDigest: process.env.PROCESSOR_DIGEST,
-              rollbackTarget: {
-                applicationWorkerVersionId: process.env.APP_ROLLBACK,
-                processorWorkerVersionId: process.env.PROCESSOR_ROLLBACK,
-                command: "wrangler versions deploy <id> --env production (and -c wrangler.processor.jsonc for the processor)",
-              },
+              rollbackReceipt: JSON.parse(readFileSync(".cache/production-attestation/rollback-receipt.json", "utf8")),
               health: JSON.parse(readFileSync(".cache/production-attestation/health.json", "utf8")),
               legacyCaptureAgreementIntegrityScan: JSON.parse(
                 readFileSync(".cache/production-attestation/integrity-scan.json", "utf8"),
               ),
-              publicSceneManifest: `${process.env.PRODUCTION_ORIGIN}/api/releases/home-scan-spark-multi-room-demo/manifest`,
+              verifiedReleases: readFileSync(".cache/production-attestation/verified-releases.txt", "utf8").trim().split("\n"),
               deployedAt: new Date().toISOString(),
             };
             writeFileSync(process.env.ATTESTATION, JSON.stringify(attestation, null, 2));
           '
-        env:
-          APP_VERSION: ${{ steps.app.outputs.version }}
-          PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
-          PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
-          APP_ROLLBACK: ${{ steps.rollback.outputs.app }}
-          PROCESSOR_ROLLBACK: ${{ steps.rollback.outputs.processor }}
 
+      # Inside the rollback boundary: if the attestation cannot be made
+      # durable, the deployment did not happen — production rolls back.
+      - name: Upload the mandatory success attestation
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: production-attestation-${{ env.DEPLOY_SHA }}
+          path: .cache/production-attestation/
+          retention-days: 90
+          if-no-files-found: error
+          # A re-run of an already-attested SHA replaces its bundle instead of
+          # colliding — a name collision here would read as an evidence outage
+          # and trigger an unnecessary rollback.
+          overwrite: true
+
+      # The LAST successful-path side effect: nothing is marked successful
+      # until the traffic, the verification, and the durable evidence all
+      # exist.
       - name: Mark the production deployment successful
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/deployments/${{ steps.deployment.outputs.id }}/statuses" \
             -f state=success \
             -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             -f "environment_url=$PRODUCTION_ORIGIN" > /dev/null
 
-      # A failure after either Worker moved restores the recorded pair and
-      # proves production answers again before this run ends — a partial
-      # deployment must not be left serving mixed revisions.
-      - name: Roll back to the recorded pair on failure
-        if: ${{ failure() && steps.rollback.outputs.app != '' && steps.app.outcome != 'skipped' }}
+      # Failure or cancellation after either Worker moved restores the frozen
+      # ACTIVE distribution — both components independently, exit codes
+      # captured — then proves the restoration: active deployments must match
+      # the receipt, health must answer, and every public release must verify
+      # again. A partial deployment must not be left serving mixed revisions,
+      # and a partial ROLLBACK must not pass silently either.
+      - name: Roll back to the frozen distribution on failure
+        if: ${{ (failure() || cancelled()) && steps.rollback.outputs.app_spec != '' && steps.app.outcome != 'skipped' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          APP_SPEC: ${{ steps.rollback.outputs.app_spec }}
+          PROCESSOR_SPEC: ${{ steps.rollback.outputs.processor_spec }}
+          PROCESSOR_ATTEMPTED: ${{ steps.processor.outcome != 'skipped' }}
         run: |
-          npx wrangler versions deploy "${{ steps.rollback.outputs.app }}@100%" \
-            --env production -y \
-            --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" |
-            tee .cache/production-attestation/rollback-app.log
-          if [ "${{ steps.processor.outcome }}" != "skipped" ]; then
-            npx wrangler versions deploy "${{ steps.rollback.outputs.processor }}@100%" \
+          set +e
+          npx wrangler versions deploy $APP_SPEC --env production -y \
+            --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" \
+            2>&1 | tee "$EVIDENCE_DIR/rollback-app.log"
+          app_exit=${PIPESTATUS[0]}
+          processor_exit=0
+          if [ "$PROCESSOR_ATTEMPTED" = "true" ]; then
+            npx wrangler versions deploy $PROCESSOR_SPEC \
               -c wrangler.processor.jsonc --env production -y \
-              --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" |
-              tee .cache/production-attestation/rollback-processor.log
+              --message "Automatic rollback after failed deployment of ${DEPLOY_SHA}" \
+              2>&1 | tee "$EVIDENCE_DIR/rollback-processor.log"
+            processor_exit=${PIPESTATUS[0]}
           fi
-          curl -fsS "$PRODUCTION_ORIGIN/api/health" |
-            tee .cache/production-attestation/rollback-health.json | grep -q '"status":"ok"'
+          restored() {
+            npx wrangler deployments list "$@" --json | node -e '
+              let d = "";
+              process.stdin.on("data", (c) => d += c).on("end", () => {
+                const deployments = JSON.parse(d);
+                const active = deployments.reduce((a, b) =>
+                  new Date(a.created_on) > new Date(b.created_on) ? a : b);
+                console.log(active.versions
+                  .map((v) => `${v.version_id}@${v.percentage}%`).join(" "));
+              })'
+          }
+          app_active=$(restored --env production)
+          processor_active=$(restored -c wrangler.processor.jsonc --env production)
+          health_ok=false
+          curl -fsS --max-time 30 "$PRODUCTION_ORIGIN/api/health" |
+            tee "$EVIDENCE_DIR/rollback-health.json" | grep -q '"status":"ok"' && health_ok=true
+          manifests_ok=true
+          if [ -s "$RUNNER_TEMP/release-slugs.json" ]; then
+            slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/release-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
+            while IFS= read -r slug; do
+              npm run verify:navigation -- "$PRODUCTION_ORIGIN/api/releases/$slug/manifest" || manifests_ok=false
+            done <<< "$slugs"
+          else
+            manifests_ok=unverified
+          fi
+          app_match=false
+          [ "$app_active" = "$APP_SPEC" ] && app_match=true
+          processor_match=true
+          if [ "$PROCESSOR_ATTEMPTED" = "true" ]; then
+            processor_match=false
+            [ "$processor_active" = "$PROCESSOR_SPEC" ] && processor_match=true
+          fi
+          jq -n \
+            --arg appExit "$app_exit" --arg processorExit "$processor_exit" \
+            --arg appActive "$app_active" --arg processorActive "$processor_active" \
+            --arg appMatch "$app_match" --arg processorMatch "$processor_match" \
+            --arg healthOk "$health_ok" --arg manifestsOk "$manifests_ok" \
+            '{schemaVersion: "production-rollback-result-v1",
+              appExit: $appExit, processorExit: $processorExit,
+              appActiveAfterRollback: $appActive,
+              processorActiveAfterRollback: $processorActive,
+              appMatchesReceipt: $appMatch, processorMatchesReceipt: $processorMatch,
+              healthOk: $healthOk, manifestsOk: $manifestsOk}' \
+            > "$EVIDENCE_DIR/rollback-result.json"
+          cat "$EVIDENCE_DIR/rollback-result.json"
+          if [ "$app_match" != "true" ] || [ "$processor_match" != "true" ] || \
+             [ "$health_ok" != "true" ] || [ "$manifests_ok" = "false" ]; then
+            echo "::error::Rollback restoration is incomplete — manual intervention required"
+            exit 1
+          fi
 
-      - name: Upload the attestation artifact
+      # Best-effort superset of the run's evidence, including rollback logs;
+      # the MANDATORY attestation already uploaded inside the boundary above.
+      - name: Upload the final run evidence
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ always() }}
         with:
-          name: production-attestation-${{ env.DEPLOY_SHA }}
+          name: production-run-evidence-${{ env.DEPLOY_SHA }}-attempt${{ github.run_attempt }}
           path: .cache/production-attestation/
           retention-days: 90
           if-no-files-found: warn
 
-      - name: Mark the production deployment failed
-        if: ${{ failure() }}
+      - name: Finalize the deployment record on failure or cancellation
+        if: ${{ failure() || cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           deployment="${{ steps.deployment.outputs.id }}"
           if [ -z "$deployment" ]; then

@@ -3,9 +3,12 @@ name: Production watch
 # Hourly deployed-state verification: the health endpoint must answer with
 # every dependency ok, and every active PUBLIC release manifest must pass the
 # same independent navigation verification an operator runs before trusting a
-# publication. A failure files (or updates) a labelled issue and the red run
-# notifies watchers — production degradation must never be discovered by a
-# visitor walking into it.
+# publication. The verifier runs from the SHA of the last successfully
+# attested production deployment — never from unreviewed default-branch HEAD,
+# whose code has not necessarily passed the release gate and must not touch
+# production-read credentials. A failure files (or updates) a labelled issue
+# and the red run notifies watchers — production degradation must never be
+# discovered by a visitor walking into it.
 
 on:
   schedule:
@@ -28,16 +31,32 @@ jobs:
     env:
       CI: "true"
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
       PRODUCTION_ORIGIN: https://spatial.whymelabs.com
       WATCH_LABEL: production-watch
+      WATCH_ISSUE_TITLE: "Production watch: health or public-release verification failing"
 
     steps:
-      - name: Check out the verification code
+      - name: Resolve the last attested production revision
+        id: attested
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow "Deploy and attest production" --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // empty')
+          if [ -z "$sha" ]; then
+            echo "::error::No successfully attested production deployment exists to watch"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Watching production as deployed from $sha"
+
+      - name: Check out the attested revision's verification code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ steps.attested.outputs.sha }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Use Node.js 22
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -45,6 +64,7 @@ jobs:
           node-version: "22"
           cache: npm
 
+      # No credentials during dependency installation.
       - name: Install locked dependencies
         run: npm ci
 
@@ -60,12 +80,17 @@ jobs:
             }
           done
 
-      - name: Verify every active public release manifest
+      - name: Enumerate active public releases
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           npx wrangler d1 execute DB --env production --remote --json --command \
             "SELECT c.slug FROM release_channels c JOIN releases r ON r.id = c.active_release_id WHERE r.revoked_at IS NULL AND r.access_policy = 'public'" \
-            > watch-slugs.json
-          slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync("watch-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
+            > "$RUNNER_TEMP/watch-slugs.json"
+
+      - name: Verify every active public release manifest
+        run: |
+          slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/watch-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
           test -n "$slugs"
           echo "Verifying public releases:"
           echo "$slugs"
@@ -80,10 +105,14 @@ jobs:
 
       - name: File or update the watch issue on failure
         if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --label "$WATCH_LABEL" --state open --json number --jq '.[0].number // empty')
+            --label "$WATCH_LABEL" --state open --json number,title \
+            --jq --arg title "$WATCH_ISSUE_TITLE" \
+            '[.[] | select(.title == $title)][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
               --body "Production watch failed again: $run_url"
@@ -92,16 +121,20 @@ jobs:
               --description "Automated production degradation reports" \
               --color "b60205" 2>/dev/null || true
             gh issue create --repo "$GITHUB_REPOSITORY" \
-              --title "Production watch: health or public-release verification failing" \
+              --title "$WATCH_ISSUE_TITLE" \
               --label "$WATCH_LABEL" \
-              --body "The hourly production watch failed. First failing run: $run_url — check the health probe and per-release verification output. This issue is updated by subsequent failures; close it once production verifies green."
+              --body "The hourly production watch failed. First failing run: $run_url — check the health probe and per-release verification output. This issue is updated by subsequent failures and closed automatically once production verifies green."
           fi
 
       - name: Close the watch issue on recovery
         if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --label "$WATCH_LABEL" --state open --json number --jq '.[0].number // empty')
+            --label "$WATCH_LABEL" --state open --json number,title \
+            --jq --arg title "$WATCH_ISSUE_TITLE" \
+            '[.[] | select(.title == $title)][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
               --comment "Production verified green again: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
