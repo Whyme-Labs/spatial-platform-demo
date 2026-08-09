@@ -3293,3 +3293,37 @@ function round(value, places) {
   const factor = 10 ** places;
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
+
+// The deployment canary round-trip: a tiny synthetic job CI creates after
+// every processor deployment to prove queue dispatch, container start,
+// worker authentication, lease, heartbeat, output upload, and completion
+// receipt end to end. The output is a PURE function of the input, so the
+// driver recomputes the expected bytes locally and compares digests —
+// determinism is asserted on content, never on timestamps.
+export function parseProcessorCanaryInput(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Processor canary input is not JSON");
+  }
+  if (
+    parsed?.schemaVersion !== "processor-canary-input-v1" ||
+    typeof parsed.nonce !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed.nonce)
+  ) {
+    throw new Error("Unrecognised processor canary input");
+  }
+  return { schemaVersion: parsed.schemaVersion, nonce: parsed.nonce };
+}
+
+export function processorCanaryOutput(request, inputSha256) {
+  if (!/^[0-9a-f]{64}$/.test(inputSha256 ?? "")) {
+    throw new Error("Processor canary output requires the input SHA-256");
+  }
+  return `${JSON.stringify({
+    schemaVersion: "processor-canary-output-v1",
+    nonce: request.nonce,
+    inputSha256,
+  })}\n`;
+}

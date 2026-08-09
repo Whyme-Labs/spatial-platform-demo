@@ -498,14 +498,24 @@ in [`docs/verification/fjd-sample-corpus.md`](./docs/verification/fjd-sample-cor
 ## Deployments
 
 Staging deploys and its deployed acceptance run automatically in CI for every
-push to `main` ("Deploy and accept staging"). Production deploys go through
-the operator-dispatched **Deploy and attest production** workflow, which
-refuses to run without a green release gate and staging acceptance for the
-exact SHA, records the rollback pair and a pending GitHub deployment before
-touching Cloudflare, rolls back automatically on partial failure, and
-publishes a SHA-bound attestation artifact (version IDs, immutable processor
-image digest, health, public-manifest verification, and the legacy
-capture-agreement integrity scan):
+push to `main` ("Deploy and accept staging"), finishing with a synthetic
+processor canary that proves queue dispatch, container start, worker
+authentication, lease, heartbeat, deterministic output, and completion
+receipt end to end. Production deploys go through the operator-dispatched
+**Deploy and attest production** workflow, bound to the protected GitHub
+`production` environment, which refuses to run without a green release gate
+and staging acceptance for the exact SHA, freezes the active rollback
+distribution before touching Cloudflare, enforces the expand-and-contract
+migration policy (`npm run audit:migrations` + `migrations/compatibility.json`),
+blocks on invalid frozen capture agreements that active surfaces still
+reference, runs the same processor canary against production, rolls back
+automatically on partial failure (re-proving health, releases, and the
+processor after restoration), and publishes a SHA-bound attestation artifact
+(version IDs, immutable processor image digest, migration compatibility,
+canary result, health, public-manifest verification, and the
+capture-agreement integrity scan). `main` itself is guarded by a ruleset —
+pull requests plus the release-gate checks required, bypass restricted —
+so the release controls cannot be rewritten by an unreviewed push:
 
 ```bash
 gh workflow run production.yml --ref main

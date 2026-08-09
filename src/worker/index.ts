@@ -13735,7 +13735,10 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   }
 
   const navigationCompletion = job.job_type === "navigation.build-v1";
-  const qaReportId = navigationCompletion ? null : crypto.randomUUID();
+  // Deployment canary round-trips prove the processing path itself; they
+  // must never enter QA or touch the (synthetic) scene lifecycle.
+  const canaryCompletion = job.job_type === "canary.roundtrip-v1";
+  const qaReportId = navigationCompletion || canaryCompletion ? null : crypto.randomUUID();
   const executionEvidence = {
     ...parsed.data.evidence,
     completedAt: new Date().toISOString(),
@@ -13973,7 +13976,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       scanStructure.reason ?? null,
     ));
   }
-  if (!navigationCompletion) {
+  if (!navigationCompletion && !canaryCompletion) {
     const auxiliaryCollisionCompletion = job.job_type === "asset.evidence-validate" &&
       job.input_kind === "collision" &&
       ["APPROVED", "PUBLISHED"].includes(job.version_status);
@@ -15062,6 +15065,7 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
       "semantic.extract-v1",
       "floorplan.extract-v1",
       "navigation.build-v1",
+      "canary.roundtrip-v1",
     ].includes(job.job_type)
   ) {
     statements.push(
@@ -17001,6 +17005,7 @@ async function reapExpiredJobLeases(env: Env): Promise<void> {
         "semantic.extract-v1",
         "floorplan.extract-v1",
         "navigation.build-v1",
+        "canary.roundtrip-v1",
       ].includes(job.job_type)
     ) {
       statements.push(

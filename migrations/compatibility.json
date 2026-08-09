@@ -1,0 +1,186 @@
+{
+  "schemaVersion": "migration-compatibility-declarations-v1",
+  "policy": "expand-and-contract: a migration deployed alongside application code must keep the frozen rollback Worker pair schema-compatible; destructive (contract) migrations ship alone in a later release, declare every destructive statement, and pin the oldest compatible application revision",
+  "grandfatherCutoff": "0053_navigation_final_capture_agreement.sql",
+  "migrations": {
+    "0001_initial.sql": {
+      "phase": "expand"
+    },
+    "0002_email_otp_jwt.sql": {
+      "phase": "expand"
+    },
+    "0003_refresh_token_history.sql": {
+      "phase": "expand"
+    },
+    "0004_mutation_idempotency.sql": {
+      "phase": "expand"
+    },
+    "0005_project_lifecycle.sql": {
+      "phase": "expand"
+    },
+    "0006_processing_agent_contract.sql": {
+      "phase": "expand"
+    },
+    "0007_client_review_hosting.sql": {
+      "phase": "expand"
+    },
+    "0008_spatial_authoring.sql": {
+      "phase": "expand"
+    },
+    "0009_measurement_products.sql": {
+      "phase": "expand"
+    },
+    "0010_lifecycle_enforcement.sql": {
+      "phase": "expand"
+    },
+    "0011_measurement_deliverables.sql": {
+      "phase": "expand"
+    },
+    "0012_team_access.sql": {
+      "phase": "expand"
+    },
+    "0013_project_bulk_operations.sql": {
+      "phase": "expand"
+    },
+    "0014_privacy_detection.sql": {
+      "phase": "expand"
+    },
+    "0015_portfolio_management.sql": {
+      "phase": "expand"
+    },
+    "0016_authored_geometry_change_evidence.sql": {
+      "phase": "expand"
+    },
+    "0017_capture_completeness_evidence.sql": {
+      "phase": "expand"
+    },
+    "0018_cloudflare_saas_domains.sql": {
+      "phase": "expand"
+    },
+    "0019_provider_backed_billing.sql": {
+      "phase": "expand"
+    },
+    "0020_enterprise_oidc.sql": {
+      "phase": "expand"
+    },
+    "0021_registered_raw_scene_change.sql": {
+      "phase": "expand"
+    },
+    "0022_capture_bundle_manifests.sql": {
+      "phase": "expand"
+    },
+    "0023_automatic_scene_registration.sql": {
+      "phase": "expand"
+    },
+    "0024_capture_adapter_ingestion.sql": {
+      "phase": "expand"
+    },
+    "0025_project_custom_fields_handoffs.sql": {
+      "phase": "expand"
+    },
+    "0026_capture_agent_credentials.sql": {
+      "phase": "expand"
+    },
+    "0027_upload_part_size.sql": {
+      "phase": "expand"
+    },
+    "0028_semantic_extraction.sql": {
+      "phase": "expand"
+    },
+    "0029_asset_bearing_handoffs.sql": {
+      "phase": "expand"
+    },
+    "0030_manual_merchant_billing.sql": {
+      "phase": "expand"
+    },
+    "0031_vendor_neutral_floorplans.sql": {
+      "phase": "expand"
+    },
+    "0032_floorplan_revision_sequence_guard.sql": {
+      "phase": "expand"
+    },
+    "0033_v5_navigation.sql": {
+      "phase": "expand"
+    },
+    "0034_navigation_profiles.sql": {
+      "phase": "expand"
+    },
+    "0035_navigation_world_units.sql": {
+      "phase": "expand"
+    },
+    "0036_spatial_world_unit_provenance.sql": {
+      "phase": "expand"
+    },
+    "0037_refresh_rotation_replay.sql": {
+      "phase": "expand"
+    },
+    "0038_recast_navigation_builds.sql": {
+      "phase": "expand"
+    },
+    "0039_numeric_release_revisions.sql": {
+      "phase": "expand"
+    },
+    "0040_authored_navigation_traversals.sql": {
+      "phase": "expand"
+    },
+    "0041_navigation_traversal_evidence.sql": {
+      "phase": "expand"
+    },
+    "0042_floorplan_navigation_receipts.sql": {
+      "phase": "expand"
+    },
+    "0043_floorplan_navigation_receipt_requirement.sql": {
+      "phase": "expand"
+    },
+    "0044_navigation_traversal_capture_receipts.sql": {
+      "phase": "expand"
+    },
+    "0045_capture_scene_registration_receipts.sql": {
+      "phase": "expand"
+    },
+    "0046_viewer_telemetry_sessions.sql": {
+      "phase": "expand"
+    },
+    "0047_metric_registered_traversal_guards.sql": {
+      "phase": "expand"
+    },
+    "0048_paired_capture_journey_receipts.sql": {
+      "phase": "expand"
+    },
+    "0049_integrity_provenance_and_job_dispatch.sql": {
+      "phase": "contract",
+      "grandfathered": true,
+      "declaredDestructive": [
+        "drop_table lifecycle_actions",
+        "rename_table lifecycle_actions_v2 lifecycle_actions"
+      ],
+      "note": "historical SQLite table rebuild, applied in production before the compatibility gate existed"
+    },
+    "0050_control_plane_invariants.sql": {
+      "phase": "contract",
+      "grandfathered": true,
+      "declaredDestructive": [
+        "drop_table organisation_invitations",
+        "rename_table organisation_invitations_v2 organisation_invitations"
+      ],
+      "note": "historical SQLite table rebuild, applied in production before the compatibility gate existed"
+    },
+    "0051_vendor_semantic_scan_structures.sql": {
+      "phase": "contract",
+      "grandfathered": true,
+      "declaredDestructive": [
+        "drop_table upload_parts",
+        "drop_table upload_sessions",
+        "rename_table upload_sessions_v2 upload_sessions",
+        "rename_table upload_parts_v2 upload_parts"
+      ],
+      "note": "historical SQLite table rebuild, applied in production before the compatibility gate existed"
+    },
+    "0052_floorplan_capture_agreement.sql": {
+      "phase": "expand"
+    },
+    "0053_navigation_final_capture_agreement.sql": {
+      "phase": "expand"
+    }
+  }
+}

@@ -522,14 +522,33 @@ The preferred path is CI-driven: every push to `main` runs the Release gate
 and then "Deploy and accept staging"; production ships via the
 operator-dispatched "Deploy and attest production" workflow
 (`gh workflow run production.yml --ref main`), which verifies both prior runs
-for the exact SHA, records the rollback pair and a pending GitHub deployment
-before touching Cloudflare, rolls back automatically on partial failure, and
-uploads a SHA-bound attestation (Worker version IDs, immutable processor image
-digest, health, public-manifest verification, and the legacy
-capture-agreement integrity scan). An hourly "Production watch" workflow
-re-verifies health and every active public release manifest, filing a
-`production-watch` issue on degradation. The manual sequence below remains
-for local emergencies only — it produces no SHA-bound evidence:
+for the exact SHA, freezes the active deployment distribution as the rollback
+receipt before touching Cloudflare, rolls back automatically on partial
+failure, and uploads a SHA-bound attestation (Worker version IDs, immutable
+processor image digest, health, public-manifest verification, the migration
+compatibility report, the processor canary result, and the capture-agreement
+integrity scan). The job is bound to the GitHub `production` environment,
+whose automatic deployment lifecycle is the single canonical deployment
+record. Both staging and production runs prove the processor end to end with
+a synthetic canary (`scripts/processor-canary.mjs`): a `canary.roundtrip-v1`
+job travels the real reconciler → queue → container → authenticated lease →
+heartbeat → deterministic output → completion-receipt path, the driver
+re-downloads the output and compares digests against a locally computed
+expectation, and every per-run resource is deleted afterwards. The
+capture-agreement integrity scan blocks the deploy when an invalid frozen
+row is still referenced by an approved build, in-flight build, or active
+release, and files a `capture-agreement-integrity` issue for every invalid
+row it finds. An hourly "Production watch" workflow re-verifies health and
+every active public release manifest from the last attested SHA, filing a
+`production-watch` issue on degradation.
+
+Release-control tamper resistance: `main` is protected by a GitHub ruleset
+(pull requests plus the three Release-gate checks required, force pushes and
+deletion blocked, bypass restricted to repository admins), and both GitHub
+environments only accept deployments from protected branches — so the code
+that runs while deployment credentials are present has itself passed the
+gate. The manual sequence below remains for local emergencies only — it
+produces no SHA-bound evidence:
 
 ```bash
 npm ci
@@ -550,14 +569,20 @@ application code reach production before its schema. D1 migrations are
 append-only after production deployment; do not edit an already applied file.
 
 Migrations follow **expand and contract**, because Worker rollback restores
-code but never data: a migration shipped with a deployment may only add
-nullable columns, new tables, or backwards-compatible indexes, so the frozen
-rollback Worker pair recorded in the production attestation remains
-schema-compatible if the deployment fails after migrating. Code that needs the
-new shape ships in the same or a later release; dropping or constraining
-retired columns happens only in a release after every running Worker version
-has stopped reading them. The production attestation records the migrations
-each deployment applied so a reviewer can check the contract was honoured.
+code but never data — and the policy is enforced, not narrated:
+`npm run audit:migrations` (part of `npm run check`) validates every
+migration against `migrations/compatibility.json`. An `expand`-phase
+migration may contain no destructive SQL (`DROP TABLE`/`COLUMN`, renames,
+`NOT NULL` columns without defaults); a `contract`-phase migration must
+declare every destructive statement it performs, name the earlier expand
+migration it contracts, and pin the oldest application revision compatible
+with the contracted schema. At deploy time the production workflow refuses a
+pending contract migration unless its expand migration is already applied in
+an earlier release AND the operator dispatched the run with
+`allow_contraction: true` — acknowledging that applying it expires every
+older rollback candidate. The attestation records the pending set, the
+compatibility report, and the last applied migration before and after the
+deploy so a reviewer can check the contract was honoured.
 The current release requires `0037_refresh_rotation_replay.sql`,
 `0038_recast_navigation_builds.sql`, and
 `0039_numeric_release_revisions.sql` in both environments before deploying the
@@ -702,7 +727,13 @@ The automated test suite runs the same release lifecycle locally in workerd.
 
 ## Rollback
 
-Code rollback:
+The production workflow rolls back automatically on partial failure: it
+restores the frozen active distribution for both Workers, compares the
+restored distributions structurally against the receipt, re-checks health,
+re-enumerates and re-verifies every public release fresh (never trusting
+evidence the failed forward deployment produced), and — when the processor
+was mutated — re-proves the restored processor with the same synthetic
+canary. Manual code rollback for emergencies:
 
 ```bash
 npx wrangler deployments list --env production

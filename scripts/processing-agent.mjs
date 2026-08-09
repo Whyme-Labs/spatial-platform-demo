@@ -53,8 +53,10 @@ import {
   inspectSpzContainer,
   parsePosterCameraJson,
   parsePlySceneSignature,
+  parseProcessorCanaryInput,
   planMultipartParts,
   processOutputEvent,
+  processorCanaryOutput,
   processorFailure,
   sparkPosterSceneDescriptor,
   sparkMaximumSphericalHarmonicDegree,
@@ -238,6 +240,59 @@ async function processNextJob() {
         "Downloaded source SHA-256 does not match the immutable asset record",
         { failureClass: "storage", retryable: true },
       );
+    }
+
+    if (job.jobType === "canary.roundtrip-v1") {
+      await reportProgress(50, "Round-tripping the deployment canary");
+      let request;
+      try {
+        request = parseProcessorCanaryInput(await readFile(sourcePath, "utf8"));
+      } catch (error) {
+        throw new ProcessingAgentError(
+          "CANARY_INPUT_INVALID",
+          safeMessage(error),
+          { failureClass: "input_validation", retryable: false },
+        );
+      }
+      const outputPath = join(workDirectory, "canary-output.json");
+      await writeFile(outputPath, processorCanaryOutput(request, download.sha256));
+      const output = await uploadOutput(
+        job,
+        lease.leaseToken,
+        "report",
+        outputPath,
+        "application/json",
+      );
+      const computeDurationMs = Math.max(1, Math.round(performance.now() - jobStartedAt));
+      await fetchJson(`/api/worker/jobs/${job.id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({
+          leaseToken: lease.leaseToken,
+          progressMessage: "Deployment canary round-trip completed",
+          outputs: [output],
+          report: {
+            schemaVersion: "processor-canary-execution-v1",
+            nonce: request.nonce,
+            inputSha256: download.sha256,
+            outputSha256: output.sha256,
+          },
+          evidence: {
+            processorVersion,
+            computeDurationMs,
+            activeHumanDurationMs: configuration.activeHumanDurationMs,
+            inputBytes: download.sizeBytes,
+            outputBytes: output.sizeBytes,
+            toolVersions: { node: process.version, processor: "0.16.0" },
+          },
+        }),
+      });
+      log("processor.canary_succeeded", {
+        jobId: job.id,
+        nonce: request.nonce,
+        outputSha256: output.sha256,
+        computeDurationMs,
+      });
+      return { claimed: true, jobId: job.id, state: "SUCCEEDED", canaryNonce: request.nonce };
     }
 
     if (job.jobType === "floorplan.extract-v1") {
