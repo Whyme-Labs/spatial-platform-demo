@@ -10,8 +10,17 @@
 // re-downloads the output from R2, recomputes its SHA-256, and compares it
 // against both the declared digest and the locally computed expectation —
 // the output is a pure function of the input, so any divergence is a real
-// pipeline defect, not noise. Every per-run resource is deleted afterwards;
-// the four fixed fixture rows (synthetic user/organisation/project/version)
+// pipeline defect, not noise.
+//
+// Execution-side failures are retried with a FRESH job (bounded): container
+// image rollouts propagate asynchronously after `wrangler deploy` returns,
+// so the first job after a deploy can land on an instance still running the
+// previous image — observed live as the old code shoving the canary input
+// through the Spark lane. A SUCCEEDED job whose verification fails is NEVER
+// retried: determinism means that is a real defect. Every per-run resource
+// is deleted per attempt, and a cleanup failure in ANY attempt fails the
+// canary even if a later attempt goes green — leaked rows are a defect too.
+// The four fixed fixture rows (synthetic user/organisation/project/version)
 // are inert, carry no release or publication, and are excluded from real
 // lifecycle transitions by job type.
 import { createHash, randomUUID } from "node:crypto";
@@ -31,6 +40,7 @@ const FIXTURES = {
   versionId: "caaa0000-0000-4000-8000-000000000003",
 };
 const CANARY_JOB_TYPE = "canary.roundtrip-v1";
+const RETRY_DELAY_MS = 90_000;
 
 function argValue(flag, fallback = null) {
   const index = process.argv.indexOf(flag);
@@ -39,7 +49,7 @@ function argValue(flag, fallback = null) {
 
 const environment = argValue("--env");
 if (!["staging", "production"].includes(environment ?? "")) {
-  console.error("Usage: processor-canary.mjs --env staging|production [--report <path>] [--timeout-seconds N]");
+  console.error("Usage: processor-canary.mjs --env staging|production [--report <path>] [--timeout-seconds N] [--attempts N]");
   process.exit(1);
 }
 if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN) {
@@ -49,6 +59,7 @@ if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN) {
 const reportPath = argValue("--report");
 const timeoutSeconds = Number(argValue("--timeout-seconds", "720"));
 const pollSeconds = Number(argValue("--poll-seconds", "10"));
+const maxAttempts = Number(argValue("--attempts", "3"));
 const bucket = `spatial-studio-assets-${environment}`;
 
 function sha256Hex(bytes) {
@@ -79,7 +90,8 @@ async function wrangler(args, { timeoutMs = 180_000 } = {}) {
     child.once("exit", (code) => {
       clearTimeout(timer);
       if (code === 0) resolvePromise(stdout);
-      else reject(new Error(`wrangler ${args.slice(0, 3).join(" ")} exited ${code}: ${stderr.slice(-2000)}`));
+      // Wrangler reports API errors on stdout under --json; include both.
+      else reject(new Error(`wrangler ${args.slice(0, 3).join(" ")} exited ${code}: ${stderr.slice(-1500)} ${stdout.slice(-1500)}`.trim()));
     });
   });
 }
@@ -97,7 +109,14 @@ async function d1(command) {
   return JSON.parse(output.slice(jsonStart));
 }
 
-async function main() {
+class CanaryFailure extends Error {
+  constructor(message, { retryable }) {
+    super(message);
+    this.retryable = retryable;
+  }
+}
+
+async function runCanaryAttempt(attemptNumber) {
   const runId = randomUUID();
   const jobId = randomUUID();
   const assetId = randomUUID();
@@ -110,10 +129,8 @@ async function main() {
   const inputObjectKey = `raw-private/${FIXTURES.organisationId}/${FIXTURES.projectId}/${FIXTURES.versionId}/${assetId}/canary-input.json`;
   const startedAt = Date.now();
 
-  const report = {
-    schemaVersion: "processor-canary-run-v1",
-    environment,
-    jobType: CANARY_JOB_TYPE,
+  const attempt = {
+    attempt: attemptNumber,
     jobId,
     assetId,
     nonce,
@@ -121,9 +138,12 @@ async function main() {
     expectedOutputSha256,
     verification: null,
     cleanup: [],
+    cleanupOk: true,
     ok: false,
+    retryable: false,
   };
   let outputObjectKey = null;
+  let inputStored = false;
 
   const workDirectory = await mkdtemp(join(tmpdir(), "processor-canary-"));
   const inputPath = join(workDirectory, "canary-input.json");
@@ -132,24 +152,28 @@ async function main() {
   try {
     // The immutable input must exist in R2 BEFORE the job row becomes
     // dispatchable — the container downloads and digest-checks it.
-    await wrangler([
-      "r2", "object", "put", `${bucket}/${inputObjectKey}`,
-      "--remote",
-      "--file", inputPath,
-      "--content-type", "application/json",
-      "--force",
-    ]);
+    try {
+      await wrangler([
+        "r2", "object", "put", `${bucket}/${inputObjectKey}`,
+        "--remote",
+        "--file", inputPath,
+        "--content-type", "application/json",
+        "--force",
+      ]);
+      inputStored = true;
+      await d1([
+        `INSERT OR IGNORE INTO users (id, email, display_name) VALUES ('${FIXTURES.userId}', 'deployment-canary@synthetic.invalid', 'Deployment canary (synthetic)')`,
+        `INSERT OR IGNORE INTO organisations (id, name, slug) VALUES ('${FIXTURES.organisationId}', 'Deployment canary (synthetic)', 'deployment-canary-synthetic')`,
+        `INSERT OR IGNORE INTO projects (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by) VALUES ('${FIXTURES.projectId}', '${FIXTURES.organisationId}', 'Processor canary (synthetic)', 'processor-canary', 'DRAFT', 'open-import', 'none', '${FIXTURES.userId}')`,
+        `INSERT OR IGNORE INTO scene_versions (id, project_id, version_number, status, created_by) VALUES ('${FIXTURES.versionId}', '${FIXTURES.projectId}', 1, 'INGESTED', '${FIXTURES.userId}')`,
+        `INSERT INTO assets (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, sha256, integrity_status, integrity_source) VALUES ('${assetId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', 'source', 'json', '${inputObjectKey}', 'canary-input.json', 'application/json', ${inputBytes}, '${inputSha256}', 'verified', 'client_declared')`,
+        `INSERT INTO processing_jobs (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state, priority, max_attempts) VALUES ('${jobId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', '${assetId}', '${CANARY_JOB_TYPE}', 'spatial-processor/0.16.0', 'canary-${runId}', 'QUEUED', 1000, 2)`,
+      ].join("; "));
+    } catch (setupError) {
+      throw new CanaryFailure(`setup failed: ${setupError.message}`, { retryable: true });
+    }
 
-    await d1([
-      `INSERT OR IGNORE INTO users (id, email, display_name) VALUES ('${FIXTURES.userId}', 'deployment-canary@synthetic.invalid', 'Deployment canary (synthetic)')`,
-      `INSERT OR IGNORE INTO organisations (id, name, slug) VALUES ('${FIXTURES.organisationId}', 'Deployment canary (synthetic)', 'deployment-canary-synthetic')`,
-      `INSERT OR IGNORE INTO projects (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by) VALUES ('${FIXTURES.projectId}', '${FIXTURES.organisationId}', 'Processor canary (synthetic)', 'processor-canary', 'DRAFT', 'open-import', 'none', '${FIXTURES.userId}')`,
-      `INSERT OR IGNORE INTO scene_versions (id, project_id, version_number, status, created_by) VALUES ('${FIXTURES.versionId}', '${FIXTURES.projectId}', 1, 'INGESTED', '${FIXTURES.userId}')`,
-      `INSERT INTO assets (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, sha256, integrity_status, integrity_source) VALUES ('${assetId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', 'source', 'json', '${inputObjectKey}', 'canary-input.json', 'application/json', ${inputBytes}, '${inputSha256}', 'verified', 'client_declared')`,
-      `INSERT INTO processing_jobs (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state, priority, max_attempts) VALUES ('${jobId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', '${assetId}', '${CANARY_JOB_TYPE}', 'spatial-processor/0.16.0', 'canary-${runId}', 'QUEUED', 1000, 2)`,
-    ].join("; "));
-
-    console.log(`Canary job ${jobId} queued in ${environment}; waiting for the deployed pipeline...`);
+    console.log(`Canary attempt ${attemptNumber}: job ${jobId} queued in ${environment}; waiting for the deployed pipeline...`);
     const deadline = Date.now() + timeoutSeconds * 1000;
     let row = null;
     for (;;) {
@@ -157,15 +181,26 @@ async function main() {
         `SELECT state, leased_by, heartbeat_at, completed_at, output_json, error_json, evidence_json FROM processing_jobs WHERE id = '${jobId}'`,
       );
       row = result[0]?.results?.[0] ?? null;
-      if (!row) throw new Error("Canary job row disappeared while polling");
+      if (!row) throw new CanaryFailure("canary job row disappeared while polling", { retryable: false });
       if (["SUCCEEDED", "FAILED", "CANCELLED", "DEAD_LETTER"].includes(row.state)) break;
       if (Date.now() > deadline) {
-        throw new Error(`Canary job still ${row.state} after ${timeoutSeconds} s (leased_by=${row.leased_by ?? "never"})`);
+        // A stuck rollout can starve container starts; a fresh attempt is
+        // allowed to try again against the settled deployment.
+        throw new CanaryFailure(
+          `canary job still ${row.state} after ${timeoutSeconds} s (leased_by=${row.leased_by ?? "never"})`,
+          { retryable: true },
+        );
       }
       await delay(pollSeconds * 1000);
     }
     if (row.state !== "SUCCEEDED") {
-      throw new Error(`Canary job ended ${row.state}: ${row.error_json ?? "no error recorded"}`);
+      // Execution-side failure: plausibly an instance still on the previous
+      // image (rollouts propagate after the deploy command returns), so a
+      // fresh job may be served by the new image.
+      throw new CanaryFailure(
+        `canary job ended ${row.state}: ${row.error_json ?? "no error recorded"}`,
+        { retryable: true },
+      );
     }
 
     const outputRecord = JSON.parse(row.output_json ?? "{}");
@@ -204,7 +239,7 @@ async function main() {
       failures.push("completion receipt declares no output object key");
     }
 
-    report.verification = {
+    attempt.verification = {
       state: row.state,
       leasedBy: row.leased_by,
       heartbeatAt: row.heartbeat_at,
@@ -217,18 +252,20 @@ async function main() {
       failures,
     };
     if (failures.length > 0) {
-      throw new Error(`Canary verification failed: ${failures.join("; ")}`);
+      // The job SUCCEEDED but its evidence is wrong: deterministic, real,
+      // and never retried away.
+      throw new CanaryFailure(`verification failed: ${failures.join("; ")}`, { retryable: false });
     }
-    report.ok = true;
+    attempt.ok = true;
   } catch (error) {
-    report.error = String(error?.message ?? error);
-    throw error;
+    attempt.error = String(error?.message ?? error);
+    attempt.retryable = error instanceof CanaryFailure ? error.retryable : true;
   } finally {
     // Per-run resources are always deleted, pass or fail; fixture rows are
     // reset in case a pre-canary application revision flipped their status.
     const cleanupSteps = [
       ["d1-rows", () => d1([
-        `DELETE FROM job_output_parts WHERE upload_id IN (SELECT id FROM job_output_uploads WHERE job_id = '${jobId}')`,
+        `DELETE FROM job_output_parts WHERE output_upload_id IN (SELECT id FROM job_output_uploads WHERE job_id = '${jobId}')`,
         `DELETE FROM job_output_uploads WHERE job_id = '${jobId}'`,
         `DELETE FROM qa_reports WHERE version_id = '${FIXTURES.versionId}'`,
         `DELETE FROM processing_jobs WHERE id = '${jobId}'`,
@@ -236,7 +273,9 @@ async function main() {
         `UPDATE scene_versions SET status = 'INGESTED', updated_at = datetime('now') WHERE id = '${FIXTURES.versionId}'`,
         `UPDATE projects SET status = 'DRAFT', updated_at = datetime('now') WHERE id = '${FIXTURES.projectId}'`,
       ].join("; "))],
-      ["r2-input", () => wrangler(["r2", "object", "delete", `${bucket}/${inputObjectKey}`, "--remote"])],
+      ...(inputStored
+        ? [["r2-input", () => wrangler(["r2", "object", "delete", `${bucket}/${inputObjectKey}`, "--remote"])]]
+        : []),
       ...(outputObjectKey
         ? [["r2-output", () => wrangler(["r2", "object", "delete", `${bucket}/${outputObjectKey}`, "--remote"])]]
         : []),
@@ -244,18 +283,43 @@ async function main() {
     for (const [resource, run] of cleanupSteps) {
       try {
         await run();
-        report.cleanup.push({ resource, status: "deleted" });
+        attempt.cleanup.push({ resource, status: "deleted" });
       } catch (cleanupError) {
-        report.cleanup.push({ resource, status: "failed", error: String(cleanupError?.message ?? cleanupError) });
-        report.ok = false;
+        attempt.cleanup.push({ resource, status: "failed", error: String(cleanupError?.message ?? cleanupError) });
+        attempt.cleanupOk = false;
       }
     }
-    const serialized = `${JSON.stringify(report, null, 2)}\n`;
-    if (reportPath) await writeFile(reportPath, serialized);
-    console.log(serialized);
   }
-  if (report.cleanup.some((step) => step.status === "failed")) {
-    throw new Error("Canary cleanup left resources behind — see the report");
+  return attempt;
+}
+
+async function main() {
+  const attempts = [];
+  for (let n = 1; n <= maxAttempts; n += 1) {
+    const attempt = await runCanaryAttempt(n);
+    attempts.push(attempt);
+    if (attempt.ok || !attempt.retryable) break;
+    if (n < maxAttempts) {
+      console.log(`Canary attempt ${n} failed (${attempt.error}); retrying with a fresh job in ${RETRY_DELAY_MS / 1000} s — a container rollout may still be propagating`);
+      await delay(RETRY_DELAY_MS);
+    }
+  }
+  const last = attempts[attempts.length - 1];
+  const cleanupOk = attempts.every((attempt) => attempt.cleanupOk);
+  const report = {
+    schemaVersion: "processor-canary-run-v2",
+    environment,
+    jobType: CANARY_JOB_TYPE,
+    attempts,
+    cleanupOk,
+    ok: last.ok && cleanupOk,
+  };
+  const serialized = `${JSON.stringify(report, null, 2)}\n`;
+  if (reportPath) await writeFile(reportPath, serialized);
+  console.log(serialized);
+  if (!report.ok) {
+    const reason = !last.ok ? last.error : "cleanup left resources behind — see the report";
+    throw new Error(reason);
   }
 }
 
