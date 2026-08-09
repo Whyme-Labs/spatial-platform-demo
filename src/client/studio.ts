@@ -7636,7 +7636,11 @@ function renderSceneAuthoringWorkspace(
   };
   if (!plan) {
     status.textContent = "Waiting for automatic structural reconstruction";
-  } else if (reviewable) {
+  } else if (reviewable || revisionId) {
+    // An approved revision may be re-approved WITHOUT geometry edits: the
+    // recook adopts the current collision standard (volumetric wall prisms,
+    // elevation-stamped capture classifications) for revisions that predate
+    // it — the staged migration path for pre-volumetric scenes.
     save.disabled = false;
   }
   void loadSceneAuthoringRenderable(project.id, spatial.version!.id);
@@ -7774,7 +7778,7 @@ function undoSceneAuthoringCorrection(): void {
   workspace.plan = prior;
   workspace.dirty = workspace.history.length > 0;
   workspace.undo.disabled = !workspace.history.length;
-  workspace.save.disabled = !workspace.dirty && !workspace.extractionId;
+  workspace.save.disabled = !workspace.dirty && !workspace.extractionId && !workspace.revisionId;
   workspace.status.textContent = workspace.dirty
     ? "Last rendered correction undone · earlier staged changes remain"
     : "All staged corrections undone";
@@ -7920,7 +7924,7 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
   if (!workspace?.plan) {
     throw new Error("Wait for the automatic structure before approving the walking map.");
   }
-  if (!workspace.dirty && !workspace.extractionId) {
+  if (!workspace.dirty && !workspace.extractionId && !workspace.revisionId) {
     throw new Error("The approved structure has no staged correction to save.");
   }
   parseEditableFloorplan(JSON.stringify(workspace.plan));
@@ -7964,21 +7968,33 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
     extractionId = draft.extraction.id;
     workspace.extractionId = extractionId;
   }
-  await api(
-    `/api/projects/${workspace.projectId}/spatial/floorplan-extractions/${extractionId}/review`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        clientOperationId: workspace.correctionReviewOperationId,
-        decision: "approve",
-        note: workspace.dirty
-          ? "Corrected against the registered Gaussian render in Spatial Studio."
-          : "Automatic structure inspected and approved against the registered Gaussian render in Spatial Studio.",
-        plan: workspace.plan,
-        ...(captureAgreementResolutions.length ? { captureAgreementResolutions } : {}),
-      }),
-    },
-  );
+  try {
+    await api(
+      `/api/projects/${workspace.projectId}/spatial/floorplan-extractions/${extractionId}/review`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          clientOperationId: workspace.correctionReviewOperationId,
+          decision: "approve",
+          note: workspace.dirty
+            ? "Corrected against the registered Gaussian render in Spatial Studio."
+            : "Automatic structure inspected and approved against the registered Gaussian render in Spatial Studio.",
+          plan: workspace.plan,
+          ...(captureAgreementResolutions.length ? { captureAgreementResolutions } : {}),
+        }),
+      },
+    );
+  } catch (error) {
+    // A clean re-approval of a pre-agreement revision can be rejected with
+    // FRESH capture-agreement findings computed on the correction draft the
+    // workspace has never seen. Reload so the draft's findings render for
+    // classification before the retry — but only when nothing is staged:
+    // a dirty workspace must never lose the operator's corrections.
+    if (!workspace.dirty) {
+      await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
+    }
+    throw error;
+  }
   showToast("Corrections saved; collision and navigation rebuild queued");
   await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
 }
