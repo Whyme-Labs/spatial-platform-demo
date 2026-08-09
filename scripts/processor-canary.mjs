@@ -52,8 +52,8 @@ if (!["staging", "production"].includes(environment ?? "")) {
   console.error("Usage: processor-canary.mjs --env staging|production [--report <path>] [--timeout-seconds N] [--attempts N]");
   process.exit(1);
 }
-if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN) {
-  console.error("::error::CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN are required");
+if (!process.env.CLOUDFLARE_ACCOUNT_ID || (process.env.CI === "true" && !process.env.CLOUDFLARE_API_TOKEN)) {
+  console.error("::error::CLOUDFLARE_ACCOUNT_ID (and CLOUDFLARE_API_TOKEN in CI) are required; local runs may use wrangler OAuth");
   process.exit(1);
 }
 const reportPath = argValue("--report");
@@ -203,6 +203,9 @@ async function runCanaryAttempt(attemptNumber) {
       );
     }
 
+    // The completion handler rewrites declared outputs into asset summaries
+    // ({id, kind, format, sizeBytes}) and mints one immutable assets row per
+    // output — object key and processor-declared digest live on that row.
     const outputRecord = JSON.parse(row.output_json ?? "{}");
     const outputs = outputRecord.outputs ?? [];
     const evidence = JSON.parse(row.evidence_json ?? "{}");
@@ -220,23 +223,34 @@ async function runCanaryAttempt(attemptNumber) {
     if (!evidence.processorVersion) failures.push("execution receipt is missing processorVersion");
     if (!evidence.completedAt) failures.push("execution receipt is missing completedAt");
     let storedOutputSha256 = null;
-    if (outputs[0]?.objectKey) {
-      outputObjectKey = outputs[0].objectKey;
-      if (!outputObjectKey.startsWith(`reports-private/${FIXTURES.organisationId}/${FIXTURES.projectId}/${FIXTURES.versionId}/${jobId}/`)) {
-        failures.push(`output landed at unexpected key ${outputObjectKey}`);
-      }
-      const outputPath = join(workDirectory, "canary-output.json");
-      await wrangler(["r2", "object", "get", `${bucket}/${outputObjectKey}`, "--remote", "--file", outputPath]);
-      const storedBytes = await readFile(outputPath);
-      storedOutputSha256 = sha256Hex(storedBytes);
-      if (storedOutputSha256 !== expectedOutputSha256) {
-        failures.push(`stored output digest ${storedOutputSha256} differs from the deterministic expectation ${expectedOutputSha256}`);
-      }
-      if ((outputs[0].sha256 ?? "").toLowerCase() !== expectedOutputSha256) {
-        failures.push(`declared output digest ${outputs[0].sha256} differs from the deterministic expectation`);
+    let declaredOutputSha256 = null;
+    const outputAssetId = outputs[0]?.id;
+    if (outputAssetId && /^[0-9a-f-]{36}$/.test(outputAssetId)) {
+      const assetResult = await d1(
+        `SELECT object_key, sha256, size_bytes FROM assets WHERE id = '${outputAssetId}'`,
+      );
+      const outputAsset = assetResult[0]?.results?.[0] ?? null;
+      if (!outputAsset) {
+        failures.push(`completion summary names asset ${outputAssetId}, but no such assets row exists`);
+      } else {
+        outputObjectKey = outputAsset.object_key;
+        declaredOutputSha256 = (outputAsset.sha256 ?? "").toLowerCase() || null;
+        if (!outputObjectKey.startsWith(`reports-private/${FIXTURES.organisationId}/${FIXTURES.projectId}/${FIXTURES.versionId}/${jobId}/`)) {
+          failures.push(`output landed at unexpected key ${outputObjectKey}`);
+        }
+        if (declaredOutputSha256 !== expectedOutputSha256) {
+          failures.push(`declared output digest ${declaredOutputSha256} differs from the deterministic expectation`);
+        }
+        const outputPath = join(workDirectory, "canary-output.json");
+        await wrangler(["r2", "object", "get", `${bucket}/${outputObjectKey}`, "--remote", "--file", outputPath]);
+        const storedBytes = await readFile(outputPath);
+        storedOutputSha256 = sha256Hex(storedBytes);
+        if (storedOutputSha256 !== expectedOutputSha256) {
+          failures.push(`stored output digest ${storedOutputSha256} differs from the deterministic expectation ${expectedOutputSha256}`);
+        }
       }
     } else {
-      failures.push("completion receipt declares no output object key");
+      failures.push("completion summary names no output asset");
     }
 
     attempt.verification = {
@@ -245,8 +259,9 @@ async function runCanaryAttempt(attemptNumber) {
       heartbeatAt: row.heartbeat_at,
       completedAt: row.completed_at,
       processorVersion: evidence.processorVersion ?? null,
+      outputAssetId: outputAssetId ?? null,
       outputObjectKey,
-      declaredOutputSha256: outputs[0]?.sha256 ?? null,
+      declaredOutputSha256,
       storedOutputSha256,
       roundTripMs: Date.now() - startedAt,
       failures,
@@ -261,24 +276,37 @@ async function runCanaryAttempt(attemptNumber) {
     attempt.error = String(error?.message ?? error);
     attempt.retryable = error instanceof CanaryFailure ? error.retryable : true;
   } finally {
-    // Per-run resources are always deleted, pass or fail; fixture rows are
-    // reset in case a pre-canary application revision flipped their status.
+    // Cleanup sweeps the ENTIRE synthetic fixture version — every canary
+    // job, every asset row, every stored object — not just this run's ids,
+    // so a leak from an earlier failed attempt is collected by the next one.
+    // The fixture version carries nothing but canary artifacts by
+    // construction, and fixture statuses are reset in case a pre-canary
+    // application revision flipped them.
+    const objectKeys = new Set(
+      [inputStored ? inputObjectKey : null, outputObjectKey].filter(Boolean),
+    );
+    try {
+      const assetRows = await d1(`SELECT object_key FROM assets WHERE version_id = '${FIXTURES.versionId}'`);
+      for (const assetRow of assetRows[0]?.results ?? []) objectKeys.add(assetRow.object_key);
+    } catch (enumerateError) {
+      attempt.cleanup.push({ resource: "asset-enumeration", status: "failed", error: String(enumerateError?.message ?? enumerateError) });
+      attempt.cleanupOk = false;
+    }
+    const canaryJobs = `SELECT id FROM processing_jobs WHERE version_id = '${FIXTURES.versionId}' AND job_type = '${CANARY_JOB_TYPE}'`;
     const cleanupSteps = [
       ["d1-rows", () => d1([
-        `DELETE FROM job_output_parts WHERE output_upload_id IN (SELECT id FROM job_output_uploads WHERE job_id = '${jobId}')`,
-        `DELETE FROM job_output_uploads WHERE job_id = '${jobId}'`,
+        `DELETE FROM job_output_parts WHERE output_upload_id IN (SELECT id FROM job_output_uploads WHERE job_id IN (${canaryJobs}))`,
+        `DELETE FROM job_output_uploads WHERE job_id IN (${canaryJobs})`,
         `DELETE FROM qa_reports WHERE version_id = '${FIXTURES.versionId}'`,
-        `DELETE FROM processing_jobs WHERE id = '${jobId}'`,
-        `DELETE FROM assets WHERE id = '${assetId}'`,
+        `DELETE FROM processing_jobs WHERE version_id = '${FIXTURES.versionId}' AND job_type = '${CANARY_JOB_TYPE}'`,
+        `DELETE FROM assets WHERE version_id = '${FIXTURES.versionId}'`,
         `UPDATE scene_versions SET status = 'INGESTED', updated_at = datetime('now') WHERE id = '${FIXTURES.versionId}'`,
         `UPDATE projects SET status = 'DRAFT', updated_at = datetime('now') WHERE id = '${FIXTURES.projectId}'`,
       ].join("; "))],
-      ...(inputStored
-        ? [["r2-input", () => wrangler(["r2", "object", "delete", `${bucket}/${inputObjectKey}`, "--remote"])]]
-        : []),
-      ...(outputObjectKey
-        ? [["r2-output", () => wrangler(["r2", "object", "delete", `${bucket}/${outputObjectKey}`, "--remote"])]]
-        : []),
+      ...[...objectKeys].map((objectKey) => [
+        `r2:${objectKey.split("/").slice(-2).join("/")}`,
+        () => wrangler(["r2", "object", "delete", `${bucket}/${objectKey}`, "--remote"]),
+      ]),
     ];
     for (const [resource, run] of cleanupSteps) {
       try {
