@@ -4524,6 +4524,7 @@ app.get("/api/projects/:projectId", async (context) => {
     context.env.DB.prepare(`
       SELECT r.id, r.version_id, sv.version_number, r.release_number, r.access_policy,
         r.published_at, r.expires_at, r.revoked_at,
+        r.viewer_config_json,
         COALESCE(
           (SELECT active.slug FROM release_channels active
             WHERE active.active_release_id = r.id

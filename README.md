@@ -125,6 +125,17 @@ Cloudflare edge caching. The browser cache remains bounded to 30 minutes while
 the Worker checks the live channel before using its long-lived per-edge copy;
 protected releases retain short-lived signed URLs and private caching.
 
+Re-approving the structure of a scene that already backs a live channel
+offers same-session auto-republish: the operator confirms the intent in the
+same gesture as the approval, and once the rebuilt walking map is accepted
+the SAME Studio session republishes through the identical fully gated publish
+endpoint, cloning the live release's slug, access policy, and stored viewer
+configuration. Publication therefore stays operator-authenticated — nothing
+server-side ever mints a public release — and the clone refuses rather than
+guesses when fidelity cannot be proven (token-gated releases, unreadable
+stored configuration, or a source-to-world transform whose registration
+evidence cannot be re-derived exactly).
+
 ## Platform boundaries
 
 Implemented:

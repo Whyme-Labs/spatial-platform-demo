@@ -11,6 +11,7 @@ import {
   restoreAuthenticationSession,
 } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
+import { buildRepublishPayload } from "./release-clone";
 import {
   parseSceneRotationDegrees,
   SCENE_ROTATION_MAX_DEGREES,
@@ -239,6 +240,7 @@ type Release = {
   published_at: string;
   expires_at?: string | null;
   revoked_at: string | null;
+  viewer_config_json?: string | null;
   slug: string;
   is_active: number;
 };
@@ -7953,6 +7955,22 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
       captureAgreementFindingIdentity(finding),
     )!,
   }));
+  // Capture the republish intent in the SAME gesture as the approval: if
+  // this version backs a live channel, the operator can decide now and the
+  // session republishes for them once the rebuild is accepted. Declining
+  // keeps publication fully manual, exactly as before.
+  const activeRelease = state.selected?.releases.find((release) =>
+    Boolean(release.is_active) && !release.revoked_at &&
+    release.version_id === workspace.versionId
+  ) ?? null;
+  const republishRelease = activeRelease && window.confirm(
+    `Republish "${activeRelease.slug}" automatically once the rebuilt walking map is accepted?\n\n` +
+    "The live release keeps its slug, access policy, and viewer configuration — only the walking map refreshes. Cancel keeps publication manual.",
+  )
+    ? activeRelease
+    : null;
+  const baselineBuildId = [...(state.spatial?.navigationBuilds ?? [])]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.id ?? null;
   let extractionId = workspace.extractionId;
   if (!extractionId) {
     if (!workspace.revisionId) {
@@ -7997,6 +8015,78 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
   }
   showToast("Corrections saved; collision and navigation rebuild queued");
   await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
+  if (republishRelease) {
+    void watchRebuildAndRepublish(
+      workspace.projectId,
+      workspace.versionId,
+      republishRelease,
+      baselineBuildId,
+    );
+  }
+}
+
+// The operator who just approved the structure has already expressed the
+// only decision a republish needs; making them come back to click Publish
+// again is ceremony. This watcher keeps publication operator-authenticated
+// — it runs in the SAME Studio session and calls the SAME fully gated
+// publish endpoint as the manual button, cloning the live release's slug,
+// access policy, and stored viewer configuration so nothing changes for the
+// public except the walking map they asked to refresh. Closing the tab
+// simply leaves the manual button as before.
+async function watchRebuildAndRepublish(
+  projectId: string,
+  versionId: string,
+  release: Release,
+  baselineBuildId: string | null,
+): Promise<void> {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  showToast(`Watching the rebuild; "${release.slug}" republishes automatically once it is accepted`);
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    let latest: SpatialWorkspace["navigationBuilds"][number] | null = null;
+    try {
+      const spatial = await api<SpatialWorkspace>(
+        `/api/projects/${projectId}/spatial?versionId=${encodeURIComponent(versionId)}`,
+      );
+      latest = [...(spatial.navigationBuilds ?? [])]
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+    } catch {
+      continue;
+    }
+    // Only a build that did not exist when the operator approved counts as
+    // the rebuild — the previous APPROVED build must never satisfy this.
+    if (!latest || latest.id === baselineBuildId) continue;
+    if (latest.status === "REJECTED" || latest.status === "FAILED") {
+      showNotice(`The rebuilt walking map ended ${latest.status}; "${release.slug}" was not republished.`, "error");
+      return;
+    }
+    if (latest.status !== "APPROVED") continue;
+    const clone = buildRepublishPayload({
+      slug: release.slug,
+      accessPolicy: release.access_policy,
+      expiresAt: release.expires_at ?? null,
+      viewerConfigJson: release.viewer_config_json ?? null,
+      clientOperationId: crypto.randomUUID(),
+      reviewedSourceToWorld: reviewedSemanticSourceToWorld(),
+    });
+    if (!clone.ok) {
+      showNotice(`Rebuilt walking map accepted, but automatic republish stopped: ${clone.reason}`, "error");
+      return;
+    }
+    try {
+      const result = await api<{ release: { url: string } }>(
+        `/api/projects/${projectId}/releases`,
+        { method: "POST", body: JSON.stringify(clone.payload) },
+      );
+      showNotice(`Republished with the new walking map: ${result.release.url}`, "success");
+      showToast("Channel republished with the rebuilt walking map");
+      await refreshAll();
+    } catch (error) {
+      showNotice(`Rebuilt walking map accepted, but the automatic republish failed: ${errorMessage(error)} — publish manually from the release panel.`, "error");
+    }
+    return;
+  }
+  showNotice(`The rebuild was not accepted within 15 minutes; publish "${release.slug}" manually once it is.`, "error");
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
