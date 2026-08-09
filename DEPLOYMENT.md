@@ -518,6 +518,19 @@ incident persists. Reprocessing is an explicit Studio action.
 
 ## Release procedure
 
+The preferred path is CI-driven: every push to `main` runs the Release gate
+and then "Deploy and accept staging"; production ships via the
+operator-dispatched "Deploy and attest production" workflow
+(`gh workflow run production.yml --ref main`), which verifies both prior runs
+for the exact SHA, records the rollback pair and a pending GitHub deployment
+before touching Cloudflare, rolls back automatically on partial failure, and
+uploads a SHA-bound attestation (Worker version IDs, immutable processor image
+digest, health, public-manifest verification, and the legacy
+capture-agreement integrity scan). An hourly "Production watch" workflow
+re-verifies health and every active public release manifest, filing a
+`production-watch` issue on degradation. The manual sequence below remains
+for local emergencies only — it produces no SHA-bound evidence:
+
 ```bash
 npm ci
 npm run check

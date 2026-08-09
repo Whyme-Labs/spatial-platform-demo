@@ -497,10 +497,26 @@ in [`docs/verification/fjd-sample-corpus.md`](./docs/verification/fjd-sample-cor
 
 ## Deployments
 
-```bash
-npm run db:migrate:staging
-npm run deploy:staging
+Staging deploys and its deployed acceptance run automatically in CI for every
+push to `main` ("Deploy and accept staging"). Production deploys go through
+the operator-dispatched **Deploy and attest production** workflow, which
+refuses to run without a green release gate and staging acceptance for the
+exact SHA, records the rollback pair and a pending GitHub deployment before
+touching Cloudflare, rolls back automatically on partial failure, and
+publishes a SHA-bound attestation artifact (version IDs, immutable processor
+image digest, health, public-manifest verification, and the legacy
+capture-agreement integrity scan):
 
+```bash
+gh workflow run production.yml --ref main
+```
+
+An hourly **Production watch** workflow independently re-verifies the health
+endpoint and every active public release manifest, filing and auto-closing a
+`production-watch` issue on degradation and recovery. The manual commands
+remain for local emergencies only — they produce no SHA-bound evidence:
+
+```bash
 npm run db:migrate:production
 npm run deploy:production
 ```
