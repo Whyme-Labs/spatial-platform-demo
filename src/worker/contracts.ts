@@ -2337,7 +2337,15 @@ export const floorplanExtractionReviewSchema = z.object({
 
 // A revision's frozen capture-agreement blob: `undefined` means the revision
 // predates the agreement (or had none), `null` means the blob exists but is
-// unreadable — which every consumer treats as a hard failure.
+// unreadable or internally inconsistent — which every consumer treats as a
+// hard failure. Reading fails closed rather than assuming every old blob was
+// minted by the current canonicalizing endpoint: a resolution must match a
+// crossing in its OWN frozen report, must not claim an elevation the report
+// cannot prove, must agree with the finding's elevation when both are known,
+// and no span may be resolved twice. A blob minted while an older endpoint
+// trusted caller elevation therefore surfaces as invalid here — blocking new
+// builds on that revision until an operator re-reviews it — instead of
+// letting a mis-elevated frozen contradiction silently fail to match.
 export function parseFrozenCaptureAgreement(captureAgreementJson: string | null): {
   report: FloorplanCaptureAgreement | null;
   resolutions: CaptureAgreementResolution[];
@@ -2355,6 +2363,35 @@ export function parseFrozenCaptureAgreement(captureAgreementJson: string | null)
   const resolutions = z.array(captureAgreementResolutionSchema)
     .safeParse(Reflect.get(stored, "resolutions") ?? []);
   if (!report.success || !resolutions.success) return null;
+  if (resolutions.data.length) {
+    // Every mintable blob with resolutions carried the report they resolve;
+    // a resolutions-without-report blob matches no version of the endpoint.
+    if (!report.data) return null;
+    const identity = (span: {
+      barrierId: string;
+      levelKey?: string | null;
+      from: readonly [number, number];
+      to: readonly [number, number];
+    }) =>
+      `${span.barrierId}|${span.levelKey ?? ""}|${span.from.join(",")}|${span.to.join(",")}`;
+    const crossingsByIdentity = new Map(
+      report.data.findings
+        .filter((finding) => finding.kind === "barrier_crosses_open_capture")
+        .map((finding) => [identity(finding), finding] as const),
+    );
+    const seen = new Set<string>();
+    for (const resolution of resolutions.data) {
+      const key = identity(resolution);
+      if (seen.has(key)) return null;
+      seen.add(key);
+      const finding = crossingsByIdentity.get(key);
+      if (!finding) return null;
+      if (resolution.elevationM !== undefined) {
+        if (finding.elevationM === undefined) return null;
+        if (Math.abs(resolution.elevationM - finding.elevationM) > 1e-6) return null;
+      }
+    }
+  }
   return { report: report.data, resolutions: resolutions.data };
 }
 
@@ -2551,20 +2588,45 @@ export type FinalCaptureAgreementResolution =
 // second phase: they reference exact finding ids, may only address crossings
 // that no frozen classification qualified for, and never reuse or stretch —
 // each id resolves exactly one finding.
-export function finalCaptureAgreementBlockReason(input: {
+export type FinalAgreementCoverage = {
+  findingId: string;
+  canonicalFinding: {
+    barrierId: string;
+    elevationM?: number;
+    from: readonly [number, number];
+    to: readonly [number, number];
+  };
+  source: "frozen-proposal-resolution" | "manual-approval-resolution";
+  classification: string;
+  note?: string;
+  sourceResolutionIdentity?: string;
+};
+
+// The full reconciliation result: the block reason (null when approval may
+// proceed) and, on success, exactly which evidence covered each surviving
+// crossing — the material an approval receipt freezes so it can stand alone.
+export function finalCaptureAgreementReconciliation(input: {
   captureExpected: boolean;
   finalAgreement: unknown;
   captureAgreementJson: string | null;
   manualResolutions?: readonly FinalCaptureAgreementResolution[];
-}): string | null {
-  if (!input.captureExpected) return null;
+}): { blockReason: string | null; coverage: FinalAgreementCoverage[] } {
+  if (!input.captureExpected) return { blockReason: null, coverage: [] };
   const parsedFinal = floorplanCaptureAgreementSchema.safeParse(input.finalAgreement);
   if (!parsedFinal.success) {
-    return "Automatic acceptance blocked: a capture was pinned for this build but it carries no readable final capture agreement.";
+    return {
+      blockReason:
+        "Automatic acceptance blocked: a capture was pinned for this build but it carries no readable final capture agreement.",
+      coverage: [],
+    };
   }
   const frozen = parseFrozenCaptureAgreement(input.captureAgreementJson);
   if (frozen === null) {
-    return "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.";
+    return {
+      blockReason:
+        "Automatic acceptance blocked: the revision's frozen capture agreement is unreadable.",
+      coverage: [],
+    };
   }
   const frozenResolutions = frozen?.resolutions ?? [];
   const crossings = parsedFinal.data.findings
@@ -2617,6 +2679,7 @@ export function finalCaptureAgreementBlockReason(input: {
     manualByFindingId.set(manual.findingId, manual);
   }
   const failures: string[] = [];
+  const coverage: FinalAgreementCoverage[] = [];
   for (const [crossingIndex, finding] of crossings.entries()) {
     const contradiction = contradictedBy.get(crossingIndex);
     if (contradiction) {
@@ -2625,14 +2688,33 @@ export function finalCaptureAgreementBlockReason(input: {
       );
       continue;
     }
+    const findingId = finalAgreementFindingIdentity(finding);
+    const canonicalFinding = {
+      barrierId: finding.barrierId,
+      ...(finding.elevationM !== undefined ? { elevationM: finding.elevationM } : {}),
+      from: finding.from,
+      to: finding.to,
+    };
     const resolutionIndex = matchedByCrossing.get(crossingIndex);
-    const manual = manualByFindingId.get(finalAgreementFindingIdentity(finding));
+    const manual = manualByFindingId.get(findingId);
     if (resolutionIndex !== undefined) {
       if (manual) {
         failures.push(
           `${finding.barrierId} already carries a frozen classification; a manual approval resolution cannot restate or replace it`,
         );
+        continue;
       }
+      const matched = frozenResolutions[resolutionIndex]!;
+      coverage.push({
+        findingId,
+        canonicalFinding,
+        source: "frozen-proposal-resolution",
+        classification: matched.classification,
+        ...(matched.note !== undefined ? { note: matched.note } : {}),
+        sourceResolutionIdentity: `${matched.barrierId}|${matched.levelKey ?? ""}|${
+          matched.from.join(",")
+        }|${matched.to.join(",")}`,
+      });
       continue;
     }
     if (!manual) {
@@ -2647,12 +2729,33 @@ export function finalCaptureAgreementBlockReason(input: {
       failures.push(
         `${finding.barrierId} is classified ${manual.classification} yet still stands across open capture`,
       );
+      continue;
     }
+    coverage.push({
+      findingId,
+      canonicalFinding,
+      source: "manual-approval-resolution",
+      classification: manual.classification,
+      note: manual.note,
+    });
   }
   if (failures.length) {
-    return `Automatic acceptance blocked: ${failures.slice(0, 3).join("; ")}.`;
+    return {
+      blockReason: `Automatic acceptance blocked: ${failures.slice(0, 3).join("; ")}.`,
+      coverage: [],
+    };
   }
-  return null;
+  return { blockReason: null, coverage };
+}
+
+// The gate alone, for callers that only decide pass/block.
+export function finalCaptureAgreementBlockReason(input: {
+  captureExpected: boolean;
+  finalAgreement: unknown;
+  captureAgreementJson: string | null;
+  manualResolutions?: readonly FinalCaptureAgreementResolution[];
+}): string | null {
+  return finalCaptureAgreementReconciliation(input).blockReason;
 }
 
 // Validates manual approval resolutions against the immutable final

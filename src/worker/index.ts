@@ -71,9 +71,9 @@ import {
   floorplanExportSchema,
   floorplanProposalReportSchema,
   floorplanReviewPlanSchema,
-  finalAgreementFindingIdentity,
-  finalCaptureAgreementBlockReason,
+  finalCaptureAgreementReconciliation,
   invalidFinalAgreementResolutionIssues,
+  type FinalAgreementCoverage,
   floorplanCaptureAgreementSchema,
   frozenCaptureAgreementBlockReason,
   parseFrozenCaptureAgreement,
@@ -8715,6 +8715,8 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   if (!reviewable || reviewable.status !== "READY_FOR_REVIEW" || !reviewable.artifact_json) {
     return conflict(context, "Only a completed navigation build can be reviewed");
   }
+  let manualApprovalCoverage: FinalAgreementCoverage[] = [];
+  let manualApprovalRevisionId: string | null = null;
   if (parsed.data.decision === "approve") {
     const parameters = parseStoredObject(reviewable.parameters_json);
     const automaticLayout = parameters && typeof parameters === "object"
@@ -8825,75 +8827,35 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
           finalCaptureAgreementResolutions: resolutionIssues,
         });
       }
-      const finalBlock = finalCaptureAgreementBlockReason({
+      const reconciliation = finalCaptureAgreementReconciliation({
         captureExpected,
         finalAgreement: artifact.data.finalCaptureAgreement,
         captureAgreementJson: agreementRevision?.capture_agreement_json ?? null,
         manualResolutions,
       });
-      if (finalBlock) {
+      if (reconciliation.blockReason) {
         return unprocessable(context, {
           finalCaptureAgreementResolutions: [
-            finalBlock.replace(/^Automatic acceptance blocked/, "Approval blocked"),
+            reconciliation.blockReason.replace(
+              /^Automatic acceptance blocked/,
+              "Approval blocked",
+            ),
           ],
         });
       }
+      manualApprovalCoverage = reconciliation.coverage;
+      manualApprovalRevisionId = typeof revisionId === "string" ? revisionId : null;
     }
   }
   const status = parsed.data.decision === "approve" ? "APPROVED" : "REJECTED";
-  // Every approval of a capture-pinned build freezes a receipt bound by hash
-  // to the exact final agreement and artifact it cleared, naming each
-  // crossing with its canonical geometry and whether frozen proposal
-  // evidence or an explicit manual classification covered it. The receipt
-  // must stand on its own: proving what was approved cannot depend on later
-  // re-interpreting a mutable column elsewhere.
-  let manualAgreementJson: string | null = null;
-  if (parsed.data.decision === "approve") {
-    const storedArtifact = parseStoredObject(reviewable.artifact_json ?? "null");
-    const finalAgreement = storedArtifact && typeof storedArtifact === "object"
-      ? Reflect.get(storedArtifact, "finalCaptureAgreement")
-      : undefined;
-    const parsedAgreement = floorplanCaptureAgreementSchema.optional()
-      .safeParse(finalAgreement ?? undefined);
-    if (parsedAgreement.success && parsedAgreement.data) {
-      const manualByFindingId = new Map(
-        (parsed.data.finalCaptureAgreementResolutions ?? [])
-          .map((resolution) => [resolution.findingId, resolution] as const),
-      );
-      manualAgreementJson = JSON.stringify({
-        schemaVersion: "final-capture-approval-v2",
-        finalAgreementSha256: await sha256Hex(JSON.stringify(parsedAgreement.data)),
-        navigationArtifactSha256: await sha256Hex(reviewable.artifact_json ?? ""),
-        matcherVersion: "capture-reconciliation-v2",
-        result: "passed",
-        resolvedFindings: parsedAgreement.data.findings
-          .filter((finding) => finding.kind === "barrier_crosses_open_capture")
-          .map((finding) => {
-            const findingId = finalAgreementFindingIdentity(finding);
-            const manual = manualByFindingId.get(findingId);
-            return {
-              findingId,
-              canonicalFinding: {
-                barrierId: finding.barrierId,
-                ...(finding.elevationM !== undefined
-                  ? { elevationM: finding.elevationM }
-                  : {}),
-                from: finding.from,
-                to: finding.to,
-              },
-              source: manual
-                ? "manual-approval-resolution"
-                : "frozen-proposal-resolution",
-              ...(manual
-                ? { classification: manual.classification, note: manual.note }
-                : {}),
-            };
-          }),
-        reviewedBy: auth.userId,
-        reviewedAt: new Date().toISOString(),
-      });
-    }
-  }
+  const manualAgreementJson = parsed.data.decision === "approve"
+    ? await buildFinalCaptureApprovalReceipt({
+      artifactJson: reviewable.artifact_json,
+      coverage: manualApprovalCoverage,
+      sourceRevisionId: manualApprovalRevisionId,
+      reviewedBy: auth.userId,
+    })
+    : null;
   const build = await context.env.DB.prepare(`
     UPDATE scene_navigation_builds
     SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = datetime('now'),
@@ -13821,10 +13783,16 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     const automaticAcceptanceCandidate = approvedFloorplanNavigationCanAutoAccept(
       navigationParameters,
     );
-    let automaticAcceptance = {
+    let automaticAcceptance: {
+      approved: boolean;
+      reason: string;
+      finalAgreementCoverage: FinalAgreementCoverage[];
+    } = {
       approved: false,
+      finalAgreementCoverage: [],
       reason: "Automatic acceptance is not available for a proposal-only or manual navigation build.",
     };
+    let automaticRevisionId: string | null = null;
     if (automaticAcceptanceCandidate) {
       const automaticLayout = Reflect.get(navigationParameters as object, "automaticLayout") as object;
       const floorplanRevisionId = String(Reflect.get(automaticLayout, "floorplanRevisionId"));
@@ -13850,9 +13818,11 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       } catch (error) {
         currentAuthoringError = error instanceof Error ? error.message : String(error);
       }
+      automaticRevisionId = floorplanRevisionId;
       automaticAcceptance = currentAuthoringError
         ? {
           approved: false,
+          finalAgreementCoverage: [],
           reason: `Automatic acceptance blocked: current navigation authoring is invalid: ${currentAuthoringError}`,
         }
         : approvedFloorplanNavigationAcceptanceDecision({
@@ -13872,6 +13842,19 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
           ),
         });
     }
+    // An automatically accepted build freezes the same hash-bound approval
+    // receipt a manual approval would, in the same statement as the status
+    // change — an approved capture-pinned build can never exist without its
+    // final-agreement evidence.
+    const artifactJson = JSON.stringify(navigationArtifact);
+    const automaticReceiptJson = automaticAcceptance.approved
+      ? await buildFinalCaptureApprovalReceipt({
+        artifactJson,
+        coverage: automaticAcceptance.finalAgreementCoverage,
+        sourceRevisionId: automaticRevisionId,
+        reviewedBy: job.navigation_created_by ?? "automatic-acceptance",
+      })
+      : null;
     navigationStatements.push(context.env.DB.prepare(`
       UPDATE scene_navigation_builds
       SET status = ?, artifact_json = ?, navmesh_asset_id = ?,
@@ -13879,11 +13862,12 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
         reviewed_by = CASE WHEN ? THEN ? ELSE reviewed_by END,
         review_note = CASE WHEN ? THEN ? ELSE review_note END,
         reviewed_at = CASE WHEN ? THEN datetime('now') ELSE reviewed_at END,
+        final_capture_agreement_json = CASE WHEN ? THEN ? ELSE final_capture_agreement_json END,
         updated_at = datetime('now')
       WHERE job_id = ? AND status IN ('QUEUED', 'PROCESSING', 'FAILED')
     `).bind(
       automaticAcceptance.approved ? "APPROVED" : "READY_FOR_REVIEW",
-      JSON.stringify(navigationArtifact),
+      artifactJson,
       navmeshAsset?.id ?? null,
       reportAsset?.id ?? null,
       automaticAcceptance.approved ? 1 : 0,
@@ -13891,6 +13875,8 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       automaticAcceptanceCandidate ? 1 : 0,
       automaticAcceptance.reason,
       automaticAcceptance.approved ? 1 : 0,
+      automaticReceiptJson !== null ? 1 : 0,
+      automaticReceiptJson,
       job.id,
     ));
     if (automaticAcceptance.approved && job.navigation_created_by) {
@@ -21185,16 +21171,54 @@ export function approvedFloorplanNavigationCanAutoAccept(parameters: unknown): b
   );
 }
 
+// Every approval of a capture-pinned build — manual or automatic — freezes a
+// receipt bound by hash to the exact final agreement and artifact it cleared,
+// naming each crossing with its canonical geometry, the classification that
+// covered it, and whether that answer came from frozen proposal evidence or
+// an explicit manual resolution. The receipt must stand on its own: proving
+// what was approved cannot depend on later re-interpreting a mutable column
+// elsewhere. Returns null when the build pins no capture agreement.
+export async function buildFinalCaptureApprovalReceipt(input: {
+  artifactJson: string | null;
+  coverage: readonly FinalAgreementCoverage[];
+  sourceRevisionId: string | null;
+  reviewedBy: string | null;
+}): Promise<string | null> {
+  const storedArtifact = parseStoredObject(input.artifactJson ?? "null");
+  const finalAgreement = storedArtifact && typeof storedArtifact === "object"
+    ? Reflect.get(storedArtifact, "finalCaptureAgreement")
+    : undefined;
+  const parsedAgreement = floorplanCaptureAgreementSchema.optional()
+    .safeParse(finalAgreement ?? undefined);
+  if (!parsedAgreement.success || !parsedAgreement.data) return null;
+  return JSON.stringify({
+    schemaVersion: "final-capture-approval-v2",
+    finalAgreementSha256: await sha256Hex(JSON.stringify(parsedAgreement.data)),
+    navigationArtifactSha256: await sha256Hex(input.artifactJson ?? ""),
+    matcherVersion: "capture-reconciliation-v2",
+    result: "passed",
+    ...(input.sourceRevisionId ? { sourceRevisionId: input.sourceRevisionId } : {}),
+    resolvedFindings: input.coverage,
+    reviewedBy: input.reviewedBy,
+    reviewedAt: new Date().toISOString(),
+  });
+}
+
 export function approvedFloorplanNavigationAcceptanceDecision(input: {
   parameters: unknown;
   revision: { status: string; planHash: string; captureAgreementJson?: string | null } | null;
   frozenAuthoringHash: string | null;
   currentAuthoringHash: string | null;
   finalCaptureAgreement?: unknown;
-}): { approved: boolean; reason: string } {
+}): {
+  approved: boolean;
+  reason: string;
+  finalAgreementCoverage: FinalAgreementCoverage[];
+} {
   if (!approvedFloorplanNavigationCanAutoAccept(input.parameters)) {
     return {
       approved: false,
+      finalAgreementCoverage: [],
       reason: "Automatic acceptance is not available for a proposal-only or manual navigation build.",
     };
   }
@@ -21203,12 +21227,14 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
   if (!input.revision || input.revision.status !== "approved") {
     return {
       approved: false,
+      finalAgreementCoverage: [],
       reason: "Automatic acceptance blocked: the source floor-plan revision is no longer current and approved.",
     };
   }
   if (input.revision.planHash !== expectedPlanHash) {
     return {
       approved: false,
+      finalAgreementCoverage: [],
       reason: `Automatic acceptance blocked: expected_plan_hash=${expectedPlanHash}, asked_plan_hash=${input.revision.planHash}.`,
     };
   }
@@ -21220,13 +21246,13 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
     input.revision.captureAgreementJson ?? null,
   );
   if (agreementBlock) {
-    return { approved: false, reason: agreementBlock };
+    return { approved: false, finalAgreementCoverage: [], reason: agreementBlock };
   }
   // The proposal agreement above cannot see walls added or moved during the
   // review itself. When a capture was pinned for this build, the build's own
   // final agreement — computed on the exact barrier set the collision was
   // cooked from — must reconcile with the frozen classifications.
-  const finalAgreementBlock = finalCaptureAgreementBlockReason({
+  const finalReconciliation = finalCaptureAgreementReconciliation({
     captureExpected: Boolean(
       Reflect.get(automaticLayout, "capture") &&
         typeof Reflect.get(automaticLayout, "capture") === "object",
@@ -21234,8 +21260,12 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
     finalAgreement: input.finalCaptureAgreement,
     captureAgreementJson: input.revision.captureAgreementJson ?? null,
   });
-  if (finalAgreementBlock) {
-    return { approved: false, reason: finalAgreementBlock };
+  if (finalReconciliation.blockReason) {
+    return {
+      approved: false,
+      finalAgreementCoverage: [],
+      reason: finalReconciliation.blockReason,
+    };
   }
   if (
     !input.frozenAuthoringHash || !input.currentAuthoringHash ||
@@ -21243,11 +21273,13 @@ export function approvedFloorplanNavigationAcceptanceDecision(input: {
   ) {
     return {
       approved: false,
+      finalAgreementCoverage: [],
       reason: `Automatic acceptance blocked: expected_authoring_hash=${input.frozenAuthoringHash ?? "missing"}, asked_authoring_hash=${input.currentAuthoringHash ?? "missing"}.`,
     };
   }
   return {
     approved: true,
+    finalAgreementCoverage: finalReconciliation.coverage,
     reason: "Automatically accepted after schema, Recast reachability, Rapier physical, structural, revision, capture-agreement, and authoring-hash validation passed.",
   };
 }

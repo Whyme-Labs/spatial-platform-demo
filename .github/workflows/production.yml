@@ -69,6 +69,19 @@ jobs:
           npm ci
           npm run build
 
+      - name: Record the rollback pair before touching production
+        id: rollback
+        run: |
+          mkdir -p "$(dirname "$ATTESTATION")"
+          app_rollback=$(npx wrangler versions list --env production --json |
+            node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const v=JSON.parse(d);const latest=v.reduce((a,b)=>a.number>b.number?a:b);console.log(latest.id)})')
+          processor_rollback=$(npx wrangler versions list -c wrangler.processor.jsonc --env production --json |
+            node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{const v=JSON.parse(d);const latest=v.reduce((a,b)=>a.number>b.number?a:b);console.log(latest.id)})')
+          test -n "$app_rollback"
+          test -n "$processor_rollback"
+          echo "app=$app_rollback" >> "$GITHUB_OUTPUT"
+          echo "processor=$processor_rollback" >> "$GITHUB_OUTPUT"
+
       - name: Deploy the application Worker with production migrations
         id: app
         run: |
@@ -89,11 +102,18 @@ jobs:
             --tag "git-${DEPLOY_SHA:0:12}" | tee .cache/production-attestation/processor-deploy.log
           version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
             .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $4}')
-          digest=$(grep -oE 'writing image sha256:[0-9a-f]+' \
-            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $3}' || true)
           test -n "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "digest=${digest:-unrecorded}" >> "$GITHUB_OUTPUT"
+          # The immutable container digest is mandatory evidence: an
+          # attestation that cannot prove which image runs is not an
+          # attestation, so the deployment fails closed without it.
+          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' \
+            .cache/production-attestation/processor-deploy.log | tail -1 | awk '{print $2}' || true)
+          if ! printf '%s' "$digest" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::Could not prove the deployed processor image digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Verify deployed production health
         id: health
@@ -120,6 +140,11 @@ jobs:
               applicationWorkerVersionId: process.env.APP_VERSION,
               processorWorkerVersionId: process.env.PROCESSOR_VERSION,
               processorImageDigest: process.env.PROCESSOR_DIGEST,
+              rollbackTarget: {
+                applicationWorkerVersionId: process.env.APP_ROLLBACK,
+                processorWorkerVersionId: process.env.PROCESSOR_ROLLBACK,
+                command: "wrangler versions deploy <id> --env production (and -c wrangler.processor.jsonc for the processor)",
+              },
               health: JSON.parse(readFileSync(".cache/production-attestation/health.json", "utf8")),
               publicSceneManifest: `${process.env.PRODUCTION_ORIGIN}/api/releases/home-scan-spark-multi-room-demo/manifest`,
               deployedAt: new Date().toISOString(),
@@ -130,6 +155,8 @@ jobs:
           APP_VERSION: ${{ steps.app.outputs.version }}
           PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
           PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
+          APP_ROLLBACK: ${{ steps.rollback.outputs.app }}
+          PROCESSOR_ROLLBACK: ${{ steps.rollback.outputs.processor }}
 
       - name: Record the GitHub production deployment
         run: |
@@ -146,8 +173,22 @@ jobs:
 
       - name: Upload the attestation artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ always() }}
         with:
           name: production-attestation-${{ env.DEPLOY_SHA }}
           path: .cache/production-attestation/
           retention-days: 90
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      - name: Record the failed production deployment
+        if: ${{ failure() }}
+        run: |
+          deployment=$(jq -n \
+            --arg ref "$DEPLOY_SHA" \
+            --arg description "FAILED production deployment of $DEPLOY_SHA — see the run log; roll back with the recorded pair if traffic moved" \
+            '{ref: $ref, environment: "production", auto_merge: false,
+              required_contexts: [], description: $description}' |
+            gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          gh api "repos/$GITHUB_REPOSITORY/deployments/$deployment/statuses" \
+            -f state=failure \
+            -f "log_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > /dev/null

@@ -83,6 +83,7 @@ describe("automatic navigation acceptance", () => {
     kind: "barrier_crosses_open_capture",
     barrierId: "wall-001",
     levelKey: "level-001",
+    elevationM: 0,
     spanCount: 4,
     metres: 1.2,
     from: [1.5, 0],
@@ -314,8 +315,35 @@ describe("final capture-agreement geometry matching", () => {
     maximumSpanPoints: 1,
     ...overrides,
   });
-  const frozen = (resolutions: unknown[]) => JSON.stringify({
-    report: null,
+  // A mintable frozen blob always carries the report its resolutions
+  // resolve, so the fixtures synthesize proposal findings mirroring each
+  // resolution's identity — the fail-closed parser rejects anything else.
+  const frozen = (resolutions: Array<Record<string, unknown>>) => JSON.stringify({
+    report: resolutions.length
+      ? {
+        schemaVersion: "shell-capture-agreement-v1",
+        pointSource: "voxel-centroids",
+        wallBandAboveFloorM: [1, 2],
+        settings: {},
+        capturePointsInBand: 2_000,
+        barrierCount: 6,
+        inspectedBarrierCount: 6,
+        findings: resolutions.map((resolution) => ({
+          kind: "barrier_crosses_open_capture",
+          barrierId: resolution.barrierId,
+          levelKey: resolution.levelKey ?? null,
+          ...(resolution.elevationM !== undefined
+            ? { elevationM: resolution.elevationM }
+            : {}),
+          spanCount: 3,
+          metres: 0.9,
+          from: resolution.from,
+          to: resolution.to,
+          maximumSpanPoints: 1,
+        })),
+        limitations: [],
+      }
+      : null,
     resolutions,
   });
   const glassAt = (overrides: Record<string, unknown>) => ({
@@ -559,6 +587,38 @@ describe("final capture-agreement geometry matching", () => {
       captureAgreementJson: frozen([]),
       manualResolutions: [manualFor(survivor, "door_opening")],
     })).toContain("classified door_opening yet still stands");
+  });
+
+  it("fails closed on a frozen blob whose resolution elevation contradicts its own report", () => {
+    // A blob minted while an older endpoint trusted caller elevation could
+    // freeze door_opening one storey up, making the contradiction
+    // unmatchable and the crossing manually resolvable. The parser refuses
+    // the whole blob instead of assuming every old row was minted honestly.
+    const forged = JSON.parse(frozen([glassAt({ classification: "door_opening" })]));
+    forged.resolutions[0].elevationM = 3;
+    const survivor = crossing({ from: [4.1, 2.3], to: [6.1, 2.3] });
+    const reason = finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([survivor]),
+      captureAgreementJson: JSON.stringify(forged),
+      manualResolutions: [manualFor(survivor)],
+    });
+    expect(reason).toContain("frozen capture agreement is unreadable");
+  });
+
+  it("fails closed on duplicated frozen resolutions and orphaned resolution blobs", () => {
+    const duplicated = JSON.parse(frozen([glassAt({})]));
+    duplicated.resolutions.push({ ...duplicated.resolutions[0], classification: "door_opening" });
+    expect(finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([crossing({})]),
+      captureAgreementJson: JSON.stringify(duplicated),
+    })).toContain("frozen capture agreement is unreadable");
+    expect(finalCaptureAgreementBlockReason({
+      captureExpected: true,
+      finalAgreement: agreement([crossing({})]),
+      captureAgreementJson: JSON.stringify({ report: null, resolutions: [glassAt({})] }),
+    })).toContain("frozen capture agreement is unreadable");
   });
 
   it("rejects unknown and duplicated manual finding ids", () => {

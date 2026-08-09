@@ -89,7 +89,13 @@ byte-match a real finding, elevation is copied from that finding (or its
 reviewed plan level), and a submitted elevation that disagrees is rejected at
 the minting boundary — a forged elevation would otherwise freeze a
 classification that can never match the final geometry, silently converting a
-contradiction into a manually-resolvable final-only crossing.
+contradiction into a manually-resolvable final-only crossing. Reading a
+frozen blob applies the same discipline retroactively: a resolution that
+matches no crossing in its own report, claims an elevation the report cannot
+prove, disagrees with its finding's elevation, or resolves a span twice
+makes the whole blob invalid, blocking new builds on that revision until an
+operator re-reviews it — old rows are never assumed to have been minted by
+the current endpoint.
 
 The agreement runs twice. The proposal report guides the reviewer; the
 navigation build then re-reads the **final** barrier set — after every
@@ -142,12 +148,16 @@ Worker copies the canonical geometry itself, so a caller can never submit a
 span of their own drawing); unknown or duplicated ids are rejected, one id
 resolves exactly one finding, a per-finding note is mandatory, and a crossing
 a frozen classification already covers cannot be restated. Every approval of
-a capture-pinned build — with or without manual resolutions — freezes a
-`final-capture-approval-v2` receipt in
-`scene_navigation_builds.final_capture_agreement_json`, hash-bound to the
-exact final agreement and artifact it cleared, naming each crossing with its
-canonical geometry and whether frozen proposal evidence or an explicit manual
-classification covered it.
+a capture-pinned build — manual or automatic, with or without manual
+resolutions — freezes a `final-capture-approval-v2` receipt in
+`scene_navigation_builds.final_capture_agreement_json`, written in the same
+statement as the status change so an approved build can never exist without
+its evidence. The receipt is hash-bound to the exact final agreement and
+artifact it cleared and is self-contained: each crossing carries its
+canonical geometry, the classification and note that covered it, whether
+that answer came from frozen proposal evidence or an explicit manual
+resolution, and — for frozen answers — the source revision and the frozen
+span's identity.
 
 Capture support reads by thickness provenance: an `estimated` thickness is
 the extractor's grid size and the wall's centreline was fit through the
