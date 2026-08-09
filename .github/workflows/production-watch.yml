@@ -109,10 +109,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # gh's embedded --jq cannot take jq's --arg flag; pipe to real jq.
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --label "$WATCH_LABEL" --state open --json number,title \
-            --jq --arg title "$WATCH_ISSUE_TITLE" \
-            '[.[] | select(.title == $title)][0].number // empty')
+            --label "$WATCH_LABEL" --state open --json number,title |
+            jq -r --arg title "$WATCH_ISSUE_TITLE" \
+              '[.[] | select(.title == $title)][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" \
               --body "Production watch failed again: $run_url"
@@ -131,10 +132,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # gh's embedded --jq cannot take jq's --arg flag; pipe to real jq.
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" \
-            --label "$WATCH_LABEL" --state open --json number,title \
-            --jq --arg title "$WATCH_ISSUE_TITLE" \
-            '[.[] | select(.title == $title)][0].number // empty')
+            --label "$WATCH_LABEL" --state open --json number,title |
+            jq -r --arg title "$WATCH_ISSUE_TITLE" \
+              '[.[] | select(.title == $title)][0].number // empty')
           if [ -n "$existing" ]; then
             gh issue close "$existing" --repo "$GITHUB_REPOSITORY" \
               --comment "Production verified green again: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
