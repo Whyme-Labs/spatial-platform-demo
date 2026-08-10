@@ -94,6 +94,10 @@ function routeBoundary(path) {
   const end = workerSource.indexOf("\napp.", start + 5);
   const block = workerSource.slice(start, end < 0 ? undefined : end);
   const limits = Array.from(block.matchAll(/LIMIT\s+(\d+)/g), (match) => Number(match[1]));
+  for (const match of block.matchAll(/\b([A-Z][A-Z0-9_]*LIST_PAGE_SIZE)\b/g)) {
+    const constant = workerSource.match(new RegExp(`const\\s+${match[1]}\\s*=\\s*(\\d+)`));
+    if (constant) limits.push(Number(constant[1]));
+  }
   if (!limits.length) throw new Error(`No measured SQL list limit found for ${path}`);
   return Math.max(...limits) + 1;
 }
@@ -203,7 +207,10 @@ function buildSeedSql(scale) {
   ], viewRows));
 
   const jobRows = Array.from({ length: scale.jobs }, (_, index) => {
-    const projectIndex = index % projectRows.length;
+    // The operator job inventory excludes archived projects. Keep this measured
+    // boundary fixture attached to one non-archived project so every generated
+    // job is query-visible and the page boundary is actually exercised.
+    const projectIndex = 0;
     const state = jobStates[index % jobStates.length];
     return [
       entityId("8401", index + 1), ids.organisation, projectRows[projectIndex][0], versionRows[projectIndex][0], assetRows[projectIndex][0],
