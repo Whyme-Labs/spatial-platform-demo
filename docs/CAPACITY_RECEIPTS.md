@@ -380,6 +380,46 @@ acceptance receipt immediately after writes. Exact multipart completion,
 database asset records, and full remote hash reads are the authoritative
 receipts for this operation.
 
+## Production-scale local QA list boundaries
+
+Last measured: 2026-08-10
+
+The inventory and dataset are derived from the current source rather than a
+guessed tenant size:
+
+```bash
+npm run inventory:write
+npm run audit:inventory
+npm run qa:data:local
+```
+
+The inventory audit measured 4 roles, 190 Worker/client routes, 37 forms, 37
+dialogs, 244 governed fields, 311 static/generated controls, 68 persisted state
+sets, and 57 asynchronous workflows. The committed generated inventory records
+the source location and acceptance/edge policy for every row.
+
+`qa:data:local` reads each primary Studio list query and creates one synthetic
+row beyond its existing SQL boundary in a new isolated `--persist-to`
+directory. The accepted receipt contained only `example.invalid` identities,
+recorded `sensitiveData=false` and `productionTouched=false`, and verified these
+exact D1 counts:
+
+| Entity | Existing query boundary | Generated and queried rows |
+| --- | ---: | ---: |
+| Projects | 200 | 201 |
+| Project templates | 100 | 101 |
+| Saved views | 50 | 51 |
+| Processing jobs | 200 | 201 |
+| Releases | 500 | 501 |
+
+The first seed attempt batched every entity into one SQL statement and D1
+returned `statement too long: SQLITE_TOOBIG`. The generator now emits one row
+per statement instead of inventing an unmeasured batch size. The first
+authenticated project load also measured that the 200-row parent query caused
+`projectCustomFieldValues` to exceed D1's SQL-variable ceiling. The query now
+passes its project IDs through one `json_each` parameter, and the regression
+test exercises the same 200-row page.
+
 ## Full software-gate receipt
 
 Last measured: 2026-08-03

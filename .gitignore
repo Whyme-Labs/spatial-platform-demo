@@ -17,3 +17,4 @@ artifacts/
 *.log
 .DS_Store
 processor/.build-stamp
+.gstack/
