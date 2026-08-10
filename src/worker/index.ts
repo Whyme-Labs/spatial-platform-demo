@@ -262,6 +262,14 @@ type ProjectRow = {
   workflow_policy_json: string;
 };
 
+type ProjectListCursor = {
+  updatedAt: string;
+  id: string;
+};
+
+// Receipt: docs/CAPACITY_RECEIPTS.md, "Production-scale local QA list boundaries".
+const PROJECT_LIST_PAGE_SIZE = 200;
+
 type ProjectCustomFieldType = "text" | "number" | "boolean" | "date" | "select" | "url";
 type ProjectCustomFieldValue = string | number | boolean | null;
 type ProjectCustomFieldDefinitionRow = {
@@ -3726,6 +3734,12 @@ app.post("/api/projects/asset-handoffs/:handoffId/cancel", async (context) => {
 app.get("/api/projects", async (context) => {
   const auth = await requireAuth(context);
   if (auth instanceof Response) return auth;
+  const cursor = parseProjectListCursor(context.req.query("cursor"));
+  if (cursor instanceof Error) {
+    return validationError(context, {
+      cursor: ["Project list cursor is invalid. Reload the portfolio and try again."],
+    });
+  }
   const operator = ["platform_admin", "production_operator"].includes(auth.role) ? 1 : 0;
   const result = await context.env.DB.prepare(`
     SELECT p.*, COALESCE(p.capture_adapter_v2, p.capture_adapter) AS capture_adapter,
@@ -3744,19 +3758,33 @@ app.get("/api/projects", async (context) => {
         WHERE pa.project_id = p.id AND pa.organisation_id = p.organisation_id
           AND pa.user_id = ? AND pa.revoked_at IS NULL
       ))
-    ORDER BY p.updated_at DESC
-    LIMIT 200
-  `).bind(auth.organisationId, operator, auth.userId).all<ProjectRow>();
+      AND (? IS NULL OR p.updated_at < ? OR (p.updated_at = ? AND p.id < ?))
+    ORDER BY p.updated_at DESC, p.id DESC
+    LIMIT ?
+  `).bind(
+    auth.organisationId,
+    operator,
+    auth.userId,
+    cursor?.updatedAt ?? null,
+    cursor?.updatedAt ?? null,
+    cursor?.updatedAt ?? null,
+    cursor?.id ?? null,
+    PROJECT_LIST_PAGE_SIZE + 1,
+  ).all<ProjectRow>();
+  const page = result.results.slice(0, PROJECT_LIST_PAGE_SIZE);
   const customFields = await projectCustomFieldValues(
     context.env.DB,
     auth.organisationId,
-    result.results.map((project) => project.id),
+    page.map((project) => project.id),
   );
   return context.json({
-    projects: result.results.map((project) => publicProject(
+    projects: page.map((project) => publicProject(
       project,
       customFields.get(project.id) ?? {},
     )),
+    nextCursor: result.results.length > PROJECT_LIST_PAGE_SIZE
+      ? projectListCursor(page[page.length - 1]!)
+      : null,
   });
 });
 
@@ -21275,6 +21303,36 @@ function publicProject(
     createdAt: project.created_at,
     updatedAt: project.updated_at,
   };
+}
+
+function projectListCursor(project: ProjectRow): string {
+  return base64UrlEncode(new TextEncoder().encode(JSON.stringify({
+    updatedAt: project.updated_at,
+    id: project.id,
+  } satisfies ProjectListCursor)));
+}
+
+function parseProjectListCursor(value: string | undefined): ProjectListCursor | null | Error {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(value)));
+    if (
+      !parsed
+      || typeof parsed !== "object"
+      || typeof Reflect.get(parsed, "updatedAt") !== "string"
+      || !Reflect.get(parsed, "updatedAt")
+      || typeof Reflect.get(parsed, "id") !== "string"
+      || !Reflect.get(parsed, "id")
+    ) {
+      return new Error("Invalid project list cursor");
+    }
+    return {
+      updatedAt: String(Reflect.get(parsed, "updatedAt")),
+      id: String(Reflect.get(parsed, "id")),
+    };
+  } catch {
+    return new Error("Invalid project list cursor");
+  }
 }
 
 function publicAuthContext(auth: AuthContext): AuthContext {

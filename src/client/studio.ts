@@ -1320,6 +1320,7 @@ const state: {
   organisations: OrganisationMembership[];
   pendingInvitations: PendingOrganisationInvitation[];
   projects: Project[];
+  projectsNextCursor: string | null;
   jobs: Job[];
   releases: Release[];
   reviewProjects: ReviewProject[];
@@ -1353,6 +1354,7 @@ const state: {
   organisations: [],
   pendingInvitations: [],
   projects: [],
+  projectsNextCursor: null,
   jobs: [],
   releases: [],
   reviewProjects: [],
@@ -1818,6 +1820,14 @@ function bindInterface(): void {
     }
   });
   byId("saveProjectViewButton").addEventListener("click", openSavedProjectViewDialog);
+  const loadMoreProjectsButton = byId<HTMLButtonElement>("loadMoreProjects");
+  loadMoreProjectsButton.addEventListener("click", () => {
+    void runAction({
+      key: "load-more-projects",
+      trigger: loadMoreProjectsButton,
+      pendingLabel: "Loading projects…",
+    }, loadMoreProjects);
+  });
   const deleteProjectViewButton = byId<HTMLButtonElement>("deleteProjectViewButton");
   deleteProjectViewButton.addEventListener("click", () => {
     const view = state.projectViews.find((candidate) => candidate.id === state.activeProjectViewId);
@@ -3440,6 +3450,7 @@ async function refreshAll(): Promise<void> {
       state.reviewProjects = reviewInbox.projects;
       if (isReviewer()) {
         state.projects = [];
+        state.projectsNextCursor = null;
         state.projectFields = [];
         state.selectedProjectIds.clear();
         bulkLifecycleOperation = null;
@@ -3458,7 +3469,7 @@ async function refreshAll(): Promise<void> {
       }
       const [dashboard, projects, jobs, releases, hosting, team, identityProviders, captureAgents, templates, views, fields] = await Promise.all([
         api<{ activeProjects: number; processingJobs: number; hostedAssets: number; hostedBytes: number; activeReleases: number }>("/api/dashboard"),
-        api<{ projects: Project[] }>("/api/projects"),
+        api<{ projects: Project[]; nextCursor: string | null }>("/api/projects"),
         api<{ jobs: Job[] }>("/api/jobs"),
         api<{ releases: Release[] }>("/api/releases"),
         api<HostingWorkspace>("/api/hosting"),
@@ -3476,6 +3487,7 @@ async function refreshAll(): Promise<void> {
         api<{ fields: ProjectCustomFieldDefinition[] }>("/api/project-fields"),
       ]);
       state.projects = projects.projects;
+      state.projectsNextCursor = projects.nextCursor;
       state.projectTemplates = templates.templates;
       state.projectFields = fields.fields;
       state.projectViews = views.views;
@@ -5204,6 +5216,7 @@ function clearTenantWorkspace(): void {
   state.recoverableUploads = [];
   state.selected = null;
   state.selectedProjectIds.clear();
+  state.projectsNextCursor = null;
   state.projectTemplates = [];
   state.projectFields = [];
   state.projectViews = [];
@@ -5229,6 +5242,7 @@ function renderProjects(): void {
   if (!projects.length) {
     renderBulkProjectActions();
     container.append(emptyState("No projects match this filter."));
+    renderProjectPagination();
     return;
   }
   const header = element("div", "project-row header");
@@ -5298,6 +5312,29 @@ function renderProjects(): void {
     container.append(row);
   }
   renderBulkProjectActions();
+  renderProjectPagination();
+}
+
+function renderProjectPagination(): void {
+  const pagination = byId("projectPagination");
+  pagination.hidden = !state.projectsNextCursor || isReviewer();
+  byId("projectPaginationStatus").textContent = state.projectsNextCursor
+    ? `${state.projects.length} projects loaded. More projects are available.`
+    : "";
+}
+
+async function loadMoreProjects(): Promise<void> {
+  const requestedCursor = state.projectsNextCursor;
+  if (!requestedCursor) return;
+  const result = await api<{ projects: Project[]; nextCursor: string | null }>(
+    `/api/projects?cursor=${encodeURIComponent(requestedCursor)}`,
+  );
+  if (state.projectsNextCursor !== requestedCursor) return;
+  const projects = new Map(state.projects.map((project) => [project.id, project]));
+  for (const project of result.projects) projects.set(project.id, project);
+  state.projects = [...projects.values()];
+  state.projectsNextCursor = result.nextCursor;
+  renderProjects();
 }
 
 function visibleProjects(): Project[] {
