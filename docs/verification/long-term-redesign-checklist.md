@@ -85,10 +85,10 @@ inventory fails `npm run audit:inventory`.
 
 - 4 roles, 190 routes, 244 governed fields, 316 controls, 68 persisted state
   sets, and 59 asynchronous workflows inventoried;
-- 56 migrations declared and consistent;
+- 58 migrations declared and consistent;
 - 83 navigation tests passed;
-- 56 Worker test files and 334 tests passed;
-- coverage: 71.36% statements, 60.91% branches, 85.30% functions, and 77.90%
+- 57 Worker test files and 335 tests passed;
+- coverage: 71.41% statements, 60.78% branches, 85.53% functions, and 77.98%
   lines;
 - 84 Playwright tests passed;
 - the production deployment configuration completed `wrangler deploy --env

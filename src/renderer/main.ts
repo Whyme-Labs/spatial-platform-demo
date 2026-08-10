@@ -1628,8 +1628,13 @@ function movementStatusText(): string {
 // the walker is leaning on it rather than brushing past a corner.
 const BLOCKED_MOVEMENT_HINT_SECONDS = 1.2;
 const BLOCKED_MOVEMENT_EPSILON_METRES = 1e-4;
+type BlockedMovementBarrier = {
+  id: string;
+  kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
+};
 let blockedMovementSeconds = 0;
 let blockedMovementHintShown = false;
+let blockedMovementBarrier: BlockedMovementBarrier | null = null;
 
 function noteMovementResistance(
   origin: Vector3Tuple,
@@ -1648,17 +1653,23 @@ function noteMovementResistance(
     : 0;
   if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES || advanced > requested * 0.25) {
     blockedMovementSeconds = 0;
+    blockedMovementBarrier = null;
     if (blockedMovementHintShown) {
       blockedMovementHintShown = false;
       setControlStatus(movementStatusText(), "ready");
     }
     return;
   }
+  // Rapier reports the contact that starts the stop, but may report only the
+  // supporting floor once the capsule is resting. Keep that first reviewed
+  // blocker for this uninterrupted resistance episode so the delayed hint
+  // still names the geometry that caused it.
+  blockedMovementBarrier ??= physicalNavigationRuntime?.lastBlockedBarrier() ?? null;
   blockedMovementSeconds += deltaSeconds;
   if (blockedMovementSeconds >= BLOCKED_MOVEMENT_HINT_SECONDS && !blockedMovementHintShown) {
     blockedMovementHintShown = true;
     setControlStatus(
-      blockedMovementMessage(physicalNavigationRuntime?.lastBlockedBarrier() ?? null),
+      blockedMovementMessage(blockedMovementBarrier),
       "info",
     );
   }
@@ -1669,10 +1680,7 @@ function noteMovementResistance(
 // identical from inside, and only the name tells an operator whether the
 // scene or the walker is wrong.
 function blockedMovementMessage(
-  blocker: {
-    id: string;
-    kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
-  } | null,
+  blocker: BlockedMovementBarrier | null,
 ): string {
   if (!blocker) return "Blocked by the walking map · this surface has no reviewed opening";
   if (blocker.kind === "dynamic") {

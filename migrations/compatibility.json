@@ -193,6 +193,9 @@
     },
     "0057_canonical_delivery_templates.sql": {
       "phase": "expand"
+    },
+    "0058_processor_canary_delivery_template.sql": {
+      "phase": "expand"
     }
   }
 }
