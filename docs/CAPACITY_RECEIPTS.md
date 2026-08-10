@@ -394,8 +394,8 @@ npm run qa:data:local
 ```
 
 The inventory audit measured 4 roles, 190 Worker/client routes, 37 forms, 37
-dialogs, 244 governed fields, 311 static/generated controls, 68 persisted state
-sets, and 57 asynchronous workflows. The committed generated inventory records
+dialogs, 244 governed fields, 316 static/generated controls, 68 persisted state
+sets, and 59 asynchronous workflows. The committed generated inventory records
 the source location and acceptance/edge policy for every row.
 
 `qa:data:local` reads each primary Studio list query and creates one synthetic
@@ -411,6 +411,12 @@ exact D1 counts:
 | Saved views | 50 | 51 |
 | Processing jobs | 200 | 201 |
 | Releases | 500 | 501 |
+
+Each bounded inventory now reads one tripwire row past its measured page only
+to determine whether an opaque keyset continuation exists. The tripwire row is
+not returned on that page. The browser names the number of loaded records,
+keeps the existing page usable during continuation, and removes the control
+when the cursor is exhausted.
 
 The first seed attempt batched every entity into one SQL statement and D1
 returned `statement too long: SQLITE_TOOBIG`. The generator now emits one row

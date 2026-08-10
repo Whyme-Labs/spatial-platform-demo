@@ -264,6 +264,8 @@ form[aria-busy="true"] .dialog-close {
 .project-table { margin-top:18px; }
 .project-pagination { margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:9px; }
 .project-pagination[hidden] { display:none; }
+.list-pagination { margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--muted);font-size:9px; }
+.list-pagination[hidden] { display:none; }
 .project-row { position:relative;display:grid;grid-template-columns:24px minmax(0,2.25fr) minmax(92px,.8fr) minmax(84px,.8fr) minmax(72px,.7fr);gap:12px;align-items:center;min-height:67px;border-top:1px solid var(--line);font-size:10px;transition:background-color .18s ease; }
 .project-row:not(.header):hover,.project-row:has(.project-row-link:focus-visible){background:rgba(255,255,255,.035)}
 .project-row.selected{background:rgba(212,255,88,.035)}

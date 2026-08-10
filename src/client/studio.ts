@@ -1322,7 +1322,9 @@ const state: {
   projects: Project[];
   projectsNextCursor: string | null;
   jobs: Job[];
+  jobsNextCursor: string | null;
   releases: Release[];
+  releasesNextCursor: string | null;
   reviewProjects: ReviewProject[];
   reviewDetails: Record<string, ReviewDetail>;
   hosting: HostingWorkspace | null;
@@ -1339,8 +1341,10 @@ const state: {
   selected: ProjectDetail | null;
   selectedProjectIds: Set<string>;
   projectTemplates: ProjectTemplate[];
+  projectTemplatesNextCursor: string | null;
   projectFields: ProjectCustomFieldDefinition[];
   projectViews: SavedProjectView[];
+  projectViewsNextCursor: string | null;
   activeProjectViewId: string | null;
   projectStatuses: string[];
   projectQuery: string;
@@ -1356,7 +1360,9 @@ const state: {
   projects: [],
   projectsNextCursor: null,
   jobs: [],
+  jobsNextCursor: null,
   releases: [],
+  releasesNextCursor: null,
   reviewProjects: [],
   reviewDetails: {},
   hosting: null,
@@ -1373,8 +1379,10 @@ const state: {
   selected: null,
   selectedProjectIds: new Set(),
   projectTemplates: [],
+  projectTemplatesNextCursor: null,
   projectFields: [],
   projectViews: [],
+  projectViewsNextCursor: null,
   activeProjectViewId: null,
   projectStatuses: [],
   projectQuery: "",
@@ -1828,6 +1836,10 @@ function bindInterface(): void {
       pendingLabel: "Loading projects…",
     }, loadMoreProjects);
   });
+  bindListContinuation("loadMoreProjectViews", "load-more-project-views", "Loading views…", loadMoreProjectViews);
+  bindListContinuation("loadMoreProjectTemplates", "load-more-project-templates", "Loading templates…", loadMoreProjectTemplates);
+  bindListContinuation("loadMoreJobs", "load-more-jobs", "Loading jobs…", loadMoreJobs);
+  bindListContinuation("loadMoreReleases", "load-more-releases", "Loading releases…", loadMoreReleases);
   const deleteProjectViewButton = byId<HTMLButtonElement>("deleteProjectViewButton");
   deleteProjectViewButton.addEventListener("click", () => {
     const view = state.projectViews.find((candidate) => candidate.id === state.activeProjectViewId);
@@ -3455,7 +3467,9 @@ async function refreshAll(): Promise<void> {
         state.selectedProjectIds.clear();
         bulkLifecycleOperation = null;
         state.jobs = [];
+        state.jobsNextCursor = null;
         state.releases = [];
+        state.releasesNextCursor = null;
         state.hosting = null;
         state.team = null;
         state.identityProviders = [];
@@ -3470,8 +3484,8 @@ async function refreshAll(): Promise<void> {
       const [dashboard, projects, jobs, releases, hosting, team, identityProviders, captureAgents, templates, views, fields] = await Promise.all([
         api<{ activeProjects: number; processingJobs: number; hostedAssets: number; hostedBytes: number; activeReleases: number }>("/api/dashboard"),
         api<{ projects: Project[]; nextCursor: string | null }>("/api/projects"),
-        api<{ jobs: Job[] }>("/api/jobs"),
-        api<{ releases: Release[] }>("/api/releases"),
+        api<{ jobs: Job[]; nextCursor: string | null }>("/api/jobs"),
+        api<{ releases: Release[]; nextCursor: string | null }>("/api/releases"),
         api<HostingWorkspace>("/api/hosting"),
         state.user?.role === "platform_admin"
           ? api<TeamWorkspace>("/api/team")
@@ -3482,15 +3496,17 @@ async function refreshAll(): Promise<void> {
         state.user?.role === "platform_admin"
           ? api<{ credentials: CaptureAgentCredential[] }>("/api/capture-agents")
           : Promise.resolve({ credentials: [] }),
-        api<{ templates: ProjectTemplate[] }>("/api/project-templates"),
-        api<{ views: SavedProjectView[] }>("/api/project-views"),
+        api<{ templates: ProjectTemplate[]; nextCursor: string | null }>("/api/project-templates"),
+        api<{ views: SavedProjectView[]; nextCursor: string | null }>("/api/project-views"),
         api<{ fields: ProjectCustomFieldDefinition[] }>("/api/project-fields"),
       ]);
       state.projects = projects.projects;
       state.projectsNextCursor = projects.nextCursor;
       state.projectTemplates = templates.templates;
+      state.projectTemplatesNextCursor = templates.nextCursor;
       state.projectFields = fields.fields;
       state.projectViews = views.views;
+      state.projectViewsNextCursor = views.nextCursor;
       if (!projectViewsInitialised) {
         const defaultView = state.projectViews.find((view) => view.isDefault);
         if (defaultView) applyProjectView(defaultView, false);
@@ -3506,7 +3522,9 @@ async function refreshAll(): Promise<void> {
         if (!currentProjectIds.has(projectId)) state.selectedProjectIds.delete(projectId);
       }
       state.jobs = jobs.jobs;
+      state.jobsNextCursor = jobs.nextCursor;
       state.releases = releases.releases;
+      state.releasesNextCursor = releases.nextCursor;
       state.hosting = hosting;
       state.team = team;
       state.identityProviders = identityProviders.providers;
@@ -3991,6 +4009,7 @@ function renderProjectControls(): void {
     saved.append(new Option(`${view.isDefault ? "★ " : ""}${view.name}`, view.id));
   }
   saved.value = state.activeProjectViewId ?? "";
+  byId<HTMLButtonElement>("loadMoreProjectViews").hidden = !state.projectViewsNextCursor;
   const activeView = state.projectViews.find((view) => view.id === state.activeProjectViewId);
   byId("saveProjectViewButton").textContent = activeView ? "Update view" : "Save view";
   byId("deleteProjectViewButton").hidden = !activeView;
@@ -4062,12 +4081,14 @@ async function deleteProjectView(view: SavedProjectView): Promise<void> {
 
 async function refreshProjectPortfolioMetadata(): Promise<void> {
   const [templates, views, fields] = await Promise.all([
-    api<{ templates: ProjectTemplate[] }>("/api/project-templates"),
-    api<{ views: SavedProjectView[] }>("/api/project-views"),
+    api<{ templates: ProjectTemplate[]; nextCursor: string | null }>("/api/project-templates"),
+    api<{ views: SavedProjectView[]; nextCursor: string | null }>("/api/project-views"),
     api<{ fields: ProjectCustomFieldDefinition[] }>("/api/project-fields"),
   ]);
   state.projectTemplates = templates.templates;
+  state.projectTemplatesNextCursor = templates.nextCursor;
   state.projectViews = views.views;
+  state.projectViewsNextCursor = views.nextCursor;
   state.projectFields = fields.fields;
   renderProjectTemplateOptions();
   renderProjectControls();
@@ -4142,6 +4163,12 @@ function renderPortfolioTools(): void {
       list.append(row);
     }
   }
+  renderListPagination(
+    "projectTemplatePagination",
+    "projectTemplatePaginationStatus",
+    state.projectTemplatesNextCursor,
+    `${state.projectTemplates.length} templates loaded. More templates are available.`,
+  );
   const selectedCount = state.selectedProjectIds.size;
   byId("portfolioExportHint").textContent = selectedCount
     ? `${selectedCount} selected project${selectedCount === 1 ? "" : "s"} can be exported, or export the full portfolio. Assets and lifecycle state stay here.`
@@ -5218,14 +5245,18 @@ function clearTenantWorkspace(): void {
   state.selectedProjectIds.clear();
   state.projectsNextCursor = null;
   state.projectTemplates = [];
+  state.projectTemplatesNextCursor = null;
   state.projectFields = [];
   state.projectViews = [];
+  state.projectViewsNextCursor = null;
   state.activeProjectViewId = null;
   state.projectQuery = "";
   state.projectAdapter = "";
   state.projectDelivery = "";
   state.projectSort = "updated_desc";
   state.projectStatuses = [];
+  state.jobsNextCursor = null;
+  state.releasesNextCursor = null;
   projectViewsInitialised = false;
   resetPortfolioImport();
   resetPortfolioHandoff();
@@ -5323,6 +5354,28 @@ function renderProjectPagination(): void {
     : "";
 }
 
+function bindListContinuation(
+  triggerId: string,
+  key: string,
+  pendingLabel: string,
+  task: () => Promise<void>,
+): void {
+  const trigger = byId<HTMLButtonElement>(triggerId);
+  trigger.addEventListener("click", () => {
+    void runAction({ key, trigger, pendingLabel }, task);
+  });
+}
+
+function renderListPagination(
+  containerId: string,
+  statusId: string,
+  cursor: string | null,
+  status: string,
+): void {
+  byId(containerId).hidden = !cursor;
+  byId(statusId).textContent = cursor ? status : "";
+}
+
 async function loadMoreProjects(): Promise<void> {
   const requestedCursor = state.projectsNextCursor;
   if (!requestedCursor) return;
@@ -5335,6 +5388,61 @@ async function loadMoreProjects(): Promise<void> {
   state.projects = [...projects.values()];
   state.projectsNextCursor = result.nextCursor;
   renderProjects();
+}
+
+async function loadMoreProjectViews(): Promise<void> {
+  const requestedCursor = state.projectViewsNextCursor;
+  if (!requestedCursor) return;
+  const result = await api<{ views: SavedProjectView[]; nextCursor: string | null }>(
+    `/api/project-views?cursor=${encodeURIComponent(requestedCursor)}`,
+  );
+  if (state.projectViewsNextCursor !== requestedCursor) return;
+  state.projectViews = appendUniqueById(state.projectViews, result.views);
+  state.projectViewsNextCursor = result.nextCursor;
+  renderProjectControls();
+}
+
+async function loadMoreProjectTemplates(): Promise<void> {
+  const requestedCursor = state.projectTemplatesNextCursor;
+  if (!requestedCursor) return;
+  const result = await api<{ templates: ProjectTemplate[]; nextCursor: string | null }>(
+    `/api/project-templates?cursor=${encodeURIComponent(requestedCursor)}`,
+  );
+  if (state.projectTemplatesNextCursor !== requestedCursor) return;
+  state.projectTemplates = appendUniqueById(state.projectTemplates, result.templates);
+  state.projectTemplatesNextCursor = result.nextCursor;
+  renderProjectTemplateOptions();
+  if (portfolioToolsDialog.open) renderPortfolioTools();
+}
+
+async function loadMoreJobs(): Promise<void> {
+  const requestedCursor = state.jobsNextCursor;
+  if (!requestedCursor) return;
+  const result = await api<{ jobs: Job[]; nextCursor: string | null }>(
+    `/api/jobs?cursor=${encodeURIComponent(requestedCursor)}`,
+  );
+  if (state.jobsNextCursor !== requestedCursor) return;
+  state.jobs = appendUniqueById(state.jobs, result.jobs);
+  state.jobsNextCursor = result.nextCursor;
+  renderJobs();
+}
+
+async function loadMoreReleases(): Promise<void> {
+  const requestedCursor = state.releasesNextCursor;
+  if (!requestedCursor) return;
+  const result = await api<{ releases: Release[]; nextCursor: string | null }>(
+    `/api/releases?cursor=${encodeURIComponent(requestedCursor)}`,
+  );
+  if (state.releasesNextCursor !== requestedCursor) return;
+  state.releases = appendUniqueById(state.releases, result.releases);
+  state.releasesNextCursor = result.nextCursor;
+  renderReleases();
+}
+
+function appendUniqueById<T extends { id: string }>(current: T[], next: T[]): T[] {
+  const records = new Map(current.map((record) => [record.id, record]));
+  for (const record of next) records.set(record.id, record);
+  return [...records.values()];
 }
 
 function visibleProjects(): Project[] {
@@ -5393,6 +5501,7 @@ function renderJobs(): void {
   container.replaceChildren();
   if (!state.jobs.length) {
     container.append(emptyState("No processing jobs.", true));
+    renderJobPagination();
     return;
   }
   const visibleJobs = state.view === "jobs" ? state.jobs : state.jobs.slice(0, 12);
@@ -5452,6 +5561,16 @@ function renderJobs(): void {
     row.append(order, body, actions);
     container.append(row);
   }
+  renderJobPagination();
+}
+
+function renderJobPagination(): void {
+  renderListPagination(
+    "jobPagination",
+    "jobPaginationStatus",
+    state.view === "jobs" ? state.jobsNextCursor : null,
+    `${state.jobs.length} jobs loaded. More jobs are available.`,
+  );
 }
 
 function renderReleases(): void {
@@ -5459,6 +5578,7 @@ function renderReleases(): void {
   container.replaceChildren();
   if (!state.releases.length) {
     container.append(emptyState("No release history yet. Approve a version, then publish its first channel."));
+    renderReleasePagination();
     return;
   }
   const header = element("div", "release-list-row header");
@@ -5554,6 +5674,16 @@ function renderReleases(): void {
     for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
+  renderReleasePagination();
+}
+
+function renderReleasePagination(): void {
+  renderListPagination(
+    "releasePagination",
+    "releasePaginationStatus",
+    state.releasesNextCursor,
+    `${state.releases.length} releases loaded. More releases are available.`,
+  );
 }
 
 function renderReviews(): void {

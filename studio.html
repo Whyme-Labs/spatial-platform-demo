@@ -151,6 +151,7 @@
                 </label>
                 <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
                 <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
+                <button id="loadMoreProjectViews" class="text-button" type="button" hidden>Load more views</button>
               </div>
             </details>
           </div>
@@ -178,6 +179,10 @@
             <span class="worker-status"><i></i>Pull-agent contract</span>
           </div>
           <div id="jobList"><div class="empty-state compact">No jobs loaded.</div></div>
+          <div id="jobPagination" class="list-pagination" hidden>
+            <span id="jobPaginationStatus"></span>
+            <button id="loadMoreJobs" class="quiet-button" type="button">Load more jobs</button>
+          </div>
           <div class="worker-card">
             <span>Compute architecture</span>
             <strong>Local RTX now.<br />Elastic workers later.</strong>
@@ -197,6 +202,10 @@
         </div>
         <div id="releaseList" class="release-table" aria-live="polite">
           <div class="empty-state">No releases loaded.</div>
+        </div>
+        <div id="releasePagination" class="list-pagination" hidden>
+          <span id="releasePaginationStatus"></span>
+          <button id="loadMoreReleases" class="quiet-button" type="button">Load more releases</button>
         </div>
       </section>
 
@@ -381,6 +390,10 @@
           <div><span class="eyebrow">TEMPLATES</span><h3>Reusable project defaults</h3></div>
         </div>
         <div id="projectTemplateList" class="compact-record-list" aria-live="polite"></div>
+        <div id="projectTemplatePagination" class="list-pagination" hidden>
+          <span id="projectTemplatePaginationStatus"></span>
+          <button id="loadMoreProjectTemplates" class="quiet-button" type="button">Load more templates</button>
+        </div>
         <form id="projectTemplateForm" class="inline-tool-form">
           <input name="templateId" type="hidden" />
           <div class="mock-form-grid">

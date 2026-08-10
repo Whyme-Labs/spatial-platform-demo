@@ -267,8 +267,34 @@ type ProjectListCursor = {
   id: string;
 };
 
+type ProjectTemplateListCursor = {
+  name: string;
+  createdAt: string;
+  id: string;
+};
+
+type ProjectViewListCursor = ProjectTemplateListCursor & {
+  isDefault: number;
+};
+
+type JobListCursor = {
+  stateRank: number;
+  priority: number;
+  createdAt: string;
+  id: string;
+};
+
+type ReleaseListCursor = {
+  publishedAt: string;
+  id: string;
+};
+
 // Receipt: docs/CAPACITY_RECEIPTS.md, "Production-scale local QA list boundaries".
 const PROJECT_LIST_PAGE_SIZE = 200;
+const PROJECT_TEMPLATE_LIST_PAGE_SIZE = 100;
+const PROJECT_VIEW_LIST_PAGE_SIZE = 50;
+const JOB_LIST_PAGE_SIZE = 200;
+const RELEASE_LIST_PAGE_SIZE = 500;
 
 type ProjectCustomFieldType = "text" | "number" | "boolean" | "date" | "select" | "url";
 type ProjectCustomFieldValue = string | number | boolean | null;
@@ -2706,17 +2732,42 @@ app.get("/api/dashboard", async (context) => {
 app.get("/api/project-templates", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
+  const cursor = parseListCursor<ProjectTemplateListCursor>(
+    context.req.query("cursor"),
+    (value): value is ProjectTemplateListCursor =>
+      isCursorString(value, "name") && isCursorString(value, "createdAt") && isCursorString(value, "id"),
+  );
+  if (cursor instanceof Error) return invalidListCursor(context, "Project template");
   const result = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
       delivery_template, notes, policy_json, client_operation_id, request_hash,
-      created_at, updated_at
+      created_at, updated_at, lower(name) AS sort_name
     FROM project_templates
     WHERE organisation_id = ?
-    ORDER BY lower(name), created_at
-    LIMIT 100
-  `).bind(auth.organisationId).all<ProjectTemplateRow>();
-  return context.json({ templates: result.results.map(publicProjectTemplate) });
+      AND (? IS NULL OR lower(name) > ? OR (
+        lower(name) = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+      ))
+    ORDER BY lower(name), created_at, id
+    LIMIT ?
+  `).bind(
+    auth.organisationId,
+    cursor?.id ?? null,
+    cursor?.name ?? null,
+    cursor?.name ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.id ?? null,
+    PROJECT_TEMPLATE_LIST_PAGE_SIZE + 1,
+  ).all<ProjectTemplateRow & { sort_name: string }>();
+  const page = result.results.slice(0, PROJECT_TEMPLATE_LIST_PAGE_SIZE);
+  const last = page[page.length - 1];
+  return context.json({
+    templates: page.map(publicProjectTemplate),
+    nextCursor: result.results.length > PROJECT_TEMPLATE_LIST_PAGE_SIZE && last
+      ? listCursor({ name: last.sort_name, createdAt: last.created_at, id: last.id })
+      : null,
+  });
 });
 
 app.post("/api/project-templates", async (context) => {
@@ -2855,14 +2906,53 @@ app.delete("/api/project-templates/:templateId", async (context) => {
 app.get("/api/project-views", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
+  const cursor = parseListCursor<ProjectViewListCursor>(
+    context.req.query("cursor"),
+    (value): value is ProjectViewListCursor =>
+      isCursorNumber(value, "isDefault")
+      && isCursorString(value, "name")
+      && isCursorString(value, "createdAt")
+      && isCursorString(value, "id"),
+  );
+  if (cursor instanceof Error) return invalidListCursor(context, "Saved project view");
   const result = await context.env.DB.prepare(`
-    SELECT id, name, filter_json, is_default, created_at, updated_at
+    SELECT id, name, filter_json, is_default, created_at, updated_at,
+      lower(name) AS sort_name
     FROM project_saved_views
     WHERE organisation_id = ? AND user_id = ?
-    ORDER BY is_default DESC, lower(name), created_at
-    LIMIT 50
-  `).bind(auth.organisationId, auth.userId).all<ProjectSavedViewRow>();
-  return context.json({ views: result.results.map(publicProjectSavedView) });
+      AND (? IS NULL OR is_default < ? OR (is_default = ? AND (
+        lower(name) > ? OR (lower(name) = ? AND (
+          created_at > ? OR (created_at = ? AND id > ?)
+        ))
+      )))
+    ORDER BY is_default DESC, lower(name), created_at, id
+    LIMIT ?
+  `).bind(
+    auth.organisationId,
+    auth.userId,
+    cursor?.id ?? null,
+    cursor?.isDefault ?? null,
+    cursor?.isDefault ?? null,
+    cursor?.name ?? null,
+    cursor?.name ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.id ?? null,
+    PROJECT_VIEW_LIST_PAGE_SIZE + 1,
+  ).all<ProjectSavedViewRow & { sort_name: string }>();
+  const page = result.results.slice(0, PROJECT_VIEW_LIST_PAGE_SIZE);
+  const last = page[page.length - 1];
+  return context.json({
+    views: page.map(publicProjectSavedView),
+    nextCursor: result.results.length > PROJECT_VIEW_LIST_PAGE_SIZE && last
+      ? listCursor({
+          isDefault: last.is_default,
+          name: last.sort_name,
+          createdAt: last.created_at,
+          id: last.id,
+        })
+      : null,
+  });
 });
 
 app.post("/api/project-views", async (context) => {
@@ -13213,23 +13303,74 @@ app.delete("/api/uploads/:uploadId", async (context) => {
 app.get("/api/jobs", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
+  const cursor = parseListCursor<JobListCursor>(
+    context.req.query("cursor"),
+    (value): value is JobListCursor =>
+      isCursorNumber(value, "stateRank")
+      && isCursorNumber(value, "priority")
+      && isCursorString(value, "createdAt")
+      && isCursorString(value, "id"),
+  );
+  if (cursor instanceof Error) return invalidListCursor(context, "Processing job");
   const result = await context.env.DB.prepare(`
-    SELECT j.id, j.project_id, j.version_id, j.job_type, j.processor_version, j.state, j.priority,
-      j.attempt_count, j.max_attempts, j.leased_by, j.lease_expires_at, j.progress, j.progress_message,
-      j.error_json, j.compute_duration_ms, j.active_human_duration_ms, j.input_bytes,
-      j.output_bytes, j.evidence_json, j.created_at, j.updated_at, p.name AS project_name
-    FROM processing_jobs j JOIN projects p ON p.id = j.project_id
-    WHERE j.organisation_id = ? AND p.status != 'ARCHIVED'
-    ORDER BY CASE j.state WHEN 'RUNNING' THEN 0 WHEN 'LEASED' THEN 1 WHEN 'QUEUED' THEN 2 ELSE 3 END,
-      j.priority ASC, j.created_at ASC
-    LIMIT 200
-  `).bind(auth.organisationId).all();
-  return context.json({ jobs: result.results });
+    WITH ranked_jobs AS (
+      SELECT j.id, j.project_id, j.version_id, j.job_type, j.processor_version, j.state, j.priority,
+        j.attempt_count, j.max_attempts, j.leased_by, j.lease_expires_at, j.progress, j.progress_message,
+        j.error_json, j.compute_duration_ms, j.active_human_duration_ms, j.input_bytes,
+        j.output_bytes, j.evidence_json, j.created_at, j.updated_at, p.name AS project_name,
+        CASE j.state WHEN 'RUNNING' THEN 0 WHEN 'LEASED' THEN 1 WHEN 'QUEUED' THEN 2 ELSE 3 END AS state_rank
+      FROM processing_jobs j JOIN projects p ON p.id = j.project_id
+      WHERE j.organisation_id = ? AND p.status != 'ARCHIVED'
+    )
+    SELECT * FROM ranked_jobs
+    WHERE (? IS NULL OR state_rank > ? OR (state_rank = ? AND (
+      priority > ? OR (priority = ? AND (
+        created_at > ? OR (created_at = ? AND id > ?)
+      ))
+    )))
+    ORDER BY state_rank, priority, created_at, id
+    LIMIT ?
+  `).bind(
+    auth.organisationId,
+    cursor?.id ?? null,
+    cursor?.stateRank ?? null,
+    cursor?.stateRank ?? null,
+    cursor?.priority ?? null,
+    cursor?.priority ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.createdAt ?? null,
+    cursor?.id ?? null,
+    JOB_LIST_PAGE_SIZE + 1,
+  ).all<Record<string, unknown> & {
+    id: string;
+    state_rank: number;
+    priority: number;
+    created_at: string;
+  }>();
+  const page = result.results.slice(0, JOB_LIST_PAGE_SIZE);
+  const last = page[page.length - 1];
+  return context.json({
+    jobs: page.map(({ state_rank: _stateRank, ...job }) => job),
+    nextCursor: result.results.length > JOB_LIST_PAGE_SIZE && last
+      ? listCursor({
+          stateRank: last.state_rank,
+          priority: last.priority,
+          createdAt: last.created_at,
+          id: last.id,
+        })
+      : null,
+  });
 });
 
 app.get("/api/releases", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
+  const cursor = parseListCursor<ReleaseListCursor>(
+    context.req.query("cursor"),
+    (value): value is ReleaseListCursor =>
+      isCursorString(value, "publishedAt") && isCursorString(value, "id"),
+  );
+  if (cursor instanceof Error) return invalidListCursor(context, "Release history");
   const result = await context.env.DB.prepare(`
     SELECT r.id, r.project_id, p.name AS project_name, r.version_id,
       sv.version_number, r.release_number, r.access_policy,
@@ -13249,10 +13390,25 @@ app.get("/api/releases", async (context) => {
     JOIN projects p ON p.id = r.project_id
     JOIN scene_versions sv ON sv.id = r.version_id
     WHERE r.organisation_id = ? AND p.status != 'ARCHIVED'
-    ORDER BY r.published_at DESC
-    LIMIT 500
-  `).bind(auth.organisationId).all();
-  return context.json({ releases: result.results });
+      AND (? IS NULL OR r.published_at < ? OR (r.published_at = ? AND r.id < ?))
+    ORDER BY r.published_at DESC, r.id DESC
+    LIMIT ?
+  `).bind(
+    auth.organisationId,
+    cursor?.id ?? null,
+    cursor?.publishedAt ?? null,
+    cursor?.publishedAt ?? null,
+    cursor?.id ?? null,
+    RELEASE_LIST_PAGE_SIZE + 1,
+  ).all<Record<string, unknown> & { id: string; published_at: string }>();
+  const page = result.results.slice(0, RELEASE_LIST_PAGE_SIZE);
+  const last = page[page.length - 1];
+  return context.json({
+    releases: page,
+    nextCursor: result.results.length > RELEASE_LIST_PAGE_SIZE && last
+      ? listCursor({ publishedAt: last.published_at, id: last.id })
+      : null,
+  });
 });
 
 app.post("/api/jobs/:jobId/retry", async (context) => {
@@ -21306,10 +21462,10 @@ function publicProject(
 }
 
 function projectListCursor(project: ProjectRow): string {
-  return base64UrlEncode(new TextEncoder().encode(JSON.stringify({
+  return listCursor({
     updatedAt: project.updated_at,
     id: project.id,
-  } satisfies ProjectListCursor)));
+  } satisfies ProjectListCursor);
 }
 
 function parseProjectListCursor(value: string | undefined): ProjectListCursor | null | Error {
@@ -21333,6 +21489,37 @@ function parseProjectListCursor(value: string | undefined): ProjectListCursor | 
   } catch {
     return new Error("Invalid project list cursor");
   }
+}
+
+function listCursor(value: Record<string, string | number>): string {
+  return base64UrlEncode(new TextEncoder().encode(JSON.stringify(value)));
+}
+
+function parseListCursor<T>(
+  value: string | undefined,
+  accepts: (parsed: unknown) => parsed is T,
+): T | null | Error {
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(value)));
+    return accepts(parsed) ? parsed : new Error("Invalid list cursor");
+  } catch {
+    return new Error("Invalid list cursor");
+  }
+}
+
+function isCursorString(value: unknown, key: string): boolean {
+  return Boolean(value && typeof value === "object" && typeof Reflect.get(value, key) === "string" && Reflect.get(value, key));
+}
+
+function isCursorNumber(value: unknown, key: string): boolean {
+  return Boolean(value && typeof value === "object" && Number.isFinite(Reflect.get(value, key)));
+}
+
+function invalidListCursor(context: Context<AppEnvironment>, label: string): Response {
+  return validationError(context, {
+    cursor: [`${label} cursor is invalid. Reload the inventory and try again.`],
+  });
 }
 
 function publicAuthContext(auth: AuthContext): AuthContext {
