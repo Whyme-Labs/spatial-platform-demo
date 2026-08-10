@@ -161,16 +161,26 @@ test.describe("authenticated studio UI", () => {
     })).toBeVisible();
   });
 
-  test("capture intake keeps legacy project workflow settings out of the primary path", async ({ page }) => {
+  test("capture intake guides a novice through details, files, and the processing plan", async ({ page }) => {
     await page.getByRole("button", { name: "Upload capture", exact: true }).click();
     const dialog = page.locator("#newProjectDialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("heading", {
-      name: "Upload a capture result and let the platform prepare the preview.",
+      name: "Create a walkable scene.",
       exact: true,
     })).toBeVisible();
-    await expect(dialog.getByLabel("Project name", { exact: true })).toBeVisible();
-    await expect(dialog.getByRole("combobox", { name: "Capture source", exact: true })).toBeVisible();
+    await expect(dialog.getByLabel("Scene name", { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel("Start from project defaults", { exact: true })).toBeHidden();
+    await expect(dialog.getByText("Optional project details", { exact: false })).toBeVisible();
+    await dialog.getByLabel("Scene name", { exact: true }).fill("Atrium walkthrough");
+    await dialog.getByRole("button", { name: "Continue to files", exact: true }).click();
+
+    await expect(dialog.getByRole("combobox", {
+      name: "Which scanner or export tool created these files?",
+      exact: true,
+    })).toBeVisible();
+    await expect(dialog.getByLabel("3D appearance file", { exact: true })).toBeVisible();
+    await expect(dialog.getByLabel("Measurement geometry file", { exact: true })).toBeVisible();
     await expect(dialog.locator("#newCaptureAsset")).toHaveAttribute(
       "accept",
       ".ply,.spz,.sog,.splat,.ksplat,.rad",
@@ -184,21 +194,130 @@ test.describe("authenticated studio UI", () => {
       "",
     );
     await expect(dialog.getByText(
-      "Required. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS so this capture can produce a floor plan, collision shell, and walking map.",
+      "Required. Choose the registered PLY, E57, LAS, LAZ, or PTS point cloud exported from the same scan. It supplies the floor plan, collision shell, and walking map.",
       { exact: true },
     )).toBeVisible();
     const frameConfirmation = dialog.getByLabel(
-      "These are direct exports from the same capture and still share one registered Y-up metre coordinate frame. I did not reorient or scale either file separately.",
+      "I confirm both files came from the same unchanged capture coordinate system.",
       { exact: true },
     );
     await expect(frameConfirmation).toBeVisible();
     await expect(frameConfirmation).toHaveAttribute("required", "");
-    await dialog.getByRole("combobox", { name: "Capture source", exact: true }).selectOption("open-import");
+    await dialog.getByRole("combobox", {
+      name: "Which scanner or export tool created these files?",
+      exact: true,
+    }).selectOption("open-import");
     await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
     await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);
-    await expect(dialog.getByLabel("Start from template", { exact: true })).toHaveCount(0);
-    await expect(dialog.getByText("Project details", { exact: true })).toBeVisible();
+    await dialog.locator("#newCaptureAsset").setInputFiles({
+      name: "atrium.spz",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("visual"),
+    });
+    await dialog.locator("#newCaptureGeometry").setInputFiles({
+      name: "atrium.e57",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.from("geometry"),
+    });
+    await frameConfirmation.check();
+    await dialog.getByRole("button", { name: "Review processing plan", exact: true }).click();
+    await expect(dialog.getByText("✓ Prepare the browser scene", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("✓ Run privacy detection", { exact: true })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Create and process scene", exact: true })).toBeVisible();
     await expectResponsiveSurface(page, "#newProjectDialog");
+  });
+
+  test("capture intake keeps required organisation metadata visible", async ({ page }) => {
+    await page.route("**/api/project-fields", async (route) => {
+      await json(route, 200, {
+        fields: [{
+          id: "91919191-9191-4919-8919-919191919191",
+          key: "portfolio_code",
+          label: "Portfolio code",
+          description: "Required by this workspace.",
+          type: "text",
+          required: true,
+          options: [],
+          active: true,
+          sortOrder: 0,
+          createdAt: now,
+          updatedAt: now,
+        }, {
+          id: "92929292-9292-4929-8929-929292929292",
+          key: "site_reference",
+          label: "Site reference",
+          description: null,
+          type: "text",
+          required: false,
+          options: [],
+          active: true,
+          sortOrder: 1,
+          createdAt: now,
+          updatedAt: now,
+        }],
+      });
+    });
+    await page.reload();
+
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    const dialog = page.locator("#newProjectDialog");
+    const requiredField = dialog.getByLabel("Portfolio code", { exact: true });
+    const optionalDetails = dialog.locator("#newProjectOptionalDetails");
+
+    await expect(requiredField).toBeVisible();
+    await expect(requiredField).toHaveAttribute("required", "");
+    await expect(optionalDetails).not.toHaveAttribute("open", "");
+    await expect(dialog.getByLabel("Site reference", { exact: true })).toBeHidden();
+    await expect(optionalDetails.getByText("Optional project details · 5 fields", { exact: true })).toBeVisible();
+  });
+
+  test("portfolio administration and saved project filters are reachable", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "Portfolio tools", exact: true })).toBeVisible();
+    await expect(page.locator("#projectAdvancedFilters")).toBeVisible();
+    await page.locator("#projectAdvancedFilters").getByText("Filters and saved views", {
+      exact: true,
+    }).click();
+    await expect(page.locator("#savedProjectView")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Save view", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Portfolio tools", exact: true }).click();
+    await expect(page.getByRole("dialog").filter({
+      has: page.getByRole("heading", { name: "Templates and portable metadata." }),
+    })).toBeVisible();
+  });
+
+  test("saved project defaults configure a new capture", async ({ page }) => {
+    await page.route("**/api/project-templates", async (route) => {
+      await json(route, 200, {
+        templates: [{
+          id: "93939393-9393-4939-8939-939393939393",
+          name: "Museum evidence pack",
+          description: "Defaults for specialist gallery evidence.",
+          captureAdapter: "phone-video",
+          deliveryTemplate: "Venue navigator",
+          notes: "Preserve the accessible public route.",
+          createdAt: now,
+          updatedAt: now,
+        }],
+      });
+    });
+    await page.reload();
+
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    const dialog = page.locator("#newProjectDialog");
+    await dialog.locator("#newProjectOptionalDetails").getByText(
+      "Optional project details · 4 fields",
+      { exact: true },
+    ).click();
+    await dialog.locator("#newProjectTemplate")
+      .selectOption("93939393-9393-4939-8939-939393939393");
+
+    await expect(dialog.locator("#newCaptureAdapter optgroup[label='Specialist evidence sources']"))
+      .toContainText("Phone / video evidence");
+    await expect(dialog.locator("#newCaptureAdapter")).toHaveValue("phone-video");
+    await expect(dialog.locator("textarea[name='notes']")).toHaveValue(
+      "Preserve the accessible public route.",
+    );
   });
 
   test("capture contracts do not invent an identity scene registration", async ({ page }) => {

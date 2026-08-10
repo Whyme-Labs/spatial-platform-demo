@@ -96,7 +96,7 @@ export const projectInputSchema = z.object({
   customerName: z.string().trim().min(2).max(120).optional(),
   customerEmail: z.string().email().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2).max(80),
+  deliveryTemplate: z.string().trim().min(2),
   notes: z.string().trim().max(4000).optional(),
   customFields: projectCustomFieldValuesSchema.default({}),
 });
@@ -106,7 +106,7 @@ export const projectUpdateSchema = z.object({
   customerName: z.string().trim().min(2).max(120).nullable().optional(),
   customerEmail: z.string().trim().email().nullable().optional(),
   captureAdapter: captureAdapterSchema.optional(),
-  deliveryTemplate: z.string().trim().min(2).max(80).optional(),
+  deliveryTemplate: z.string().trim().min(2).optional(),
   notes: z.string().trim().max(4000).nullable().optional(),
   customFields: projectCustomFieldValuesSchema.optional(),
 }).refine((value) => Object.keys(value).length > 0, {
@@ -125,7 +125,7 @@ export const projectTemplateSchema = z.object({
   name: z.string().trim().min(2).max(80),
   description: z.string().trim().max(500).nullable().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2).max(80),
+  deliveryTemplate: z.string().trim().min(2),
   notes: z.string().trim().max(4000).nullable().optional(),
 });
 
@@ -153,7 +153,7 @@ export const projectViewFilterSchema = z.object({
   ])).max(12).transform((values) => [...new Set(values)].sort()).default([]),
   captureAdapters: z.array(captureAdapterSchema).max(captureAdapterIds.length)
     .transform((values) => [...new Set(values)].sort()).default([]),
-  deliveryTemplates: z.array(z.string().trim().min(2).max(80)).max(20)
+  deliveryTemplates: z.array(z.string().trim().min(2)).max(20)
     .transform((values) => [...new Set(values)].sort()).default([]),
   sort: z.enum(["updated_desc", "updated_asc", "name_asc", "name_desc"]).default("updated_desc"),
 });
@@ -177,9 +177,9 @@ export const portfolioProjectSchema = z.object({
   sourceId: z.string().uuid().optional(),
   name: z.string().trim().min(3).max(120),
   customerName: z.string().trim().min(2).max(120).nullable().optional(),
-  customerEmail: z.string().trim().email().max(254).nullable().optional(),
+  customerEmail: z.string().trim().email().nullable().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2).max(80),
+  deliveryTemplate: z.string().trim().min(2),
   notes: z.string().trim().max(4000).nullable().optional(),
   customFields: projectCustomFieldValuesSchema.default({}),
 });
@@ -2303,6 +2303,7 @@ export const floorplanExtractionReviewSchema = z.object({
   decision: z.enum(["approve", "reject"]),
   note: z.string().trim().min(10).max(2000),
   plan: floorplanReviewPlanSchema.nullable().optional(),
+  republishReleaseId: z.string().uuid().optional(),
   captureAgreementResolutions: z.array(captureAgreementResolutionSchema)
     .max(2_000).optional(),
 }).superRefine((value, context) => {
@@ -2318,6 +2319,13 @@ export const floorplanExtractionReviewSchema = z.object({
       code: "custom",
       path: ["plan"],
       message: "A rejected proposal must not create an approved plan",
+    });
+  }
+  if (value.decision === "reject" && value.republishReleaseId) {
+    context.addIssue({
+      code: "custom",
+      path: ["republishReleaseId"],
+      message: "A rejected proposal cannot request publication",
     });
   }
   // Every NEW resolution freezes its storey elevation. The stored blob's

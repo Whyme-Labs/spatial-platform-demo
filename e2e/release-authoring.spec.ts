@@ -16,9 +16,13 @@ test("project rows open a dedicated project workspace with nested tools", async 
 
   await projectRow.click();
 
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
   await expect(page.locator("#studioGrid")).toBeHidden();
   await expect(page.getByRole("heading", { name: "Corrected Spark room", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
   await expect(page.getByRole("heading", { name: "Your walkable splat preview is ready.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
 
@@ -41,14 +45,82 @@ test("project rows open a dedicated project workspace with nested tools", async 
     expect(layout.navigationGap, `${viewport.width}px project navigation overlaps its heading`).toBeGreaterThan(0);
   }
 
-  await page.getByRole("button", { name: "Scene & navigation", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/scene$`));
-  await expect(page.getByRole("heading", { name: "Floors, rooms, doorways, POIs, routes, and privacy regions" })).toBeVisible();
+  const processStep = page.locator(".project-journey-step").filter({ hasText: "Process" });
+  await processStep.click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+  await expect(page.locator('.project-journey-step[aria-current="step"]')).toHaveCount(1);
+  await expect(processStep).toHaveAttribute("aria-current", "step");
+  await expect(page.getByRole("heading", {
+    name: "Your walkable splat preview is ready.",
+    exact: true,
+  })).toBeFocused();
+
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
+  await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.locator("#projectTable")).toBeHidden();
 
   await page.getByRole("button", { name: "Back to projects", exact: true }).click();
   await expect(page).toHaveURL(/#projects$/);
   await expect(page.locator("#projectTable")).toBeVisible();
+});
+
+test("privacy, walk testing, expert evidence, and publication are first-class project tasks", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+  await expect(page.getByRole("heading", {
+    name: "Automated candidates, human decisions",
+    exact: true,
+  })).toBeVisible();
+
+  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/walk$`));
+  await expect(page.getByRole("heading", { name: "Routes and movement runtime", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Expert", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
+  await expect(page.getByRole("heading", {
+    name: "Inspect technical evidence and recovery controls",
+    exact: true,
+  })).toBeVisible();
+
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+  await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
+});
+
+test("QA recovery opens the visible privacy task", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
+  await page.getByRole("button", { name: "Open privacy evidence workspace", exact: true }).click();
+
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+  await expect(page.locator("#privacyAssuranceCard")).toBeVisible();
+});
+
+test("publication keeps technical overrides behind an expert disclosure", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.getByRole("button", { name: "Configure publication", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  await expect(dialog.getByLabel("Public slug", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Use current view", exact: true })).toBeVisible();
+  await expect(dialog.locator("#releaseCameraPreview")).toBeVisible();
+  await expect(dialog.getByLabel("Splat budget (millions)", { exact: true })).toBeHidden();
+  await expect(dialog.getByLabel("Starting camera position (x, y, z)", { exact: true })).toBeHidden();
+  await expect(dialog.getByText("Expert settings", { exact: true })).toBeVisible();
 });
 
 test("release authoring resets project-specific fields and submits scene rotation", async ({ page }) => {
@@ -61,11 +133,13 @@ test("release authoring resets project-specific fields and submits scene rotatio
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Corrected Spark room" })).toBeVisible();
 
   const openRelease = page.getByRole("button", { name: "Publish shareable URL", exact: true });
   await openRelease.click();
   const dialog = page.locator("#releaseDialog");
+  await dialog.getByText("Expert settings", { exact: true }).click();
   await dialog.getByRole("textbox", { name: "Subtitle", exact: true }).fill("Stale project copy");
   await dialog.locator("input[name='initialCameraPosition']").fill("1, 2, 3");
   await dialog.locator("input[name='sceneRotationZ']").fill("180");
@@ -76,6 +150,7 @@ test("release authoring resets project-specific fields and submits scene rotatio
   await expect(dialog.locator("input[name='initialCameraPosition']")).toHaveValue("");
   await expect(dialog.locator("input[name='sceneRotationZ']")).toHaveValue("0");
 
+  await dialog.getByText("Expert settings", { exact: true }).click();
   await dialog.locator("input[name='sceneRotationZ']").fill("361");
   expect(pageErrors).toEqual([]);
   await dialog.locator("input[name='sceneRotationZ']").fill("180");
@@ -95,6 +170,7 @@ test("release authoring loads spatial guards before enabling visual rotation", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -109,9 +185,11 @@ test("release authoring makes visual rotation and reviewed transforms mutually e
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
+  await dialog.getByText("Expert settings", { exact: true }).click();
   const applyTransform = dialog.getByRole("checkbox", {
     name: "Apply authored source-to-world transform",
     exact: true,
@@ -138,6 +216,7 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
   await expect(page.locator("#releaseDialog")).toBeVisible();
@@ -148,6 +227,8 @@ test("processed splats stay blocked until their walking map is approved", async 
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Registered structural geometry is required.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
@@ -158,8 +239,15 @@ test("processed splats stay blocked until their walking map is approved", async 
     { exact: true },
   )).toBeVisible();
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
-  await expect(page.getByText("Floor plan", { exact: true })).toBeVisible();
-  await expect(page.getByText("Geometry required", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await expect(page.getByRole("heading", {
+    name: "Metric capture → operator revision → portable drawings",
+    exact: true,
+  })).toBeVisible();
+  await expect(page.getByText(
+    "A verified metric point cloud is required; visual-only Gaussian splats are not measurement evidence.",
+    { exact: true },
+  )).toBeVisible();
 });
 
 test("walking evidence builds automatically without exposing routine authoring", async ({ page }) => {
@@ -170,6 +258,8 @@ test("walking evidence builds automatically without exposing routine authoring",
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Building and verifying the walking map.", exact: true })).toBeVisible();
   await expect(page.getByText(/No routine navigation setup is required\.$/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh walking-map progress", exact: true })).toBeVisible();
@@ -184,6 +274,8 @@ test("automatic reconstruction exposes only unresolved structural exceptions", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Structural exceptions need review.", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Review structural exceptions", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
@@ -194,6 +286,7 @@ test("multi-level floor-plan review shows every level and vertical connector", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await expect(page.getByRole("heading", {
     name: "Inspect and correct the reconstructed structure in place",
@@ -222,8 +315,6 @@ test("multi-level floor-plan review shows every level and vertical connector", a
     await expect.poll(() => toolbar.evaluate((element) =>
       element.scrollWidth <= element.clientWidth)).toBe(true);
   }
-  await expect(page.locator("details.spatial-advanced-workflows")).not.toHaveAttribute("open", "");
-  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
   await expect(page.getByText("2 levels", { exact: true })).toBeVisible();
   await expect(page.getByText("1 stair/ramp connector", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Correct and review plan", exact: true }).click();
@@ -244,15 +335,16 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
+  await page.getByRole("button", { name: "Walk test", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
     has: page.getByRole("heading", { name: "Routes and movement runtime" }),
   });
   const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
-  const tuneNavigation = card.getByRole("button", { name: "Tune navigation agent", exact: true });
+  const tuneNavigation = card.getByRole("button", { name: "Walking profile", exact: true });
   const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
   const firstApprove = card.getByRole("button", { name: "Approve navigation", exact: true }).first();
@@ -299,8 +391,9 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByText("Advanced evidence and diagnostics", { exact: true }).click();
+  await page.getByRole("button", { name: "Walk test", exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
   const dialog = page.locator("#navigationTraversalDialog");

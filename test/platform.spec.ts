@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { issueAuthTokens, otpHash } from "../src/worker/auth";
 import { navigationArtifactSchema } from "../src/worker/contracts";
 import worker, {
+  completeReleaseRepublishIntent,
   currentNavigationAuthoringState,
   navigationArtifactMatchesFrozenConnections,
   navigationAuthoringHash,
@@ -1847,6 +1848,7 @@ describe("Spatial Studio Worker", () => {
         body: JSON.stringify({
           name: "Heritage gallery archive",
           customerName: "City Museum",
+          customerEmail: "collections@museum.example",
           captureAdapter: "fjd-trion",
           deliveryTemplate: "Venue navigator",
           notes: "Keep metric masters and a public web derivative.",
@@ -1859,10 +1861,43 @@ describe("Spatial Studio Worker", () => {
         id: created.project.id,
         name: "Heritage gallery archive",
         customerName: "City Museum",
+        customerEmail: "collections@museum.example",
         captureAdapter: "fjd-trion",
         deliveryTemplate: "Venue navigator",
         notes: "Keep metric masters and a public web derivative.",
         status: "DRAFT",
+      },
+    });
+
+    const emailOnlyResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ customerEmail: "archives@museum.example" }),
+      },
+    );
+    expect(emailOnlyResponse.status).toBe(200);
+    await expect(emailOnlyResponse.json()).resolves.toMatchObject({
+      project: {
+        customerName: "City Museum",
+        customerEmail: "archives@museum.example",
+      },
+    });
+
+    const customerNameOnlyResponse = await exports.default.fetch(
+      `${origin}/api/projects/${created.project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ customerName: "City Museum" }),
+      },
+    );
+    expect(customerNameOnlyResponse.status).toBe(200);
+    await expect(customerNameOnlyResponse.json()).resolves.toMatchObject({
+      project: {
+        customerName: "City Museum",
+        customerEmail: "archives@museum.example",
       },
     });
 
@@ -3716,6 +3751,79 @@ describe("Spatial Studio Worker", () => {
     await env.DB.prepare(`
       UPDATE releases SET spatial_snapshot_json = ? WHERE id = ?
     `).bind(JSON.stringify(telemetrySnapshot), release.release.id).run();
+    const republishIntentId = crypto.randomUUID();
+    const channelBeforeRepublish = await env.DB.prepare(`
+      SELECT id, activation_generation FROM release_channels WHERE active_release_id = ?
+    `).bind(release.release.id).first<{ id: string; activation_generation: number }>();
+    expect(channelBeforeRepublish).toBeTruthy();
+    await env.DB.prepare(`
+      INSERT INTO release_republish_intents (
+        id, organisation_id, project_id, version_id, navigation_build_id,
+        source_release_id, status, requested_by, client_operation_id
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).bind(
+      republishIntentId,
+      provisionalEvidenceOwner!.organisation_id,
+      project.id,
+      completed.asset.versionId,
+      navigationBuildId,
+      release.release.id,
+      provisionalEvidenceOwner!.created_by,
+      crypto.randomUUID(),
+    ).run();
+    const republished = await completeReleaseRepublishIntent(
+      env,
+      navigationBuildId,
+      "durable-republish-test",
+    );
+    expect(republished).toMatchObject({
+      id: republishIntentId,
+      status: "completed",
+      releaseId: expect.any(String),
+      error: null,
+    });
+    const republishedRelease = await env.DB.prepare(`
+      SELECT r.id, r.release_number, r.viewer_config_json, r.spatial_snapshot_json,
+        rc.active_release_id
+      FROM releases r
+      JOIN release_channels rc ON rc.project_id = r.project_id
+        AND rc.organisation_id = r.organisation_id
+      WHERE r.id = ?
+    `).bind(republished!.releaseId).first<{
+      id: string;
+      release_number: number;
+      viewer_config_json: string;
+      spatial_snapshot_json: string;
+      active_release_id: string;
+    }>();
+    expect(republishedRelease).toMatchObject({
+      id: republished!.releaseId,
+      release_number: 2,
+      active_release_id: republished!.releaseId,
+    });
+    expect(JSON.parse(republishedRelease!.viewer_config_json)).toEqual(
+      JSON.parse((await env.DB.prepare(
+        "SELECT viewer_config_json FROM releases WHERE id = ?",
+      ).bind(release.release.id).first<{ viewer_config_json: string }>())!.viewer_config_json),
+    );
+    expect(JSON.parse(republishedRelease!.spatial_snapshot_json)).toMatchObject({
+      navigationAssets: { buildId: navigationBuildId },
+    });
+    await env.DB.batch([
+      env.DB.prepare(`
+        UPDATE release_channels
+        SET active_release_id = ?, activation_generation = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(
+        release.release.id,
+        channelBeforeRepublish!.activation_generation,
+        channelBeforeRepublish!.id,
+      ),
+      env.DB.prepare("DELETE FROM release_republish_intents WHERE id = ?")
+        .bind(republishIntentId),
+      env.DB.prepare("DELETE FROM releases WHERE id = ?")
+        .bind(republished!.releaseId),
+    ]);
     const publishedManifestResponse = await exports.default.fetch(
       `${origin}/api/releases/${release.release.slug}/manifest`,
     );

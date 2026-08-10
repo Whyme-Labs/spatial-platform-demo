@@ -181,6 +181,9 @@
     },
     "0053_navigation_final_capture_agreement.sql": {
       "phase": "expand"
+    },
+    "0054_durable_release_republish.sql": {
+      "phase": "expand"
     }
   }
 }

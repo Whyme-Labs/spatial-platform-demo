@@ -81,8 +81,12 @@
         </div>
         <nav class="project-section-nav" aria-label="Project workspace">
           <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
-          <button id="projectSceneTab" type="button" data-project-section="scene">Scene &amp; navigation</button>
+          <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
+          <button id="projectPrivacyTab" type="button" data-project-section="privacy">Privacy</button>
+          <button id="projectWalkTab" type="button" data-project-section="walk">Walk test</button>
+          <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
           <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
+          <button id="projectExpertTab" type="button" data-project-section="expert">Expert</button>
         </nav>
       </section>
 
@@ -110,20 +114,6 @@
               <span class="sr-only">Search projects</span>
               <input id="projectSearch" type="search" maxlength="120" placeholder="Search project or customer…" />
             </label>
-            <label hidden>
-              <span class="sr-only">Capture adapter</span>
-              <select id="projectAdapterFilter">
-                <option value="">All capture sources</option>
-                <option value="xgrids-lcc">XGRIDS LCC</option>
-                <option value="fjd-trion">FJD Trion</option>
-                <option value="open-import">Open asset import</option>
-                <option value="phone-video">Phone / video</option>
-              </select>
-            </label>
-            <label hidden>
-              <span class="sr-only">Delivery template</span>
-              <select id="projectDeliveryFilter"><option value="">All delivery templates</option></select>
-            </label>
             <label>
               <span class="sr-only">Sort projects</span>
               <select id="projectSort">
@@ -133,12 +123,36 @@
                 <option value="name_desc">Name Z-A</option>
               </select>
             </label>
-            <label hidden>
-              <span class="sr-only">Saved project view</span>
-              <select id="savedProjectView"><option value="">Current filters</option></select>
-            </label>
-            <button id="saveProjectViewButton" class="quiet-button" type="button" hidden>Save view</button>
-            <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
+            <details id="projectAdvancedFilters" class="project-advanced-filters">
+              <summary>Filters and saved views</summary>
+              <div class="project-advanced-filter-controls">
+                <label>
+                  <span>Capture source</span>
+                  <select id="projectAdapterFilter">
+                    <option value="">All capture sources</option>
+                    <optgroup label="Guided capture sources">
+                      <option value="xgrids-lcc">XGRIDS LCC</option>
+                      <option value="fjd-trion">FJD Trion</option>
+                      <option value="open-import">Open asset import</option>
+                    </optgroup>
+                    <optgroup label="Specialist evidence sources">
+                      <option value="phone-video">Phone / video evidence</option>
+                      <option value="drone-imagery">Drone imagery evidence</option>
+                    </optgroup>
+                  </select>
+                </label>
+                <label>
+                  <span>Delivery classification</span>
+                  <select id="projectDeliveryFilter"><option value="">All delivery classifications</option></select>
+                </label>
+                <label>
+                  <span>Saved view</span>
+                  <select id="savedProjectView"><option value="">Current filters</option></select>
+                </label>
+                <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
+                <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
+              </div>
+            </details>
           </div>
           <div id="projectBulkBar" class="bulk-action-bar" role="status" aria-live="polite" hidden>
             <strong id="projectSelectionCount">0 projects selected</strong>
@@ -204,7 +218,7 @@
 
       <section id="spatialWorkspace" class="output-section" hidden>
         <div class="section-heading">
-          <div><span class="eyebrow">SPATIAL AUTHORING</span><h2>Floors, rooms, doorways, POIs, routes, and privacy regions</h2></div>
+          <div><span id="spatialWorkspaceEyebrow" class="eyebrow">STRUCTURE</span><h2 id="spatialWorkspaceTitle">Review reconstructed rooms and openings</h2></div>
           <span class="worker-status"><i></i>Vendor-neutral semantics</span>
         </div>
         <div id="spatialOverview" class="workspace-grid" aria-live="polite">
@@ -219,6 +233,16 @@
         </div>
         <div id="measurementOverview" class="workspace-grid" aria-live="polite">
           <div class="empty-state">Open a project to define its measurement brief.</div>
+        </div>
+      </section>
+
+      <section id="publishWorkspace" class="output-section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">RELEASE</span><h2>Review and publish</h2></div>
+          <span class="worker-status"><i></i>Evidence-gated delivery</span>
+        </div>
+        <div id="publishOverview" class="workspace-grid" aria-live="polite">
+          <div class="empty-state">Open a project to review its publication readiness.</div>
         </div>
       </section>
 
@@ -270,26 +294,55 @@
     <form id="newProjectForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">NEW CAPTURE</span>
-      <h2>Upload a capture result and let the platform prepare the preview.</h2>
-      <p>Upload the visual splat and registered geometry from XGRIDS or FJD together. The platform creates the project, prepares the browser scene, and automatically generates floor-plan and navigation drafts for review.</p>
-      <div class="mock-form-grid">
-        <label for="newCaptureName"><span>Project name</span><input id="newCaptureName" name="name" required minlength="3" maxlength="120" placeholder="Ground floor showroom" /></label>
-        <label for="newCaptureAdapter"><span>Capture source</span><select id="newCaptureAdapter" name="captureAdapter"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD</option><option value="open-import">Portable splat</option></select></label>
-        <label class="full capture-file-field" for="newCaptureAsset"><span>Portable splat export</span><input id="newCaptureAsset" name="capture" type="file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Accepted: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
-        <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Registered metric point cloud</span><input id="newCaptureGeometry" name="geometry" type="file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Required for XGRIDS/FJD automatic floor-plan and navigation generation. Use a registered Y-up metric PLY, E57, LAS, LAZ, or PTS export.</small></label>
-        <label class="full checkbox-row capture-frame-confirmation"><input name="sameCaptureFrameConfirmed" type="checkbox" required /><span>These are direct exports from the same capture and still share one registered Y-up metre coordinate frame. I did not reorient or scale either file separately.</span></label>
-      </div>
-      <details class="form-advanced-settings">
-        <summary>Project details</summary>
+      <h2>Create a walkable scene.</h2>
+      <p>Name the scene, add the two exports from one scan, then review what the platform will prepare.</p>
+      <ol class="capture-intake-progress" aria-label="Scene creation progress">
+        <li data-capture-intake-indicator="1" aria-current="step"><span>1</span> Scene details</li>
+        <li data-capture-intake-indicator="2"><span>2</span> Capture files</li>
+        <li data-capture-intake-indicator="3"><span>3</span> Review</li>
+      </ol>
+      <section class="capture-intake-step" data-capture-intake-step="1" aria-labelledby="captureIntakeDetailsTitle">
+        <h3 id="captureIntakeDetailsTitle">Scene details</h3>
         <div class="mock-form-grid">
-          <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
-          <label class="full"><span>Notes</span><textarea name="notes" maxlength="4000" placeholder="Optional context for the capture or team"></textarea></label>
+          <label for="newCaptureName"><span>Scene name</span><input id="newCaptureName" name="name" required minlength="3" maxlength="120" placeholder="Ground floor showroom" /></label>
         </div>
-        <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
-      </details>
+        <section id="newProjectRequiredInformation" class="custom-field-form-section" aria-live="polite" hidden>
+          <h3>Required organisation information</h3>
+          <p>Complete the fields governed by this workspace before uploading.</p>
+          <div id="newProjectRequiredCustomFields" class="custom-field-grid"></div>
+        </section>
+        <details id="newProjectOptionalDetails" class="form-advanced-settings">
+          <summary id="newProjectOptionalSummary">Optional project details</summary>
+          <div class="mock-form-grid">
+            <label class="full"><span>Start from project defaults</span><select id="newProjectTemplate" name="projectTemplate"><option value="">No saved defaults</option></select></label>
+            <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
+            <label><span>Customer contact email</span><input name="customerEmail" type="email" /></label>
+            <label class="full"><span>Notes</span><textarea name="notes" maxlength="4000" placeholder="Optional context for the capture or team"></textarea></label>
+          </div>
+          <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+        </details>
+      </section>
+      <section class="capture-intake-step" data-capture-intake-step="2" aria-labelledby="captureIntakeFilesTitle" hidden>
+        <h3 id="captureIntakeFilesTitle">Add capture files</h3>
+        <div class="mock-form-grid">
+          <label class="full" for="newCaptureAdapter"><span>Which scanner or export tool created these files?</span><select id="newCaptureAdapter" name="captureAdapter"><optgroup label="Guided walkable-scene sources"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD Trion</option><option value="open-import">Other walkable-scene export</option></optgroup><optgroup label="Specialist evidence sources"><option value="phone-video">Phone / video evidence</option><option value="drone-imagery">Drone imagery evidence</option></optgroup></select></label>
+          <label class="full capture-file-field" for="newCaptureAsset"><span>3D appearance file</span><input id="newCaptureAsset" name="capture" type="file" aria-label="3D appearance file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Choose the browser visual: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
+          <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Measurement geometry file</span><input id="newCaptureGeometry" name="geometry" type="file" aria-label="Measurement geometry file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Choose the registered point cloud exported from the same scan.</small></label>
+          <label class="full checkbox-row capture-frame-confirmation"><input name="sameCaptureFrameConfirmed" type="checkbox" required /><span>I confirm both files came from the same unchanged capture coordinate system.</span></label>
+        </div>
+      </section>
+      <section class="capture-intake-step" data-capture-intake-step="3" aria-labelledby="captureIntakeReviewTitle" hidden>
+        <h3 id="captureIntakeReviewTitle">Review and process</h3>
+        <div id="newCaptureReview" class="capture-intake-review" aria-live="polite"></div>
+        <p class="field-note">The source files remain immutable. Machine-generated structure, privacy candidates, and walking evidence still require the stage-specific checks shown after processing.</p>
+      </section>
       <div class="upload-progress"><i id="newProjectUploadProgress"></i></div>
       <small id="newProjectStatus" role="status" aria-live="polite">Ready to upload.</small>
-      <button class="primary-button wide" type="submit">Upload and process</button>
+      <div class="capture-intake-actions">
+        <button id="newCaptureBack" class="quiet-button" type="button" hidden>Back</button>
+        <button id="newCaptureNext" class="primary-button" type="button">Continue to files</button>
+        <button id="newCaptureSubmit" class="primary-button" type="submit" hidden>Create and process scene</button>
+      </div>
       <p id="projectError" class="form-error" role="alert"></p>
     </form>
   </dialog>
@@ -589,6 +642,9 @@
       <div class="mock-form-grid">
         <label><span>Project name</span><input name="name" required minlength="3" maxlength="120" /></label>
         <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
+        <label><span>Customer contact email</span><input name="customerEmail" type="email" /></label>
+        <label><span>Capture source</span><select name="captureAdapter"><optgroup label="Guided capture sources"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="open-import">Open asset import</option></optgroup><optgroup label="Specialist evidence sources"><option value="phone-video">Phone / video evidence</option><option value="drone-imagery">Drone imagery evidence</option></optgroup></select></label>
+        <label><span>Delivery classification</span><input name="deliveryTemplate" required /></label>
         <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
       </div>
       <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
@@ -629,28 +685,42 @@
         <label class="full"><span>Subtitle</span><input name="subtitle" maxlength="240" /></label>
         <label><span>Capture date</span><input name="captureDate" type="date" /></label>
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
-        <label><span>Splat budget (millions)</span><input name="splatBudgetMillions" type="number" min="0.25" max="8" step="0.25" value="2" required /></label>
         <label><span>Opening movement</span><select name="defaultMovementMode"><option value="walk">Walk</option><option value="fly">Fly in 3D</option></select></label>
         <p class="field-note full">Fly requires an approved v7 closed structural shell. Walk and Fly collide with reviewed floors, walls, and ceilings while ignoring classified furniture.</p>
-        <label><span>Scene rotation X (degrees)</span><input name="sceneRotationX" type="number" step="0.1" value="0" required /></label>
-        <label><span>Scene rotation Y (degrees)</span><input name="sceneRotationY" type="number" step="0.1" value="0" required /></label>
-        <label><span>Scene rotation Z (degrees)</span><input name="sceneRotationZ" type="number" step="0.1" value="0" required /></label>
-        <p id="sceneRotationNote" class="field-note full">Visual orientation only. This renderer transform does not establish metric scale or replace reviewed source-to-world evidence.</p>
-        <label class="checkbox-row"><input name="applySourceToWorld" type="checkbox" /> Apply authored source-to-world transform</label>
-        <label class="full"><span>Reviewed transform evidence</span><select name="sourceToWorldEvidenceId"><option value="">No accepted extraction available</option></select></label>
-        <label><span>World unit</span><select name="releaseWorldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
-        <label><span>Source up axis</span><select name="releaseSourceUpAxis"><option value="Y">Y-up</option><option value="Z">Z-up</option></select></label>
-        <label><span>World units per source unit</span><input name="releaseMetresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" /></label>
-        <label><span>World yaw</span><input name="releaseYawDegrees" type="number" min="-360" max="360" step="0.1" value="0" /></label>
-        <label><span>World translation X</span><input name="releaseTranslationX" type="number" step="0.01" value="0" /></label>
-        <label><span>World translation Y</span><input name="releaseTranslationY" type="number" step="0.01" value="0" /></label>
-        <label><span>World translation Z</span><input name="releaseTranslationZ" type="number" step="0.01" value="0" /></label>
-        <label class="full"><span>Starting camera position (x, y, z)</span><input name="initialCameraPosition" placeholder="Optional; for example -0.3, 0.71, -0.94" /></label>
-        <label class="full"><span>Starting camera target (x, y, z)</span><input name="initialCameraTarget" placeholder="Required when a starting position is set" /></label>
-        <label><span>Camera up (x, y, z)</span><input name="initialCameraUp" value="0, 1, 0" /></label>
-        <label><span>Field of view</span><input name="initialCameraFov" type="number" min="20" max="100" step="1" value="58" /></label>
-        <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer" required>This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
       </div>
+      <section class="release-starting-view" aria-labelledby="releaseStartingViewTitle">
+        <div>
+          <h3 id="releaseStartingViewTitle">Starting view</h3>
+          <p id="releaseCameraStatus" class="field-note" role="status">Preparing the approved scene…</p>
+        </div>
+        <iframe id="releaseCameraPreview" title="Choose the publication starting view"></iframe>
+        <button id="releaseUseCurrentView" class="quiet-button wide" type="button" disabled>Use current view</button>
+      </section>
+      <details id="releaseExpertSettings" class="form-advanced-settings">
+        <summary>Expert settings</summary>
+        <p class="field-note">These values affect collision, measurement, and publication evidence. Change them only when the reviewed capture evidence requires an override.</p>
+        <div class="mock-form-grid">
+          <label><span>Splat budget (millions)</span><input name="splatBudgetMillions" type="number" min="0.25" max="8" step="0.25" value="2" /></label>
+          <label><span>Scene rotation X (degrees)</span><input name="sceneRotationX" type="number" step="0.1" value="0" /></label>
+          <label><span>Scene rotation Y (degrees)</span><input name="sceneRotationY" type="number" step="0.1" value="0" /></label>
+          <label><span>Scene rotation Z (degrees)</span><input name="sceneRotationZ" type="number" step="0.1" value="0" /></label>
+          <p id="sceneRotationNote" class="field-note full">Visual orientation only. This renderer transform does not establish metric scale or replace reviewed source-to-world evidence.</p>
+          <label class="checkbox-row"><input name="applySourceToWorld" type="checkbox" /> Apply authored source-to-world transform</label>
+          <label class="full"><span>Reviewed transform evidence</span><select name="sourceToWorldEvidenceId"><option value="">No accepted extraction available</option></select></label>
+          <label><span>World unit</span><select name="releaseWorldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
+          <label><span>Source up axis</span><select name="releaseSourceUpAxis"><option value="Y">Y-up</option><option value="Z">Z-up</option></select></label>
+          <label><span>World units per source unit</span><input name="releaseMetresPerSourceUnit" type="number" min="0.000001" max="10000" step="any" value="1" /></label>
+          <label><span>World yaw</span><input name="releaseYawDegrees" type="number" min="-360" max="360" step="0.1" value="0" /></label>
+          <label><span>World translation X</span><input name="releaseTranslationX" type="number" step="0.01" value="0" /></label>
+          <label><span>World translation Y</span><input name="releaseTranslationY" type="number" step="0.01" value="0" /></label>
+          <label><span>World translation Z</span><input name="releaseTranslationZ" type="number" step="0.01" value="0" /></label>
+          <label class="full"><span>Starting camera position (x, y, z)</span><input name="initialCameraPosition" placeholder="Optional; for example -0.3, 0.71, -0.94" /></label>
+          <label class="full"><span>Starting camera target (x, y, z)</span><input name="initialCameraTarget" placeholder="Required when a starting position is set" /></label>
+          <label><span>Camera up (x, y, z)</span><input name="initialCameraUp" value="0, 1, 0" /></label>
+          <label><span>Field of view</span><input name="initialCameraFov" type="number" min="20" max="100" step="1" value="58" /></label>
+          <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer">This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
+        </div>
+      </details>
       <p class="field-note">The release freezes this transform and the exact authored navigation runtime. Provisional SU releases support navigation but make no metre, area, clearance, survey, or construction claim.</p>
       <button class="primary-button wide" type="submit">Publish release</button>
       <p id="releaseError" class="form-error" role="alert"></p>
@@ -743,20 +813,24 @@
   <dialog id="navigationProfileDialog" class="dialog-card wide-dialog">
     <form id="navigationProfileForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
-      <span class="eyebrow">NAVIGATION AGENT</span>
-      <h2>Tune walking clearance for this scene version.</h2>
-      <div class="mock-form-grid">
-        <label class="full"><span>World unit</span><select name="worldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
-        <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" required /></label>
-        <label><span>Agent height</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" required /></label>
-        <label><span>Eye height</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" required /></label>
-        <label><span>Maximum climb / step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" required /></label>
-        <label><span>Maximum slope (degrees)</span><input name="maxSlopeDegrees" type="number" min="0" max="89" step="1" required /></label>
-        <label><span>Maximum speed</span><input name="maxSpeed" type="number" min="0.1" max="20" step="0.1" required /></label>
-        <label><span>Maximum acceleration</span><input name="maxAcceleration" type="number" min="0.1" max="100" step="0.1" required /></label>
-      </div>
-      <p class="field-note">This immutable profile drives Recast radius erosion, ledge and slope filtering, Detour queries, and the physical character controller. In SU it is only a relative gameplay value, not a real-world clearance claim.</p>
-      <button class="primary-button wide" type="submit">Save navigation profile</button>
+      <span class="eyebrow">WALKING PROFILE</span>
+      <h2>Review walking clearance for this scene.</h2>
+      <div id="navigationProfileSummary" class="notice-card"></div>
+      <details class="form-advanced-settings">
+        <summary>Expert profile values</summary>
+        <p class="field-note">These values affect clearance, ledges, slopes, route queries, and the physical controller. Change them only when measured scene evidence requires an override.</p>
+        <div class="mock-form-grid">
+          <label class="full"><span>World unit</span><select name="worldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
+          <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" /></label>
+          <label><span>Agent height</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" /></label>
+          <label><span>Eye height</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" /></label>
+          <label><span>Maximum climb / step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" /></label>
+          <label><span>Maximum slope (degrees)</span><input name="maxSlopeDegrees" type="number" min="0" max="89" step="1" /></label>
+          <label><span>Maximum speed</span><input name="maxSpeed" type="number" min="0.1" max="20" step="0.1" /></label>
+          <label><span>Maximum acceleration</span><input name="maxAcceleration" type="number" min="0.1" max="100" step="0.1" /></label>
+        </div>
+      </details>
+      <button class="primary-button wide" type="submit">Save expert overrides</button>
       <p id="navigationProfileError" class="form-error" role="alert"></p>
     </form>
   </dialog>
@@ -765,23 +839,27 @@
     <form id="navigationBuildForm">
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">VERIFIED WALKING MAP</span>
-      <h2>Build the Unreal-equivalent navigation artifact.</h2>
-      <p>Recast generates radius-cleared topology, Detour proves every authored room route, and Rapier replays those routes with the production capsule before human review.</p>
-      <div class="mock-form-grid">
-        <label class="full"><span>Verified collision GLB</span><select id="navigationCollisionAsset" name="collisionAssetId" required></select></label>
-        <label class="full"><span>Complete build bounds (min x, y, z → max x, y, z)</span><input name="bounds" required placeholder="-5, -0.5, -5 → 5, 3, 5" /></label>
-        <label class="full"><span>Opening spawn at floor level (x, y, z)</span><input name="spawn" required placeholder="0, 0, 0" /></label>
-        <label><span>Recast cell size</span><input name="cellSize" type="number" min="0.02" max="1" step="0.01" value="0.1" required /></label>
-        <label><span>Recast cell height</span><input name="cellHeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05" required /></label>
-        <label><span>Tile size (voxels)</span><input name="tileSize" type="number" min="16" max="1024" step="1" value="32" required /></label>
-        <label><span>Maximum contour edge (voxels)</span><input name="maxEdgeLengthVoxels" type="number" min="1" max="10000" step="1" value="12" required /></label>
-        <label><span>Contour simplification error</span><input name="maxSimplificationError" type="number" min="0.1" max="10" step="0.1" value="1.3" required /></label>
-        <label><span>Minimum region (voxels)</span><input name="minimumRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="8" required /></label>
-        <label><span>Merge region (voxels)</span><input name="mergeRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="20" required /></label>
-        <label class="checkbox-row"><input name="provisional" type="checkbox" /><span>Explicit provisional scene-unit build</span></label>
-      </div>
-      <p class="field-note">The GLB, profile, entities, obstacle boxes, authored traversals, bounds, spawn, and explicit Recast settings are frozen into the job. Any disconnected room or collision-blocked route fails before review.</p>
-      <button class="primary-button wide" type="submit">Queue verified build</button>
+      <h2>Build the verified walking map.</h2>
+      <p>The platform derives the build envelope and starting point from approved structure, then proves every authored room route with the production movement controller.</p>
+      <div id="navigationBuildSummary" class="notice-card"></div>
+      <details class="form-advanced-settings">
+        <summary>Expert build values</summary>
+        <p class="field-note">The collision asset, profile, structure, obstacles, traversals, bounds, starting point, and Recast values are frozen into the job. Incorrect overrides can disconnect rooms or invalidate walking evidence.</p>
+        <div class="mock-form-grid">
+          <label class="full"><span>Verified collision GLB</span><select id="navigationCollisionAsset" name="collisionAssetId"></select></label>
+          <label class="full"><span>Complete build bounds (min x, y, z → max x, y, z)</span><input name="bounds" placeholder="Derived from approved structure" /></label>
+          <label class="full"><span>Opening spawn at floor level (x, y, z)</span><input name="spawn" placeholder="Choose in the scene or enter an evidence-backed point" /></label>
+          <label><span>Recast cell size</span><input name="cellSize" type="number" min="0.02" max="1" step="0.01" value="0.1" /></label>
+          <label><span>Recast cell height</span><input name="cellHeight" type="number" min="0.01" max="0.5" step="0.01" value="0.05" /></label>
+          <label><span>Tile size (voxels)</span><input name="tileSize" type="number" min="16" max="1024" step="1" value="32" /></label>
+          <label><span>Maximum contour edge (voxels)</span><input name="maxEdgeLengthVoxels" type="number" min="1" max="10000" step="1" value="12" /></label>
+          <label><span>Contour simplification error</span><input name="maxSimplificationError" type="number" min="0.1" max="10" step="0.1" value="1.3" /></label>
+          <label><span>Minimum region (voxels)</span><input name="minimumRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="8" /></label>
+          <label><span>Merge region (voxels)</span><input name="mergeRegionSizeVoxels" type="number" min="1" max="10000" step="1" value="20" /></label>
+          <label class="checkbox-row"><input name="provisional" type="checkbox" /><span>Explicit provisional scene-unit build</span></label>
+        </div>
+      </details>
+      <button class="primary-button wide" type="submit">Build verified walking map</button>
       <p id="navigationBuildError" class="form-error" role="alert"></p>
     </form>
   </dialog>
@@ -865,19 +943,25 @@
       <p>The processor normalizes a verified metric point cloud and produces an indicative proposal. PLY is read natively; E57, LAS, LAZ, and PTS are normalized through PDAL with recorded provenance.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Registered metric point cloud</span><select id="floorplanInputAsset" name="inputAssetId" required></select></label>
-        <label><span>Source up axis</span><select name="sourceUpAxis" required><option value="y">Y-up (viewer / Gaussian frame)</option><option value="z">Z-up (survey / LAS frame)</option></select></label>
-        <label><span>Plan grid</span><input name="gridSizeM" type="number" min="0.05" max="1" step="0.05" value="0.25" required /></label>
-        <label><span>Floor band</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" required /></label>
-        <label><span>Wall evidence from</span><input name="wallMinHeightM" type="number" min="0.1" max="5" step="0.05" value="0.25" required /></label>
-        <label><span>Wall evidence to</span><input name="wallMaxHeightM" type="number" min="0.2" max="10" step="0.05" value="2.5" required /></label>
-        <label><span>Vertical wall coverage</span><input name="minimumWallHeightCoverage" type="number" min="0.1" max="1" step="0.05" value="0.45" required /></label>
-        <label><span>Minimum room area</span><input name="minimumRoomAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" required /></label>
-        <label><span>Maximum opening width</span><input name="maximumOpeningWidthM" type="number" min="0.1" max="5" step="0.05" value="1.25" required /></label>
-        <label><span>Maximum rooms</span><input name="maximumRooms" type="number" min="1" max="250" step="1" value="100" required /></label>
-        <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" required /></label>
-        <label><span>Floor elevation hint (optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic strongest floor layer" /></label>
-        <label class="full"><span>Registration evidence</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Who verified metres, Y-up orientation, registration, and this immutable source?"></textarea></label>
+        <label class="full"><span>Compatibility note</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Identify the scan/export and how you verified that its scale and orientation match this scene."></textarea></label>
       </div>
+      <details class="form-advanced-settings">
+        <summary>Expert extraction values</summary>
+        <p class="field-note">The automatic defaults are the normal path. Change these values only when the registered source evidence proves a different orientation or extraction requirement.</p>
+        <div class="mock-form-grid">
+          <label><span>Source up axis</span><select name="sourceUpAxis"><option value="y">Y-up (viewer / Gaussian frame)</option><option value="z">Z-up (survey / LAS frame)</option></select></label>
+          <label><span>Plan grid</span><input name="gridSizeM" type="number" min="0.05" max="1" step="0.05" value="0.25" /></label>
+          <label><span>Floor band</span><input name="floorBandM" type="number" min="0.05" max="0.5" step="0.01" value="0.15" /></label>
+          <label><span>Wall evidence from</span><input name="wallMinHeightM" type="number" min="0.1" max="5" step="0.05" value="0.25" /></label>
+          <label><span>Wall evidence to</span><input name="wallMaxHeightM" type="number" min="0.2" max="10" step="0.05" value="2.5" /></label>
+          <label><span>Vertical wall coverage</span><input name="minimumWallHeightCoverage" type="number" min="0.1" max="1" step="0.05" value="0.45" /></label>
+          <label><span>Minimum room area</span><input name="minimumRoomAreaM2" type="number" min="0.25" max="10000" step="0.25" value="2" /></label>
+          <label><span>Maximum opening width</span><input name="maximumOpeningWidthM" type="number" min="0.1" max="5" step="0.05" value="1.25" /></label>
+          <label><span>Maximum rooms</span><input name="maximumRooms" type="number" min="1" max="250" step="1" value="100" /></label>
+          <label><span>Maximum sampled points</span><input name="maximumSamplePoints" type="number" min="1000" max="10000000" step="1000" value="2000000" /></label>
+          <label><span>Floor elevation hint (optional)</span><input name="elevationHintM" type="number" step="0.01" placeholder="Automatic strongest floor layer" /></label>
+        </div>
+      </details>
       <p class="field-note">The machine closes likely door-width gaps only to segment rooms, then keeps those gaps as unclassified opening candidates. It does not infer legal areas, survey control, or construction tolerances.</p>
       <button class="primary-button wide" type="submit">Queue floor-plan extraction</button>
       <p id="floorplanExtractionError" class="form-error" role="alert"></p>
@@ -892,7 +976,6 @@
       <input name="extractionId" type="hidden" />
       <div id="floorplanReviewContext" class="notice-card"></div>
       <div class="floorplan-review-grid">
-        <label class="floorplan-plan-editor"><span>Structured plan (metres)</span><textarea id="floorplanPlanEditor" name="planJson" spellcheck="false" required></textarea></label>
         <section class="floorplan-preview-panel" aria-labelledby="floorplanPreviewTitle">
           <div class="workspace-section-heading">
             <div>
@@ -903,6 +986,11 @@
           <div id="floorplanReviewPreview" class="floorplan-review-preview"></div>
           <p id="floorplanReviewValidation" class="field-note" aria-live="polite"></p>
         </section>
+        <details class="form-advanced-settings floorplan-plan-editor">
+          <summary>Expert: edit raw structured plan</summary>
+          <p class="field-note">The graphical Structure workspace is the normal correction surface. Edit this JSON only for recovery or engineering investigation.</p>
+          <label><span>Structured plan (metres)</span><textarea id="floorplanPlanEditor" name="planJson" spellcheck="false"></textarea></label>
+        </details>
       </div>
       <div class="mock-form-grid">
         <label><span>Decision</span><select name="decision" required><option value="approve">Approve corrected indicative revision</option><option value="reject">Reject proposal</option></select></label>

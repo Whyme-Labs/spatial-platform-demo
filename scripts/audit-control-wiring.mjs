@@ -23,6 +23,20 @@ let auditedDynamicLinks = 0;
 for (const entryPoint of entryPoints) {
   const html = await readProjectFile(entryPoint.html);
   const source = (await Promise.all(entryPoint.scripts.map(readProjectFile))).join("\n");
+  const declaredIds = new Set(
+    Array.from(html.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi), (match) => match[1]),
+  );
+  for (const match of source.matchAll(/\.id\s*=\s*["']([^"']+)["']/g)) {
+    declaredIds.add(match[1]);
+  }
+  for (const lookup of source.matchAll(/\bbyId(?:<[^>]+>)?\(["']([^"']+)["']\)/g)) {
+    const id = lookup[1];
+    if (!declaredIds.has(id)) {
+      failures.push(
+        `${entryPoint.scripts.join(",")}:${lineAt(source, lookup.index ?? 0)} looks up missing #${id}`,
+      );
+    }
+  }
   const forms = Array.from(html.matchAll(/<form\b([^>]*)>/gi));
   const buttons = Array.from(html.matchAll(/<button\b([^>]*)>/gi));
   const links = Array.from(html.matchAll(/<a\b([^>]*)>/gi));
@@ -74,6 +88,23 @@ for (const entryPoint of entryPoints) {
         `${entryPoint.html}:${lineAt(html, linkMatch.index ?? 0)} link has no destination`,
       );
     }
+  }
+
+  for (const detailsMatch of html.matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/gi)) {
+    const attributes = parseAttributes(detailsMatch[1] ?? "");
+    if ("open" in attributes) continue;
+    const requiredControl = Array.from(
+      (detailsMatch[2] ?? "").matchAll(/<(?:input|select|textarea)\b([^>]*)>/gi),
+    ).find((control) => "required" in parseAttributes(control[1] ?? ""));
+    if (requiredControl) {
+      failures.push(
+        `${entryPoint.html}:${lineAt(html, detailsMatch.index ?? 0)} closed details contain a hidden required field`,
+      );
+    }
+  }
+
+  if (entryPoint.html === "studio.html") {
+    auditStudioWorkflow(html, source);
   }
 }
 
@@ -265,4 +296,57 @@ function stringArgument(node) {
   return node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     ? node.text
     : null;
+}
+
+function auditStudioWorkflow(html, source) {
+  const mandatoryStages = ["structure", "privacy", "walk", "publish"];
+  const journeyDestinations = projectJourneyDestinations(source);
+  const sectionValues = new Set(
+    Array.from(html.matchAll(/data-project-section=["']([^"']+)["']/g), (match) => match[1]),
+  );
+  for (const stage of mandatoryStages) {
+    if (!sectionValues.has(stage)) {
+      failures.push(`studio.html project navigation is missing mandatory ${stage} stage`);
+    }
+    if (!journeyDestinations.has(stage)) {
+      failures.push(`src/client/studio.ts journey is missing a ${stage} destination`);
+    }
+  }
+  if (!source.includes('step.dataset.projectJourneySection = target') ||
+    !source.includes('activateProjectSection(target, true, "push", true)')) {
+    failures.push("src/client/studio.ts journey steps do not expose routed keyboard buttons");
+  }
+  if (html.includes("Advanced evidence and diagnostics") ||
+    source.includes("Advanced evidence and diagnostics") ||
+    html.includes("spatial-advanced-workflows")) {
+    failures.push("mandatory spatial workflow still belongs to an Advanced disclosure");
+  }
+  if (!html.includes('id="newProjectTemplate"') ||
+    !source.includes('form.get("projectTemplate")')) {
+    failures.push("project templates have no reachable creation application path");
+  }
+  if (!source.includes('firstIncompleteProjectSection(detail)')) {
+    failures.push("project open does not route to the first incomplete mandatory stage");
+  }
+}
+
+function projectJourneyDestinations(source) {
+  const sourceFile = ts.createSourceFile(
+    "src/client/studio.ts",
+    source,
+    ts.ScriptTarget.ESNext,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const destinations = new Set();
+  visit(sourceFile, (node) => {
+    if (
+      !ts.isCallExpression(node) ||
+      !ts.isIdentifier(node.expression) ||
+      node.expression.text !== "projectJourneyStep"
+    ) return;
+    const destination = stringArgument(node.arguments.at(-1));
+    if (destination) destinations.add(destination);
+  });
+  return destinations;
 }

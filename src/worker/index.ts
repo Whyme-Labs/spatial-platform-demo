@@ -233,6 +233,7 @@ type ProjectRow = {
   delivery_template: string;
   notes: string | null;
   customer_name: string | null;
+  customer_email: string | null;
   created_at: string;
   updated_at: string;
   latest_version_id: string | null;
@@ -3701,11 +3702,11 @@ app.get("/api/projects", async (context) => {
   const operator = ["platform_admin", "production_operator"].includes(auth.role) ? 1 : 0;
   const result = await context.env.DB.prepare(`
     SELECT p.*, COALESCE(p.capture_adapter_v2, p.capture_adapter) AS capture_adapter,
-      c.name AS customer_name,
+      c.name AS customer_name, c.contact_email AS customer_email,
       sv.id AS latest_version_id, sv.version_number AS latest_version_number,
       rc.slug AS active_release_slug
     FROM projects p
-    LEFT JOIN customers c ON c.id = p.customer_id
+    LEFT JOIN customers c ON c.id = p.customer_id AND c.organisation_id = p.organisation_id
     LEFT JOIN scene_versions sv ON sv.id = (
       SELECT id FROM scene_versions WHERE project_id = p.id ORDER BY version_number DESC LIMIT 1
     )
@@ -4404,28 +4405,55 @@ app.patch("/api/projects/:projectId", async (context) => {
   }
 
   let customerId = project.customer_id;
+  const customerStatements: D1PreparedStatement[] = [];
   if (parsed.data.customerName !== undefined) {
     if (parsed.data.customerName === null) {
+      if (parsed.data.customerEmail) {
+        return context.json({
+          error: "Set a customer name before adding a customer contact email.",
+        }, 422);
+      }
       customerId = null;
     } else {
       const customer = await context.env.DB.prepare(`
         INSERT INTO customers (id, organisation_id, name, contact_email)
         VALUES (?, ?, ?, ?)
         ON CONFLICT(organisation_id, name) DO UPDATE SET
-          contact_email = COALESCE(excluded.contact_email, customers.contact_email)
+          contact_email = CASE
+            WHEN ? = 1 THEN excluded.contact_email
+            ELSE customers.contact_email
+          END
         RETURNING id
       `).bind(
         crypto.randomUUID(),
         auth.organisationId,
         parsed.data.customerName,
         parsed.data.customerEmail ?? null,
+        parsed.data.customerEmail !== undefined ? 1 : 0,
       ).first<{ id: string }>();
       if (!customer) throw new Error("Customer record was not created");
       customerId = customer.id;
     }
+  } else if (parsed.data.customerEmail !== undefined) {
+    if (!customerId) {
+      if (parsed.data.customerEmail) {
+        return context.json({
+          error: "Set a customer name before adding a customer contact email.",
+        }, 422);
+      }
+    } else {
+      customerStatements.push(
+        context.env.DB.prepare(`
+          UPDATE customers
+          SET contact_email = ?
+          WHERE id = ? AND organisation_id = ?
+        `).bind(parsed.data.customerEmail, customerId, auth.organisationId),
+      );
+    }
   }
 
   const updateStatements: D1PreparedStatement[] = [
+    ...customerStatements,
     context.env.DB.prepare(`
       UPDATE projects
       SET customer_id = ?, name = ?, capture_adapter = ?, capture_adapter_v2 = ?,
@@ -7020,6 +7048,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals: [],
     traversalEvidenceOptions: [],
     navigationBuilds: [],
+    releaseRepublishIntents: [],
     navigationArtifact: null,
     deliveryPolicy: null,
     collisionProxy: { version: "box-union-v1", boxes: [] },
@@ -7161,6 +7190,23 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE s.project_id = ? AND s.version_id = ? AND s.organisation_id = ?
       ORDER BY s.created_at DESC LIMIT 25
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT i.id, i.navigation_build_id, i.source_release_id, i.status,
+        i.completed_release_id, i.error_message, i.created_at, i.updated_at,
+        i.completed_at,
+        COALESCE(
+          (SELECT active.slug FROM release_channels active
+            WHERE active.active_release_id = i.completed_release_id
+              AND active.organisation_id = i.organisation_id LIMIT 1),
+          (SELECT historical.slug FROM release_channels historical
+            WHERE historical.project_id = i.project_id
+              AND historical.organisation_id = i.organisation_id
+            ORDER BY historical.updated_at DESC LIMIT 1)
+        ) AS slug
+      FROM release_republish_intents i
+      WHERE i.project_id = ? AND i.version_id = ? AND i.organisation_id = ?
+      ORDER BY i.created_at DESC
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
@@ -7215,6 +7261,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals,
     traversalEvidenceOptions,
     navigationBuilds,
+    releaseRepublishIntents: requiredBatchResult(results, 20).results,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
@@ -8875,7 +8922,14 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   ).first<{ id: string; status: string; reviewed_at: string }>();
   if (!build) return conflict(context, "Only a completed navigation build can be reviewed");
   await audit(context, auth, "spatial.navigation_build.review", "scene_navigation_build", build.id, parsed.data);
-  return context.json({ build });
+  const republishIntent = status === "APPROVED"
+    ? await completeReleaseRepublishIntent(context.env, build.id, context.get("requestId"))
+    : await failReleaseRepublishIntent(
+      context.env.DB,
+      build.id,
+      "Automatic republish stopped because the rebuilt walking map was rejected",
+    );
+  return context.json({ build, republishIntent });
 });
 
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
@@ -10390,6 +10444,56 @@ app.post(
     const extractionParameters = parseStoredObject(extraction.parameters_json);
     const automaticPipeline = extractionParameters && typeof extractionParameters === "object" &&
       Reflect.get(extractionParameters, "automaticPipeline") === true;
+    let republishSourceRelease: {
+      id: string;
+      version_id: string;
+      access_policy: string;
+      expires_at: string | null;
+    } | null = null;
+    if (parsed.data.republishReleaseId) {
+      if (!automaticPipeline) {
+        return conflict(
+          context,
+          "Automatic republishing requires an automatic walking-map rebuild from this review",
+        );
+      }
+      republishSourceRelease = await context.env.DB.prepare(`
+        SELECT r.id, r.version_id, r.access_policy, r.expires_at
+        FROM releases r
+        JOIN release_channels rc ON rc.active_release_id = r.id
+          AND rc.organisation_id = r.organisation_id
+          AND rc.project_id = r.project_id
+        WHERE r.id = ? AND r.organisation_id = ? AND r.project_id = ?
+          AND r.revoked_at IS NULL
+      `).bind(
+        parsed.data.republishReleaseId,
+        auth.organisationId,
+        project.id,
+      ).first<{
+        id: string;
+        version_id: string;
+        access_policy: string;
+        expires_at: string | null;
+      }>();
+      if (!republishSourceRelease) {
+        return conflict(context, "Only this project's active release can be republished");
+      }
+      if (republishSourceRelease.version_id !== extraction.version_id) {
+        return conflict(context, "The active release must use the walking-map version being rebuilt");
+      }
+      if (republishSourceRelease.access_policy === "token") {
+        return conflict(
+          context,
+          "Token-protected releases require a new recipient token and must be republished manually",
+        );
+      }
+      if (
+        republishSourceRelease.expires_at &&
+        Date.parse(republishSourceRelease.expires_at) <= Date.now()
+      ) {
+        return conflict(context, "An expired release cannot be republished automatically");
+      }
+    }
     let correctedCollision: {
       assetId: string;
       objectKey: string;
@@ -10576,6 +10680,13 @@ app.post(
         });
       }
     }
+    if (republishSourceRelease && !correctedNavigation) {
+      return conflict(
+        context,
+        "This review did not produce a walking-map rebuild to attach the republish request to",
+      );
+    }
+    const republishIntentId = republishSourceRelease ? crypto.randomUUID() : null;
     let response: Record<string, unknown> = {};
     let reviewWriteError: unknown = null;
     for (let allocationAttempt = 0; allocationAttempt < 3; allocationAttempt += 1) {
@@ -10610,6 +10721,14 @@ app.post(
             status: "QUEUED",
             floorplanRevisionId: revisionId,
             planHash,
+          }
+          : null,
+        republishIntent: republishIntentId && correctedNavigation && republishSourceRelease
+          ? {
+            id: republishIntentId,
+            navigationBuildId: correctedNavigation.id,
+            sourceReleaseId: republishSourceRelease.id,
+            status: "pending",
           }
           : null,
       };
@@ -10810,6 +10929,31 @@ app.post(
             requestHash,
             serializedResponse,
           ),
+          ...(republishIntentId && republishSourceRelease
+            ? [context.env.DB.prepare(`
+              INSERT INTO release_republish_intents (
+                id, organisation_id, project_id, version_id, navigation_build_id,
+                source_release_id, status, requested_by, client_operation_id
+              )
+              SELECT ?, ?, ?, ?, ?, ?, 'pending', ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM scene_navigation_builds
+                WHERE id = ? AND organisation_id = ? AND project_id = ?
+              )
+            `).bind(
+              republishIntentId,
+              auth.organisationId,
+              project.id,
+              extraction.version_id,
+              correctedNavigation.id,
+              republishSourceRelease.id,
+              auth.userId,
+              parsed.data.clientOperationId,
+              correctedNavigation.id,
+              auth.organisationId,
+              project.id,
+            )]
+            : []),
           context.env.DB.prepare(`
             INSERT INTO audit_events (
               id, organisation_id, actor_user_id, action, resource_type, resource_id,
@@ -12994,6 +13138,12 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
       SET status = 'FAILED', updated_at = datetime('now')
       WHERE job_id = ? AND organisation_id = ?
     `).bind(job.id, auth.organisationId),
+    failReleaseRepublishIntentForJobStatement(
+      context.env.DB,
+      job.id,
+      "Automatic republish stopped because the walking-map rebuild was cancelled",
+      auth.organisationId,
+    ),
   ];
   if (!["registered-scene-change-v1", "semantic.extract-v1", "floorplan.extract-v1", "navigation.build-v1"].includes(job.job_type)) {
     cancelStatements.push(context.env.DB.prepare(
@@ -14003,6 +14153,19 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     }
   }
   await context.env.DB.batch(completionStatements);
+  let releaseRepublish: ReleaseRepublishIntentResult | null = null;
+  if (navigationCompletion) {
+    const completedBuild = await context.env.DB.prepare(`
+      SELECT id, status FROM scene_navigation_builds WHERE job_id = ?
+    `).bind(job.id).first<{ id: string; status: string }>();
+    if (completedBuild?.status === "APPROVED") {
+      releaseRepublish = await completeReleaseRepublishIntent(
+        context.env,
+        completedBuild.id,
+        context.get("requestId"),
+      );
+    }
+  }
   const automaticFloorplan =
     job.job_type === "asset.evidence-validate" &&
       job.input_kind === "pointcloud" &&
@@ -14026,6 +14189,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     outputs: outputSummary,
     qaReportId,
     automaticFloorplan,
+    releaseRepublish,
   });
 });
 
@@ -15058,6 +15222,13 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
       retry ? "QUEUED" : terminalState,
       job.id,
     ),
+    ...(!retry
+      ? [failReleaseRepublishIntentForJobStatement(
+        context.env.DB,
+        job.id,
+        `Automatic republish stopped because the walking-map rebuild failed: ${parsed.data.message}`,
+      )]
+      : []),
   ];
   if (
     !retry &&
@@ -16999,6 +17170,11 @@ async function reapExpiredJobLeases(env: Env): Promise<void> {
         UPDATE scene_navigation_builds SET status = 'FAILED', updated_at = datetime('now')
         WHERE job_id = ?
       `).bind(job.id),
+      failReleaseRepublishIntentForJobStatement(
+        env.DB,
+        job.id,
+        "Automatic republish stopped because the walking-map worker exhausted its attempts",
+      ),
     ];
     if (
       ![
@@ -18860,10 +19036,10 @@ async function projectArchiveBlocker(
 async function scopedProject(database: D1Database, organisationId: string, projectId: string): Promise<ProjectRow | null> {
   return database.prepare(`
     SELECT p.*, COALESCE(p.capture_adapter_v2, p.capture_adapter) AS capture_adapter,
-      c.name AS customer_name,
+      c.name AS customer_name, c.contact_email AS customer_email,
       sv.id AS latest_version_id, sv.version_number AS latest_version_number,
       rc.slug AS active_release_slug
-    FROM projects p LEFT JOIN customers c ON c.id = p.customer_id
+    FROM projects p LEFT JOIN customers c ON c.id = p.customer_id AND c.organisation_id = p.organisation_id
     LEFT JOIN scene_versions sv ON sv.id = (
       SELECT id FROM scene_versions WHERE project_id = p.id ORDER BY version_number DESC LIMIT 1
     )
@@ -20678,6 +20854,7 @@ function publicProject(
     deliveryTemplate: project.delivery_template,
     notes: project.notes,
     customerName: project.customer_name,
+    customerEmail: project.customer_email,
     customFields,
     latestVersionId: project.latest_version_id,
     latestVersionNumber: project.latest_version_number,
@@ -21310,6 +21487,269 @@ async function nextReleaseNumber(database: D1Database, projectId: string): Promi
     "SELECT COALESCE(MAX(release_number), 0) + 1 AS next FROM releases WHERE project_id = ?",
   ).bind(projectId).first<{ next: number }>();
   return allocated?.next ?? 1;
+}
+
+type ReleaseRepublishIntentResult = {
+  id: string;
+  status: "completed" | "failed";
+  releaseId: string | null;
+  error: string | null;
+};
+
+function failReleaseRepublishIntentForJobStatement(
+  database: D1Database,
+  jobId: string,
+  message: string,
+  organisationId?: string,
+): D1PreparedStatement {
+  const organisationGuard = organisationId ? " AND organisation_id = ?" : "";
+  return database.prepare(`
+    UPDATE release_republish_intents
+    SET status = 'failed', error_message = ?, completed_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE navigation_build_id IN (
+      SELECT id FROM scene_navigation_builds
+      WHERE job_id = ?${organisationGuard}
+    ) AND status = 'pending'
+  `).bind(message, jobId, ...(organisationId ? [organisationId] : []));
+}
+
+async function failReleaseRepublishIntent(
+  database: D1Database,
+  navigationBuildId: string,
+  message: string,
+): Promise<ReleaseRepublishIntentResult | null> {
+  const failed = await database.prepare(`
+    UPDATE release_republish_intents
+    SET status = 'failed', error_message = ?, completed_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE navigation_build_id = ? AND status = 'pending'
+    RETURNING id
+  `).bind(message, navigationBuildId).first<{ id: string }>();
+  return failed
+    ? { id: failed.id, status: "failed", releaseId: null, error: message }
+    : null;
+}
+
+export async function completeReleaseRepublishIntent(
+  env: Env,
+  navigationBuildId: string,
+  requestId: string,
+): Promise<ReleaseRepublishIntentResult | null> {
+  const intent = await env.DB.prepare(`
+    SELECT i.id, i.organisation_id, i.project_id, i.version_id,
+      i.source_release_id, i.requested_by, i.status,
+      nb.status AS navigation_status,
+      r.web_asset_id, r.poster_asset_id, r.access_policy, r.access_token_hash,
+      r.viewer_config_json, r.expires_at, r.revoked_at,
+      rc.id AS channel_id, rc.slug, rc.active_release_id,
+      web.integrity_status AS web_integrity_status, web.deleted_at AS web_deleted_at,
+      poster.integrity_status AS poster_integrity_status, poster.deleted_at AS poster_deleted_at
+    FROM release_republish_intents i
+    JOIN scene_navigation_builds nb ON nb.id = i.navigation_build_id
+      AND nb.organisation_id = i.organisation_id
+      AND nb.project_id = i.project_id AND nb.version_id = i.version_id
+    JOIN releases r ON r.id = i.source_release_id
+      AND r.organisation_id = i.organisation_id
+      AND r.project_id = i.project_id AND r.version_id = i.version_id
+    LEFT JOIN release_channels rc ON rc.organisation_id = i.organisation_id
+      AND rc.project_id = i.project_id AND rc.active_release_id = r.id
+    JOIN assets web ON web.id = r.web_asset_id
+      AND web.organisation_id = i.organisation_id
+      AND web.project_id = i.project_id AND web.version_id = i.version_id
+    LEFT JOIN assets poster ON poster.id = r.poster_asset_id
+      AND poster.organisation_id = i.organisation_id
+      AND poster.project_id = i.project_id AND poster.version_id = i.version_id
+    WHERE i.navigation_build_id = ? AND i.status = 'pending'
+  `).bind(navigationBuildId).first<{
+    id: string;
+    organisation_id: string;
+    project_id: string;
+    version_id: string;
+    source_release_id: string;
+    requested_by: string;
+    status: string;
+    navigation_status: string;
+    web_asset_id: string;
+    poster_asset_id: string | null;
+    access_policy: string;
+    access_token_hash: string | null;
+    viewer_config_json: string;
+    expires_at: string | null;
+    revoked_at: string | null;
+    channel_id: string | null;
+    slug: string | null;
+    active_release_id: string | null;
+    web_integrity_status: string;
+    web_deleted_at: string | null;
+    poster_integrity_status: string | null;
+    poster_deleted_at: string | null;
+  }>();
+  if (!intent) return null;
+  const fail = (message: string) =>
+    failReleaseRepublishIntent(env.DB, navigationBuildId, message);
+  if (intent.navigation_status !== "APPROVED") return null;
+  if (!intent.channel_id || !intent.slug || intent.active_release_id !== intent.source_release_id) {
+    return fail("Automatic republish stopped because the source release is no longer active");
+  }
+  if (intent.revoked_at) {
+    return fail("Automatic republish stopped because the source release was revoked");
+  }
+  if (intent.access_policy === "token") {
+    return fail("Token-protected releases require manual publication with a new recipient token");
+  }
+  if (intent.expires_at && Date.parse(intent.expires_at) <= Date.now()) {
+    return fail("Automatic republish stopped because the source release expired");
+  }
+  if (intent.web_integrity_status !== "verified" || intent.web_deleted_at) {
+    return fail("Automatic republish stopped because the published web asset is no longer verified");
+  }
+  if (
+    intent.poster_asset_id &&
+    (intent.poster_integrity_status !== "verified" || intent.poster_deleted_at)
+  ) {
+    return fail("Automatic republish stopped because the published poster is no longer verified");
+  }
+
+  try {
+    const spatialSnapshot = await captureSpatialSnapshot(
+      env.DB,
+      intent.organisation_id,
+      intent.project_id,
+      intent.version_id,
+    );
+    const entities = Reflect.get(spatialSnapshot, "entities");
+    const connectivity = inspectWalkableConnectivity(Array.isArray(entities) ? entities : []);
+    if (connectivity.componentCount > 1) {
+      return fail(
+        `Automatic republish stopped because the rebuilt walking map has ${connectivity.componentCount} disconnected components`,
+      );
+    }
+    const walkingPackage = await verifiedPhysicalNavigation(
+      env,
+      intent.organisation_id,
+      intent.project_id,
+      intent.version_id,
+      spatialSnapshot,
+    );
+    if (!walkingPackage) {
+      return fail(
+        "Automatic republish stopped because the approved collision, navigation report, and Detour navmesh are not all verified",
+      );
+    }
+
+    const releaseId = crypto.randomUUID();
+    const publishedAt = new Date().toISOString();
+    const spatialSnapshotJson = JSON.stringify(spatialSnapshot);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO releases (
+          id, organisation_id, project_id, version_id, web_asset_id, poster_asset_id,
+          access_policy, access_token_hash, viewer_config_json, spatial_snapshot_json,
+          published_at, expires_at, created_by, client_operation_id, release_number
+        )
+        SELECT ?, i.organisation_id, i.project_id, i.version_id,
+          source.web_asset_id, source.poster_asset_id, source.access_policy,
+          source.access_token_hash, source.viewer_config_json, ?, ?, source.expires_at,
+          i.requested_by, i.id,
+          (SELECT COALESCE(MAX(existing.release_number), 0) + 1
+            FROM releases existing WHERE existing.project_id = i.project_id)
+        FROM release_republish_intents i
+        JOIN release_channels rc ON rc.organisation_id = i.organisation_id
+          AND rc.project_id = i.project_id AND rc.active_release_id = i.source_release_id
+        JOIN releases source ON source.id = i.source_release_id
+          AND source.organisation_id = i.organisation_id
+          AND source.project_id = i.project_id AND source.version_id = i.version_id
+        JOIN assets web ON web.id = source.web_asset_id
+          AND web.organisation_id = i.organisation_id
+          AND web.project_id = i.project_id AND web.version_id = i.version_id
+        LEFT JOIN assets poster ON poster.id = source.poster_asset_id
+          AND poster.organisation_id = i.organisation_id
+          AND poster.project_id = i.project_id AND poster.version_id = i.version_id
+        WHERE i.id = ? AND i.status = 'pending'
+          AND source.revoked_at IS NULL AND source.access_policy != 'token'
+          AND (source.expires_at IS NULL OR unixepoch(source.expires_at) > unixepoch('now'))
+          AND web.integrity_status = 'verified' AND web.deleted_at IS NULL
+          AND (source.poster_asset_id IS NULL OR (
+            poster.integrity_status = 'verified' AND poster.deleted_at IS NULL
+          ))
+      `).bind(
+        releaseId,
+        spatialSnapshotJson,
+        publishedAt,
+        intent.id,
+      ),
+      env.DB.prepare(`
+        UPDATE release_channels
+        SET active_release_id = ?, activation_generation = activation_generation + 1,
+          updated_at = datetime('now')
+        WHERE id = ? AND active_release_id = ?
+          AND EXISTS (SELECT 1 FROM releases WHERE id = ?)
+      `).bind(releaseId, intent.channel_id, intent.source_release_id, releaseId),
+      env.DB.prepare(
+        "UPDATE scene_versions SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND EXISTS (SELECT 1 FROM releases WHERE id = ?)",
+      ).bind(intent.version_id, releaseId),
+      env.DB.prepare(
+        "UPDATE projects SET status = 'PUBLISHED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ? AND EXISTS (SELECT 1 FROM releases WHERE id = ?)",
+      ).bind(intent.project_id, intent.organisation_id, releaseId),
+      env.DB.prepare(`
+        UPDATE release_republish_intents
+        SET status = 'completed', completed_release_id = ?, error_message = NULL,
+          completed_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ? AND status = 'pending'
+          AND EXISTS (SELECT 1 FROM release_channels WHERE id = ? AND active_release_id = ?)
+      `).bind(releaseId, intent.id, intent.channel_id, releaseId),
+      env.DB.prepare(`
+        INSERT INTO audit_events (
+          id, organisation_id, actor_user_id, action, resource_type, resource_id,
+          request_id, metadata_json
+        )
+        SELECT ?, organisation_id, requested_by, 'release.auto_republish',
+          'release', ?, ?, ?
+        FROM release_republish_intents
+        WHERE id = ? AND status = 'completed' AND completed_release_id = ?
+      `).bind(
+        crypto.randomUUID(),
+        releaseId,
+        requestId,
+        JSON.stringify({
+          slug: intent.slug,
+          sourceReleaseId: intent.source_release_id,
+          navigationBuildId,
+        }),
+        intent.id,
+        releaseId,
+      ),
+    ]);
+    const completed = await env.DB.prepare(`
+      SELECT status, completed_release_id, error_message
+      FROM release_republish_intents WHERE id = ?
+    `).bind(intent.id).first<{
+      status: "pending" | "completed" | "failed";
+      completed_release_id: string | null;
+      error_message: string | null;
+    }>();
+    if (completed?.status === "completed") {
+      return {
+        id: intent.id,
+        status: "completed",
+        releaseId: completed.completed_release_id,
+        error: null,
+      };
+    }
+    return fail(
+      "Automatic republish stopped because the active release or its verified assets changed during publication",
+    );
+  } catch (error) {
+    const message = `Automatic republish failed: ${errorMessage(error)}`;
+    console.error(JSON.stringify({
+      event: "release.auto_republish_failed",
+      intentId: intent.id,
+      navigationBuildId,
+      error: errorMessage(error),
+    }));
+    return fail(message);
+  }
 }
 
 function isReleaseNumberSequenceConflict(error: unknown): boolean {

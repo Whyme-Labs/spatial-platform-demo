@@ -11,7 +11,6 @@ import {
   restoreAuthenticationSession,
 } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
-import { buildRepublishPayload } from "./release-clone";
 import {
   parseSceneRotationDegrees,
   SCENE_ROTATION_MAX_DEGREES,
@@ -89,6 +88,7 @@ type Project = {
   deliveryTemplate: string;
   notes: string | null;
   customerName: string | null;
+  customerEmail: string | null;
   customFields: Record<string, string | number | boolean>;
   latestVersionId: string | null;
   latestVersionNumber: number | null;
@@ -1101,6 +1101,18 @@ type SpatialWorkspace = {
     created_at: string;
     updated_at: string;
   }>;
+  releaseRepublishIntents: Array<{
+    id: string;
+    navigation_build_id: string;
+    source_release_id: string;
+    status: "pending" | "completed" | "failed";
+    completed_release_id: string | null;
+    error_message: string | null;
+    slug: string | null;
+    created_at: string;
+    updated_at: string;
+    completed_at: string | null;
+  }>;
   navigationArtifact: Record<string, unknown> | null;
 };
 type MeasurementWorkspace = {
@@ -1245,7 +1257,15 @@ type ProjectBulkLifecycleResult = {
   }>;
 };
 type StudioView = "projects" | "project" | "jobs" | "releases" | "reviews" | "hosting" | "team";
-type ProjectSection = "overview" | "scene" | "measurement";
+type ProjectSection =
+  | "overview"
+  | "process"
+  | "structure"
+  | "privacy"
+  | "walk"
+  | "publish"
+  | "measurement"
+  | "expert";
 
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -1369,6 +1389,7 @@ let turnstileWidgetId: string | null = null;
 let turnstileLoadPromise: Promise<TurnstileApi> | null = null;
 let turnstileInitialisePromise: Promise<void> | null = null;
 let projectOperationId: string | null = null;
+let newCaptureIntakeStep: 1 | 2 | 3 = 1;
 let captureJourneyOperation: {
   id: string;
   primaryUploadOperationId: string;
@@ -1500,9 +1521,11 @@ let sceneAuthoringWorkspace: {
   modeButtons: HTMLButtonElement[];
   correctionDraftOperationId: string;
   correctionReviewOperationId: string;
+  republishReleaseId: string | null;
   captureAgreementFindings: CaptureAgreementFinding[];
   captureAgreementClassifications: Map<string, string>;
 } | null = null;
+let latestReleaseCameraPose: ComparisonCameraPose | null = null;
 const comparisonFrameReady = { left: false, right: false };
 const comparisonFrameTimeouts: { left: number | null; right: number | null } = {
   left: null,
@@ -1661,11 +1684,15 @@ function bindInterface(): void {
   }
   byId("newProjectButton").addEventListener("click", () => {
     projectOperationId = crypto.randomUUID();
+    newProjectForm.reset();
     byId("projectError").textContent = "";
     byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
     byId("newProjectStatus").textContent = "Ready to upload.";
-    renderProjectCustomFieldForm("newProjectCustomFields", {});
+    byId<HTMLDetailsElement>("newProjectOptionalDetails").open = false;
+    renderNewProjectMetadataFields();
+    renderProjectTemplateOptions();
     renderNewCaptureHelp();
+    setNewCaptureIntakeStep(1, false);
     newProjectDialog.showModal();
   });
   byId("portfolioToolsButton").addEventListener("click", () => {
@@ -1679,8 +1706,13 @@ function bindInterface(): void {
     void loadRecentAssetHandoff();
   });
   byId<HTMLSelectElement>("newCaptureAdapter").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLSelectElement>("newProjectTemplate").addEventListener("change", applySelectedProjectTemplate);
   byId<HTMLInputElement>("newCaptureAsset").addEventListener("change", renderNewCaptureHelp);
   byId<HTMLInputElement>("newCaptureGeometry").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLButtonElement>("newCaptureBack").addEventListener("click", () => {
+    setNewCaptureIntakeStep(newCaptureIntakeStep === 3 ? 2 : 1);
+  });
+  byId<HTMLButtonElement>("newCaptureNext").addEventListener("click", advanceNewCaptureIntake);
   const projectSearch = byId<HTMLInputElement>("projectSearch");
   const projectAdapterFilter = byId<HTMLSelectElement>("projectAdapterFilter");
   const projectDeliveryFilter = byId<HTMLSelectElement>("projectDeliveryFilter");
@@ -2060,14 +2092,7 @@ function bindInterface(): void {
   updateEnterpriseLoginAvailability();
   byId("qaOpenPrivacyWorkspace").addEventListener("click", () => {
     qaDialog.close();
-    activateProjectSection("scene");
-    // The privacy workspace is a card inside the scene section, below the
-    // floor-plan authoring stage. Land the reviewer on it rather than at the
-    // top of the section, where they only see the render-native editor.
-    window.requestAnimationFrame(() => {
-      document.getElementById("privacyAssuranceCard")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    activateProjectSection("privacy", true, "push", true);
   });
   const resendButton = byId<HTMLButtonElement>("resendLoginCode");
   resendButton.addEventListener("click", () => {
@@ -2086,6 +2111,10 @@ function bindInterface(): void {
   const newProjectSubmit = newProjectForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   newProjectForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (newCaptureIntakeStep !== 3) {
+      advanceNewCaptureIntake();
+      return;
+    }
     const form = new FormData(newProjectForm);
     void runAction({
       key: "create-project",
@@ -2174,6 +2203,10 @@ function bindInterface(): void {
       errorTarget: byId("releaseError"),
     }, () => publishRelease(form));
   });
+  byId<HTMLButtonElement>("releaseUseCurrentView").addEventListener(
+    "click",
+    applyReleaseCurrentView,
+  );
   const releaseEvidence = releaseForm.elements.namedItem("sourceToWorldEvidenceId");
   if (releaseEvidence instanceof HTMLSelectElement) {
     releaseEvidence.addEventListener("change", () => {
@@ -2288,6 +2321,12 @@ function bindInterface(): void {
   });
   const navigationBuildSubmit =
     navigationBuildForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  for (const input of navigationBuildForm.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+    "input[name='bounds'], input[name='spawn'], select[name='collisionAssetId']",
+  )) {
+    input.addEventListener("input", syncNavigationBuildReadiness);
+    input.addEventListener("change", syncNavigationBuildReadiness);
+  }
   navigationBuildForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(navigationBuildForm);
@@ -2621,6 +2660,7 @@ function bindInterface(): void {
   }
   window.addEventListener("message", handleComparisonRendererMessage);
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
+  window.addEventListener("message", handleReleaseCameraRendererMessage);
   versionComparisonDialog.addEventListener("close", resetVersionComparison);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
@@ -2644,12 +2684,16 @@ function bindInterface(): void {
   byId<HTMLButtonElement>("backToProjects").addEventListener("click", () => activateView("projects", true, "push"));
   const projectSectionButtons: Array<[HTMLButtonElement, ProjectSection]> = [
     [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
-    [byId<HTMLButtonElement>("projectSceneTab"), "scene"],
+    [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
+    [byId<HTMLButtonElement>("projectPrivacyTab"), "privacy"],
+    [byId<HTMLButtonElement>("projectWalkTab"), "walk"],
+    [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
+    [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
   ];
   projectSectionButtons.forEach(([button, section]) => {
     button.addEventListener("click", () => {
-      activateProjectSection(section, true, "push");
+      activateProjectSection(section, true, "push", true);
     });
   });
   window.addEventListener("hashchange", () => void navigateFromHash());
@@ -3086,8 +3130,13 @@ function hashForView(view: StudioView): string {
 
 function projectSectionFromHash(): ProjectSection {
   const [candidate, , section] = window.location.hash.slice(1).split("/");
-  if (candidate === "spatial" || section === "scene") return "scene";
+  if (section === "process") return "process";
+  if (candidate === "spatial" || section === "scene" || section === "structure") return "structure";
+  if (section === "privacy") return "privacy";
+  if (section === "walk") return "walk";
+  if (section === "publish") return "publish";
   if (candidate === "measurement" || section === "measurement") return "measurement";
+  if (section === "expert") return "expert";
   return "overview";
 }
 
@@ -3107,6 +3156,7 @@ function activateProjectSection(
   section: ProjectSection,
   updateLocation = true,
   historyMode: "replace" | "push" = "replace",
+  focusHeading = false,
 ): void {
   if (!state.selected) {
     activateView("projects", updateLocation);
@@ -3114,6 +3164,26 @@ function activateProjectSection(
   }
   state.projectSection = section;
   activateView("project", updateLocation, historyMode);
+  if (focusHeading) {
+    window.requestAnimationFrame(() => focusProjectSectionHeading(section));
+  }
+}
+
+function focusProjectSectionHeading(section: ProjectSection): void {
+  const selector = section === "overview"
+    ? "#detailTitle"
+    : section === "process"
+      ? "#detailBody .project-journey h3"
+      : section === "publish"
+        ? "#publishWorkspace h2"
+        : section === "measurement"
+          ? "#measurementWorkspace h2"
+          : "#spatialWorkspace h2";
+  const heading = document.querySelector<HTMLElement>(selector);
+  if (!heading) return;
+  heading.tabIndex = -1;
+  heading.scrollIntoView({ behavior: "smooth", block: "start" });
+  heading.focus({ preventScroll: true });
 }
 
 function activateView(
@@ -3134,6 +3204,12 @@ function activateView(
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-project-journey-section]").forEach((button) => {
+    const active = view === "project" &&
+      button.dataset.projectJourneySection === state.projectSection;
+    if (active) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  });
   const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
   if (advancedNavigation) advancedNavigation.open = !["projects", "project", "releases"].includes(view);
   const projectsVisible = view === "projects";
@@ -3147,15 +3223,17 @@ function activateView(
   byId("studioGrid").classList.toggle("projects-only", projectsVisible);
   byId("projectBoard").hidden = jobsVisible;
   byId("queuePanel").hidden = !jobsVisible;
-  byId("projectDetail").hidden = !projectVisible || state.projectSection !== "overview";
+  byId("projectDetail").hidden = !projectVisible || !["overview", "process"].includes(state.projectSection);
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
-  byId("spatialWorkspace").hidden = !projectVisible || state.projectSection !== "scene";
+  byId("spatialWorkspace").hidden = !projectVisible ||
+    !["structure", "privacy", "walk", "expert"].includes(state.projectSection);
+  byId("publishWorkspace").hidden = !projectVisible || state.projectSection !== "publish";
   byId("measurementWorkspace").hidden = !projectVisible || state.projectSection !== "measurement";
   byId("hostingWorkspace").hidden = view !== "hosting";
   byId("teamWorkspace").hidden = view !== "team";
   byId<HTMLButtonElement>("newProjectButton").hidden = !projectsVisible || isReviewer();
-  byId<HTMLButtonElement>("portfolioToolsButton").hidden = true;
+  byId<HTMLButtonElement>("portfolioToolsButton").hidden = !projectsVisible || state.user?.role !== "platform_admin";
   const headings = {
     projects: {
       eyebrow: "CAPTURE TO PREVIEW",
@@ -3188,10 +3266,24 @@ function activateView(
   } as const;
   byId("viewEyebrow").textContent = headings[view].eyebrow;
   byId("viewTitle").textContent = headings[view].title;
+  const spatialHeading: readonly [string, string] | undefined = ({
+    structure: ["STRUCTURE", "Review reconstructed rooms and openings"],
+    privacy: ["PRIVACY", "Review privacy evidence before approval"],
+    walk: ["WALK TEST", "Verify movement, clearance, and destinations"],
+    expert: ["EXPERT", "Inspect technical evidence and recovery controls"],
+  } as const)[state.projectSection as "structure" | "privacy" | "walk" | "expert"];
+  if (spatialHeading) {
+    byId("spatialWorkspaceEyebrow").textContent = spatialHeading[0];
+    byId("spatialWorkspaceTitle").textContent = spatialHeading[1];
+  }
   renderJobs();
   if (view === "reviews") renderReviews();
-  if (projectVisible && state.projectSection === "scene") {
+  if (projectVisible && ["structure", "privacy", "walk", "expert"].includes(state.projectSection)) {
     renderSpatial();
+    void ensureProjectWorkspace("spatial");
+  }
+  if (projectVisible && state.projectSection === "publish") {
+    renderPublish();
     void ensureProjectWorkspace("spatial");
   }
   if (projectVisible && state.projectSection === "measurement") {
@@ -3349,8 +3441,11 @@ async function refreshAll(): Promise<void> {
       }
       if (requestedView === "project") state.projectSection = projectSectionFromHash();
       activateView(requestedView, false);
-      if (requestedView === "project" && state.projectSection !== "overview") {
-        await ensureProjectWorkspace(state.projectSection === "scene" ? "spatial" : "measurement", true);
+      if (requestedView === "project" && !["overview", "process"].includes(state.projectSection)) {
+        await ensureProjectWorkspace(
+          state.projectSection === "measurement" ? "measurement" : "spatial",
+          true,
+        );
       }
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
@@ -3424,6 +3519,81 @@ async function reconcileBillingCheckoutReturn(): Promise<void> {
 const portableCaptureFormats = ["ply", "spz", "sog", "splat", "ksplat", "rad"] as const;
 const metricGeometryFormats = ["ply", "e57", "las", "laz", "pts"] as const;
 
+function setNewCaptureIntakeStep(step: 1 | 2 | 3, focusHeading = true): void {
+  newCaptureIntakeStep = step;
+  for (const section of document.querySelectorAll<HTMLElement>("[data-capture-intake-step]")) {
+    section.hidden = Number(section.dataset.captureIntakeStep) !== step;
+  }
+  for (const indicator of document.querySelectorAll<HTMLElement>("[data-capture-intake-indicator]")) {
+    const active = Number(indicator.dataset.captureIntakeIndicator) === step;
+    indicator.classList.toggle("active", active);
+    if (active) indicator.setAttribute("aria-current", "step");
+    else indicator.removeAttribute("aria-current");
+  }
+  byId<HTMLButtonElement>("newCaptureBack").hidden = step === 1;
+  byId<HTMLButtonElement>("newCaptureNext").hidden = step === 3;
+  byId<HTMLButtonElement>("newCaptureNext").textContent = step === 1
+    ? "Continue to files"
+    : "Review processing plan";
+  byId<HTMLButtonElement>("newCaptureSubmit").hidden = step !== 3;
+  if (step === 3) renderNewCaptureReview();
+  if (focusHeading) {
+    window.requestAnimationFrame(() => {
+      const heading = document.querySelector<HTMLElement>(
+        `[data-capture-intake-step="${step}"] h3`,
+      );
+      if (!heading) return;
+      heading.tabIndex = -1;
+      heading.focus();
+    });
+  }
+}
+
+function advanceNewCaptureIntake(): void {
+  const section = document.querySelector<HTMLElement>(
+    `[data-capture-intake-step="${newCaptureIntakeStep}"]`,
+  );
+  const invalid = section?.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+    "input:invalid, select:invalid, textarea:invalid",
+  );
+  if (invalid) {
+    invalid.reportValidity();
+    invalid.focus();
+    return;
+  }
+  if (newCaptureIntakeStep === 1) setNewCaptureIntakeStep(2);
+  else if (newCaptureIntakeStep === 2) setNewCaptureIntakeStep(3);
+}
+
+function renderNewCaptureReview(): void {
+  const form = byId<HTMLFormElement>("newProjectForm");
+  const adapter = form.elements.namedItem("captureAdapter");
+  const capture = form.elements.namedItem("capture");
+  const geometry = form.elements.namedItem("geometry");
+  const review = byId("newCaptureReview");
+  const adapterLabel = adapter instanceof HTMLSelectElement
+    ? adapter.selectedOptions[0]?.textContent ?? "Not selected"
+    : "Not selected";
+  const captureName = capture instanceof HTMLInputElement
+    ? capture.files?.[0]?.name ?? "Not selected"
+    : "Not selected";
+  const geometryName = geometry instanceof HTMLInputElement
+    ? geometry.files?.[0]?.name ?? "Not selected"
+    : "Not selected";
+  review.replaceChildren(
+    projectFact("Scene", String(new FormData(form).get("name") ?? "")),
+    projectFact("Capture source", adapterLabel),
+    projectFact("3D appearance", captureName),
+    projectFact("Measurement geometry", geometryName),
+    element("h4", "", "The platform will"),
+    element("p", "capture-plan-item", "✓ Preserve both source files"),
+    element("p", "capture-plan-item", "✓ Prepare the browser scene"),
+    element("p", "capture-plan-item", "✓ Detect rooms, walls, and openings"),
+    element("p", "capture-plan-item", "✓ Build the walkable area"),
+    element("p", "capture-plan-item", "✓ Run privacy detection"),
+  );
+}
+
 function portableCapturePlan(file: File): {
   format: typeof portableCaptureFormats[number];
   purpose: "gaussian_splat" | "web_scene";
@@ -3460,8 +3630,8 @@ function renderNewCaptureHelp(): void {
     ? "XGRIDS"
     : adapter === "fjd-trion"
       ? "FJD"
-      : "portable";
-  let message = `${source} intake accepts a portable PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD export. Native project files remain supporting evidence and cannot create the preview alone.`;
+      : "This export";
+  let message = `${source} scenes need a browser visual (PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD) plus measurement geometry from the same scan. Native project files remain supporting evidence.`;
   if (file) {
     try {
       const plan = portableCapturePlan(file);
@@ -3475,7 +3645,7 @@ function renderNewCaptureHelp(): void {
   byId("newCaptureHelp").textContent = message;
   byId("newCaptureGeometryHelp").textContent = geometry
     ? `${geometry.name} will be verified, then used to generate the floor plan, structural collision draft, and navigation draft automatically.`
-    : "Required. Export a registered Y-up metric PLY, E57, LAS, LAZ, or PTS so this capture can produce a floor plan, collision shell, and walking map.";
+    : "Required. Choose the registered PLY, E57, LAS, LAZ, or PTS point cloud exported from the same scan. It supplies the floor plan, collision shell, and walking map.";
 }
 
 async function createCapture(form: FormData): Promise<void> {
@@ -3485,6 +3655,9 @@ async function createCapture(form: FormData): Promise<void> {
   const geometryFile = form.get("geometry");
   const geometry = geometryFile instanceof File && geometryFile.size > 0 ? geometryFile : null;
   const adapter = String(form.get("captureAdapter") ?? "open-import");
+  const template = state.projectTemplates.find((candidate) =>
+    candidate.id === String(form.get("projectTemplate") ?? "")
+  ) ?? null;
   if (!geometry) {
     throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
   }
@@ -3507,10 +3680,14 @@ async function createCapture(form: FormData): Promise<void> {
         clientOperationId: projectOperationId,
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")),
+        customerEmail: optionalString(form.get("customerEmail")),
         captureAdapter: adapter,
-        deliveryTemplate: "Property showcase",
+        deliveryTemplate: template?.deliveryTemplate ?? "Property showcase",
         notes: optionalString(form.get("notes")),
-        customFields: projectCustomFieldsFromForm(byId("newProjectCustomFields")),
+        customFields: {
+          ...projectCustomFieldsFromForm(byId("newProjectRequiredCustomFields")),
+          ...projectCustomFieldsFromForm(byId("newProjectCustomFields")),
+        },
       }),
     });
     byId("newProjectStatus").textContent = "Project created. Starting resumable upload…";
@@ -3558,6 +3735,7 @@ async function createCapture(form: FormData): Promise<void> {
     window.setTimeout(() => {
       byId<HTMLFormElement>("newProjectForm").reset();
       renderNewCaptureHelp();
+      setNewCaptureIntakeStep(1, false);
     }, 950);
   } catch (error) {
     byId("projectError").textContent = errorMessage(error);
@@ -3608,7 +3786,7 @@ function renderProjectControls(): void {
     ...state.projectTemplates.map((template) => template.deliveryTemplate),
     ...(state.projectDelivery ? [state.projectDelivery] : []),
   ])].sort((left, right) => left.localeCompare(right));
-  delivery.replaceChildren(new Option("All delivery templates", ""));
+  delivery.replaceChildren(new Option("All delivery classifications", ""));
   for (const value of deliveryValues) delivery.append(new Option(value, value));
   delivery.value = state.projectDelivery;
 
@@ -3704,11 +3882,36 @@ function renderProjectTemplateOptions(): void {
   const select = document.getElementById("newProjectTemplate");
   if (!(select instanceof HTMLSelectElement)) return;
   const selected = select.value;
-  select.replaceChildren(new Option("No template - choose settings below", ""));
+  select.replaceChildren(new Option("No saved defaults", ""));
   for (const template of state.projectTemplates) {
     select.append(new Option(template.name, template.id));
   }
   select.value = state.projectTemplates.some((template) => template.id === selected) ? selected : "";
+}
+
+function applySelectedProjectTemplate(): void {
+  const form = byId<HTMLFormElement>("newProjectForm");
+  const templateId = byId<HTMLSelectElement>("newProjectTemplate").value;
+  const template = state.projectTemplates.find((candidate) => candidate.id === templateId);
+  if (!template) return;
+  const adapter = form.elements.namedItem("captureAdapter");
+  const notes = form.elements.namedItem("notes");
+  if (adapter instanceof HTMLSelectElement) {
+    const supported = Array.from(adapter.options).some((option) =>
+      option.value === template.captureAdapter
+    );
+    if (!supported) {
+      byId<HTMLSelectElement>("newProjectTemplate").value = "";
+      showNotice(
+        `The “${template.name}” defaults use a capture source this Studio version cannot create. Update the defaults in Portfolio tools before applying them.`,
+        "error",
+      );
+      return;
+    }
+    adapter.value = template.captureAdapter;
+  }
+  if (notes instanceof HTMLTextAreaElement && !notes.value.trim()) notes.value = template.notes ?? "";
+  renderNewCaptureHelp();
 }
 
 function renderPortfolioTools(): void {
@@ -6783,7 +6986,9 @@ function renderSpatial(): void {
     versionSelect,
   );
   container.append(versionControl);
-  container.append(renderSceneAuthoringWorkspace(project, spatial));
+  if (state.projectSection === "structure") {
+    container.append(renderSceneAuthoringWorkspace(project, spatial));
+  }
   const hierarchy = element("article", "workspace-card-large");
   hierarchy.append(
     element("span", "eyebrow", `VERSION ${spatial.version.version_number}`),
@@ -6999,7 +7204,7 @@ function renderSpatial(): void {
   const addRoute = element("button", "quiet-button wide", "Create guided route");
   addRoute.disabled = spatial.entities.length === 0;
   addRoute.addEventListener("click", openRouteDialog);
-  const tuneNavigation = element("button", "quiet-button wide", "Tune navigation agent");
+  const tuneNavigation = element("button", "quiet-button wide", "Walking profile");
   tuneNavigation.addEventListener("click", openNavigationProfileDialog);
   const authorTraversal = element("button", "quiet-button wide", "Author vertical traversal");
   authorTraversal.addEventListener("click", () => openNavigationTraversalDialog());
@@ -7479,22 +7684,96 @@ function renderSpatial(): void {
     }, saveDefaultDeliveryPolicy);
   });
   delivery.append(savePolicy);
-  const advanced = document.createElement("details");
-  advanced.className = "spatial-advanced-workflows";
-  const advancedSummary = document.createElement("summary");
-  advancedSummary.textContent = "Advanced evidence and diagnostics";
-  const advancedGrid = element("div", "workspace-grid spatial-advanced-grid");
-  advancedGrid.append(
-    hierarchy,
-    semanticExtraction,
-    renderFloorplanWorkflow(project, spatial),
-    routes,
-    captureEvidence,
-    assurance,
-    delivery,
+  if (state.projectSection === "privacy") {
+    container.append(assurance);
+    return;
+  }
+  if (state.projectSection === "structure") {
+    container.append(renderFloorplanWorkflow(project, spatial));
+    return;
+  }
+  if (state.projectSection === "walk") {
+    container.append(routes);
+    return;
+  }
+  container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
+}
+
+function renderPublish(): void {
+  const container = byId("publishOverview");
+  container.replaceChildren();
+  const detail = state.selected;
+  if (!detail) {
+    container.append(emptyState("Open a project before reviewing publication readiness."));
+    return;
+  }
+  if (!state.spatial?.version) {
+    container.append(emptyState("Loading publication evidence…"));
+    return;
+  }
+
+  const card = element("article", "workspace-card-large publication-readiness-card");
+  const latestVersion = detail.versions[0] ?? null;
+  const releasableVersion = auxiliaryCollisionTargetVersion();
+  const navigationReady = Boolean(
+    releasableVersion && detail.previewReadyVersionIds.includes(releasableVersion.id),
   );
-  advanced.append(advancedSummary, advancedGrid);
-  container.append(advanced);
+  const privacy = privacyQaReadiness(state.spatial);
+  card.append(
+    element("span", "eyebrow", "PUBLICATION READINESS"),
+    element("h3", "", "Confirm evidence, then publish"),
+    projectFact(
+      "Visual scene",
+      releasableVersion ? `Version ${releasableVersion.version_number} approved` : "Awaiting QA approval",
+    ),
+    projectFact("Walking map", navigationReady ? "Verified and approved" : "Not ready"),
+    projectFact("Privacy evidence", privacy.ready ? "Ready for human approval" : privacy.message),
+  );
+  const republish = (state.spatial.releaseRepublishIntents ?? [])[0];
+  if (republish) {
+    card.append(projectFact(
+      "Walking-map republish",
+      republish.status === "pending"
+        ? `Queued for /${republish.slug ?? "current release"}; this request survives closing Studio`
+        : republish.status === "completed"
+          ? `Completed for /${republish.slug ?? "published release"}`
+          : republish.error_message ?? "Stopped; publish manually after resolving the rebuild",
+    ));
+  }
+
+  if (latestVersion?.status === "QA_REQUIRED") {
+    const review = element("button", "quiet-button wide", "Review privacy and approve");
+    review.addEventListener("click", () => {
+      void runAction({
+        key: `open-qa:${detail.project.id}`,
+        trigger: review,
+        pendingLabel: "Checking evidence…",
+      }, openQaDialog);
+    });
+    card.append(review);
+  }
+  if (releasableVersion && navigationReady) {
+    const configure = element("button", "primary-button wide", "Configure publication");
+    configure.addEventListener("click", () => {
+      void runAction({
+        key: `open-release:${detail.project.id}`,
+        trigger: configure,
+        pendingLabel: "Loading release evidence…",
+      }, openReleaseDialog);
+    });
+    card.append(configure);
+  }
+  const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at);
+  if (activeRelease) {
+    const publishedLink = document.createElement("a");
+    publishedLink.className = "quiet-button wide";
+    publishedLink.href = `/s/${activeRelease.slug}`;
+    publishedLink.target = "_blank";
+    publishedLink.rel = "noopener";
+    publishedLink.textContent = `Open published /${activeRelease.slug}`;
+    card.append(publishedLink);
+  }
+  container.append(card);
 }
 
 function renderSceneAuthoringWorkspace(
@@ -7574,6 +7853,51 @@ function renderSceneAuthoringWorkspace(
     }, submitSceneAuthoringCorrections);
   });
   toolbar.append(undo, finish, save);
+  const publicationFollowUp = element("div", "scene-authoring-publication-follow-up");
+  const pendingRepublish = (spatial.releaseRepublishIntents ?? []).find(
+    (intent) => intent.status === "pending",
+  );
+  const activeRelease = state.selected?.releases.find((release) =>
+    Boolean(release.is_active) && !release.revoked_at && release.version_id === spatial.version!.id
+  ) ?? null;
+  if (pendingRepublish) {
+    publicationFollowUp.append(element(
+      "p",
+      "inline-status",
+      `Publication /${pendingRepublish.slug ?? activeRelease?.slug ?? "current"} will refresh after this walking map passes verification. This request is durable; closing Studio will not cancel it.`,
+    ));
+  } else if (activeRelease?.access_policy === "token") {
+    publicationFollowUp.append(element(
+      "p",
+      "field-note",
+      "This release uses a recipient token. Rebuild the walking map here, then publish manually to issue a new token.",
+    ));
+  } else if (activeRelease) {
+    const label = element("label", "checkbox-row");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.addEventListener("change", () => {
+      if (sceneAuthoringWorkspace?.versionId === spatial.version!.id) {
+        sceneAuthoringWorkspace.republishReleaseId = input.checked ? activeRelease.id : null;
+      }
+    });
+    label.append(
+      input,
+      element(
+        "span",
+        "",
+        `Republish /${activeRelease.slug} automatically after the rebuilt walking map passes verification.`,
+      ),
+    );
+    publicationFollowUp.append(
+      label,
+      element(
+        "small",
+        "field-note",
+        "The worker preserves this release's audience, expiry, and viewer settings. The request survives closing this browser.",
+      ),
+    );
+  }
 
   const reviewable = [...(spatial.floorplanExtractions ?? [])]
     .find((extraction) => extraction.status === "READY_FOR_REVIEW" && extraction.proposal_json);
@@ -7633,6 +7957,7 @@ function renderSceneAuthoringWorkspace(
     modeButtons,
     correctionDraftOperationId: crypto.randomUUID(),
     correctionReviewOperationId: crypto.randomUUID(),
+    republishReleaseId: null,
     captureAgreementFindings,
     captureAgreementClassifications,
   };
@@ -7647,6 +7972,7 @@ function renderSceneAuthoringWorkspace(
   }
   void loadSceneAuthoringRenderable(project.id, spatial.version!.id);
   card.append(heading, stage, legend, toolbar);
+  if (publicationFollowUp.childElementCount) card.append(publicationFollowUp);
   if (captureAgreementFindings.length) {
     card.append(renderCaptureAgreementFindings(
       captureAgreementFindings,
@@ -7955,22 +8281,6 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
       captureAgreementFindingIdentity(finding),
     )!,
   }));
-  // Capture the republish intent in the SAME gesture as the approval: if
-  // this version backs a live channel, the operator can decide now and the
-  // session republishes for them once the rebuild is accepted. Declining
-  // keeps publication fully manual, exactly as before.
-  const activeRelease = state.selected?.releases.find((release) =>
-    Boolean(release.is_active) && !release.revoked_at &&
-    release.version_id === workspace.versionId
-  ) ?? null;
-  const republishRelease = activeRelease && window.confirm(
-    `Republish "${activeRelease.slug}" automatically once the rebuilt walking map is accepted?\n\n` +
-    "The live release keeps its slug, access policy, and viewer configuration — only the walking map refreshes. Cancel keeps publication manual.",
-  )
-    ? activeRelease
-    : null;
-  const baselineBuildId = [...(state.spatial?.navigationBuilds ?? [])]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))[0]?.id ?? null;
   let extractionId = workspace.extractionId;
   if (!extractionId) {
     if (!workspace.revisionId) {
@@ -7986,8 +8296,9 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
     extractionId = draft.extraction.id;
     workspace.extractionId = extractionId;
   }
+  let review: { republishIntent?: { id: string; status: string } | null };
   try {
-    await api(
+    review = await api<{ republishIntent?: { id: string; status: string } | null }>(
       `/api/projects/${workspace.projectId}/spatial/floorplan-extractions/${extractionId}/review`,
       {
         method: "POST",
@@ -7998,6 +8309,9 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
             ? "Corrected against the registered Gaussian render in Spatial Studio."
             : "Automatic structure inspected and approved against the registered Gaussian render in Spatial Studio.",
           plan: workspace.plan,
+          ...(workspace.republishReleaseId
+            ? { republishReleaseId: workspace.republishReleaseId }
+            : {}),
           ...(captureAgreementResolutions.length ? { captureAgreementResolutions } : {}),
         }),
       },
@@ -8013,80 +8327,10 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
     }
     throw error;
   }
-  showToast("Corrections saved; collision and navigation rebuild queued");
+  showToast(review.republishIntent
+    ? "Corrections saved; walking-map rebuild and durable republish queued"
+    : "Corrections saved; collision and navigation rebuild queued");
   await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
-  if (republishRelease) {
-    void watchRebuildAndRepublish(
-      workspace.projectId,
-      workspace.versionId,
-      republishRelease,
-      baselineBuildId,
-    );
-  }
-}
-
-// The operator who just approved the structure has already expressed the
-// only decision a republish needs; making them come back to click Publish
-// again is ceremony. This watcher keeps publication operator-authenticated
-// — it runs in the SAME Studio session and calls the SAME fully gated
-// publish endpoint as the manual button, cloning the live release's slug,
-// access policy, and stored viewer configuration so nothing changes for the
-// public except the walking map they asked to refresh. Closing the tab
-// simply leaves the manual button as before.
-async function watchRebuildAndRepublish(
-  projectId: string,
-  versionId: string,
-  release: Release,
-  baselineBuildId: string | null,
-): Promise<void> {
-  const deadline = Date.now() + 15 * 60 * 1000;
-  showToast(`Watching the rebuild; "${release.slug}" republishes automatically once it is accepted`);
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 10_000));
-    let latest: SpatialWorkspace["navigationBuilds"][number] | null = null;
-    try {
-      const spatial = await api<SpatialWorkspace>(
-        `/api/projects/${projectId}/spatial?versionId=${encodeURIComponent(versionId)}`,
-      );
-      latest = [...(spatial.navigationBuilds ?? [])]
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
-    } catch {
-      continue;
-    }
-    // Only a build that did not exist when the operator approved counts as
-    // the rebuild — the previous APPROVED build must never satisfy this.
-    if (!latest || latest.id === baselineBuildId) continue;
-    if (latest.status === "REJECTED" || latest.status === "FAILED") {
-      showNotice(`The rebuilt walking map ended ${latest.status}; "${release.slug}" was not republished.`, "error");
-      return;
-    }
-    if (latest.status !== "APPROVED") continue;
-    const clone = buildRepublishPayload({
-      slug: release.slug,
-      accessPolicy: release.access_policy,
-      expiresAt: release.expires_at ?? null,
-      viewerConfigJson: release.viewer_config_json ?? null,
-      clientOperationId: crypto.randomUUID(),
-      reviewedSourceToWorld: reviewedSemanticSourceToWorld(),
-    });
-    if (!clone.ok) {
-      showNotice(`Rebuilt walking map accepted, but automatic republish stopped: ${clone.reason}`, "error");
-      return;
-    }
-    try {
-      const result = await api<{ release: { url: string } }>(
-        `/api/projects/${projectId}/releases`,
-        { method: "POST", body: JSON.stringify(clone.payload) },
-      );
-      showNotice(`Republished with the new walking map: ${result.release.url}`, "success");
-      showToast("Channel republished with the rebuilt walking map");
-      await refreshAll();
-    } catch (error) {
-      showNotice(`Rebuilt walking map accepted, but the automatic republish failed: ${errorMessage(error)} — publish manually from the release panel.`, "error");
-    }
-    return;
-  }
-  showNotice(`The rebuild was not accepted within 15 minutes; publish "${release.slug}" manually once it is.`, "error");
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
@@ -8304,7 +8548,11 @@ async function loadSpatialWorkspace(projectId: string, requestedVersionId?: stri
   state.spatial = workspace;
   state.spatialProjectId = projectId;
   state.spatialVersionId = workspace.version?.id ?? null;
-  if (state.view === "project" && state.projectSection === "scene") renderSpatial();
+  if (
+    state.view === "project" &&
+    ["structure", "privacy", "walk", "expert"].includes(state.projectSection)
+  ) renderSpatial();
+  if (state.view === "project" && state.projectSection === "publish") renderPublish();
 }
 
 function semanticExtractionAssets(): Asset[] {
@@ -8525,7 +8773,7 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
       generation !== semanticExtractionPollGeneration ||
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
-      state.projectSection !== "scene"
+      state.projectSection !== "structure"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -9143,7 +9391,7 @@ async function pollFloorplanExtraction(projectId: string, extractionId: string):
       generation !== floorplanExtractionPollGeneration ||
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
-      state.projectSection !== "scene"
+      state.projectSection !== "structure"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -9356,6 +9604,11 @@ function openNavigationProfileDialog(): void {
   setFormValue(form, "maxSlopeDegrees", String(profile.maxSlopeDegrees ?? 45));
   setFormValue(form, "maxSpeed", String(profile.maxSpeed ?? 1.6));
   setFormValue(form, "maxAcceleration", String(profile.maxAcceleration ?? 8));
+  byId("navigationProfileSummary").textContent =
+    `${profile.worldUnit === "scene_units" ? "Provisional scene-unit" : "Metric"} profile · ` +
+    `${profile.agentRadius} ${worldUnitSymbol(profile.worldUnit)} radius · ` +
+    `${profile.agentHeight} ${worldUnitSymbol(profile.worldUnit)} standing height · ` +
+    `${profile.maxStepMetres} ${worldUnitSymbol(profile.worldUnit)} maximum step.`;
   byId("navigationProfileError").textContent = "";
   navigationProfileDialog.showModal();
 }
@@ -9563,19 +9816,8 @@ function openNavigationBuildDialog(): void {
     let position: [number, number, number] | null = null;
     try {
       position = opening.position_json ? finiteStudioPoint(JSON.parse(opening.position_json)) : null;
-      if (!position && opening.geometry_json) {
-        const geometry = JSON.parse(opening.geometry_json) as { points?: unknown[] };
-        const geometryPoints = Array.isArray(geometry.points)
-          ? geometry.points.map(finiteStudioPoint).filter((point): point is [number, number, number] => Boolean(point))
-          : [];
-        if (geometryPoints.length) {
-          position = [0, 1, 2].map((axis) =>
-            geometryPoints.reduce((sum, point) => sum + point[axis]!, 0) / geometryPoints.length
-          ) as [number, number, number];
-        }
-      }
     } catch {
-      // Operator can author the required opening below.
+      // A malformed legacy position must never become a walking spawn.
     }
     if (position) setFormValue(form, "spawn", position.join(", "));
   }
@@ -9583,8 +9825,24 @@ function openNavigationBuildDialog(): void {
   if (provisional instanceof HTMLInputElement) {
     provisional.checked = spatial.navigationProfile.worldUnit === "scene_units";
   }
+  syncNavigationBuildReadiness();
   byId("navigationBuildError").textContent = "";
   navigationBuildDialog.showModal();
+}
+
+function syncNavigationBuildReadiness(): void {
+  const form = byId<HTMLFormElement>("navigationBuildForm");
+  const collision = form.elements.namedItem("collisionAssetId");
+  const bounds = form.elements.namedItem("bounds");
+  const spawn = form.elements.namedItem("spawn");
+  const ready = collision instanceof HTMLSelectElement && Boolean(collision.value) &&
+    bounds instanceof HTMLInputElement && Boolean(parseWalkableBounds(bounds.value)) &&
+    spawn instanceof HTMLInputElement && Boolean(parsePosition(spawn.value));
+  const submit = form.querySelector<HTMLButtonElement>("[type='submit']");
+  if (submit) submit.disabled = !ready;
+  byId("navigationBuildSummary").textContent = ready
+    ? "Approved collision, structure-derived bounds, and an authored room starting point are ready. The exact evidence will be frozen into the walking-map job."
+    : "Approve structure and choose a starting point in the scene before building. Expert values remain inspectable, but polygon averages are never treated as safe walking positions.";
 }
 
 async function queueNavigationBuild(form: FormData): Promise<void> {
@@ -9821,7 +10079,7 @@ async function pollPrivacyScan(projectId: string, scanId: string): Promise<void>
       generation !== privacyScanPollGeneration ||
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
-      state.projectSection !== "scene"
+      state.projectSection !== "structure"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -10373,7 +10631,7 @@ async function pollRawSceneChange(projectId: string, reportId: string): Promise<
       generation !== rawSceneChangePollGeneration ||
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
-      state.projectSection !== "scene"
+      state.projectSection !== "structure"
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -11190,15 +11448,93 @@ async function selectProject(
     }
     state.selected = detail;
     renderProjectDetail();
-    if (openProjectView) activateProjectSection("overview", true, "push");
+    const openingSection = firstIncompleteProjectSection(detail);
+    if (openProjectView) activateProjectSection(openingSection, true, "push");
     if (focusWorkspace) {
       const header = byId("projectWorkspaceHeader");
       header.scrollIntoView({ behavior: "smooth", block: "start" });
-      window.setTimeout(() => byId("projectDetail").focus({ preventScroll: true }), 320);
+      window.setTimeout(() => focusProjectSectionHeading(openingSection), 320);
     }
   } catch (error) {
     showNotice(errorMessage(error), "error");
   }
+}
+
+function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
+  const journey = projectJourneyState(detail);
+  if (!journey.hasCapture) return "overview";
+  if (!journey.renderableVersion) return "process";
+  if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
+  if (!journey.structureReady) return "structure";
+  if (journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
+  if (!journey.navigationReady) return "walk";
+  if (!journey.privacyApproved) return "privacy";
+  if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
+  return "overview";
+}
+
+function projectJourneyState(detail: ProjectDetail) {
+  const renderableVersion = detail.versions.find((version) =>
+    detail.assets.some((asset) =>
+      asset.version_id === version.id &&
+      asset.kind === "web" &&
+      asset.integrity_status === "verified" &&
+      ["rad", "spz", "sog"].includes(asset.format)
+    )
+  ) ?? null;
+  const journeyJobs = renderableVersion
+    ? detail.jobs.filter((job) => job.version_id === renderableVersion.id)
+    : detail.jobs;
+  const activeJob = journeyJobs.find((job) =>
+    ["QUEUED", "LEASED", "RUNNING"].includes(job.state)
+  ) ?? null;
+  const supersededByLaterSuccess = (candidate: Job) =>
+    journeyJobs.some((other) => other.job_type === candidate.job_type &&
+      other.state === "SUCCEEDED" && other.created_at >= candidate.created_at);
+  const failedJob = journeyJobs.find((job) =>
+    ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state) &&
+    !supersededByLaterSuccess(job)) ?? null;
+  const hasCapture = detail.assets.length > 0;
+  const hasMetricGeometry = detail.assets.some((asset) =>
+    asset.kind === "pointcloud" && ["ply", "e57", "las", "laz", "pts"].includes(asset.format)
+  );
+  const floorplanJob = journeyJobs.find((job) => job.job_type === "floorplan.extract-v1") ?? null;
+  const navigationJob = journeyJobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
+  const navigationReady = Boolean(
+    renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
+  );
+  const structureReady = navigationReady || Boolean(navigationJob);
+  // Privacy follows the newest immutable version, including an auxiliary QA
+  // version. Publication independently resolves the approved visual target,
+  // so an outstanding QA review can remain the recommended stage without
+  // hiding an already releasable visual version.
+  const privacyVersion = detail.versions[0] ?? null;
+  const privacyApproved = Boolean(
+    privacyVersion && ["APPROVED", "PUBLISHED"].includes(privacyVersion.status),
+  );
+  const automaticWalkingWorkActive = Boolean(
+    activeJob && ["asset.evidence-validate", "floorplan.extract-v1", "navigation.build-v1"]
+      .includes(activeJob.job_type),
+  );
+  const walkingExceptionReviewReady = Boolean(
+    renderableVersion && hasMetricGeometry && floorplanJob?.state === "SUCCEEDED" &&
+    !structureReady && !automaticWalkingWorkActive && !failedJob,
+  );
+  return {
+    renderableVersion,
+    activeJob,
+    failedJob,
+    hasCapture,
+    hasMetricGeometry,
+    floorplanJob,
+    navigationJob,
+    navigationReady,
+    structureReady,
+    privacyVersion,
+    privacyApproved,
+    automaticWalkingWorkActive,
+    walkingExceptionReviewReady,
+  };
 }
 
 async function ensureProjectWorkspace(view: "spatial" | "measurement", force = false): Promise<void> {
@@ -11207,7 +11543,11 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
   const cachedProjectId = view === "spatial" ? state.spatialProjectId : state.measurementProjectId;
   if (!force && cachedProjectId === projectId) return;
 
-  const container = byId(view === "spatial" ? "spatialOverview" : "measurementOverview");
+  const container = byId(
+    view === "spatial"
+      ? state.projectSection === "publish" ? "publishOverview" : "spatialOverview"
+      : "measurementOverview",
+  );
   container.setAttribute("aria-busy", "true");
   container.replaceChildren(emptyState(
     view === "spatial"
@@ -11221,11 +11561,12 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
       else await loadMeasurementWorkspace(projectId);
     });
   } catch (error) {
-    const currentSection = view === "spatial" ? "scene" : "measurement";
     if (
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
-      state.projectSection !== currentSection
+      (view === "spatial"
+        ? !["structure", "privacy", "walk", "expert", "publish"].includes(state.projectSection)
+        : state.projectSection !== "measurement")
     ) return;
     const retry = element("button", "quiet-button", "Retry");
     const errorState = emptyState(errorMessage(error));
@@ -11296,44 +11637,22 @@ function renderProjectDetail(): void {
   body.className = "project-detail-flow";
   body.replaceChildren();
 
-  const renderableVersion = detail.versions.find((version) =>
-    detail.assets.some((asset) =>
-      asset.version_id === version.id &&
-      asset.kind === "web" &&
-      asset.integrity_status === "verified" &&
-      ["rad", "spz", "sog"].includes(asset.format)
-    )
-  ) ?? null;
-  const activeJob = detail.jobs.find((job) => ["QUEUED", "LEASED", "RUNNING"].includes(job.state)) ?? null;
-  // A dead attempt only deserves the journey banner while it is the latest
-  // word on its stage. Retries are normal operation; surfacing a failure that a
-  // later run of the same job type already superseded turns every recovered
-  // scene into a permanent false alarm.
-  const supersededByLaterSuccess = (candidate: Job) =>
-    detail.jobs.some((other) => other.job_type === candidate.job_type &&
-      other.state === "SUCCEEDED" && other.created_at >= candidate.created_at);
-  const failedJob = detail.jobs.find((job) =>
-    ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state) &&
-    !supersededByLaterSuccess(job)) ?? null;
-  const hasCapture = detail.assets.length > 0;
-  const hasMetricGeometry = detail.assets.some((asset) =>
-    asset.kind === "pointcloud" && ["ply", "e57", "las", "laz", "pts"].includes(asset.format)
-  );
-  const floorplanJob = detail.jobs.find((job) => job.job_type === "floorplan.extract-v1") ?? null;
-  const navigationJob = detail.jobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
-  const floorplanReady = floorplanJob?.state === "SUCCEEDED";
-  const navigationReady = Boolean(
-    renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
-  );
+  const {
+    renderableVersion,
+    activeJob,
+    failedJob,
+    hasCapture,
+    hasMetricGeometry,
+    floorplanJob,
+    navigationJob,
+    navigationReady,
+    structureReady,
+    privacyVersion: latestVersion,
+    privacyApproved,
+    automaticWalkingWorkActive,
+    walkingExceptionReviewReady,
+  } = projectJourneyState(detail);
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
-  const automaticWalkingWorkActive = Boolean(
-    activeJob && ["asset.evidence-validate", "floorplan.extract-v1", "navigation.build-v1"]
-      .includes(activeJob.job_type),
-  );
-  const walkingExceptionReviewReady = Boolean(
-    renderableVersion && hasMetricGeometry && floorplanReady && !navigationReady &&
-    !automaticWalkingWorkActive && !failedJob,
-  );
 
   const journey = element("section", "project-journey");
   const journeyHeading = element("div", "project-journey-heading");
@@ -11449,40 +11768,59 @@ function renderProjectDetail(): void {
   journeyHeading.append(journeyCopy, journeyActions);
   const steps = element("div", "project-journey-steps");
   steps.append(
-    projectJourneyStep("1", "Capture", hasCapture ? "complete" : "current", hasCapture ? "Source preserved" : "Upload export"),
+    projectJourneyStep("1", "Capture", hasCapture ? "complete" : "current", hasCapture ? "Source preserved" : "Upload files", "overview"),
     projectJourneyStep(
       "2",
-      "Splat",
+      "Process",
       renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
-      renderableVersion ? "Web scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
+      renderableVersion ? "Visual scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
+      "process",
     ),
     projectJourneyStep(
       "3",
-      "Floor plan",
-      floorplanReady ? "complete" : floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
-        ? "current"
-        : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
-      floorplanReady ? "Draft ready" : floorplanJob ? humanStatus(floorplanJob.state) : hasMetricGeometry ? "Starts automatically" : "Geometry required",
+      "Structure",
+      structureReady
+        ? "complete"
+        : walkingExceptionReviewReady || floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
+          ? "current"
+          : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
+      structureReady
+        ? "Rooms and openings approved"
+        : walkingExceptionReviewReady
+          ? "Review structural exceptions"
+          : floorplanJob ? humanStatus(floorplanJob.state) : hasMetricGeometry ? "Starts automatically" : "Geometry required",
+      "structure",
     ),
     projectJourneyStep(
       "4",
-      "Navigation",
-      navigationReady ? "complete" : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
-        ? "current"
-        : navigationJob ? "blocked" : floorplanReady ? "waiting" : "waiting",
-      navigationReady ? "Proof accepted" : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
+      "Privacy",
+      privacyApproved ? "complete" : latestVersion?.status === "QA_REQUIRED" ? "current" : renderableVersion ? "waiting" : "blocked",
+      privacyApproved ? "Human approval recorded" : latestVersion?.status === "QA_REQUIRED" ? "Review findings" : "Wait for processed scene",
+      "privacy",
     ),
     projectJourneyStep(
       "5",
-      "Preview",
-      navigationReady ? "complete" : renderableVersion ? "blocked" : "waiting",
-      navigationReady
-        ? "Walkable URL ready"
-        : walkingExceptionReviewReady
-          ? "Review highlighted exceptions"
-          : renderableVersion
-            ? "Waiting for verified walking package"
-            : "Waiting for scene",
+      "Walk test",
+      navigationReady ? "complete" : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
+        ? "current"
+        : navigationJob ? "blocked" : "waiting",
+      navigationReady ? "Proof accepted" : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
+      "walk",
+    ),
+    projectJourneyStep(
+      "6",
+      "Publish",
+      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
+      activeRelease
+        ? `Live at /${activeRelease.slug}`
+        : !privacyApproved
+          ? "Privacy approval required"
+          : navigationReady
+            ? "Choose audience and publish"
+            : walkingExceptionReviewReady
+              ? "Review structural exceptions"
+              : "Verified walk required",
+      "publish",
     ),
   );
   journey.append(journeyHeading, steps);
@@ -11511,7 +11849,6 @@ function renderProjectDetail(): void {
     publishedLink.textContent = "Open published preview";
     sharing.append(publishedLink, projectFact("Published URL", `${location.origin}/s/${activeRelease.slug}`));
   }
-  const latestVersion = detail.versions[0];
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
   if (latestVersion?.status === "QA_REQUIRED" && navigationReady) {
     const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
@@ -11542,7 +11879,9 @@ function renderProjectDetail(): void {
   const overview = detailCard("Project record");
   overview.append(
     projectFact("Customer", detail.project.customerName ?? "Not assigned"),
+    projectFact("Customer contact", detail.project.customerEmail ?? "Not assigned"),
     projectFact("Capture source", humanStatus(detail.project.captureAdapter)),
+    projectFact("Delivery classification", detail.project.deliveryTemplate),
     projectFact("Notes", detail.project.notes ?? "No project notes."),
   );
   for (const field of state.projectFields.filter((candidate) =>
@@ -11701,7 +12040,7 @@ function renderProjectDetail(): void {
       pendingLabel: "Opening evidence…",
     }, async () => {
       await loadMeasurementWorkspace(detail.project.id);
-      activateProjectSection("measurement");
+      activateProjectSection("measurement", true, "push", true);
     });
   });
   const domainButton = element("button", "quiet-button wide", "Add custom domain");
@@ -11730,8 +12069,13 @@ function projectJourneyStep(
   label: string,
   status: "complete" | "current" | "available" | "waiting" | "blocked",
   detail: string,
+  target: ProjectSection,
 ): HTMLElement {
-  const step = element("article", `project-journey-step ${status}`);
+  const step = element("button", `project-journey-step ${status}`);
+  step.type = "button";
+  step.dataset.projectJourneySection = target;
+  step.addEventListener("click", () => activateProjectSection(target, true, "push", true));
+  if (state.projectSection === target) step.setAttribute("aria-current", "step");
   step.append(
     element("span", "project-journey-number", number),
     element("strong", "", label),
@@ -11747,7 +12091,7 @@ function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
     pendingLabel: "Opening editor…",
   }, async () => {
     await loadSpatialWorkspace(projectId);
-    activateProjectSection("scene");
+    activateProjectSection("structure", true, "push", true);
   });
 }
 
@@ -12288,21 +12632,28 @@ async function reviewCaptureBundle(form: FormData): Promise<void> {
 }
 
 function renderProjectCustomFieldForm(
-  containerId: "newProjectCustomFields" | "editProjectCustomFields",
+  containerId: "newProjectRequiredCustomFields" | "newProjectCustomFields" | "editProjectCustomFields",
   values: Record<string, string | number | boolean>,
 ): void {
   const container = byId(containerId);
   container.replaceChildren();
-  const fields = state.projectFields.filter((field) => field.active);
+  const fields = state.projectFields.filter((field) => {
+    if (!field.active) return false;
+    if (containerId === "newProjectRequiredCustomFields") return field.required;
+    if (containerId === "newProjectCustomFields") return !field.required;
+    return true;
+  });
   if (!fields.length) return;
-  container.append(
-    element("h3", "", "Organisation metadata"),
-    element(
-      "p",
-      "",
-      "These typed fields are governed by the current workspace and validated before saving.",
-    ),
-  );
+  if (containerId !== "newProjectRequiredCustomFields") {
+    container.append(
+      element("h3", "", "Organisation metadata"),
+      element(
+        "p",
+        "",
+        "These typed fields are governed by the current workspace and validated before saving.",
+      ),
+    );
+  }
   const grid = element("div", "custom-field-grid");
   for (const field of fields) {
     const label = document.createElement("label");
@@ -12344,6 +12695,16 @@ function renderProjectCustomFieldForm(
   container.append(grid);
 }
 
+function renderNewProjectMetadataFields(): void {
+  renderProjectCustomFieldForm("newProjectRequiredCustomFields", {});
+  renderProjectCustomFieldForm("newProjectCustomFields", {});
+  const requiredCount = state.projectFields.filter((field) => field.active && field.required).length;
+  const optionalCustomCount = state.projectFields.filter((field) => field.active && !field.required).length;
+  byId("newProjectRequiredInformation").hidden = requiredCount === 0;
+  byId("newProjectOptionalSummary").textContent =
+    `Optional project details · ${4 + optionalCustomCount} fields`;
+}
+
 function projectCustomFieldsFromForm(
   container: HTMLElement,
   includeEmpty = false,
@@ -12383,6 +12744,9 @@ function openEditProjectDialog(): void {
   };
   setValue("name", project.name);
   setValue("customerName", project.customerName ?? "");
+  setValue("customerEmail", project.customerEmail ?? "");
+  setValue("captureAdapter", project.captureAdapter);
+  setValue("deliveryTemplate", project.deliveryTemplate);
   setValue("notes", project.notes ?? "");
   renderProjectCustomFieldForm("editProjectCustomFields", project.customFields);
   byId("editProjectError").textContent = "";
@@ -12398,8 +12762,9 @@ async function updateProject(form: FormData): Promise<void> {
       body: JSON.stringify({
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")) ?? null,
-        captureAdapter: project.captureAdapter,
-        deliveryTemplate: project.deliveryTemplate,
+        customerEmail: optionalString(form.get("customerEmail")) ?? null,
+        captureAdapter: String(form.get("captureAdapter") ?? project.captureAdapter),
+        deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
         notes: optionalString(form.get("notes")) ?? null,
         customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
       }),
@@ -13124,6 +13489,7 @@ async function openReleaseDialog(): Promise<void> {
   ) return;
   const form = byId<HTMLFormElement>("releaseForm");
   form.reset();
+  byId<HTMLDetailsElement>("releaseExpertSettings").open = false;
   const slug = form.elements.namedItem("slug");
   const title = form.elements.namedItem("title");
   if (slug instanceof HTMLInputElement) slug.value = state.selected.project.activeReleaseSlug ?? state.selected.project.slug;
@@ -13162,8 +13528,76 @@ async function openReleaseDialog(): Promise<void> {
   }
   syncReleaseTransformModes(form);
   releaseOperationId = crypto.randomUUID();
+  latestReleaseCameraPose = null;
+  byId<HTMLButtonElement>("releaseUseCurrentView").disabled = true;
+  byId("releaseCameraStatus").textContent = "Preparing the approved scene…";
   byId("releaseError").textContent = "";
   releaseDialog.showModal();
+  void prepareReleaseCameraPreview(versionId);
+}
+
+async function prepareReleaseCameraPreview(versionId: string): Promise<void> {
+  const frame = byId<HTMLIFrameElement>("releaseCameraPreview");
+  frame.onload = null;
+  frame.dataset.previewReady = "false";
+  frame.src = "about:blank";
+  try {
+    const renderable = await createVersionPreview(versionId);
+    if (!releaseDialog.open || state.spatial?.version?.id !== versionId) return;
+    frame.onload = () => {
+      frame.dataset.previewReady = "true";
+      sendVersionSpatialRuntime(frame, renderable);
+    };
+    frame.src = rendererAssetUrl(renderable).toString();
+  } catch (error) {
+    if (!releaseDialog.open) return;
+    byId("releaseCameraStatus").textContent =
+      `Starting-view preview unavailable: ${errorMessage(error)} Publication settings remain editable.`;
+  }
+}
+
+function handleReleaseCameraRendererMessage(event: MessageEvent<unknown>): void {
+  const frame = byId<HTMLIFrameElement>("releaseCameraPreview");
+  if (
+    !releaseDialog.open ||
+    frame.dataset.previewReady !== "true" ||
+    event.origin !== location.origin ||
+    event.source !== frame.contentWindow ||
+    !event.data ||
+    typeof event.data !== "object" ||
+    Reflect.get(event.data, "source") !== "spatial-spark"
+  ) return;
+  const type = Reflect.get(event.data, "type");
+  if (type === "camera-update") {
+    const pose = Reflect.get(event.data, "cameraPose");
+    if (!validComparisonCameraPose(pose)) return;
+    latestReleaseCameraPose = pose;
+    byId<HTMLButtonElement>("releaseUseCurrentView").disabled = false;
+    byId("releaseCameraStatus").textContent =
+      "Move to the view visitors should see first, then capture it.";
+    return;
+  }
+  if (type === "ready") {
+    byId("releaseCameraStatus").textContent =
+      "Move in the approved scene to choose the visitor starting view.";
+    return;
+  }
+  if (type === "error") {
+    byId("releaseCameraStatus").textContent =
+      `Starting-view preview unavailable: ${String(Reflect.get(event.data, "message") ?? "renderer error")}.`;
+  }
+}
+
+function applyReleaseCurrentView(): void {
+  if (!latestReleaseCameraPose) return;
+  const form = byId<HTMLFormElement>("releaseForm");
+  setFormValue(form, "initialCameraPosition", latestReleaseCameraPose.position.join(", "));
+  setFormValue(form, "initialCameraTarget", latestReleaseCameraPose.target.join(", "));
+  setFormValue(form, "initialCameraUp", latestReleaseCameraPose.up.join(", "));
+  setFormValue(form, "initialCameraFov", String(latestReleaseCameraPose.fovDegrees));
+  byId("releaseCameraStatus").textContent =
+    "Starting view captured. Move again and choose Use current view to replace it.";
+  showToast("Publication starting view captured");
 }
 
 function releaseSceneRotationInputs(form: HTMLFormElement): [

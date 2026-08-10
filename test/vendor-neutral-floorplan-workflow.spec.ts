@@ -654,16 +654,54 @@ describe("vendor-neutral floor-plan workflow", () => {
         classification: "door_opening",
       }],
     };
+    const sourceReleaseId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO releases (
+          id, organisation_id, project_id, version_id, web_asset_id, access_policy,
+          viewer_config_json, spatial_snapshot_json, published_at, created_by,
+          client_operation_id, release_number
+        ) VALUES (?, ?, ?, ?, ?, 'unlisted', '{}', '{}', ?, ?, ?, 1)
+      `).bind(
+        sourceReleaseId,
+        storedProject!.organisation_id,
+        project.id,
+        versionId,
+        assetId,
+        new Date().toISOString(),
+        storedProject!.created_by,
+        crypto.randomUUID(),
+      ),
+      env.DB.prepare(`
+        INSERT INTO release_channels (
+          id, organisation_id, project_id, slug, active_release_id
+        ) VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        crypto.randomUUID(),
+        storedProject!.organisation_id,
+        project.id,
+        `durable-republish-${project.id.slice(0, 8)}`,
+        sourceReleaseId,
+      ),
+    ]);
     const reviewResponses = await Promise.all([
       exports.default.fetch(reviewUrl, {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ ...reviewBody, clientOperationId: crypto.randomUUID() }),
+        body: JSON.stringify({
+          ...reviewBody,
+          clientOperationId: crypto.randomUUID(),
+          republishReleaseId: sourceReleaseId,
+        }),
       }),
       exports.default.fetch(reviewUrl, {
         method: "POST",
         headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ ...reviewBody, clientOperationId: crypto.randomUUID() }),
+        body: JSON.stringify({
+          ...reviewBody,
+          clientOperationId: crypto.randomUUID(),
+          republishReleaseId: sourceReleaseId,
+        }),
       }),
     ]);
     expect(reviewResponses.map((response) => response.status).sort()).toEqual([200, 409]);
@@ -678,6 +716,12 @@ describe("vendor-neutral floor-plan workflow", () => {
         floorplanRevisionId: string;
         planHash: string;
       };
+      republishIntent: {
+        id: string;
+        navigationBuildId: string;
+        sourceReleaseId: string;
+        status: string;
+      };
     }>();
     expect(reviewed.revision).toMatchObject({
       id: expect.any(String),
@@ -689,6 +733,19 @@ describe("vendor-neutral floor-plan workflow", () => {
       status: "QUEUED",
       floorplanRevisionId: reviewed.revision.id,
       planHash: reviewed.revision.planHash,
+    });
+    expect(reviewed.republishIntent).toMatchObject({
+      navigationBuildId: reviewed.automaticNavigation.id,
+      sourceReleaseId,
+      status: "pending",
+    });
+    await expect(env.DB.prepare(`
+      SELECT status, navigation_build_id, source_release_id
+      FROM release_republish_intents WHERE id = ?
+    `).bind(reviewed.republishIntent.id).first()).resolves.toMatchObject({
+      status: "pending",
+      navigation_build_id: reviewed.automaticNavigation.id,
+      source_release_id: sourceReleaseId,
     });
     const correctedBuild = await env.DB.prepare(`
       SELECT b.parameters_json, b.authoring_hash, j.state,
@@ -989,6 +1046,19 @@ describe("vendor-neutral floor-plan workflow", () => {
     expect(manualApproval.status).toBe(200);
     await expect(manualApproval.json()).resolves.toMatchObject({
       build: { status: "APPROVED" },
+      republishIntent: {
+        id: reviewed.republishIntent.id,
+        status: "failed",
+        error: expect.stringContaining("approved collision, navigation report, and Detour navmesh"),
+      },
+    });
+    await expect(env.DB.prepare(`
+      SELECT status, error_message, completed_at
+      FROM release_republish_intents WHERE id = ?
+    `).bind(reviewed.republishIntent.id).first()).resolves.toMatchObject({
+      status: "failed",
+      error_message: expect.stringContaining("approved collision, navigation report, and Detour navmesh"),
+      completed_at: expect.any(String),
     });
     // The per-finding receipt freezes with the build the operator approved.
     const manualReceipt = await env.DB.prepare(
