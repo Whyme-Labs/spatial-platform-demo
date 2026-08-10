@@ -60,6 +60,16 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.locator("#projectTable")).toBeHidden();
 
+  const privacyTab = page.getByRole("button", { name: "Privacy", exact: true });
+  await privacyTab.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+  await expect(privacyTab).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".project-journey-step").filter({ hasText: "Privacy" })).toHaveAttribute("aria-current", "step");
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
+  await page.goForward();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+
   await page.getByRole("button", { name: "Back to projects", exact: true }).click();
   await expect(page).toHaveURL(/#projects$/);
   await expect(page.locator("#projectTable")).toBeVisible();
@@ -138,6 +148,10 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   })).toBeVisible();
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add structure or navigation obstacle", exact: true })).toHaveCount(0);
+  await expect(page.locator("input[name='position']:visible")).toHaveCount(0);
+  await expect(page.locator("input[name='bounds']:visible")).toHaveCount(0);
+  await expect(page.locator("textarea[name='planJson']:visible")).toHaveCount(0);
   await page.getByRole("button", { name: "Correct and review plan", exact: true }).click();
   const floorplanReview = page.locator("#floorplanReviewDialog");
   await expect(floorplanReview.getByText("Expert: edit raw structured plan", { exact: true })).toBeVisible();
@@ -161,6 +175,7 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
 
   await page.getByRole("button", { name: "Walk test", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Walk test", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Recast cell size", { exact: true })).toBeHidden();
   await expect(page.getByText(
     "0 unreachable authored destinations · 0 failed physical routes in the approved processor receipt.",
     { exact: true },
