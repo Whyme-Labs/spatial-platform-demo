@@ -371,9 +371,39 @@ function auditStudioWorkflow(html, source) {
   if (!source.includes('firstIncompleteProjectSection(detail)')) {
     failures.push("project open does not route to the first incomplete mandatory stage");
   }
-  if (/\b(?:window\.)?confirm\s*\(\s*`(?:Revoke \/s\/|Make this historical release active)/.test(source)) {
-    failures.push("multi-stage publication decisions still use a native browser confirmation");
+  const nativePublicationConfirmations = findNativePublicationConfirmations(source);
+  if (nativePublicationConfirmations.length) {
+    failures.push(
+      `multi-stage publication decisions still use native browser confirmation: ${nativePublicationConfirmations.join(", ")}`,
+    );
   }
+}
+
+function findNativePublicationConfirmations(source) {
+  const sourceFile = ts.createSourceFile(
+    "src/client/studio.ts",
+    source,
+    ts.ScriptTarget.ESNext,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const confirmations = [];
+  visit(sourceFile, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    const directConfirm = ts.isIdentifier(node.expression) && node.expression.text === "confirm";
+    const windowConfirm = ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "window" &&
+      node.expression.name.text === "confirm";
+    if (!directConfirm && !windowConfirm) return;
+    const decision = node.arguments[0]?.getText(sourceFile) ?? "";
+    if (!/(?:republish|publish(?:ed|ing)?|\/s\/|historical release|release channel)/i.test(decision)) {
+      return;
+    }
+    const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+    confirmations.push(`src/client/studio.ts:${line}`);
+  });
+  return confirmations;
 }
 
 function projectJourneyDestinations(source) {
