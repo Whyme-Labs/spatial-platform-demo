@@ -588,7 +588,7 @@
       <div class="upload-progress"><i id="uploadProgress"></i></div>
       <small id="uploadStatus" role="status" aria-live="polite">Ready to upload.</small>
       <button class="primary-button wide" type="submit">Start resumable upload</button>
-      <button id="pauseUploadButton" class="quiet-button wide" type="button" hidden>Pause upload</button>
+      <button id="pauseUploadButton" class="quiet-button wide" type="button" data-reachable-when="a resumable upload is active" hidden>Pause upload</button>
       <p id="uploadError" class="form-error" role="alert"></p>
     </form>
   </dialog>
@@ -1268,7 +1268,7 @@
             <iframe id="compareLeftFrame" title="Left spatial version" allow="fullscreen" allowfullscreen hidden></iframe>
             <div id="compareLeftEmpty" class="comparison-frame-empty">Load a comparison to start the Spark renderer.</div>
           </div>
-          <button id="compareLeftRetry" class="quiet-button wide" type="button" hidden>Retry left renderer</button>
+          <button id="compareLeftRetry" class="quiet-button wide" type="button" data-reachable-when="the left comparison renderer fails" hidden>Retry left renderer</button>
           <div id="compareLeftEvidence" class="comparison-evidence"></div>
         </article>
 
@@ -1278,7 +1278,7 @@
             <iframe id="compareRightFrame" title="Right spatial version" allow="fullscreen" allowfullscreen hidden></iframe>
             <div id="compareRightEmpty" class="comparison-frame-empty">Load a comparison to start the Spark renderer.</div>
           </div>
-          <button id="compareRightRetry" class="quiet-button wide" type="button" hidden>Retry right renderer</button>
+          <button id="compareRightRetry" class="quiet-button wide" type="button" data-reachable-when="the right comparison renderer fails" hidden>Retry right renderer</button>
           <div id="compareRightEvidence" class="comparison-evidence"></div>
         </article>
       </div>

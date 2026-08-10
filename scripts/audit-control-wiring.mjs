@@ -72,6 +72,15 @@ for (const entryPoint of entryPoints) {
           `${entryPoint.html}:${lineAt(html, buttonMatch.index ?? 0)} button #${attributes.id} is not referenced by its client entry point`,
         );
       }
+      if (
+        "hidden" in attributes &&
+        !attributes["data-reachable-when"]?.trim() &&
+        !hiddenControlCanBecomeVisible(source, attributes.id)
+      ) {
+        failures.push(
+          `${entryPoint.html}:${lineAt(html, buttonMatch.index ?? 0)} hidden button #${attributes.id} has no reachable visible state`,
+        );
+      }
       continue;
     }
 
@@ -197,6 +206,35 @@ function hasSubmitBinding(source, id) {
   return new RegExp(
     `\\b${escapeRegExp(declaration[1])}\\.addEventListener\\(["']submit["']`,
   ).test(source);
+}
+
+function hiddenControlCanBecomeVisible(source, id) {
+  const escaped = escapeRegExp(id);
+  const directTargets = [
+    `byId(?:<[^>]+>)?\\(["']${escaped}["']\\)`,
+    `document\\.getElementById\\(["']${escaped}["']\\)`,
+    `document\\.querySelector(?:<[^>]+>)?\\(["']#${escaped}["']\\)`,
+  ];
+  const declarations = new Set();
+  for (const target of directTargets) {
+    for (const match of source.matchAll(
+      new RegExp(`(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*${target}`, "g"),
+    )) {
+      if (match[1]) declarations.add(escapeRegExp(match[1]));
+    }
+  }
+  const targets = [...directTargets, ...declarations];
+  for (const target of targets) {
+    for (const match of source.matchAll(
+      new RegExp(`(?:${target})\\.hidden\\s*=\\s*([^;\\n]+)`, "g"),
+    )) {
+      if (match[1]?.trim() !== "true") return true;
+    }
+    if (
+      new RegExp(`(?:${target})\\.removeAttribute\\(\\s*["']hidden["']\\s*\\)`).test(source)
+    ) return true;
+  }
+  return false;
 }
 
 function delegatedSelectorFor(attributes) {
