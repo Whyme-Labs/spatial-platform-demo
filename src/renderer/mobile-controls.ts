@@ -23,14 +23,10 @@ export type MobileControlState = {
 
 export type MobileControlSurfaceElements = {
   viewport: HTMLElement;
-  toggle: HTMLButtonElement;
   pad: HTMLElement;
   knob: HTMLElement;
   status: HTMLElement;
   lookHint: HTMLElement;
-  onboarding: HTMLElement;
-  onboardingStart: HTMLButtonElement;
-  onboardingDismiss: HTMLButtonElement;
 };
 
 const NEUTRAL_INPUT = {
@@ -63,22 +59,12 @@ export class MobileControlModel {
 
   setTouchCapable(touchCapable: boolean): void {
     this.current.touchCapable = touchCapable;
-    if (!touchCapable) this.deactivate();
+    this.syncActivation();
   }
 
   setReady(ready: boolean): void {
     this.current.ready = ready;
-    if (!ready) this.deactivate();
-  }
-
-  toggle(): boolean {
-    if (!this.current.touchCapable || !this.current.ready) return false;
-    if (this.current.active) {
-      this.deactivate();
-      return false;
-    }
-    this.current.active = true;
-    return true;
+    this.syncActivation();
   }
 
   beginPointer(
@@ -121,9 +107,11 @@ export class MobileControlModel {
     this.resetInput();
   }
 
-  private deactivate(): void {
-    this.current.active = false;
-    this.resetInput();
+  private syncActivation(): void {
+    const active = this.current.touchCapable && this.current.ready;
+    if (this.current.active === active) return;
+    this.current.active = active;
+    if (!active) this.resetInput();
   }
 
   private resetInput(): void {
@@ -160,31 +148,22 @@ export class MobileControlSurface {
   private readonly model = new MobileControlModel();
   private readonly elements: MobileControlSurfaceElements;
   private readonly coarsePointer: MediaQueryList;
-  private readonly storage: Pick<Storage, "getItem" | "setItem"> | null;
   private readonly onModeChange: (active: boolean) => void;
-  private readonly onOnboardingChange: (visible: boolean) => void;
   private lastReportedActive = false;
-  private lastReportedOnboarding = false;
   private disposed = false;
 
   constructor({
     elements,
     coarsePointer,
-    storage = safeLocalStorage(),
     onModeChange = () => {},
-    onOnboardingChange = () => {},
   }: {
     elements: MobileControlSurfaceElements;
     coarsePointer: MediaQueryList;
-    storage?: Pick<Storage, "getItem" | "setItem"> | null;
     onModeChange?: (active: boolean) => void;
-    onOnboardingChange?: (visible: boolean) => void;
   }) {
     this.elements = elements;
     this.coarsePointer = coarsePointer;
-    this.storage = storage;
     this.onModeChange = onModeChange;
-    this.onOnboardingChange = onOnboardingChange;
     this.model.setTouchCapable(coarsePointer.matches);
     this.bind();
     this.render();
@@ -200,9 +179,7 @@ export class MobileControlSurface {
 
   setReady(ready: boolean): void {
     this.model.setReady(ready);
-    if (!ready) this.elements.onboarding.hidden = true;
     this.render();
-    if (ready) this.offerOnboarding();
   }
 
   suspend(): void {
@@ -215,41 +192,26 @@ export class MobileControlSurface {
     this.disposed = true;
     this.model.setReady(false);
     this.render();
-    this.elements.toggle.removeEventListener("click", this.handleToggle);
     this.elements.pad.removeEventListener("pointerdown", this.handlePointerDown);
     this.elements.pad.removeEventListener("pointermove", this.handlePointerMove);
     this.elements.pad.removeEventListener("pointerup", this.handlePointerEnd);
     this.elements.pad.removeEventListener("pointercancel", this.handlePointerEnd);
     this.elements.pad.removeEventListener("lostpointercapture", this.handlePointerEnd);
-    this.elements.onboardingStart.removeEventListener("click", this.handleOnboardingStart);
-    this.elements.onboardingDismiss.removeEventListener("click", this.handleOnboardingDismiss);
     window.removeEventListener("blur", this.handleSuspend);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.coarsePointer.removeEventListener("change", this.handleCapabilityChange);
   }
 
   private bind(): void {
-    this.elements.toggle.addEventListener("click", this.handleToggle);
     this.elements.pad.addEventListener("pointerdown", this.handlePointerDown);
     this.elements.pad.addEventListener("pointermove", this.handlePointerMove);
     this.elements.pad.addEventListener("pointerup", this.handlePointerEnd);
     this.elements.pad.addEventListener("pointercancel", this.handlePointerEnd);
     this.elements.pad.addEventListener("lostpointercapture", this.handlePointerEnd);
-    this.elements.onboardingStart.addEventListener("click", this.handleOnboardingStart);
-    this.elements.onboardingDismiss.addEventListener("click", this.handleOnboardingDismiss);
     window.addEventListener("blur", this.handleSuspend);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.coarsePointer.addEventListener("change", this.handleCapabilityChange);
   }
-
-  private readonly handleToggle = (): void => {
-    this.model.toggle();
-    this.dismissOnboarding();
-    this.render();
-    if (this.model.state.active) {
-      vibrate(8);
-    }
-  };
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
     if (event.pointerType === "mouse") return;
@@ -281,20 +243,6 @@ export class MobileControlSurface {
     this.render();
   };
 
-  private readonly handleOnboardingStart = (): void => {
-    if (!this.model.state.active) this.model.toggle();
-    this.dismissOnboarding();
-    this.render();
-    this.elements.toggle.focus({ preventScroll: true });
-    vibrate(8);
-  };
-
-  private readonly handleOnboardingDismiss = (): void => {
-    this.dismissOnboarding();
-    this.render();
-    this.elements.toggle.focus({ preventScroll: true });
-  };
-
   private readonly handleSuspend = (): void => {
     this.suspend();
   };
@@ -305,9 +253,7 @@ export class MobileControlSurface {
 
   private readonly handleCapabilityChange = (event: MediaQueryListEvent): void => {
     this.model.setTouchCapable(event.matches);
-    if (!event.matches) this.elements.onboarding.hidden = true;
     this.render();
-    if (event.matches && this.model.state.ready) this.offerOnboarding();
   };
 
   private pointerInput(event: PointerEvent): {
@@ -325,10 +271,6 @@ export class MobileControlSurface {
 
   private render(): void {
     const state = this.model.state;
-    this.elements.toggle.hidden = !state.touchCapable;
-    this.elements.toggle.disabled = !state.ready;
-    this.elements.toggle.setAttribute("aria-pressed", String(state.active));
-    this.elements.toggle.textContent = state.active ? "Exit roam" : "Free roam";
     this.elements.pad.hidden = !state.touchCapable || !state.active;
     this.elements.pad.setAttribute("aria-disabled", String(!state.ready));
     this.elements.status.textContent = movementDescription(state.movement);
@@ -340,38 +282,6 @@ export class MobileControlSurface {
       this.lastReportedActive = state.active;
       this.onModeChange(state.active);
     }
-    this.reportOnboarding();
-  }
-
-  private offerOnboarding(): void {
-    const state = this.model.state;
-    if (!state.touchCapable || !state.ready || state.active || this.hasSeenOnboarding()) return;
-    this.elements.onboarding.hidden = false;
-    this.reportOnboarding();
-  }
-
-  private dismissOnboarding(): void {
-    this.elements.onboarding.hidden = true;
-    try {
-      this.storage?.setItem(ONBOARDING_STORAGE_KEY, ONBOARDING_VERSION);
-    } catch {
-      // Storage can be blocked in embedded or privacy-restricted contexts.
-    }
-  }
-
-  private hasSeenOnboarding(): boolean {
-    try {
-      return this.storage?.getItem(ONBOARDING_STORAGE_KEY) === ONBOARDING_VERSION;
-    } catch {
-      return false;
-    }
-  }
-
-  private reportOnboarding(): void {
-    const visible = !this.elements.onboarding.hidden;
-    if (visible === this.lastReportedOnboarding) return;
-    this.lastReportedOnboarding = visible;
-    this.onOnboardingChange(visible);
   }
 }
 
@@ -469,14 +379,6 @@ function round(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function safeLocalStorage(): Storage | null {
-  try {
-    return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function vibrate(duration: number): void {
   try {
     navigator.vibrate?.(duration);
@@ -484,6 +386,3 @@ function vibrate(duration: number): void {
     // Haptics are optional and must never block navigation.
   }
 }
-
-const ONBOARDING_STORAGE_KEY = "spatial:mobile-controls";
-const ONBOARDING_VERSION = "v1";

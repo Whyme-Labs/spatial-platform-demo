@@ -206,10 +206,6 @@ button {
   content: "↺";
 }
 
-.spark-controls #freeRoamToggle::before {
-  content: "⌖";
-}
-
 .spark-controls #toggleHelp::before {
   width: 17px;
   height: 17px;
@@ -507,96 +503,6 @@ button {
   font-size: 1rem;
 }
 
-.spark-mobile-onboarding {
-  position: absolute;
-  z-index: 14;
-  right: max(12px, env(safe-area-inset-right));
-  bottom: max(12px, env(safe-area-inset-bottom));
-  width: min(370px, calc(100% - 24px));
-  max-height: calc(100dvh - 84px);
-  padding: 22px;
-  overflow-y: auto;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 22px;
-  background: rgb(12 16 18 / 94%);
-  box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
-  backdrop-filter: blur(24px);
-}
-
-.spark-onboarding-kicker {
-  color: #d4ff58;
-  font: 600 0.65rem/1 "IBM Plex Mono", ui-monospace, monospace;
-  letter-spacing: 0.14em;
-}
-
-.spark-mobile-onboarding > strong {
-  display: block;
-  max-width: 16ch;
-  margin-top: 10px;
-  font-size: 1.2rem;
-  line-height: 1.15;
-  letter-spacing: -0.025em;
-}
-
-.spark-mobile-onboarding ol {
-  display: grid;
-  margin: 20px 0;
-  padding: 0;
-  gap: 12px;
-  list-style: none;
-}
-
-.spark-mobile-onboarding li {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-}
-
-.spark-mobile-onboarding li > span {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  place-items: center;
-  border: 1px solid rgb(212 255 88 / 28%);
-  border-radius: 50%;
-  color: #d4ff58;
-  font: 600 0.66rem/1 "IBM Plex Mono", ui-monospace, monospace;
-}
-
-.spark-mobile-onboarding p {
-  margin: 3px 0 0;
-  color: #b6beb8;
-  font-size: 0.78rem;
-  line-height: 1.45;
-}
-
-.spark-mobile-onboarding b {
-  color: #f4f6f1;
-  font-weight: 650;
-}
-
-.spark-onboarding-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.spark-onboarding-actions button {
-  min-height: 46px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 13px;
-  background: transparent;
-  color: #dce2dc;
-}
-
-.spark-onboarding-actions button:first-child {
-  border-color: #d4ff58;
-  background: #d4ff58;
-  color: #12160d;
-  font-weight: 680;
-}
-
 @keyframes spark-spin {
   to {
     transform: rotate(360deg);
@@ -637,10 +543,6 @@ button {
     display: flex !important;
   }
 
-  .spark-mobile-onboarding.spark-mobile-only:not([hidden]) {
-    display: block !important;
-  }
-
   .spark-help .spark-mobile-only {
     display: block !important;
   }
@@ -667,19 +569,6 @@ button {
 
   .spark-controls #enterFullscreen {
     display: none;
-  }
-
-  .spark-controls #freeRoamToggle {
-    min-width: 82px;
-    border: 1px solid rgb(212 255 88 / 22%);
-    color: #e1f4a9;
-  }
-
-  .spark-controls #freeRoamToggle[aria-pressed="true"] {
-    border-color: #d4ff58;
-    background: #d4ff58;
-    color: #12160d;
-    font-weight: 680;
   }
 
   .spark-runtime {
@@ -716,9 +605,6 @@ button {
     font-size: 0.68rem;
   }
 
-  .spark-onboarding-actions {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (any-pointer: coarse) and (max-height: 480px) and (orientation: landscape) {

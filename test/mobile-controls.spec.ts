@@ -15,14 +15,14 @@ describe("mobile free-roam controls", () => {
       active: false,
       movement: { x: 0, z: 0 },
     });
-    expect(controls.toggle()).toBe(false);
-
     controls.setTouchCapable(true);
-    expect(controls.toggle()).toBe(false);
+    expect(controls.state.active).toBe(false);
 
     controls.setReady(true);
-    expect(controls.toggle()).toBe(true);
     expect(controls.state.active).toBe(true);
+
+    controls.setReady(false);
+    expect(controls.state.active).toBe(false);
   });
 
   it("normalises a drag into bounded walking input with a dead zone", () => {
@@ -93,6 +93,5 @@ function readyControls(): MobileControlModel {
   const controls = new MobileControlModel();
   controls.setTouchCapable(true);
   controls.setReady(true);
-  controls.toggle();
   return controls;
 }

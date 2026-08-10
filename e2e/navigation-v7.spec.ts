@@ -264,7 +264,7 @@ test.describe("v7 touch flight controls", () => {
       "Walk enabled · structural shell collision · furniture ignored",
       { timeout: 15_000 },
     );
-    await renderer.locator("#startFreeRoam").click();
+    await expect(renderer.locator("#movementPad")).toBeVisible();
     await renderer.locator("#movementModeToggle").click();
     await expect(renderer.locator("#movementModeToggle")).toHaveText("Walk");
     await expect(renderer.locator("#flightAltitudeControls")).toBeVisible();
@@ -329,7 +329,7 @@ test.describe("v7 touch flight controls", () => {
       "Walk enabled · structural shell collision · furniture ignored",
       { timeout: 15_000 },
     );
-    await renderer.locator("#startFreeRoam").click();
+    await expect(renderer.locator("#movementPad")).toBeVisible();
     await renderer.locator("#movementModeToggle").click();
     await renderer.locator("#toggleHelp").click();
     await expect(renderer.locator("#controlHelp")).toBeVisible();

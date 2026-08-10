@@ -11,10 +11,7 @@ test.describe("touch-first Spark controls", () => {
   test("presents a bounded touch control surface with an explicit loading state", async ({ page }) => {
     await page.goto("/renderer/index.html");
 
-    const freeRoam = page.getByRole("button", { name: "Free roam" });
-    await expect(freeRoam).toBeVisible();
-    await expect(freeRoam).toBeDisabled();
-    await expect(freeRoam).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
     await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
     await expect(page.locator(".spark-runtime")).toBeHidden();
     await expect(page.getByText("The spatial scene could not be rendered.", {
@@ -22,7 +19,7 @@ test.describe("touch-first Spark controls", () => {
     })).toBeVisible();
 
     const contract = await page.evaluate(() => {
-      const button = document.querySelector<HTMLElement>("#freeRoamToggle");
+      const button = document.querySelector<HTMLElement>("#toggleHelp");
       const toolbar = document.querySelector<HTMLElement>(".spark-controls");
       if (!button || !toolbar) return null;
       const buttonBounds = button.getBoundingClientRect();
@@ -41,22 +38,16 @@ test.describe("touch-first Spark controls", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });
 
-  test("onboards free roam, tracks thumb movement, and always releases to neutral", async ({ page }) => {
+  test("keeps free roam active while thumb movement always releases to neutral", async ({ page }) => {
     await page.goto("/renderer/index.html");
     await page.evaluate(() => {
       window.dispatchEvent(new Event("spatial:e2e-mobile-controls-ready"));
     });
 
-    const freeRoam = page.locator("#freeRoamToggle");
     const joystick = page.getByRole("group", { name: "Movement joystick" });
     const movementStatus = page.locator("#movementStatus");
-    await expect(freeRoam).toBeEnabled();
-    await expect(page.getByRole("dialog", { name: "Explore without learning game controls." }))
-      .toBeVisible();
-
-    await page.getByRole("button", { name: "Try Free roam" }).click();
-    await expect(freeRoam).toHaveAttribute("aria-pressed", "true");
-    await expect(freeRoam).toHaveText("Exit roam");
+    await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
+    await expect(page.locator("#mobileOnboarding")).toHaveCount(0);
     await expect(joystick).toBeVisible();
     await expect(page.getByText("Drag scene to look")).toBeVisible();
     await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
@@ -93,6 +84,8 @@ test.describe("touch-first Spark controls", () => {
       }));
     });
     await expect(movementStatus).toHaveText("Stopped");
+    await expect(joystick).toBeVisible();
+    await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
     await expect(page.locator("#movementKnob")).toHaveCSS("transform", "matrix(1, 0, 0, 1, 0, 0)");
 
     await joystick.evaluate((element) => {
@@ -129,11 +122,8 @@ test.describe("touch-first Spark controls", () => {
       }));
     });
     await expect(movementStatus).toHaveText("Stopped");
-
-    await freeRoam.click();
-    await expect(freeRoam).toHaveAttribute("aria-pressed", "false");
-    await expect(joystick).toBeHidden();
-    await expect(page.locator("#sparkViewport")).not.toHaveClass(/free-roam-active/);
+    await expect(joystick).toBeVisible();
+    await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
   });
 
   test("blocks releases without the required walking map", async ({
@@ -163,13 +153,8 @@ test.describe("touch-first Spark controls", () => {
       }));
     });
 
-    const walkingRequired = page.getByRole("button", { name: "Walking required" });
-    await expect(walkingRequired).toBeVisible();
-    await expect(walkingRequired).toBeDisabled();
-    await expect(walkingRequired).toHaveAttribute(
-      "title",
-      "This scene is blocked until its walking map is available",
-    );
+    await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 
     await page.getByRole("button", { name: "Controls" }).click();
     await expect(page.locator("#mobileMovementHelp")).toHaveText(
@@ -185,7 +170,7 @@ test("does not add game controls for a fine-pointer desktop viewer", async ({ pa
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/renderer/index.html");
 
-  await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
+  await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 });
 
@@ -287,7 +272,7 @@ test("rejects a partial walking runtime without exposing mesh jargon", async ({ 
     "This scene has no approved walking map and cannot be viewed.",
   );
   await expect(status).not.toContainText("triangles");
-  await expect(page.getByRole("button", { name: "Free roam" })).toBeHidden();
+  await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
   const controlsButton = page.getByRole("button", { name: "Controls" });
   await expect(controlsButton).toBeVisible();
   await expect(page.getByRole("button", { name: "Full screen" })).toBeVisible();

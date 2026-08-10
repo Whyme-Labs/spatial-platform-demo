@@ -148,11 +148,6 @@ type RendererMessage =
     }
   | {
       source: "spatial-spark";
-      type: "control-onboarding";
-      visible: boolean;
-    }
-  | {
-      source: "spatial-spark";
       type: "control-help";
       visible: boolean;
       height: number;
@@ -195,7 +190,6 @@ const helpPanel = byId<HTMLElement>("controlHelp");
 const sparkViewport = byId<HTMLElement>("sparkViewport");
 const fullscreenButton = byId<HTMLButtonElement>("enterFullscreen");
 const controlStatus = byId<HTMLElement>("controlStatus");
-const freeRoamToggle = byId<HTMLButtonElement>("freeRoamToggle");
 const mobileMovementHelp = byId<HTMLElement>("mobileMovementHelp");
 const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
 const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
@@ -208,14 +202,10 @@ const mobileControls = new MobileControlSurface({
   coarsePointer: matchMedia("(any-pointer: coarse)"),
   elements: {
     viewport: sparkViewport,
-    toggle: freeRoamToggle,
     pad: byId("movementPad"),
     knob: byId("movementKnob"),
     status: byId("movementStatus"),
     lookHint: byId("mobileLookHint"),
-    onboarding: byId("mobileOnboarding"),
-    onboardingStart: byId<HTMLButtonElement>("startFreeRoam"),
-    onboardingDismiss: byId<HTMLButtonElement>("dismissMobileOnboarding"),
   },
   onModeChange: (active) => {
     post({
@@ -224,13 +214,6 @@ const mobileControls = new MobileControlSurface({
       mode: active ? "free-roam" : "orbit",
     });
     updateMovementModeChrome();
-  },
-  onOnboardingChange: (visible) => {
-    post({
-      source: "spatial-spark",
-      type: "control-onboarding",
-      visible,
-    });
   },
 });
 
@@ -1471,16 +1454,10 @@ function setMovementAvailability(
   controls.setTranslationEnabled(available);
   controls.setNavigationBounds(available && !collisionDrivenMovement ? walkableBoxes : []);
   mobileControls.setReady(available && readySent);
-  freeRoamToggle.textContent = available
-    ? (mobileControls.active ? "Exit roam" : "Free roam")
-    : "Walking required";
-  freeRoamToggle.title = available
-    ? "Enable touch-friendly movement"
-    : "This scene is blocked until its walking map is available";
   mobileMovementHelp.textContent = available
     ? collisionDrivenMovement && movementMode === "fly"
-      ? "Drag to look · use Free roam to fly · Rise and Lower change altitude"
-      : "Drag to look · use the Free roam joystick to move"
+      ? "Drag to look · fly with the joystick · Rise and Lower change altitude"
+      : "Drag to look · move with the left-thumb joystick"
     : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
     ? collisionDrivenMovement && movementMode === "fly"

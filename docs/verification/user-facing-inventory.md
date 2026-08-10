@@ -892,9 +892,9 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | src/client/studio.ts:open:15095 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:15095 | CONTROL-A |
 | src/client/studio.ts:remove:15102 | button | remove | generated/global | src/client/studio.ts:15102 | CONTROL-A |
 | src/client/studio.ts:verify:15157 | button | verify | generated/global | src/client/studio.ts:15157 | CONTROL-A |
-| src/client/viewer.ts:button:969 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:969 | CONTROL-A |
-| src/client/viewer.ts:button:1000 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1000 | CONTROL-A |
-| src/client/viewer.ts:button:1079 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1079 | CONTROL-A |
+| src/client/viewer.ts:button:959 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:959 | CONTROL-A |
+| src/client/viewer.ts:button:990 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:990 | CONTROL-A |
+| src/client/viewer.ts:button:1069 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1069 | CONTROL-A |
 
 ## Persisted states
 

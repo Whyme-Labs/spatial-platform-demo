@@ -897,7 +897,8 @@ form[aria-busy="true"] .dialog-close {
   .viewport.renderer-help-open .viewer-hud { display:none; }
   .review-panel { top:auto; bottom:12px; left:12px; width:calc(100% - 24px); max-height:58%; }
   .spatial-navigator,.release-info-details { max-height:calc(100dvh - 250px); }
-  .viewport.mobile-controls-onboarding .navigator-trigger { display:none; }
+  .viewport.mobile-free-roam-active .navigator-trigger,
+  .viewport.mobile-free-roam-active .spatial-navigator { display:none; }
   .review-summary,.plan-grid { grid-template-columns:1fr; }
   .hosting-row,.review-line { align-items:flex-start; flex-direction:column; }
   .domain-row-heading { flex-direction:column; }

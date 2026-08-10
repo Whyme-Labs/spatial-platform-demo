@@ -243,11 +243,6 @@ type SparkRendererMessage =
     }
   | {
       source: "spatial-spark";
-      type: "control-onboarding";
-      visible: boolean;
-    }
-  | {
-      source: "spatial-spark";
       type: "control-help";
       visible: boolean;
       height: number;
@@ -415,7 +410,6 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   armLoadingWatchdog();
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
-  byId("viewport").classList.remove("mobile-controls-onboarding");
   byId("viewport").classList.remove("renderer-help-open");
   byId<HTMLElement>("viewport").style.removeProperty("--renderer-help-height");
   errorPanel.hidden = true;
@@ -523,10 +517,6 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     byId("viewport").classList.toggle("mobile-free-roam-active", message.mode === "free-roam");
     return;
   }
-  if (message.source === "spatial-spark" && message.type === "control-onboarding") {
-    byId("viewport").classList.toggle("mobile-controls-onboarding", message.visible);
-    return;
-  }
   if (message.type === "control-help") {
     const viewport = byId<HTMLElement>("viewport");
     const helpHeight = Number.isFinite(message.height)
@@ -589,7 +579,7 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
-      type === "control-onboarding" || type === "control-help" ||
+      type === "control-help" ||
       type === "authored-traversal-state" || type === "dynamic-barrier-state");
 }
 
@@ -1543,7 +1533,6 @@ function showError(title: string, message: string): void {
   loadingWatchdogAtMs = null;
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
-  byId("viewport").classList.remove("mobile-controls-onboarding");
   byId("viewport").classList.remove("renderer-help-open");
   byId<HTMLElement>("viewport").style.removeProperty("--renderer-help-height");
   setLoading(false);
