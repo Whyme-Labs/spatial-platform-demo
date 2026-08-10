@@ -18074,11 +18074,11 @@ async function projectCustomFieldValues(
     JOIN project_custom_field_definitions d
       ON d.id = v.field_id AND d.organisation_id = v.organisation_id
     WHERE v.organisation_id = ?
-      AND v.project_id IN (${uniqueProjectIds.map(() => "?").join(", ")})
+      AND v.project_id IN (SELECT value FROM json_each(?))
     ORDER BY d.sort_order, d.key
   `).bind(
     organisationId,
-    ...uniqueProjectIds,
+    JSON.stringify(uniqueProjectIds),
   ).all<{ project_id: string; key: string; value_json: string }>();
   for (const row of result.results) {
     const projectValues = values.get(row.project_id) ?? {};
