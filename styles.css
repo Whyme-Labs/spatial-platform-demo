@@ -15,7 +15,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-[hidden] { display: none !important; }
+html [hidden] { display: none !important; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
 body { overflow-x: hidden; }
 button, input, textarea, select { font: inherit; }
@@ -479,6 +479,8 @@ form[aria-busy="true"] .dialog-close {
 .form-advanced-settings[open] > summary::after { content:"−"; }
 .form-advanced-settings > :not(summary) { margin-left:14px;margin-right:14px; }
 .form-advanced-settings > .mock-form-grid { margin-top:4px;margin-bottom:14px; }
+.generated-readback { display:grid;gap:7px;margin-top:14px;color:var(--muted);font-size:11px; }
+.generated-readback textarea { width:100%;min-height:76px;background:#0f110f;border:1px solid var(--line);color:var(--text);border-radius:12px;padding:12px;resize:none; }
 .capture-file-field input[type="file"] { padding:12px;border:1px dashed var(--line-strong);border-radius:12px;background:#101210; }
 .capture-intake-progress { margin:18px 0;padding:0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;list-style:none; }
 .capture-intake-progress li { min-width:0;padding:10px 12px;display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:11px;color:var(--muted);font-size:11px;font-weight:600; }

@@ -246,7 +246,7 @@ describe("capture adapter evidence ingestion", () => {
       .toBe(verifiedSha256);
   });
 
-  it("attaches registered geometry to the visual version and queues floor-plan generation automatically", async () => {
+  it("qualifies paired PLY coordinates and queues floor-plan generation when geometry finishes first", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
       method: "POST",
@@ -266,7 +266,10 @@ describe("capture adapter evidence ingestion", () => {
       format: string;
       purpose: string;
       targetVersionId?: string;
-      captureJourney?: { id: string; sameFrameConfirmed: true };
+      captureJourney?: {
+        id: string;
+        qualification: "automatic-ply-coordinate-evidence-v1";
+      };
     }) => {
       const created = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
         method: "POST",
@@ -310,13 +313,50 @@ describe("capture adapter evidence ingestion", () => {
 
     const captureJourney = {
       id: crypto.randomUUID(),
-      sameFrameConfirmed: true as const,
+      qualification: "automatic-ply-coordinate-evidence-v1" as const,
     };
+    const binaryPly = (points: Array<[number, number, number]>) => {
+      const header = [
+        "ply",
+        "format binary_little_endian 1.0",
+        "comment spatial_studio_coordinate_frame scanner-run-42",
+        "comment spatial_studio_up_axis Y",
+        "comment spatial_studio_units metres",
+        `element vertex ${points.length}`,
+        "property float x",
+        "property float y",
+        "property float z",
+        "end_header",
+        "",
+      ].join("\n");
+      const headerBytes = new TextEncoder().encode(header);
+      const bytes = new Uint8Array(headerBytes.byteLength + points.length * 12);
+      bytes.set(headerBytes);
+      const view = new DataView(bytes.buffer);
+      points.forEach((point, pointIndex) => point.forEach((value, axis) => {
+        view.setFloat32(headerBytes.byteLength + pointIndex * 12 + axis * 4, value, true);
+      }));
+      return bytes;
+    };
+    const coordinateEvidence = (bounds: {
+      min: [number, number, number];
+      max: [number, number, number];
+    }) => ({
+      schemaVersion: "ply-coordinate-evidence-v1",
+      method: "automatic-ply-coordinate-evidence-v1",
+      coordinateFrameId: "scanner-run-42",
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      vertexCount: 2,
+      finitePointCount: 2,
+      bounds,
+    });
+    const visualBytes = binaryPly([[0, 0, 0], [10, 3, 8]]);
     const visual = await uploadBytes({
-      bytes: new Uint8Array([0x52, 0x41, 0x44, 0x01]),
-      fileName: "capture.rad",
-      format: "rad",
-      purpose: "web_scene",
+      bytes: visualBytes,
+      fileName: "capture.ply",
+      format: "ply",
+      purpose: "gaussian_splat",
       captureJourney,
     });
     const unpairedGeometry = await exports.default.fetch(
@@ -344,9 +384,7 @@ describe("capture adapter evidence ingestion", () => {
         )],
       },
     });
-    const metricBytes = new TextEncoder().encode(
-      "ply\nformat ascii 1.0\nelement vertex 1\nproperty float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n",
-    );
+    const metricBytes = binaryPly([[1, 0, 1], [9, 2.5, 7]]);
     const geometry = await uploadBytes({
       bytes: metricBytes,
       fileName: "registered-room.ply",
@@ -363,60 +401,99 @@ describe("capture adapter evidence ingestion", () => {
     `).bind(visual.upload.versionId).first<{ source_provenance_json: string }>();
     expect(JSON.parse(pairedVersion?.source_provenance_json ?? "{}")).toMatchObject({
       captureJourney: {
-        schemaVersion: "paired-capture-journey-v1",
+        schemaVersion: "paired-capture-journey-v2",
         id: captureJourney.id,
         captureAdapter: "xgrids-lcc",
         primaryAssetId: visual.upload.assetId,
         geometryAssetId: geometry.upload.assetId,
         declaration: "same-capture-registered-y-up-metres",
         sourceCoordinateFrameId: `capture-journey:${captureJourney.id}`,
+        qualification: {
+          method: "automatic-ply-coordinate-evidence-v1",
+          status: "pending",
+        },
       },
     });
 
-    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        workerId: `automatic-floorplan-${crypto.randomUUID()}`,
-        jobId: geometry.completion.job.id,
-      }),
-    });
-    expect(leaseResponse.status).toBe(200);
-    const lease = await leaseResponse.json<{ leaseToken: string }>();
-    const verifiedSha256 = await crypto.subtle.digest("SHA-256", metricBytes)
-      .then((hash) => Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""));
-    const workerComplete = await exports.default.fetch(
-      `${origin}/api/worker/jobs/${geometry.completion.job.id}/complete`,
-      {
+    const completeJob = async (input: {
+      jobId: string;
+      bytes: Uint8Array;
+      bounds: { min: [number, number, number]; max: [number, number, number] };
+    }) => {
+      const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${env.WORKER_API_TOKEN}`,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          leaseToken: lease.leaseToken,
-          progressMessage: "Registered geometry verified",
-          outputs: [],
-          report: { source: { sha256: verifiedSha256 } },
-          evidence: {
-            processorVersion: "spatial-evidence/1.0.0",
-            computeDurationMs: 10,
-            activeHumanDurationMs: 0,
-            inputBytes: metricBytes.byteLength,
-            outputBytes: 0,
-            toolVersions: { processor: "test" },
-          },
+          workerId: `automatic-floorplan-${crypto.randomUUID()}`,
+          jobId: input.jobId,
         }),
-      },
-    );
-    expect(workerComplete.status).toBe(200);
-    const completed = await workerComplete.json<{
+      });
+      expect(leaseResponse.status).toBe(200);
+      const lease = await leaseResponse.json<{ leaseToken: string }>();
+      const sha256 = await crypto.subtle.digest("SHA-256", input.bytes)
+        .then((hash) => Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join(""));
+      const response = await exports.default.fetch(
+        `${origin}/api/worker/jobs/${input.jobId}/complete`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            leaseToken: lease.leaseToken,
+            progressMessage: "Coordinate evidence verified",
+            outputs: [],
+            report: { source: { sha256, coordinateEvidence: coordinateEvidence(input.bounds) } },
+            evidence: {
+              processorVersion: "spatial-evidence/1.0.0",
+              computeDurationMs: 10,
+              activeHumanDurationMs: 0,
+              inputBytes: input.bytes.byteLength,
+              outputBytes: 0,
+              toolVersions: { processor: "test" },
+            },
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
+      return response.json<{
+        automaticFloorplan: { id: string; jobId: string; status: string } | null;
+      }>();
+    };
+
+    const geometryCompletion = await completeJob({
+      jobId: geometry.completion.job.id,
+      bytes: metricBytes,
+      bounds: { min: [1, 0, 1], max: [9, 2.5, 7] },
+    });
+    expect(geometryCompletion.automaticFloorplan).toBeNull();
+    const completed = await completeJob({
+      jobId: visual.completion.job.id,
+      bytes: visualBytes,
+      bounds: { min: [0, 0, 0], max: [10, 3, 8] },
+    }) as {
       automaticFloorplan: { id: string; jobId: string; status: string };
-    }>();
+    };
     expect(completed.automaticFloorplan).toMatchObject({ status: "QUEUED" });
+    const qualifiedVersion = await env.DB.prepare(`
+      SELECT source_provenance_json
+      FROM scene_versions
+      WHERE id = ?
+    `).bind(visual.upload.versionId).first<{ source_provenance_json: string }>();
+    expect(JSON.parse(qualifiedVersion?.source_provenance_json ?? "{}")).toMatchObject({
+      captureJourney: {
+        qualification: {
+          method: "automatic-ply-coordinate-evidence-v1",
+          status: "verified",
+          coordinateFrameId: "scanner-run-42",
+          overlapBounds: { min: [1, 0, 1], max: [9, 2.5, 7] },
+        },
+      },
+    });
     const automatic = await env.DB.prepare(`
       SELECT r.status, r.parameters_json, j.state, j.job_type
       FROM floorplan_extraction_runs r
@@ -435,12 +512,110 @@ describe("capture adapter evidence ingestion", () => {
     });
     expect(JSON.parse(automatic!.parameters_json)).toMatchObject({
       automaticPipeline: true,
+      structureWorkflow: "automatic-extract-review",
       coordinateAssurance: "registered_y_up_metric_frame",
+    });
+
+    const failingJourney = {
+      id: crypto.randomUUID(),
+      qualification: "automatic-ply-coordinate-evidence-v1" as const,
+    };
+    const failingVisualBytes = binaryPly([[0, 0, 0], [4, 2, 4]]);
+    const failingVisual = await uploadBytes({
+      bytes: failingVisualBytes,
+      fileName: "failed-capture.ply",
+      format: "ply",
+      purpose: "gaussian_splat",
+      captureJourney: failingJourney,
+    });
+    const failingGeometryBytes = binaryPly([[1, 0, 1], [3, 1.5, 3]]);
+    const failingGeometry = await uploadBytes({
+      bytes: failingGeometryBytes,
+      fileName: "failed-geometry.ply",
+      format: "ply",
+      purpose: "metric_point_cloud",
+      targetVersionId: failingVisual.upload.versionId,
+      captureJourney: failingJourney,
+    });
+    await completeJob({
+      jobId: failingGeometry.completion.job.id,
+      bytes: failingGeometryBytes,
+      bounds: { min: [1, 0, 1], max: [3, 1.5, 3] },
+    });
+    const failingLeaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: `automatic-floorplan-failure-${crypto.randomUUID()}`,
+        jobId: failingVisual.completion.job.id,
+      }),
+    });
+    expect(failingLeaseResponse.status).toBe(200);
+    const failingLease = await failingLeaseResponse.json<{ leaseToken: string }>();
+    const failureResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${failingVisual.completion.job.id}/fail`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          leaseToken: failingLease.leaseToken,
+          code: "PLY_COORDINATE_READ_FAILED",
+          message: "The visual PLY coordinate stream could not be read",
+          retryable: false,
+          failureClass: "input_validation",
+        }),
+      },
+    );
+    expect(failureResponse.status).toBe(200);
+    const failedVersion = await env.DB.prepare(`
+      SELECT source_provenance_json
+      FROM scene_versions
+      WHERE id = ?
+    `).bind(failingVisual.upload.versionId).first<{ source_provenance_json: string }>();
+    expect(JSON.parse(failedVersion?.source_provenance_json ?? "{}")).toMatchObject({
+      captureJourney: {
+        qualification: {
+          method: "automatic-ply-coordinate-evidence-v1",
+          status: "blocked",
+          reason: expect.stringContaining("visual PLY"),
+        },
+      },
+    });
+    const retryResponse = await exports.default.fetch(
+      `${origin}/api/jobs/${failingVisual.completion.job.id}/retry`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(retryResponse.status).toBe(200);
+    const recovered = await completeJob({
+      jobId: failingVisual.completion.job.id,
+      bytes: failingVisualBytes,
+      bounds: { min: [0, 0, 0], max: [4, 2, 4] },
+    });
+    expect(recovered.automaticFloorplan).toMatchObject({ status: "QUEUED" });
+    const recoveredVersion = await env.DB.prepare(`
+      SELECT source_provenance_json
+      FROM scene_versions
+      WHERE id = ?
+    `).bind(failingVisual.upload.versionId).first<{ source_provenance_json: string }>();
+    expect(JSON.parse(recoveredVersion?.source_provenance_json ?? "{}")).toMatchObject({
+      captureJourney: {
+        qualification: {
+          method: "automatic-ply-coordinate-evidence-v1",
+          status: "verified",
+          coordinateFrameId: "scanner-run-42",
+        },
+      },
     });
     const versionCount = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM scene_versions WHERE project_id = ?",
     ).bind(project.id).first<{ count: number }>();
-    expect(versionCount?.count).toBe(1);
+    expect(versionCount?.count).toBe(2);
   });
 
   it("binds an authored SOG opening camera to the immutable version and processor lease", async () => {

@@ -7,6 +7,7 @@ import { Earcut } from "three/src/extras/Earcut.js";
 import { buildAuthoredStructuralCollisionGlb } from "../../scripts/authored-collision.mjs";
 // @ts-expect-error JavaScript pipeline modules intentionally expose a stable ESM API.
 import { structuralCollisionConfigFromReviewPlan } from "../../scripts/automatic-spatial-pipeline.mjs";
+import { qualifyPairedPlyCoordinateEvidence } from "../../scripts/capture-compatibility-core.mjs";
 import {
   manualJobCompletionSchema,
   customDomainSchema,
@@ -58,6 +59,7 @@ import {
   navigationProfileSchema,
   navigationBuildSchema,
   navigationBuildReviewSchema,
+  navigationWalkTestSchema,
   navigationTraversalCreateSchema,
   navigationTraversalUpdateSchema,
   navigationArtifactSchema,
@@ -177,12 +179,28 @@ import {
 } from "../shared/capture-registration";
 import {
   bindPairedCaptureGeometry,
+  AUTOMATIC_PAIRED_CAPTURE_METHOD,
+  ATTESTED_PAIRED_CAPTURE_METHOD,
   createPairedCaptureJourney,
+  pairedCaptureJourneyIsVerified,
   pairedCaptureIdentityTransform,
   parsePairedCaptureJourney,
+  parsePlyCoordinateEvidenceReceipt,
+  setPairedCaptureAutomaticQualification,
   type PairedCaptureJourney,
+  type PlyCoordinateEvidence,
 } from "../shared/paired-capture-journey";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
+import {
+  parseProjectWorkflowPolicy,
+  projectPolicyForDeliveryTemplate,
+  structureWorkflowAllowsAutomaticProposal,
+  type ProjectWorkflowPolicy,
+} from "../shared/project-policies";
+import {
+  parseMeasurementGrade,
+  publicationMeasurementDisclaimer,
+} from "../shared/measurement-disclaimers";
 import {
   CloudflareSaasError,
   createCloudflareCustomHostname,
@@ -240,6 +258,8 @@ type ProjectRow = {
   latest_version_number: number | null;
   active_release_slug: string | null;
   archived_from_status: string | null;
+  project_template_id: string | null;
+  workflow_policy_json: string;
 };
 
 type ProjectCustomFieldType = "text" | "number" | "boolean" | "date" | "select" | "url";
@@ -383,6 +403,7 @@ type ProjectTemplateRow = {
   capture_adapter: string;
   delivery_template: string;
   notes: string | null;
+  policy_json: string;
   client_operation_id: string | null;
   request_hash: string | null;
   created_at: string;
@@ -2680,7 +2701,7 @@ app.get("/api/project-templates", async (context) => {
   const result = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-      delivery_template, notes, client_operation_id, request_hash,
+      delivery_template, notes, policy_json, client_operation_id, request_hash,
       created_at, updated_at
     FROM project_templates
     WHERE organisation_id = ?
@@ -2701,7 +2722,7 @@ app.post("/api/project-templates", async (context) => {
   const prior = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-      delivery_template, notes, client_operation_id, request_hash,
+      delivery_template, notes, policy_json, client_operation_id, request_hash,
       created_at, updated_at
     FROM project_templates
     WHERE organisation_id = ? AND client_operation_id = ?
@@ -2722,8 +2743,8 @@ app.post("/api/project-templates", async (context) => {
   await context.env.DB.prepare(`
     INSERT INTO project_templates
       (id, organisation_id, name, description, capture_adapter, capture_adapter_v2,
-        delivery_template, notes, client_operation_id, request_hash, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        delivery_template, notes, policy_json, client_operation_id, request_hash, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     templateId,
     auth.organisationId,
@@ -2733,6 +2754,7 @@ app.post("/api/project-templates", async (context) => {
     parsed.data.captureAdapter,
     parsed.data.deliveryTemplate,
     parsed.data.notes ?? null,
+    JSON.stringify(parsed.data.policy ?? projectPolicyForDeliveryTemplate(parsed.data.deliveryTemplate)),
     parsed.data.clientOperationId,
     requestHash,
     auth.userId,
@@ -2740,7 +2762,7 @@ app.post("/api/project-templates", async (context) => {
   const created = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-      delivery_template, notes, client_operation_id, request_hash,
+      delivery_template, notes, policy_json, client_operation_id, request_hash,
       created_at, updated_at
     FROM project_templates WHERE id = ? AND organisation_id = ?
   `).bind(templateId, auth.organisationId).first<ProjectTemplateRow>();
@@ -2760,7 +2782,7 @@ app.patch("/api/project-templates/:templateId", async (context) => {
   const template = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-      delivery_template, notes, client_operation_id, request_hash,
+      delivery_template, notes, policy_json, client_operation_id, request_hash,
       created_at, updated_at
     FROM project_templates WHERE id = ? AND organisation_id = ?
   `).bind(context.req.param("templateId"), auth.organisationId).first<ProjectTemplateRow>();
@@ -2775,7 +2797,7 @@ app.patch("/api/project-templates/:templateId", async (context) => {
   await context.env.DB.prepare(`
     UPDATE project_templates
     SET name = ?, description = ?, capture_adapter = ?, capture_adapter_v2 = ?,
-      delivery_template = ?, notes = ?, updated_at = datetime('now')
+      delivery_template = ?, notes = ?, policy_json = ?, updated_at = datetime('now')
     WHERE id = ? AND organisation_id = ?
   `).bind(
     parsed.data.name ?? template.name,
@@ -2784,13 +2806,18 @@ app.patch("/api/project-templates/:templateId", async (context) => {
     parsed.data.captureAdapter ?? template.capture_adapter,
     parsed.data.deliveryTemplate ?? template.delivery_template,
     parsed.data.notes === undefined ? template.notes : parsed.data.notes,
+    JSON.stringify(parsed.data.policy ?? (
+      parsed.data.deliveryTemplate
+        ? projectPolicyForDeliveryTemplate(parsed.data.deliveryTemplate)
+        : projectWorkflowPolicy(template)
+    )),
     template.id,
     auth.organisationId,
   ).run();
   const updated = await context.env.DB.prepare(`
     SELECT id, organisation_id, name, description,
       COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-      delivery_template, notes, client_operation_id, request_hash,
+      delivery_template, notes, policy_json, client_operation_id, request_hash,
       created_at, updated_at
     FROM project_templates WHERE id = ? AND organisation_id = ?
   `).bind(template.id, auth.organisationId).first<ProjectTemplateRow>();
@@ -4100,6 +4127,28 @@ app.post("/api/projects", async (context) => {
   if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = projectInputSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const selectedTemplate = parsed.data.projectTemplateId
+    ? await context.env.DB.prepare(`
+      SELECT id, organisation_id, name, description,
+        COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
+        delivery_template, notes, policy_json, client_operation_id, request_hash,
+        created_at, updated_at
+      FROM project_templates
+      WHERE id = ? AND organisation_id = ?
+    `).bind(parsed.data.projectTemplateId, auth.organisationId).first<ProjectTemplateRow>()
+    : null;
+  if (parsed.data.projectTemplateId && !selectedTemplate) {
+    return validationError(context, {
+      projectTemplateId: ["Project template does not exist in this organisation"],
+    });
+  }
+  const effectiveCaptureAdapter = selectedTemplate?.capture_adapter as CaptureAdapterId | undefined ??
+    parsed.data.captureAdapter;
+  const effectiveDeliveryTemplate = selectedTemplate?.delivery_template ?? parsed.data.deliveryTemplate;
+  const effectiveNotes = parsed.data.notes ?? selectedTemplate?.notes ?? null;
+  const workflowPolicy = selectedTemplate
+    ? projectWorkflowPolicy(selectedTemplate)
+    : projectPolicyForDeliveryTemplate(effectiveDeliveryTemplate);
   const customFieldResult = await validateProjectCustomFieldValues(
     context.env.DB,
     auth.organisationId,
@@ -4113,16 +4162,18 @@ app.post("/api/projects", async (context) => {
     name: parsed.data.name,
     customerName: parsed.data.customerName ?? null,
     customerEmail: parsed.data.customerEmail ?? null,
-    captureAdapter: parsed.data.captureAdapter,
-    deliveryTemplate: parsed.data.deliveryTemplate,
-    notes: parsed.data.notes ?? null,
+    projectTemplateId: selectedTemplate?.id ?? null,
+    captureAdapter: effectiveCaptureAdapter,
+    deliveryTemplate: effectiveDeliveryTemplate,
+    notes: effectiveNotes,
+    workflowPolicy,
     customFields: JSON.parse(canonicalCustomFields(customFieldResult.values)),
   }));
   if (parsed.data.clientOperationId) {
     const existing = await context.env.DB.prepare(`
       SELECT id, slug, status, name,
         COALESCE(capture_adapter_v2, capture_adapter) AS capture_adapter,
-        delivery_template, create_request_hash
+        delivery_template, create_request_hash, project_template_id, workflow_policy_json
       FROM projects
       WHERE organisation_id = ? AND client_operation_id = ?
     `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
@@ -4133,6 +4184,8 @@ app.post("/api/projects", async (context) => {
       capture_adapter: string;
       delivery_template: string;
       create_request_hash: string | null;
+      project_template_id: string | null;
+      workflow_policy_json: string;
     }>();
     if (existing) {
       const existingCustomFields = await projectCustomFieldValues(
@@ -4142,8 +4195,10 @@ app.post("/api/projects", async (context) => {
       );
       const legacyConflict =
         existing.name !== parsed.data.name ||
-        existing.capture_adapter !== parsed.data.captureAdapter ||
-        existing.delivery_template !== parsed.data.deliveryTemplate ||
+        existing.capture_adapter !== effectiveCaptureAdapter ||
+        existing.delivery_template !== effectiveDeliveryTemplate ||
+        existing.project_template_id !== (selectedTemplate?.id ?? null) ||
+        JSON.stringify(projectWorkflowPolicy(existing)) !== JSON.stringify(workflowPolicy) ||
         canonicalCustomFields(existingCustomFields.get(existing.id) ?? {}) !==
           canonicalCustomFields(customFieldResult.values);
       if (
@@ -4158,7 +4213,14 @@ app.post("/api/projects", async (context) => {
           id: existing.id,
           slug: existing.slug,
           status: existing.status,
-          ...parsed.data,
+          name: parsed.data.name,
+          customerName: parsed.data.customerName,
+          customerEmail: parsed.data.customerEmail,
+          captureAdapter: effectiveCaptureAdapter,
+          deliveryTemplate: effectiveDeliveryTemplate,
+          notes: effectiveNotes,
+          projectTemplateId: selectedTemplate?.id ?? null,
+          workflowPolicy,
           customFields: customFieldResult.values,
         },
         idempotent: true,
@@ -4190,18 +4252,21 @@ app.post("/api/projects", async (context) => {
       INSERT INTO projects
         (id, organisation_id, customer_id, name, slug, status,
           capture_adapter, capture_adapter_v2, delivery_template, notes,
+          project_template_id, workflow_policy_json,
           created_by, client_operation_id, create_request_hash)
-      VALUES (?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       projectId,
       auth.organisationId,
       customerId,
       parsed.data.name,
       projectSlug,
-      legacyCaptureAdapter(parsed.data.captureAdapter),
-      parsed.data.captureAdapter,
-      parsed.data.deliveryTemplate,
-      parsed.data.notes ?? null,
+      legacyCaptureAdapter(effectiveCaptureAdapter),
+      effectiveCaptureAdapter,
+      effectiveDeliveryTemplate,
+      effectiveNotes,
+      selectedTemplate?.id ?? null,
+      JSON.stringify(workflowPolicy),
       auth.userId,
       parsed.data.clientOperationId ?? null,
       projectRequestHash,
@@ -4223,7 +4288,14 @@ app.post("/api/projects", async (context) => {
       id: projectId,
       slug: projectSlug,
       status: "DRAFT",
-      ...parsed.data,
+      name: parsed.data.name,
+      customerName: parsed.data.customerName,
+      customerEmail: parsed.data.customerEmail,
+      captureAdapter: effectiveCaptureAdapter,
+      deliveryTemplate: effectiveDeliveryTemplate,
+      notes: effectiveNotes,
+      projectTemplateId: selectedTemplate?.id ?? null,
+      workflowPolicy,
       customFields: customFieldResult.values,
     },
   }, 201);
@@ -4457,7 +4529,9 @@ app.patch("/api/projects/:projectId", async (context) => {
     context.env.DB.prepare(`
       UPDATE projects
       SET customer_id = ?, name = ?, capture_adapter = ?, capture_adapter_v2 = ?,
-        delivery_template = ?, notes = ?, updated_at = datetime('now')
+        delivery_template = ?, notes = ?,
+        project_template_id = CASE WHEN ? = 1 THEN NULL ELSE project_template_id END,
+        workflow_policy_json = ?, updated_at = datetime('now')
       WHERE id = ? AND organisation_id = ?
     `).bind(
       customerId,
@@ -4466,6 +4540,13 @@ app.patch("/api/projects/:projectId", async (context) => {
       parsed.data.captureAdapter ?? project.capture_adapter,
       parsed.data.deliveryTemplate ?? project.delivery_template,
       parsed.data.notes === undefined ? project.notes : parsed.data.notes,
+      parsed.data.deliveryTemplate !== undefined || parsed.data.captureAdapter !== undefined ||
+          parsed.data.workflowPolicy !== undefined
+        ? 1
+        : 0,
+      JSON.stringify(parsed.data.workflowPolicy ?? (parsed.data.deliveryTemplate
+        ? projectPolicyForDeliveryTemplate(parsed.data.deliveryTemplate)
+        : projectWorkflowPolicy(project))),
       project.id,
       auth.organisationId,
     ),
@@ -4582,12 +4663,24 @@ app.get("/api/projects/:projectId", async (context) => {
       ORDER BY created_at DESC
       LIMIT 50
     `).bind(projectId, auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT DISTINCT wt.version_id
+      FROM scene_navigation_walk_tests wt
+      JOIN scene_navigation_builds nb
+        ON nb.id = wt.navigation_build_id
+        AND nb.organisation_id = wt.organisation_id
+        AND nb.project_id = wt.project_id
+        AND nb.version_id = wt.version_id
+      WHERE wt.project_id = ? AND wt.organisation_id = ?
+        AND nb.status = 'APPROVED'
+    `).bind(projectId, auth.organisationId),
   ]);
   const versions = requiredBatchResult(detailResults, 0);
   const assets = requiredBatchResult(detailResults, 1);
   const jobs = requiredBatchResult(detailResults, 2);
   const releases = requiredBatchResult(detailResults, 3);
   const captureBundles = requiredBatchResult(detailResults, 4);
+  const walkTestVersions = requiredBatchResult(detailResults, 5);
   const previewCandidateVersion = versions.results.find((version) => {
     const versionId = version && typeof version === "object"
       ? readStringProperty(version, "id")
@@ -4645,6 +4738,12 @@ app.get("/api/projects/:projectId", async (context) => {
     releases: releases.results,
     captureBundles: captureBundles.results,
     previewReadyVersionIds,
+    walkTestReadyVersionIds: walkTestVersions.results.flatMap((row) => {
+      const versionId = row && typeof row === "object"
+        ? readStringProperty(row, "version_id")
+        : null;
+      return versionId ? [versionId] : [];
+    }),
   });
 });
 
@@ -7048,6 +7147,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals: [],
     traversalEvidenceOptions: [],
     navigationBuilds: [],
+    walkTests: [],
     releaseRepublishIntents: [],
     navigationArtifact: null,
     deliveryPolicy: null,
@@ -7207,6 +7307,13 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE i.project_id = ? AND i.version_id = ? AND i.organisation_id = ?
       ORDER BY i.created_at DESC
     `).bind(access.project.id, version.id, access.auth.organisationId),
+    context.env.DB.prepare(`
+      SELECT id, navigation_build_id, start_pose_json, end_pose_json,
+        runtime_evidence_json, completed_by, completed_at
+      FROM scene_navigation_walk_tests
+      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
+      ORDER BY completed_at DESC
+    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 15).results;
@@ -7262,6 +7369,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     traversalEvidenceOptions,
     navigationBuilds,
     releaseRepublishIntents: requiredBatchResult(results, 20).results,
+    walkTests: requiredBatchResult(results, 21).results,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
@@ -7537,7 +7645,7 @@ async function pairedCaptureAuthoringRegistration(
   const journey = version
     ? storedPairedCaptureJourney(version.source_provenance_json)
     : null;
-  if (!journey?.geometryAssetId) return null;
+  if (!journey?.geometryAssetId || !pairedCaptureJourneyIsVerified(journey)) return null;
   const assets = await database.prepare(`
     SELECT id, kind, sha256, integrity_status, deleted_at
     FROM assets
@@ -7565,14 +7673,20 @@ async function pairedCaptureAuthoringRegistration(
     geometry.integrity_status !== "verified" || geometry.deleted_at ||
     !geometry.sha256 || !/^[a-f0-9]{64}$/i.test(geometry.sha256)
   ) return null;
+  const automaticQualification = journey.qualification?.method ===
+      AUTOMATIC_PAIRED_CAPTURE_METHOD &&
+      journey.qualification.status === "verified"
+    ? journey.qualification
+    : null;
   const registrationPayload = captureSceneRegistrationPayload({
     schemaVersion: CAPTURE_SCENE_REGISTRATION_SCHEMA_VERSION,
     sourceCoordinateFrameId: journey.sourceCoordinateFrameId,
     targetCoordinateFrameId: SCENE_WORLD_COORDINATE_FRAME,
     evidenceAssetId: geometry.id,
     evidenceSha256: geometry.sha256,
-    method:
-      "Operator-confirmed paired export: the visual splat and registered metric point cloud are direct exports of one capture and retain the same right-handed Y-up metre frame.",
+    method: automaticQualification
+      ? "Processor-verified paired PLY coordinates: embedded frame identity, metre scale, Y-up axis, and exact vertex bounds overlap."
+      : "Operator-attested paired export: the visual splat and registered metric point cloud are direct exports of one capture and retain the same right-handed Y-up metre frame.",
     sourceToWorld: pairedCaptureIdentityTransform,
   });
   const registrationSha256 = await sha256Hex(JSON.stringify(registrationPayload));
@@ -7587,6 +7701,11 @@ async function pairedCaptureAuthoringRegistration(
     geometryAsset: {
       id: geometry.id,
       sha256: geometry.sha256.toLowerCase(),
+    },
+    qualification: journey.qualification ?? {
+      method: ATTESTED_PAIRED_CAPTURE_METHOD,
+      status: "verified",
+      legacyReceipt: true,
     },
     registrationSha256,
   };
@@ -8354,6 +8473,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     context.req.param("projectId"),
   );
   if (!project) return notFound(context, "Project not found");
+  const workflowPolicy = parsed.data.workflowPolicy ?? projectWorkflowPolicy(project);
   const version = await context.env.DB.prepare(
     "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
@@ -8382,7 +8502,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
       "Authored traversal coordinates fix this version's world unit. Create a new version instead of relabelling them.",
     );
   }
-  const updated = await context.env.DB.prepare(`
+  const profileUpdate = context.env.DB.prepare(`
     INSERT INTO scene_navigation_profiles (
       version_id, organisation_id, project_id, world_unit, agent_radius,
       agent_height, eye_height, max_step_metres, max_slope_degrees,
@@ -8466,12 +8586,53 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     project.id,
     version.id,
     parsed.data.worldUnit,
-  ).first<{ world_unit: string }>();
-  if (!updated) {
+  );
+  const atomicUpdate = await context.env.DB.batch([
+    profileUpdate,
+    context.env.DB.prepare(`
+      UPDATE projects
+      SET workflow_policy_json = ?, project_template_id = NULL,
+        updated_at = datetime('now')
+      WHERE id = ? AND organisation_id = ?
+        AND EXISTS (
+          SELECT 1 FROM scene_navigation_profiles profile
+          WHERE profile.version_id = ? AND profile.project_id = ?
+            AND profile.organisation_id = ? AND profile.world_unit = ?
+            AND profile.agent_radius = ? AND profile.agent_height = ?
+            AND profile.eye_height = ? AND profile.max_step_metres = ?
+            AND profile.max_slope_degrees = ? AND profile.max_speed = ?
+            AND profile.max_acceleration = ?
+        )
+      RETURNING workflow_policy_json
+    `).bind(
+      JSON.stringify(workflowPolicy),
+      project.id,
+      auth.organisationId,
+      version.id,
+      project.id,
+      auth.organisationId,
+      parsed.data.worldUnit,
+      parsed.data.agentRadius,
+      parsed.data.agentHeight,
+      parsed.data.eyeHeight,
+      parsed.data.maxStepMetres,
+      parsed.data.maxSlopeDegrees,
+      parsed.data.maxSpeed,
+      parsed.data.maxAcceleration,
+    ),
+  ]);
+  const updatedProfile = requiredBatchResult(atomicUpdate, 0).results[0] as
+    | { world_unit: string }
+    | undefined;
+  const policyUpdated = requiredBatchResult(atomicUpdate, 1).results[0];
+  if (!updatedProfile) {
     return conflict(
       context,
       "This scene version already contains authored geometry or measurement evidence that fixes another unit. Create a new version instead of relabelling the existing coordinates.",
     );
+  }
+  if (!policyUpdated) {
+    throw new Error("Navigation profile and workflow policy did not commit atomically");
   }
   await audit(context, auth, "spatial.navigation_profile.update", "scene_version", version.id, {
     worldUnit: parsed.data.worldUnit,
@@ -8482,6 +8643,7 @@ app.put("/api/projects/:projectId/spatial/navigation-profile", async (context) =
     maxSlopeDegrees: parsed.data.maxSlopeDegrees,
     maxSpeed: parsed.data.maxSpeed,
     maxAcceleration: parsed.data.maxAcceleration,
+    workflowPolicy,
   });
   return context.json({
     navigationProfile: {
@@ -8930,6 +9092,85 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
       "Automatic republish stopped because the rebuilt walking map was rejected",
     );
   return context.json({ build, republishIntent });
+});
+
+app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/walk-tests", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  const parsed = navigationWalkTestSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const projectId = context.req.param("projectId");
+  const buildId = context.req.param("buildId");
+  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
+  const prior = await context.env.DB.prepare(`
+    SELECT id, navigation_build_id, request_hash, completed_at
+    FROM scene_navigation_walk_tests
+    WHERE organisation_id = ? AND client_operation_id = ?
+  `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
+    id: string;
+    navigation_build_id: string;
+    request_hash: string;
+    completed_at: string;
+  }>();
+  if (prior) {
+    if (prior.navigation_build_id !== buildId || prior.request_hash !== requestHash) {
+      return conflict(context, "Operation ID was already used for a different walk-test receipt");
+    }
+    return context.json({ walkTest: prior, idempotent: true });
+  }
+  const build = await context.env.DB.prepare(`
+    SELECT id, version_id, status, artifact_json
+    FROM scene_navigation_builds
+    WHERE id = ? AND project_id = ? AND organisation_id = ?
+  `).bind(buildId, projectId, auth.organisationId).first<{
+    id: string;
+    version_id: string;
+    status: string;
+    artifact_json: string | null;
+  }>();
+  if (!build) return notFound(context, "Navigation build not found");
+  if (
+    build.status !== "APPROVED" || !build.artifact_json ||
+    build.version_id !== parsed.data.versionId
+  ) {
+    return conflict(
+      context,
+      "Walk-test completion requires the approved walking map for this exact immutable scene version",
+    );
+  }
+  const walkTestId = crypto.randomUUID();
+  await context.env.DB.prepare(`
+    INSERT INTO scene_navigation_walk_tests (
+      id, organisation_id, project_id, version_id, navigation_build_id,
+      client_operation_id, request_hash, start_pose_json, end_pose_json,
+      runtime_evidence_json, completed_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    walkTestId,
+    auth.organisationId,
+    projectId,
+    build.version_id,
+    build.id,
+    parsed.data.clientOperationId,
+    requestHash,
+    JSON.stringify(parsed.data.startPose),
+    JSON.stringify(parsed.data.endPose),
+    JSON.stringify(parsed.data.runtimeEvidence),
+    auth.userId,
+  ).run();
+  await audit(context, auth, "spatial.navigation_walk_test.complete", "scene_navigation_walk_test", walkTestId, {
+    navigationBuildId: build.id,
+    versionId: build.version_id,
+    runtimeEvidence: parsed.data.runtimeEvidence,
+  });
+  return context.json({
+    walkTest: {
+      id: walkTestId,
+      navigation_build_id: build.id,
+      completed_at: new Date().toISOString(),
+    },
+  }, 201);
 });
 
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
@@ -13077,15 +13318,18 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
   if (auth instanceof Response) return auth;
   if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const job = await context.env.DB.prepare(`
-    SELECT id, project_id, version_id, job_type, state
-    FROM processing_jobs
-    WHERE id = ? AND organisation_id = ?
+    SELECT j.id, j.project_id, j.version_id, j.job_type, j.state,
+      us.capture_journey_id AS input_capture_journey_id
+    FROM processing_jobs j
+    LEFT JOIN upload_sessions us ON us.asset_id = j.input_asset_id
+    WHERE j.id = ? AND j.organisation_id = ?
   `).bind(context.req.param("jobId"), auth.organisationId).first<{
     id: string;
     project_id: string;
     version_id: string;
     job_type: string;
     state: string;
+    input_capture_journey_id: string | null;
   }>();
   if (!job) return notFound(context, "Job not found");
   if (job.state === "CANCELLED") {
@@ -13155,7 +13399,14 @@ app.post("/api/jobs/:jobId/cancel", async (context) => {
   }
   await context.env.DB.batch(cancelStatements);
   await audit(context, auth, "job.cancel", "processing_job", job.id, { priorState: job.state });
-  return context.json({ job: { id: job.id, state: "CANCELLED" } });
+  const captureJourney = job.input_capture_journey_id
+    ? await reconcileAutomaticPairedCaptureJourney(
+      context.env.DB,
+      job.project_id,
+      job.version_id,
+    )
+    : null;
+  return context.json({ job: { id: job.id, state: "CANCELLED" }, captureJourney });
 });
 
 app.post("/api/jobs/:jobId/manual-complete", async (context) => {
@@ -13717,6 +13968,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       a.sha256 AS input_sha256, a.integrity_source AS input_integrity_source,
       sv.status AS version_status,
       us.purpose AS input_purpose, us.created_by AS input_created_by,
+      us.capture_journey_id AS input_capture_journey_id,
       nb.authoring_hash AS navigation_authoring_hash,
       nb.parameters_json AS navigation_parameters_json,
       nb.created_by AS navigation_created_by
@@ -13743,6 +13995,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     input_integrity_source: AssetIntegritySource | null;
     input_purpose: CaptureAssetPurpose | null;
     input_created_by: string | null;
+    input_capture_journey_id: string | null;
     version_status: string;
     navigation_authoring_hash: string | null;
     navigation_parameters_json: string | null;
@@ -14153,6 +14406,13 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     }
   }
   await context.env.DB.batch(completionStatements);
+  const reconciledCaptureJourney = job.input_capture_journey_id
+    ? await reconcileAutomaticPairedCaptureJourney(
+      context.env.DB,
+      job.project_id,
+      job.version_id,
+    )
+    : null;
   let releaseRepublish: ReleaseRepublishIntentResult | null = null;
   if (navigationCompletion) {
     const completedBuild = await context.env.DB.prepare(`
@@ -14166,24 +14426,78 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       );
     }
   }
-  const automaticFloorplan =
-    job.job_type === "asset.evidence-validate" &&
+  type AutomaticFloorplanSource = {
+    assetId: string;
+    fileName: string;
+    format: string;
+    sha256: string;
+    sizeBytes: number;
+    createdBy: string;
+  };
+  let automaticFloorplanSource: AutomaticFloorplanSource | null = null;
+  if (
+    reconciledCaptureJourney &&
+    pairedCaptureJourneyIsVerified(reconciledCaptureJourney)
+  ) {
+    if (
+      job.job_type === "asset.evidence-validate" &&
       job.input_kind === "pointcloud" &&
       job.input_purpose === "metric_point_cloud" &&
+      job.input_asset_id &&
       job.input_created_by &&
       verifiedInputSha256
-      ? await queueAutomaticFloorplanExtraction(context, {
-        organisationId: job.organisation_id,
-        projectId: job.project_id,
-        versionId: job.version_id,
-        assetId: job.input_asset_id!,
+    ) {
+      automaticFloorplanSource = {
+        assetId: job.input_asset_id,
         fileName: job.input_file_name,
         format: job.input_format,
         sha256: verifiedInputSha256,
         sizeBytes: job.input_size_bytes,
         createdBy: job.input_created_by,
-      })
-      : null;
+      };
+    } else if (reconciledCaptureJourney.geometryAssetId) {
+      const geometry = await context.env.DB.prepare(`
+        SELECT a.id, a.file_name, a.format, a.sha256, a.size_bytes, us.created_by
+        FROM assets a
+        JOIN upload_sessions us ON us.asset_id = a.id
+        WHERE a.id = ? AND a.organisation_id = ? AND a.project_id = ? AND a.version_id = ?
+          AND a.kind = 'pointcloud' AND us.purpose = 'metric_point_cloud'
+          AND a.integrity_status = 'verified' AND a.sha256 IS NOT NULL
+        ORDER BY us.created_at DESC
+        LIMIT 1
+      `).bind(
+        reconciledCaptureJourney.geometryAssetId,
+        job.organisation_id,
+        job.project_id,
+        job.version_id,
+      ).first<{
+        id: string;
+        file_name: string;
+        format: string;
+        sha256: string;
+        size_bytes: number;
+        created_by: string;
+      }>();
+      if (geometry) {
+        automaticFloorplanSource = {
+          assetId: geometry.id,
+          fileName: geometry.file_name,
+          format: geometry.format,
+          sha256: geometry.sha256,
+          sizeBytes: geometry.size_bytes,
+          createdBy: geometry.created_by,
+        };
+      }
+    }
+  }
+  const automaticFloorplan = automaticFloorplanSource
+    ? await queueAutomaticFloorplanExtraction(context, {
+      organisationId: job.organisation_id,
+      projectId: job.project_id,
+      versionId: job.version_id,
+      ...automaticFloorplanSource,
+    })
+    : null;
   return context.json({
     job: { id: job.id, state: "SUCCEEDED" },
     outputs: outputSummary,
@@ -14617,10 +14931,11 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     SELECT j.id, j.organisation_id, j.project_id, j.version_id,
       j.input_asset_id, j.state, a.size_bytes AS input_size_bytes,
       a.format AS input_format, r.id AS extraction_id, r.parameters_json,
-      r.normalizer, r.created_by
+      r.normalizer, r.created_by, p.delivery_template, p.workflow_policy_json
     FROM processing_jobs j
     JOIN floorplan_extraction_runs r ON r.job_id = j.id
     JOIN assets a ON a.id = j.input_asset_id
+    JOIN projects p ON p.id = j.project_id AND p.organisation_id = j.organisation_id
     WHERE j.id = ? AND j.job_type = 'floorplan.extract-v1'
       AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
       AND j.lease_expires_at > ?
@@ -14641,6 +14956,8 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     parameters_json: string;
     normalizer: string;
     created_by: string;
+    delivery_template: string;
+    workflow_policy_json: string;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
@@ -14673,6 +14990,20 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   }
   const serverParameters = parseStoredObject(job.parameters_json);
   const automaticPipeline = Reflect.get(serverParameters as object, "automaticPipeline") === true;
+  const storedStructureWorkflow = Reflect.get(serverParameters as object, "structureWorkflow");
+  if (
+    automaticPipeline &&
+    storedStructureWorkflow !== undefined &&
+    storedStructureWorkflow !== "automatic-extract-review" &&
+    storedStructureWorkflow !== "review-every-proposal"
+  ) {
+    return validationError(context, {
+      parameters: ["Automatic floor-plan processing is missing its frozen structure workflow policy"],
+    });
+  }
+  const queuedStructureWorkflow = storedStructureWorkflow ?? projectWorkflowPolicy(job).structureWorkflow;
+  const automaticStructureProposal = automaticPipeline &&
+    structureWorkflowAllowsAutomaticProposal(queuedStructureWorkflow);
   if (
     parsed.data.evidence.normalization.sourceUpAxis !==
       Reflect.get(serverParameters as object, "sourceUpAxis")
@@ -14871,7 +15202,9 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   const collisionAssetId = collisionOutput && storedCollision && storedCollisionHash
     ? crypto.randomUUID()
     : null;
-  const navigationBuildId = automaticPipeline && collisionAssetId ? crypto.randomUUID() : null;
+  const navigationBuildId = automaticStructureProposal && collisionAssetId
+    ? crypto.randomUUID()
+    : null;
   const navigationJobId = navigationBuildId ? crypto.randomUUID() : null;
   const navigationClientOperationId = navigationBuildId ? crypto.randomUUID() : null;
   let automaticNavigationState: Awaited<ReturnType<
@@ -15139,10 +15472,13 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
   if (!parsed.success) return validationError(context, parsed.error.flatten());
   const tokenHash = await sha256Hex(`${parsed.data.leaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
-    SELECT id, organisation_id, project_id, version_id, job_type, attempt_count, max_attempts
-    FROM processing_jobs
-    WHERE id = ? AND lease_token_hash = ? AND state IN ('LEASED', 'RUNNING')
-      AND lease_expires_at > ?
+    SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.job_type,
+      j.attempt_count, j.max_attempts,
+      us.capture_journey_id AS input_capture_journey_id
+    FROM processing_jobs j
+    LEFT JOIN upload_sessions us ON us.asset_id = j.input_asset_id
+    WHERE j.id = ? AND j.lease_token_hash = ? AND j.state IN ('LEASED', 'RUNNING')
+      AND j.lease_expires_at > ?
   `).bind(context.req.param("jobId"), tokenHash, new Date().toISOString()).first<{
     id: string;
     organisation_id: string;
@@ -15151,6 +15487,7 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
     job_type: string;
     attempt_count: number;
     max_attempts: number;
+    input_capture_journey_id: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid");
   // A lease reclaimed under a running processor is transient infrastructure
@@ -15250,7 +15587,17 @@ app.post("/api/worker/jobs/:jobId/fail", async (context) => {
     );
   }
   await context.env.DB.batch(statements);
-  return context.json({ job: { id: job.id, state: retry ? "QUEUED" : terminalState, retryQueued: retry } });
+  const captureJourney = !retry && job.input_capture_journey_id
+    ? await reconcileAutomaticPairedCaptureJourney(
+      context.env.DB,
+      job.project_id,
+      job.version_id,
+    )
+    : null;
+  return context.json({
+    job: { id: job.id, state: retry ? "QUEUED" : terminalState, retryQueued: retry },
+    captureJourney,
+  });
 });
 
 app.post("/api/versions/:versionId/approve", async (context) => {
@@ -15447,6 +15794,19 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       });
     }
   }
+  if (projectWorkflowPolicy(project).hosting === "managed-required") {
+    const activeHosting = await context.env.DB.prepare(`
+      SELECT id FROM project_hosting_subscriptions
+      WHERE project_id = ? AND organisation_id = ? AND status = 'active'
+      ORDER BY current_period_end DESC LIMIT 1
+    `).bind(project.id, auth.organisationId).first<{ id: string }>();
+    if (!activeHosting) {
+      return conflict(
+        context,
+        "Publication blocked: this project policy requires active managed hosting. Configure hosting and complete billing before publishing.",
+      );
+    }
+  }
   const approved = await context.env.DB.prepare(`
     SELECT sv.id, sv.version_number, sv.status, sv.manifest_json
     FROM scene_versions sv
@@ -15460,6 +15820,22 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   }>();
   if (!approved?.manifest_json) return validationError(context, { project: ["Project has no approved scene version"] });
   const approval = parseStoredObject(approved.manifest_json);
+  const measurementGrade = parseMeasurementGrade(
+    approval && typeof approval === "object" ? Reflect.get(approval, "measurementGrade") : null,
+  );
+  if (measurementGrade) {
+    const expectedDisclaimer = publicationMeasurementDisclaimer(
+      measurementGrade,
+      parsed.data.viewerConfig.sourceToWorld?.worldUnit === "scene_units",
+    );
+    if (parsed.data.viewerConfig.measurementDisclaimer !== expectedDisclaimer) {
+      return unprocessable(context, {
+        measurementDisclaimer: [
+          "The publication warning must match the approved version's measurement reliance grade",
+        ],
+      });
+    }
+  }
   const webAssetId = readStringProperty(approval, "webAssetId");
   let posterAssetId = readNullableStringProperty(approval, "posterAssetId");
   if (!webAssetId) return validationError(context, { project: ["Approved version has no web asset"] });
@@ -15578,6 +15954,29 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     return conflict(
       context,
       "Publication blocked: the exact approved v7+ collision, navigation report, and Detour navmesh must all be present and verified",
+    );
+  }
+  const navigationAssets = Reflect.get(spatialSnapshot, "navigationAssets");
+  const approvedNavigationBuildId = navigationAssets && typeof navigationAssets === "object"
+    ? readNullableStringProperty(navigationAssets, "buildId")
+    : null;
+  const completedWalkTest = approvedNavigationBuildId
+    ? await context.env.DB.prepare(`
+      SELECT id FROM scene_navigation_walk_tests
+      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+        AND navigation_build_id = ?
+      ORDER BY completed_at DESC LIMIT 1
+    `).bind(
+      auth.organisationId,
+      project.id,
+      approved.id,
+      approvedNavigationBuildId,
+    ).first<{ id: string }>()
+    : null;
+  if (!completedWalkTest) {
+    return conflict(
+      context,
+      "Publication blocked: complete and record the in-scene walk test for the exact approved walking map",
     );
   }
   if (
@@ -17259,6 +17658,17 @@ async function queueAutomaticFloorplanExtraction(
   }>();
   if (existing) return { id: existing.id, jobId: existing.job_id, status: existing.status };
 
+  const project = await context.env.DB.prepare(`
+    SELECT delivery_template, workflow_policy_json
+    FROM projects
+    WHERE id = ? AND organisation_id = ?
+  `).bind(input.projectId, input.organisationId).first<{
+    delivery_template: string;
+    workflow_policy_json: string;
+  }>();
+  if (!project) throw new Error("Automatic floor-plan extraction project disappeared");
+  const structureWorkflow = projectWorkflowPolicy(project).structureWorkflow;
+
   const extractionId = crypto.randomUUID();
   const jobId = crypto.randomUUID();
   const clientOperationId = crypto.randomUUID();
@@ -17268,6 +17678,7 @@ async function queueAutomaticFloorplanExtraction(
     : "pdal";
   const parameters = {
     automaticPipeline: true,
+    structureWorkflow,
     coordinateAssurance: "registered_y_up_metric_frame",
     sourceUpAxis,
     registrationEvidence:
@@ -20859,6 +21270,8 @@ function publicProject(
     latestVersionId: project.latest_version_id,
     latestVersionNumber: project.latest_version_number,
     activeReleaseSlug: project.active_release_slug,
+    projectTemplateId: project.project_template_id,
+    workflowPolicy: projectWorkflowPolicy(project),
     createdAt: project.created_at,
     updatedAt: project.updated_at,
   };
@@ -21057,9 +21470,29 @@ function publicProjectTemplate(template: ProjectTemplateRow): Record<string, unk
     captureAdapter: template.capture_adapter,
     deliveryTemplate: template.delivery_template,
     notes: template.notes,
+    policy: projectWorkflowPolicy(template),
     createdAt: template.created_at,
     updatedAt: template.updated_at,
   };
+}
+
+function projectWorkflowPolicy(
+  source: Pick<ProjectRow, "workflow_policy_json" | "delivery_template"> |
+    Pick<ProjectTemplateRow, "policy_json" | "delivery_template">,
+): ProjectWorkflowPolicy {
+  const json = "workflow_policy_json" in source
+    ? source.workflow_policy_json
+    : source.policy_json;
+  if (json.trim() === "{}") {
+    return projectPolicyForDeliveryTemplate(source.delivery_template);
+  }
+  const policy = parseProjectWorkflowPolicy(parseStoredObject(json));
+  if (!policy) {
+    throw new Error(
+      `Invalid persisted project workflow policy for delivery_template=${source.delivery_template}`,
+    );
+  }
+  return policy;
 }
 
 function publicProjectSavedView(view: ProjectSavedViewRow): Record<string, unknown> {
@@ -21479,6 +21912,105 @@ function storedPairedCaptureJourney(value: string): PairedCaptureJourney | null 
   const provenance = parseStoredObject(value);
   return provenance && typeof provenance === "object"
     ? parsePairedCaptureJourney(Reflect.get(provenance, "captureJourney"))
+    : null;
+}
+
+async function reconcileAutomaticPairedCaptureJourney(
+  database: D1Database,
+  projectId: string,
+  versionId: string,
+): Promise<PairedCaptureJourney | null> {
+  const version = await database.prepare(`
+    SELECT source_provenance_json
+    FROM scene_versions
+    WHERE id = ? AND project_id = ?
+  `).bind(versionId, projectId).first<{ source_provenance_json: string }>();
+  const journey = version
+    ? storedPairedCaptureJourney(version.source_provenance_json)
+    : null;
+  if (
+    !journey?.geometryAssetId ||
+    journey.qualification?.method !== AUTOMATIC_PAIRED_CAPTURE_METHOD ||
+    journey.qualification.status === "verified"
+  ) return journey;
+
+  const jobs = await database.prepare(`
+    SELECT input_asset_id, state, output_json
+    FROM processing_jobs
+    WHERE project_id = ? AND version_id = ? AND input_asset_id IN (?, ?)
+    ORDER BY created_at DESC
+  `).bind(
+    projectId,
+    versionId,
+    journey.primaryAssetId,
+    journey.geometryAssetId,
+  ).all<{ input_asset_id: string; state: string; output_json: string | null }>();
+  const latestByAsset = new Map<string, { state: string; output_json: string | null }>();
+  for (const job of jobs.results) {
+    if (!latestByAsset.has(job.input_asset_id)) latestByAsset.set(job.input_asset_id, job);
+  }
+  const primaryJob = latestByAsset.get(journey.primaryAssetId);
+  const geometryJob = latestByAsset.get(journey.geometryAssetId);
+  if (!primaryJob || !geometryJob) return journey;
+  const terminalStates = new Set(["SUCCEEDED", "FAILED", "DEAD_LETTER", "CANCELLED"]);
+  if (!terminalStates.has(primaryJob.state) || !terminalStates.has(geometryJob.state)) return journey;
+
+  const primaryEvidence = coordinateEvidenceFromJobOutput(primaryJob.output_json);
+  const geometryEvidence = coordinateEvidenceFromJobOutput(geometryJob.output_json);
+  let resolved: PairedCaptureJourney;
+  if (!primaryEvidence || !geometryEvidence) {
+    const missing = [
+      ...(!primaryEvidence ? ["visual PLY"] : []),
+      ...(!geometryEvidence ? ["geometry PLY"] : []),
+    ].join(" and ");
+    resolved = setPairedCaptureAutomaticQualification(journey, {
+      method: AUTOMATIC_PAIRED_CAPTURE_METHOD,
+      status: "blocked",
+      reason: `Automatic qualification could not read complete coordinate evidence from the ${missing}.`,
+    });
+  } else {
+    const result = qualifyPairedPlyCoordinateEvidence(primaryEvidence, geometryEvidence);
+    resolved = setPairedCaptureAutomaticQualification(journey, result.qualified
+      ? {
+        method: result.method,
+        status: "verified",
+        coordinateFrameId: result.coordinateFrameId,
+        sourceUpAxis: result.sourceUpAxis,
+        worldUnit: result.worldUnit,
+        overlapBounds: result.overlapBounds,
+        visual: result.visual,
+        geometry: result.geometry,
+      }
+      : {
+        method: AUTOMATIC_PAIRED_CAPTURE_METHOD,
+        status: "blocked",
+        reason: result.reason,
+      });
+  }
+  const parsedProvenance = parseStoredObject(version!.source_provenance_json);
+  const provenance = parsedProvenance && typeof parsedProvenance === "object" &&
+      !Array.isArray(parsedProvenance)
+    ? { ...parsedProvenance }
+    : {};
+  await database.prepare(`
+    UPDATE scene_versions
+    SET source_provenance_json = ?, updated_at = datetime('now')
+    WHERE id = ? AND project_id = ? AND source_provenance_json = ?
+  `).bind(
+    JSON.stringify({ ...provenance, captureJourney: resolved }),
+    versionId,
+    projectId,
+    version!.source_provenance_json,
+  ).run();
+  return resolved;
+}
+
+function coordinateEvidenceFromJobOutput(value: string | null): PlyCoordinateEvidence | null {
+  const output = parseStoredObject(value ?? "");
+  const report = output && typeof output === "object" ? Reflect.get(output, "report") : null;
+  const source = report && typeof report === "object" ? Reflect.get(report, "source") : null;
+  return source && typeof source === "object"
+    ? parsePlyCoordinateEvidenceReceipt(Reflect.get(source, "coordinateEvidence"))
     : null;
 }
 

@@ -325,10 +325,11 @@
       <section class="capture-intake-step" data-capture-intake-step="2" aria-labelledby="captureIntakeFilesTitle" hidden>
         <h3 id="captureIntakeFilesTitle">Add capture files</h3>
         <div class="mock-form-grid">
-          <label class="full" for="newCaptureAdapter"><span>Which scanner or export tool created these files?</span><select id="newCaptureAdapter" name="captureAdapter"><optgroup label="Guided walkable-scene sources"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD Trion</option><option value="open-import">Other walkable-scene export</option></optgroup><optgroup label="Specialist evidence sources"><option value="phone-video">Phone / video evidence</option><option value="drone-imagery">Drone imagery evidence</option></optgroup></select></label>
+          <label class="full" for="newCaptureAdapter"><span>Which scanner or export tool created these files?</span><select id="newCaptureAdapter" name="captureAdapter" required><option value="" selected>Choose the capture source</option><optgroup label="Guided walkable-scene sources"><option value="xgrids-lcc">XGRIDS</option><option value="fjd-trion">FJD Trion</option><option value="open-import">Other walkable-scene export</option></optgroup><optgroup label="Specialist evidence sources"><option value="phone-video">Phone / video evidence</option><option value="drone-imagery">Drone imagery evidence</option></optgroup></select></label>
           <label class="full capture-file-field" for="newCaptureAsset"><span>3D appearance file</span><input id="newCaptureAsset" name="capture" type="file" aria-label="3D appearance file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Choose the browser visual: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
           <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Measurement geometry file</span><input id="newCaptureGeometry" name="geometry" type="file" aria-label="Measurement geometry file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Choose the registered point cloud exported from the same scan.</small></label>
-          <label class="full checkbox-row capture-frame-confirmation"><input name="sameCaptureFrameConfirmed" type="checkbox" required /><span>I confirm both files came from the same unchanged capture coordinate system.</span></label>
+          <p id="newCaptureQualificationStatus" class="full field-note" role="status" aria-live="polite">Add both files to check their coordinate compatibility.</p>
+          <label id="newCaptureFrameConfirmation" class="full checkbox-row capture-frame-confirmation" hidden><input id="sameCaptureFrameConfirmed" name="sameCaptureFrameConfirmed" type="checkbox" /><span>I confirm both files came from the same unchanged capture coordinate system.</span></label>
         </div>
       </section>
       <section class="capture-intake-step" data-capture-intake-step="3" aria-labelledby="captureIntakeReviewTitle" hidden>
@@ -383,6 +384,15 @@
             <label><span>Description</span><input name="description" maxlength="500" /></label>
             <label><span>Capture adapter</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="phone-video">Phone / video</option><option value="drone-imagery">Drone imagery</option><option value="open-import">Open asset import</option></select></label>
             <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
+            <label><span>Privacy review</span><select name="privacyReview"><option value="strict">Strict</option><option value="standard">Standard</option></select></label>
+            <label><span>Publication</span><select name="publication"><option value="public-after-approval">Public after approval</option><option value="private-review">Private review</option></select></label>
+            <label><span>Navigation</span><select name="navigation"><option value="visitor-walk">Visitor walk</option><option value="review-walk-and-fly">Review walk and fly</option></select></label>
+            <label><span>Required files</span><select name="requiredFiles"><option value="visual-and-registered-geometry">Visual + registered geometry</option></select></label>
+            <label><span>Structure workflow</span><select name="structureWorkflow"><option value="automatic-extract-review">Automatic extraction + exception review</option><option value="review-every-proposal">Review every structural proposal</option></select></label>
+            <label><span>Walking clearance</span><select name="navigationClearance"><option value="approved-scene">Approved scene profile</option><option value="ada-route-review">US ADA route minimum review</option><option value="custom">Custom expert profile</option></select></label>
+            <label><span>Measurement</span><select name="measurement"><option value="hidden">Hidden</option><option value="indicative">Indicative</option><option value="controlled">Controlled deliverables</option></select></label>
+            <label><span>Hosting</span><select name="hosting"><option value="managed-optional">Managed optional</option><option value="managed-required">Managed required</option></select></label>
+            <label><span>Default quality</span><select name="quality"><option value="data-saver">Data saver</option><option value="standard">Standard</option><option value="high-detail">High detail</option></select></label>
             <label class="full"><span>Default notes</span><textarea name="notes" maxlength="4000"></textarea></label>
           </div>
           <div class="form-actions">
@@ -644,7 +654,7 @@
         <label><span>Customer</span><input name="customerName" maxlength="120" /></label>
         <label><span>Customer contact email</span><input name="customerEmail" type="email" /></label>
         <label><span>Capture source</span><select name="captureAdapter"><optgroup label="Guided capture sources"><option value="xgrids-lcc">XGRIDS LCC</option><option value="fjd-trion">FJD Trion</option><option value="open-import">Open asset import</option></optgroup><optgroup label="Specialist evidence sources"><option value="phone-video">Phone / video evidence</option><option value="drone-imagery">Drone imagery evidence</option></optgroup></select></label>
-        <label><span>Delivery classification</span><input name="deliveryTemplate" required /></label>
+        <label><span>Delivery classification</span><select name="deliveryTemplate" required><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
         <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
       </div>
       <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
@@ -686,6 +696,7 @@
         <label><span>Capture date</span><input name="captureDate" type="date" /></label>
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
         <label><span>Opening movement</span><select name="defaultMovementMode"><option value="walk">Walk</option><option value="fly">Fly in 3D</option></select></label>
+        <label><span>Viewer quality</span><select name="qualityPreset"><option value="data-saver">Data saver</option><option value="standard">Standard</option><option value="high-detail">High detail</option></select></label>
         <p class="field-note full">Fly requires an approved v7 closed structural shell. Walk and Fly collide with reviewed floors, walls, and ceilings while ignoring classified furniture.</p>
       </div>
       <section class="release-starting-view" aria-labelledby="releaseStartingViewTitle">
@@ -718,12 +729,24 @@
           <label class="full"><span>Starting camera target (x, y, z)</span><input name="initialCameraTarget" placeholder="Required when a starting position is set" /></label>
           <label><span>Camera up (x, y, z)</span><input name="initialCameraUp" value="0, 1, 0" /></label>
           <label><span>Field of view</span><input name="initialCameraFov" type="number" min="20" max="100" step="1" value="58" /></label>
-          <label class="full"><span>Measurement disclaimer</span><textarea name="measurementDisclaimer">This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
         </div>
       </details>
+      <label class="full generated-readback"><span>Generated measurement disclaimer</span><textarea name="measurementDisclaimer" readonly>This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.</textarea></label>
       <p class="field-note">The release freezes this transform and the exact authored navigation runtime. Provisional SU releases support navigation but make no metre, area, clearance, survey, or construction claim.</p>
       <button class="primary-button wide" type="submit">Publish release</button>
       <p id="releaseError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
+  <dialog id="publicationConfirmationDialog" class="dialog-card confirmation-dialog">
+    <form method="dialog">
+      <span class="eyebrow">PUBLICATION DECISION</span>
+      <h2 id="publicationConfirmationTitle">Confirm publication change</h2>
+      <p id="publicationConfirmationMessage"></p>
+      <div class="form-actions">
+        <button class="quiet-button" value="cancel" type="submit">Keep current release</button>
+        <button id="publicationConfirmationSubmit" class="danger-button" value="confirm" type="submit">Confirm</button>
+      </div>
     </form>
   </dialog>
 
@@ -816,21 +839,24 @@
       <span class="eyebrow">WALKING PROFILE</span>
       <h2>Review walking clearance for this scene.</h2>
       <div id="navigationProfileSummary" class="notice-card"></div>
-      <details class="form-advanced-settings">
+      <label class="full"><span>Visitor movement</span><select name="navigationIntent"><option value="visitor-walk">Visitor walk</option><option value="review-walk-and-fly">Review walk and fly</option></select></label>
+      <label class="full"><span>Clearance profile</span><select name="clearancePreset"><option value="approved-scene">Approved scene profile</option><option value="ada-route-review">US ADA route minimum review</option><option value="custom">Custom expert profile</option></select></label>
+      <p id="navigationClearancePresetSummary" class="field-note">Keeps the clearance profile already approved for this immutable scene version.</p>
+      <details id="navigationExpertSettings" class="form-advanced-settings">
         <summary>Expert profile values</summary>
         <p class="field-note">These values affect clearance, ledges, slopes, route queries, and the physical controller. Change them only when measured scene evidence requires an override.</p>
         <div class="mock-form-grid">
           <label class="full"><span>World unit</span><select name="worldUnit"><option value="scene_units">Provisional scene units (SU)</option><option value="metres">Metric metres</option></select></label>
-          <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="0.01" /></label>
+          <label><span>Agent radius</span><input name="agentRadius" type="number" min="0.05" max="2" step="any" /></label>
           <label><span>Agent height</span><input name="agentHeight" type="number" min="0.5" max="4" step="0.01" /></label>
           <label><span>Eye height</span><input name="eyeHeight" type="number" min="0.3" max="3" step="0.01" /></label>
-          <label><span>Maximum climb / step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="0.01" /></label>
-          <label><span>Maximum slope (degrees)</span><input name="maxSlopeDegrees" type="number" min="0" max="89" step="1" /></label>
+          <label><span>Maximum climb / step</span><input name="maxStepMetres" type="number" min="0.01" max="0.5" step="any" /></label>
+          <label><span>Maximum slope (degrees)</span><input name="maxSlopeDegrees" type="number" min="0" max="89" step="any" /></label>
           <label><span>Maximum speed</span><input name="maxSpeed" type="number" min="0.1" max="20" step="0.1" /></label>
           <label><span>Maximum acceleration</span><input name="maxAcceleration" type="number" min="0.1" max="100" step="0.1" /></label>
         </div>
       </details>
-      <button class="primary-button wide" type="submit">Save expert overrides</button>
+      <button class="primary-button wide" type="submit">Save walking profile</button>
       <p id="navigationProfileError" class="form-error" role="alert"></p>
     </form>
   </dialog>

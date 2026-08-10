@@ -431,7 +431,11 @@ describe("vendor-neutral floor-plan workflow", () => {
     await env.DB.prepare(
       "UPDATE floorplan_extraction_runs SET parameters_json = ? WHERE job_id = ?",
     ).bind(
-      JSON.stringify({ ...JSON.parse(storedParameters!.parameters_json), automaticPipeline: true }),
+      JSON.stringify({
+        ...JSON.parse(storedParameters!.parameters_json),
+        automaticPipeline: true,
+        structureWorkflow: "automatic-extract-review",
+      }),
       lease.job.id,
     ).run();
     const collisionBytes = buildAuthoredStructuralCollisionGlb({

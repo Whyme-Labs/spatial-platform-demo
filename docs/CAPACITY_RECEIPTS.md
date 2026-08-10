@@ -2,6 +2,65 @@
 
 Last measured: 2026-08-02
 
+## PLY coordinate-header preflight
+
+Last measured: 2026-08-10
+
+The checked repository and ignored qualification corpus contains ten readable
+PLY files. The largest header ends at byte 1,532 in each FJD P2 Horse Gaussian
+fixture. Capture intake and the processor read at most
+`ply_coordinate_header_bytes=2097152`, 1,368 times that measured maximum. A
+header that reaches the tripwire blocks intake and names the budget, limit, and
+first rejected request. Ordinary files whose metadata is unavailable may use
+explicit same-frame attestation; a too-large header may not bypass inspection.
+Automatic qualification then streams every declared binary vertex; it does not
+sample the bounds.
+
+Remeasure from the repository root with:
+
+```sh
+find assets test .cache -type f -iname '*.ply' -print0 2>/dev/null | \
+  xargs -0 -n1 sh -c 'p="$0"; n=$(LC_ALL=C awk "BEGIN{n=0} {n+=length(\$0)+1; if (\$0==\"end_header\") {print n; exit}}" "$p" 2>/dev/null); if [ -n "$n" ]; then printf "%s\t%s\n" "$n" "$p"; fi' | \
+  sort -n
+```
+
+Remeasure and resize the tripwire if a known-good header approaches it.
+
+## US ADA route-review preset
+
+Last verified: 2026-08-10
+
+The optional `ada-route-review` navigation preset is a conservative geometry
+review aid, not an accessibility certification. It uses the US Access Board's
+36-inch continuous accessible-route width, 1/2-inch maximum threshold, and
+1:12 maximum ramp slope. The circular navigation agent therefore has a
+0.4572-metre radius, the climb check uses 0.0127 metres, and the slope check
+uses 4.763641690726178 degrees. The broader standard also governs doors,
+turns, passing spaces, landings, surfaces, controls, and other conditions that
+this navigation profile cannot certify.
+
+Primary references:
+
+- https://www.access-board.gov/ada/guides/chapter-4-accessible-routes/
+- https://www.access-board.gov/ada/guides/chapter-4-entrances-doors-and-gates/
+- https://www.access-board.gov/ada/guides/chapter-4-ramps-and-curb-ramps/
+
+Reproduce the conversions from the repository root with:
+
+```sh
+node - <<'NODE'
+const inchesToMetres = 0.0254;
+console.log({
+  routeWidthMetres: 36 * inchesToMetres,
+  agentRadiusMetres: 36 * inchesToMetres / 2,
+  thresholdMetres: 0.5 * inchesToMetres,
+  rampSlopeDegrees: Math.atan(1 / 12) * 180 / Math.PI,
+});
+NODE
+```
+
+Reverify the cited standard before changing the preset or its label.
+
 ## Exact horizontal-surface tolerance
 
 Last measured: 2026-08-03

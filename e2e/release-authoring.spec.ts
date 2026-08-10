@@ -93,6 +93,124 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
 });
 
+test("a novice can upload, inspect every stage, walk test, and publish using visible controls", async ({ page }) => {
+  let publishedBody: Record<string, unknown> | null = null;
+  await mockApprovedProject(page, (body) => {
+    publishedBody = body;
+  }, { captureIntake: true, noviceLifecycle: true });
+
+  await page.goto("/studio.html#projects");
+  await expect(page.getByText("Corrected Spark room", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+  const intake = page.locator("#newProjectDialog");
+  await intake.getByLabel("Scene name", { exact: true }).fill("Corrected Spark room");
+  await intake.getByRole("button", { name: "Continue to files", exact: true }).click();
+  await intake.getByRole("combobox", {
+    name: "Which scanner or export tool created these files?",
+    exact: true,
+  }).selectOption("open-import");
+  await intake.getByLabel("3D appearance file", { exact: true }).setInputFiles({
+    name: "showroom.spz",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("portable-visual"),
+  });
+  await intake.getByLabel("Measurement geometry file", { exact: true }).setInputFiles({
+    name: "showroom.e57",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("registered-geometry"),
+  });
+  const fallback = intake.getByRole("checkbox", {
+    name: "I confirm both files came from the same unchanged capture coordinate system.",
+    exact: true,
+  });
+  await expect(fallback).toBeVisible();
+  await fallback.check();
+  await intake.getByRole("button", { name: "Review processing plan", exact: true }).click();
+  await expect(intake.getByText("✓ Build the walkable area", { exact: true })).toBeVisible();
+  await intake.getByRole("button", { name: "Create and process scene", exact: true }).click();
+  await expect(intake).toBeHidden();
+
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.locator(".project-journey-step").filter({ hasText: "Process" }).click();
+  await expect(page.getByRole("heading", {
+    name: "Structural exceptions need review.",
+    exact: true,
+  })).toBeVisible();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
+  await page.getByRole("button", { name: "Correct and review plan", exact: true }).click();
+  const floorplanReview = page.locator("#floorplanReviewDialog");
+  await expect(floorplanReview.getByText("Expert: edit raw structured plan", { exact: true })).toBeVisible();
+  await expect(floorplanReview.locator("textarea[name='planJson']")).toBeHidden();
+  await floorplanReview.getByLabel("Evidence note", { exact: true }).fill(
+    "Checked room outlines, wall runs, and the registered source overlay.",
+  );
+  await floorplanReview.getByRole("button", { name: "Save operator decision", exact: true }).click();
+  await expect(floorplanReview).toBeHidden();
+
+  await page.getByRole("button", { name: "Privacy", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Review candidate", exact: true }).click();
+  const privacyReview = page.locator("#privacyCandidateDialog");
+  await privacyReview.getByLabel("Evidence note", { exact: true }).fill(
+    "Verified as a reflection in the poster frame.",
+  );
+  await privacyReview.getByRole("button", { name: "Record privacy decision", exact: true }).click();
+  await expect(privacyReview).toBeHidden();
+  await expect(page.getByText("Privacy candidate dismissed", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Walk test", exact: true })).toBeVisible();
+  await expect(page.getByText(
+    "0 unreachable authored destinations · 0 failed physical routes in the approved processor receipt.",
+    { exact: true },
+  )).toBeVisible();
+  const walkFrame = page.frameLocator("#walkTestPreview");
+  await walkFrame.getByRole("button", { name: "Stand at safe start", exact: true }).click();
+  const setStartingPosition = page.getByRole("button", {
+    name: "Set test start here",
+    exact: true,
+  });
+  await expect(setStartingPosition).toBeEnabled();
+  await setStartingPosition.click();
+  await expect(page.locator("#walkTestStatus")).toContainText("Starting point set");
+  await walkFrame.getByRole("button", { name: "Walk to destination", exact: true }).click();
+  const completeWalkTest = page.getByRole("button", { name: "Complete walk test", exact: true });
+  await expect(completeWalkTest).toBeEnabled();
+  await completeWalkTest.click();
+  await expect(page.getByText("Walk test completed and recorded", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
+  const qa = page.locator("#qaDialog");
+  await expect(qa.getByText("Privacy evidence is ready", { exact: true })).toBeVisible();
+  await qa.getByRole("checkbox", {
+    name: "I confirm privacy and publication review is approved.",
+    exact: true,
+  }).check();
+  await qa.getByLabel("QA notes", { exact: true }).fill("Completed the visible novice review journey.");
+  await qa.getByRole("button", { name: "Approve immutable version", exact: true }).click();
+
+  const release = page.locator("#releaseDialog");
+  await expect(release).toBeVisible();
+  await expect(release.locator("select[name='qualityPreset']")).toBeVisible();
+  await expect(release.locator("select[name='qualityPreset']")).toHaveValue("standard");
+  await release.locator("select[name='accessPolicy']").selectOption("unlisted");
+  await expect(release.locator("input[name='splatBudgetMillions']")).toBeHidden();
+  await expect(release.locator('textarea[name="measurementDisclaimer"]')).toHaveValue(
+    "This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.",
+  );
+  await release.getByRole("button", { name: "Publish release", exact: true }).click();
+  await expect.poll(() => publishedBody).not.toBeNull();
+  expect(publishedBody).toMatchObject({
+    accessPolicy: "unlisted",
+    viewerConfig: {
+      title: "Corrected Spark room",
+      defaultMovementMode: "walk",
+    },
+  });
+});
+
 test("QA recovery opens the visible privacy task", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
 
@@ -351,7 +469,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   const buildEvidence = card.getByText("Inspect build evidence", { exact: true }).first();
   await expect(buildEvidence).toBeVisible();
   await buildEvidence.click();
-  await expect(card.getByText('"schemaVersion": "spatial-navigation-v9"')).toBeVisible();
+  await expect(card.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
 
   for (const viewport of [
     { width: 1280, height: 720 },
@@ -418,13 +536,28 @@ async function mockApprovedProject(
     qualifiedTraversalEvidence?: boolean;
     previewReady?: boolean;
     walkingState?: "building" | "exception";
+    captureIntake?: boolean;
+    noviceLifecycle?: boolean;
   } = {},
 ): Promise<void> {
+  let projectCreated = !options.captureIntake;
+  let noviceStage: "structure" | "privacy" | "approved" = options.noviceLifecycle
+    ? "structure"
+    : "approved";
+  let novicePrivacyResolved = false;
+  let noviceWalkTestCompleted = !options.noviceLifecycle;
+  const uploads = new Map<string, {
+    assetId: string;
+    fileName: string;
+    format: string;
+    purpose: string;
+    sizeBytes: number;
+  }>();
   const project = {
     id: projectId,
     name: "Corrected Spark room",
     slug: "corrected-spark-room",
-    status: "APPROVED",
+    status: options.noviceLifecycle ? "QA_REQUIRED" : "APPROVED",
     captureAdapter: "open-import",
     deliveryTemplate: "Property showcase",
     notes: "Visual-only Gaussian fixture.",
@@ -433,8 +566,39 @@ async function mockApprovedProject(
     latestVersionId: options.auxiliaryQaVersion ? auxiliaryQaVersionId : versionId,
     latestVersionNumber: options.auxiliaryQaVersion ? 2 : 1,
     activeReleaseSlug: null,
+    workflowPolicy: {
+      schemaVersion: "project-workflow-policy-v1",
+      privacyReview: "strict",
+      publication: "public-after-approval",
+      navigation: "visitor-walk",
+      requiredFiles: "visual-and-registered-geometry",
+      structureWorkflow: "automatic-extract-review",
+      navigationClearance: "approved-scene",
+      measurement: "hidden",
+      hosting: "managed-optional",
+      quality: "standard",
+    },
     updatedAt: now,
   };
+  await page.route("**/renderer/index.html**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body>
+        <button id="start">Stand at safe start</button>
+        <button id="destination">Walk to destination</button>
+        <script>
+          const send = (position, target) => parent.postMessage({
+            source: "spatial-spark",
+            type: "camera-update",
+            cameraPose: { position, target },
+          }, location.origin);
+          document.querySelector("#start").addEventListener("click", () => send([1, 1.6, 2], [1, 1.6, 1]));
+          document.querySelector("#destination").addEventListener("click", () => send([2, 1.6, 2], [2, 1.6, 1]));
+        </script>
+      </body></html>`,
+    });
+  });
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -463,14 +627,109 @@ async function mockApprovedProject(
     }
     if (path === "/api/dashboard") {
       return json(route, 200, {
-        activeProjects: 1,
+        activeProjects: projectCreated ? 1 : 0,
         processingJobs: 0,
         hostedAssets: 1,
         hostedBytes: 73_400_000,
         activeReleases: 0,
       });
     }
-    if (path === "/api/projects" && method === "GET") return json(route, 200, { projects: [project] });
+    if (path === "/api/projects" && method === "POST" && options.captureIntake) {
+      projectCreated = true;
+      return json(route, 201, { project });
+    }
+    if (path === "/api/projects" && method === "GET") {
+      return json(route, 200, { projects: projectCreated ? [project] : [] });
+    }
+    if (path === `/api/projects/${projectId}/uploads` && method === "POST" && options.captureIntake) {
+      const body = request.postDataJSON() as {
+        fileName: string;
+        format: string;
+        purpose: string;
+        sizeBytes: number;
+      };
+      const uploadId = crypto.randomUUID();
+      const assetId = crypto.randomUUID();
+      uploads.set(uploadId, { assetId, ...body });
+      return json(route, 201, {
+        upload: {
+          id: uploadId,
+          versionId,
+          assetId,
+          purpose: body.purpose,
+          partSizeBytes: body.sizeBytes,
+          expectedSizeBytes: body.sizeBytes,
+          expiresAt: "2026-08-17T13:30:00.000Z",
+          status: "OPEN",
+        },
+      });
+    }
+    const uploadPart = path.match(/^\/api\/uploads\/([^/]+)\/parts\/(\d+)$/);
+    if (uploadPart && method === "PUT" && options.captureIntake) {
+      return json(route, 200, {
+        part: { partNumber: Number(uploadPart[2]), etag: `etag-${uploadPart[1]}` },
+      });
+    }
+    const uploadCompletion = path.match(/^\/api\/uploads\/([^/]+)\/complete$/);
+    if (uploadCompletion && method === "POST" && options.captureIntake) {
+      const upload = uploads.get(uploadCompletion[1]!);
+      if (!upload) return json(route, 404, { error: "Unknown upload fixture" });
+      return json(route, 200, {
+        asset: {
+          id: upload.assetId,
+          versionId,
+          kind: upload.purpose === "metric_point_cloud" ? "pointcloud" : "master",
+          purpose: upload.purpose,
+          sizeBytes: upload.sizeBytes,
+          integrityStatus: "pending",
+        },
+        job: {
+          id: crypto.randomUUID(),
+          type: upload.purpose === "metric_point_cloud" ? "asset.evidence-validate" : "asset.validate",
+          state: "QUEUED",
+        },
+      });
+    }
+    if (
+      options.noviceLifecycle && method === "POST" &&
+      path === `/api/projects/${projectId}/spatial/floorplan-extractions/14141414-1414-4414-8414-141414141414/review`
+    ) {
+      noviceStage = "privacy";
+      return json(route, 200, {
+        extraction: { id: "14141414-1414-4414-8414-141414141414", status: "REVIEWED" },
+        revision: { id: "62626262-6262-4262-8262-626262626262", status: "approved" },
+      });
+    }
+    if (
+      options.noviceLifecycle && method === "PATCH" &&
+      path === `/api/projects/${projectId}/privacy-candidates/61616161-6161-4161-8161-616161616161`
+    ) {
+      novicePrivacyResolved = true;
+      return json(route, 200, {
+        candidate: { id: "61616161-6161-4161-8161-616161616161", status: "dismissed" },
+      });
+    }
+    if (
+      options.noviceLifecycle && method === "POST" &&
+      path === `/api/versions/${versionId}/approve`
+    ) {
+      noviceStage = "approved";
+      project.status = "APPROVED";
+      return json(route, 200, { version: { id: versionId, status: "APPROVED" } });
+    }
+    if (
+      options.noviceLifecycle && method === "POST" &&
+      path === `/api/projects/${projectId}/spatial/navigation-builds/dddddddd-dddd-4ddd-8ddd-dddddddddddd/walk-tests`
+    ) {
+      noviceWalkTestCompleted = true;
+      return json(route, 201, {
+        walkTest: {
+          id: "73737373-7373-4373-8373-737373737373",
+          navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+          completed_at: now,
+        },
+      });
+    }
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
         project,
@@ -483,7 +742,15 @@ async function mockApprovedProject(
               created_at: "2026-07-31T14:00:00.000Z",
             }]
             : []),
-          { id: versionId, version_number: 1, status: "APPROVED", created_at: now },
+          {
+            id: versionId,
+            version_number: 1,
+            status: options.noviceLifecycle && noviceStage !== "approved" ? "QA_REQUIRED" : "APPROVED",
+            manifest_json: noviceStage === "approved"
+              ? JSON.stringify({ measurementGrade: "visual-only" })
+              : null,
+            created_at: now,
+          },
         ],
         assets: [
           {
@@ -495,6 +762,28 @@ async function mockApprovedProject(
             size_bytes: 73_400_000,
             integrity_status: "verified",
           },
+          ...(options.noviceLifecycle
+            ? [
+              {
+                id: "57575757-5757-4575-8575-575757575757",
+                version_id: versionId,
+                kind: "poster",
+                format: "png",
+                file_name: "private-evidence.png",
+                size_bytes: 4096,
+                integrity_status: "verified",
+              },
+              {
+                id: "58585858-5858-4585-8585-585858585858",
+                version_id: versionId,
+                kind: "pointcloud",
+                format: "e57",
+                file_name: "showroom.e57",
+                size_bytes: 8192,
+                integrity_status: "verified",
+              },
+            ]
+            : []),
           ...(options.navigationBuildHistory
             ? [{
               id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -543,7 +832,17 @@ async function mockApprovedProject(
             }]
             : []),
         ],
-        jobs: options.walkingState === "building"
+        jobs: options.noviceLifecycle && noviceStage === "structure"
+          ? [{
+            id: "59595959-5959-4595-8595-595959595959",
+            version_id: versionId,
+            job_type: "floorplan.extract-v1",
+            state: "SUCCEEDED",
+            progress: 100,
+            progress_message: "Structural proposal ready",
+            created_at: now,
+          }]
+          : options.walkingState === "building"
           ? [{
             id: "45454545-4545-4454-8454-454545454545",
             version_id: versionId,
@@ -582,7 +881,11 @@ async function mockApprovedProject(
             updated_at: now,
           }]
           : [],
-        previewReadyVersionIds: options.previewReady === false ? [] : [versionId],
+        previewReadyVersionIds: options.previewReady === false ||
+            options.noviceLifecycle && noviceStage === "structure"
+          ? []
+          : [versionId],
+        walkTestReadyVersionIds: noviceWalkTestCompleted ? [versionId] : [],
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {
@@ -638,14 +941,47 @@ async function mockApprovedProject(
         routes: [],
         routeStops: [],
         privacyRegions: [],
-        privacyScans: [],
-        privacyCandidates: [],
+        privacyScans: options.noviceLifecycle && noviceStage !== "structure"
+          ? [{
+            id: "60606060-6060-4060-8060-606060606060",
+            status: "COMPLETED",
+            detector: "fixture-detector",
+            detector_version: "fixture/1",
+            attempt_count: 1,
+            max_attempts: 3,
+            input_count: 1,
+            candidate_count: 1,
+            evidence_json: "{}",
+            error_json: null,
+            created_at: now,
+            completed_at: now,
+          }]
+          : [],
+        privacyCandidates: options.noviceLifecycle && noviceStage !== "structure"
+          ? [{
+            id: "61616161-6161-4161-8161-616161616161",
+            scan_id: "60606060-6060-4060-8060-606060606060",
+            asset_id: "57575757-5757-4575-8575-575757575757",
+            asset_file_name: "private-evidence.png",
+            asset_mime_type: "image/png",
+            target: "poster",
+            label: "Possible face",
+            bbox_json: JSON.stringify({ xMin: 0.2, yMin: 0.2, xMax: 0.4, yMax: 0.5 }),
+            confidence: 0.82,
+            detector_metadata_json: "{}",
+            status: novicePrivacyResolved ? "dismissed" : "pending",
+            decision_note: novicePrivacyResolved ? "Verified as a poster reflection." : null,
+            created_at: now,
+            reviewed_at: novicePrivacyResolved ? now : null,
+          }]
+          : [],
         changeReports: [],
         captureCompletenessReports: [],
         rawChangeReports: [],
         semanticExtractions: reviewedTransform,
         semanticCandidates: [],
-        floorplanExtractions: options.multiLevelFloorplan
+        floorplanExtractions: options.multiLevelFloorplan ||
+            options.noviceLifecycle && noviceStage === "structure"
           ? [{
             id: "14141414-1414-4414-8414-141414141414",
             version_id: versionId,
@@ -674,7 +1010,12 @@ async function mockApprovedProject(
           : [],
         floorplanRevisions: [],
         floorplanExports: [],
-        deliveryPolicy: null,
+        deliveryPolicy: {
+          mobile_lite_budget: 0.75,
+          mobile_standard_budget: 1.25,
+          desktop_standard_budget: 2,
+          desktop_high_budget: 4,
+        },
         collisionProxy: { version: "empty-v1", boxes: [] },
         navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
         navigationObstacles: [],
@@ -707,7 +1048,8 @@ async function mockApprovedProject(
           eyeHeight: 1.6,
           maxStepMetres: 0.1,
         },
-        navigationBuilds: options.navigationBuildHistory
+        navigationBuilds: options.navigationBuildHistory ||
+            options.noviceLifecycle && noviceStage !== "structure"
           ? [
             {
               id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -737,7 +1079,23 @@ async function mockApprovedProject(
               job_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
               status: "APPROVED",
               parameters_json: "{}",
-              artifact_json: null,
+              artifact_json: JSON.stringify({
+                schemaVersion: "spatial-navigation-v9",
+                source: { authoringHash: "d".repeat(64) },
+                validation: {
+                  passed: true,
+                  componentCount: 1,
+                  unreachableDestinationIds: [],
+                },
+                physicalValidation: {
+                  passed: true,
+                  routeCount: 2,
+                  failedDestinationIds: [],
+                },
+                structuralValidation: { passed: true, probeCount: 12 },
+                offMeshConnections: [],
+                authoredTraversalValidation: { passed: true, directionCount: 0 },
+              }),
               navmesh_asset_id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
               report_asset_id: "12121212-1212-4212-8212-121212121212",
               review_note: "Reviewed collision evidence.",
@@ -747,7 +1105,51 @@ async function mockApprovedProject(
             },
           ]
           : [],
+        walkTests: noviceWalkTestCompleted
+          ? [{
+            id: "73737373-7373-4373-8373-737373737373",
+            navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            start_pose_json: JSON.stringify({ position: [1, 1.6, 2], target: [1, 1.6, 1] }),
+            end_pose_json: JSON.stringify({ position: [2, 1.6, 2], target: [2, 1.6, 1] }),
+            runtime_evidence_json: JSON.stringify({ movementObserved: true }),
+            completed_by: "44444444-4444-4444-8444-444444444444",
+            completed_at: now,
+          }]
+          : [],
         navigationArtifact: null,
+      });
+    }
+    if (path === `/api/projects/${projectId}/versions/${versionId}/preview`) {
+      return json(route, 200, {
+        renderable: {
+          versionId,
+          assetId: "55555555-5555-4555-8555-555555555555",
+          format: "rad",
+          fileName: "scene.rad",
+          mimeType: "application/octet-stream",
+          sizeBytes: 73_400_000,
+          sha256: "f".repeat(64),
+          contentUrl: "/mock-assets/scene.rad",
+          collisionUrl: "/mock-assets/collision.bin",
+          sessionExpiresAt: "2026-08-10T14:30:00.000Z",
+          spatial: {
+            entities: [],
+            routes: [],
+            routeStops: [],
+            collisionProxy: { version: "empty-v1", boxes: [] },
+            navigationMesh: { version: "empty-v1", vertices: [], indices: [], sourceEntityIds: [] },
+            obstacleProxy: { version: "empty-v1", boxes: [] },
+            navigationProfile: {
+              worldUnit: "scene_units",
+              agentRadius: 0.22,
+              agentHeight: 1.8,
+              eyeHeight: 1.6,
+              maxStepMetres: 0.1,
+            },
+            navigationArtifact: null,
+          },
+          viewer: null,
+        },
       });
     }
     if (path === `/api/projects/${projectId}/releases` && method === "POST") {

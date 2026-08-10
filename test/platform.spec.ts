@@ -16,8 +16,10 @@ import worker, {
 } from "../src/worker/index";
 import { sha256Hex, signSceneToken } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
+import { publicationMeasurementDisclaimer } from "../src/shared/measurement-disclaimers";
 
 const origin = "https://spatial.test";
+const VISUAL_ONLY_MEASUREMENT_DISCLAIMER = publicationMeasurementDisclaimer("visual-only");
 let testClientSequence = 0;
 
 function nextTestClientAddress(): string {
@@ -1733,6 +1735,61 @@ describe("Spatial Studio Worker", () => {
     expect(operationCount?.count).toBe(3);
   });
 
+  it("blocks managed-hosting projects from publication until hosting is active", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Managed venue ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "open-import",
+        deliveryTemplate: "Venue navigator",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const publicationRequest = {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        slug: `managed-venue-${crypto.randomUUID().slice(0, 8)}`,
+        accessPolicy: "public",
+        viewerConfig: {
+          title: "Managed venue",
+          measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+        },
+      }),
+    };
+    const blocked = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      publicationRequest,
+    );
+    expect(blocked.status).toBe(409);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: expect.stringContaining("requires active managed hosting"),
+    });
+
+    await env.DB.prepare(`
+      INSERT INTO project_hosting_subscriptions (
+        id, organisation_id, project_id, plan_code, status,
+        current_period_start, current_period_end, renews_automatically,
+        archive_on_expiry, created_by
+      )
+      SELECT ?, organisation_id, id, 'venue', 'active', datetime('now'),
+        datetime('now', '+1 day'), 0, 1, created_by
+      FROM projects WHERE id = ?
+    `).bind(crypto.randomUUID(), project.id).run();
+    const pastHostingGate = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      publicationRequest,
+    );
+    expect(pastHostingGate.status).toBe(400);
+    await expect(pastHostingGate.json()).resolves.toMatchObject({
+      details: { project: [expect.stringContaining("no approved scene version")] },
+    });
+  });
+
   it("keeps one live hosting subscription per project across repeated manual invoices", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
@@ -2058,6 +2115,15 @@ describe("Spatial Studio Worker", () => {
       captureAdapter: "fjd-trion",
       deliveryTemplate: "Venue navigator",
       notes: "Capture public routes before staff-only areas.",
+      policy: {
+        schemaVersion: "project-workflow-policy-v1",
+        privacyReview: "strict",
+        publication: "private-review",
+        navigation: "visitor-walk",
+        measurement: "controlled",
+        hosting: "managed-required",
+        quality: "high-detail",
+      },
     };
     const templateResponse = await exports.default.fetch(`${origin}/api/project-templates`, {
       method: "POST",
@@ -2073,8 +2139,34 @@ describe("Spatial Studio Worker", () => {
     });
     expect(templateReplay.status).toBe(200);
     await expect(templateReplay.json()).resolves.toMatchObject({
-      template: { id: template.template.id, name: "Premium venue" },
+      template: {
+        id: template.template.id,
+        name: "Premium venue",
+        policy: templateBody.policy,
+      },
       idempotent: true,
+    });
+
+    const templatedProjectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        projectTemplateId: template.template.id,
+        name: "Template-governed venue",
+        captureAdapter: "open-import",
+        deliveryTemplate: "Property showcase",
+      }),
+    });
+    expect(templatedProjectResponse.status).toBe(201);
+    await expect(templatedProjectResponse.json()).resolves.toMatchObject({
+      project: {
+        projectTemplateId: template.template.id,
+        captureAdapter: "fjd-trion",
+        deliveryTemplate: "Venue navigator",
+        notes: templateBody.notes,
+        workflowPolicy: templateBody.policy,
+      },
     });
 
     const viewResponse = await exports.default.fetch(`${origin}/api/project-views`, {
@@ -2681,7 +2773,7 @@ describe("Spatial Studio Worker", () => {
             accessPolicy: "public",
             viewerConfig: {
               title: "Invalid camera",
-              measurementDisclaimer: "Visual experience only.",
+              measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
               initialCamera,
             },
           }),
@@ -2924,7 +3016,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Disconnected apartment",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
           },
         }),
       },
@@ -2970,7 +3062,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Misaligned spatial runtime",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             sceneRotationDegrees: [0, 0, 180],
           },
         }),
@@ -2988,7 +3080,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Missing verified navigation",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
           },
         }),
       },
@@ -3512,6 +3604,26 @@ describe("Spatial Studio Worker", () => {
       ),
     ]);
 
+    const walkTestResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/spatial/navigation-builds/${navigationBuildId}/walk-tests`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          clientOperationId: crypto.randomUUID(),
+          versionId: completed.asset.versionId,
+          startPose: { position: [0.5, 1.6, 0.5], target: [0.5, 1.6, 0] },
+          endPose: { position: [0.7, 1.6, 0.7], target: [0.7, 1.6, 0.2] },
+          runtimeEvidence: {
+            movementObserved: true,
+            collisionFailureReported: false,
+            traversalBlockReported: false,
+          },
+        }),
+      },
+    );
+    expect(walkTestResponse.status).toBe(201);
+
     const unsupportedFlyRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -3522,7 +3634,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Unsafe v6 Fly default",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             defaultMovementMode: "fly",
           },
         }),
@@ -3702,7 +3814,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "unlisted",
           viewerConfig: {
             title: "Missing navigation object",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
           },
         }),
       },
@@ -3726,7 +3838,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "public",
           viewerConfig: {
             title: "Publishable apartment",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             splatBudgetMillions: 1,
             initialCamera: {
               position: [3.14, 0.18, -3.56],
@@ -4401,7 +4513,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "public",
           viewerConfig: {
             title: "Publishable apartment",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             splatBudgetMillions: 1,
             initialCamera: {
               position: [3.14, 0.18, -3.56],
@@ -4434,7 +4546,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "public",
           viewerConfig: {
             title: "Publishable apartment",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             splatBudgetMillions: 1,
             initialCamera: {
               position: [3.14, 0.18, -3.56],
@@ -4464,7 +4576,7 @@ describe("Spatial Studio Worker", () => {
           accessPolicy: "public",
           viewerConfig: {
             title: "Publishable apartment — revised presentation",
-            measurementDisclaimer: "Visual experience only.",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             initialCamera: {
               position: [3.14, 0.18, -3.56],
               target: [3.08, -0.31, -2.69],

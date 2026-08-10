@@ -179,6 +179,10 @@ test.describe("authenticated studio UI", () => {
       name: "Which scanner or export tool created these files?",
       exact: true,
     })).toBeVisible();
+    await dialog.getByRole("combobox", {
+      name: "Which scanner or export tool created these files?",
+      exact: true,
+    }).selectOption("open-import");
     await expect(dialog.getByLabel("3D appearance file", { exact: true })).toBeVisible();
     await expect(dialog.getByLabel("Measurement geometry file", { exact: true })).toBeVisible();
     await expect(dialog.locator("#newCaptureAsset")).toHaveAttribute(
@@ -201,8 +205,7 @@ test.describe("authenticated studio UI", () => {
       "I confirm both files came from the same unchanged capture coordinate system.",
       { exact: true },
     );
-    await expect(frameConfirmation).toBeVisible();
-    await expect(frameConfirmation).toHaveAttribute("required", "");
+    await expect(dialog.locator("#newCaptureFrameConfirmation")).toBeHidden();
     await dialog.getByRole("combobox", {
       name: "Which scanner or export tool created these files?",
       exact: true,
@@ -219,6 +222,8 @@ test.describe("authenticated studio UI", () => {
       mimeType: "application/octet-stream",
       buffer: Buffer.from("geometry"),
     });
+    await expect(frameConfirmation).toBeVisible();
+    await expect(frameConfirmation).toHaveAttribute("required", "");
     await frameConfirmation.check();
     await dialog.getByRole("button", { name: "Review processing plan", exact: true }).click();
     await expect(dialog.getByText("✓ Prepare the browser scene", { exact: true })).toBeVisible();

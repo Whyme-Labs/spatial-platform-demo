@@ -19,6 +19,9 @@ let auditedLinks = 0;
 let auditedForms = 0;
 let auditedDynamicButtons = 0;
 let auditedDynamicLinks = 0;
+let auditedRegistryFields = 0;
+const studioFieldRegistry = JSON.parse(await readProjectFile("config/studio-field-registry.json"));
+const workerSource = await readProjectFile("src/worker/index.ts");
 
 for (const entryPoint of entryPoints) {
   const html = await readProjectFile(entryPoint.html);
@@ -105,6 +108,7 @@ for (const entryPoint of entryPoints) {
 
   if (entryPoint.html === "studio.html") {
     auditStudioWorkflow(html, source);
+    auditStudioFieldRegistry(html, source, workerSource, studioFieldRegistry);
   }
 }
 
@@ -157,6 +161,7 @@ if (failures.length) {
     `Control-wiring audit passed for ${auditedButtons} static buttons, ` +
       `${auditedDynamicButtons} dynamic buttons, ${auditedLinks} static links, ` +
       `${auditedDynamicLinks} dynamic links, and ${auditedForms} interactive forms.`,
+      ` Field registry: ${auditedRegistryFields} governed lifecycle fields.`,
   );
 }
 
@@ -328,6 +333,9 @@ function auditStudioWorkflow(html, source) {
   if (!source.includes('firstIncompleteProjectSection(detail)')) {
     failures.push("project open does not route to the first incomplete mandatory stage");
   }
+  if (/\b(?:window\.)?confirm\s*\(\s*`(?:Revoke \/s\/|Make this historical release active)/.test(source)) {
+    failures.push("multi-stage publication decisions still use a native browser confirmation");
+  }
 }
 
 function projectJourneyDestinations(source) {
@@ -349,4 +357,187 @@ function projectJourneyDestinations(source) {
     if (destination) destinations.add(destination);
   });
   return destinations;
+}
+
+function auditStudioFieldRegistry(html, source, worker, registry) {
+  if (registry.schemaVersion !== "studio-field-registry-v1") {
+    failures.push("config/studio-field-registry.json has an unsupported schemaVersion");
+    return;
+  }
+  const governedForms = new Set(registry.governedForms ?? []);
+  const fields = [
+    ...(Array.isArray(registry.fields) ? registry.fields : []),
+    ...expandFieldSets(registry.fieldSets),
+  ];
+  const ids = new Set();
+  const fieldKeys = new Set();
+  const allowedAudiences = new Set(["operator", "expert", "internal"]);
+  const allowedStages = new Set([
+    "admin", "capture", "expert", "hosting", "measurement", "overview", "portfolio",
+    "structure", "privacy", "walk", "publish",
+  ]);
+  for (const field of fields) {
+    auditedRegistryFields += 1;
+    if (!field?.id || ids.has(field.id)) {
+      failures.push(`field registry has a missing or duplicate id ${JSON.stringify(field?.id)}`);
+      continue;
+    }
+    ids.add(field.id);
+    const key = `${field.form}:${field.name}`;
+    if (fieldKeys.has(key)) failures.push(`field registry duplicates ${key}`);
+    fieldKeys.add(key);
+    if (!governedForms.has(field.form)) {
+      failures.push(`field registry ${field.id} belongs to ungoverned form ${field.form}`);
+    }
+    if (!allowedAudiences.has(field.audience)) {
+      failures.push(`field registry ${field.id} has unknown audience ${field.audience}`);
+    }
+    if (!allowedStages.has(field.stage)) {
+      failures.push(`field registry ${field.id} has unknown stage ${field.stage}`);
+    }
+    for (const property of ["requestPath", "persistencePath", "consumer", "readback"]) {
+      if (typeof field[property] !== "string" || !field[property].trim()) {
+        failures.push(`field registry ${field.id} has no ${property}`);
+      }
+    }
+    const formHtml = htmlFormBody(html, field.form);
+    if (formHtml === null) {
+      failures.push(`field registry ${field.id} references missing form #${field.form}`);
+      continue;
+    }
+    const control = namedControl(formHtml, field.name);
+    if (!control) {
+      failures.push(`field registry ${field.id} references missing ${field.form}[name=${field.name}]`);
+      continue;
+    }
+    if (!namedControlHasVisibleLabel(formHtml, field.name)) {
+      failures.push(`field registry ${field.id} has no visible label in #${field.form}`);
+    }
+    const expertControl = expertControlNames(formHtml).has(field.name);
+    if (expertControl !== (field.audience === "expert")) {
+      failures.push(
+        `field registry ${field.id} audience=${field.audience} does not match its ${
+          expertControl ? "Expert" : "Recommended"
+        } surface`,
+      );
+    }
+    const controlAttributes = parseAttributes(control.attributes);
+    if (controlAttributes.type === "number" &&
+      (typeof field.unit !== "string" || !field.unit.trim())) {
+      failures.push(`numeric field registry ${field.id} has no unit`);
+    }
+    if (field.audience === "expert" &&
+      (typeof field.explanation !== "string" || !field.explanation.trim())) {
+      failures.push(`expert field registry ${field.id} has no plain-language explanation`);
+    }
+    if (field.required === true) {
+      const attributes = parseAttributes(control.attributes);
+      if (control.tag !== "select" && !("required" in attributes)) {
+        failures.push(`field registry ${field.id} is required but its visible control is not required`);
+      }
+    }
+    if ("required" in controlAttributes && field.required !== true) {
+      failures.push(`field registry ${field.id} understates a required visible control`);
+    }
+    if (!source.includes(field.consumer) && !worker.includes(field.consumer)) {
+      failures.push(`field registry ${field.id} consumer ${field.consumer} is not in Studio or the Worker`);
+    }
+    if (!source.includes(field.readback)) {
+      failures.push(`field registry ${field.id} readback ${field.readback} is not in Studio`);
+    }
+    const persistenceRoot = field.persistencePath.split(/[.|]/)[0];
+    if (!persistenceRoot || !worker.includes(persistenceRoot)) {
+      failures.push(`field registry ${field.id} persistence ${field.persistencePath} is not in the Worker`);
+    }
+  }
+
+  for (const match of html.matchAll(/<form\b([^>]*)>/gi)) {
+    const attributes = parseAttributes(match[1] ?? "");
+    if (attributes.method?.toLowerCase() === "dialog" || attributes.id === "loginForm") continue;
+    if (attributes.id && !governedForms.has(attributes.id)) {
+      failures.push(`authenticated Studio form #${attributes.id} is absent from the field registry`);
+    }
+  }
+
+  for (const formId of governedForms) {
+    const formHtml = htmlFormBody(html, formId);
+    if (formHtml === null) {
+      failures.push(`governed field-registry form #${formId} is missing`);
+      continue;
+    }
+    for (const match of formHtml.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+      const attributes = parseAttributes(match[2] ?? "");
+      if (!attributes.name || attributes.type === "hidden") continue;
+      if (!fieldKeys.has(`${formId}:${attributes.name}`)) {
+        failures.push(
+          `${formId}[name=${attributes.name}] is visible in Recommended mode but absent from the field registry`,
+        );
+      }
+    }
+  }
+}
+
+function expandFieldSets(fieldSets) {
+  if (!Array.isArray(fieldSets)) return [];
+  const expanded = [];
+  for (const set of fieldSets) {
+    const required = new Set(set?.required ?? []);
+    const expertFields = new Set(set?.expertFields ?? []);
+    for (const name of set?.fields ?? []) {
+      expanded.push({
+        id: `${set.idPrefix}.${name}`,
+        form: set.form,
+        name,
+        audience: expertFields.has(name) ? "expert" : set.audience,
+        stage: set.stage,
+        required: required.has(name),
+        requestPath: `${set.requestPath}.${name}`,
+        persistencePath: `${set.persistencePath}.*`,
+        consumer: set.consumer,
+        readback: set.readback,
+        unit: set.units?.[name],
+        explanation: set.explanations?.[name] ?? set.explanation,
+      });
+    }
+  }
+  return expanded;
+}
+
+function namedControlHasVisibleLabel(formHtml, name) {
+  const escaped = escapeRegExp(name);
+  return new RegExp(
+    `<label\\b[^>]*>[\\s\\S]*?<(?:input|select|textarea)\\b[^>]*\\bname=["']${escaped}["'][^>]*>[\\s\\S]*?<\\/label>`,
+    "i",
+  ).test(formHtml);
+}
+
+function expertControlNames(formHtml) {
+  const names = new Set();
+  for (const match of formHtml.matchAll(/<details\b([^>]*)>([\s\S]*?)<\/details>/gi)) {
+    const attributes = parseAttributes(match[1] ?? "");
+    const body = match[2] ?? "";
+    const classes = new Set((attributes.class ?? "").split(/\s+/));
+    const expertSummary = /<summary\b[^>]*>[^<]*(?:Expert|Advanced)/i.test(body);
+    if (!classes.has("form-advanced-settings") || !expertSummary) {
+      continue;
+    }
+    for (const control of body.matchAll(/<(?:input|select|textarea)\b([^>]*)>/gi)) {
+      const name = parseAttributes(control[1] ?? "").name;
+      if (name) names.add(name);
+    }
+  }
+  return names;
+}
+
+function htmlFormBody(html, formId) {
+  const match = new RegExp(`<form\\b[^>]*\\bid=["']${escapeRegExp(formId)}["'][^>]*>([\\s\\S]*?)<\\/form>`, "i").exec(html);
+  return match?.[1] ?? null;
+}
+
+function namedControl(formHtml, name) {
+  for (const match of formHtml.matchAll(/<(input|select|textarea)\b([^>]*)>/gi)) {
+    const attributes = parseAttributes(match[2] ?? "");
+    if (attributes.name === name) return { tag: match[1].toLowerCase(), attributes: match[2] ?? "" };
+  }
+  return null;
 }

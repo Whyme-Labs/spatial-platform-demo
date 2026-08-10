@@ -11,8 +11,34 @@ import {
   SCENE_ROTATION_MIN_DEGREES,
 } from "../shared/scene-rotation";
 import { captureBundleRoles } from "./capture-bundle";
+import {
+  normalizeProjectDeliveryTemplate,
+  projectDeliveryTemplateInputs,
+  projectWorkflowPolicyIds,
+} from "../shared/project-policies";
+import {
+  AUTOMATIC_PAIRED_CAPTURE_METHOD,
+  ATTESTED_PAIRED_CAPTURE_METHOD,
+} from "../shared/paired-capture-journey";
 
 const captureAdapterSchema = z.enum(captureAdapterIds);
+const projectDeliveryTemplateSchema = z.enum(projectDeliveryTemplateInputs)
+  .transform(normalizeProjectDeliveryTemplate);
+export const projectWorkflowPolicySchema = z.object({
+  schemaVersion: z.literal("project-workflow-policy-v1"),
+  privacyReview: z.enum(projectWorkflowPolicyIds.privacyReview),
+  publication: z.enum(projectWorkflowPolicyIds.publication),
+  navigation: z.enum(projectWorkflowPolicyIds.navigation),
+  measurement: z.enum(projectWorkflowPolicyIds.measurement),
+  hosting: z.enum(projectWorkflowPolicyIds.hosting),
+  quality: z.enum(projectWorkflowPolicyIds.quality),
+  requiredFiles: z.enum(projectWorkflowPolicyIds.requiredFiles)
+    .default("visual-and-registered-geometry"),
+  structureWorkflow: z.enum(projectWorkflowPolicyIds.structureWorkflow)
+    .default("automatic-extract-review"),
+  navigationClearance: z.enum(projectWorkflowPolicyIds.navigationClearance)
+    .default("approved-scene"),
+}).strict();
 export const projectCustomFieldTypeSchema = z.enum([
   "text",
   "number",
@@ -92,11 +118,12 @@ export const organisationSwitchSchema = z.object({
 
 export const projectInputSchema = z.object({
   clientOperationId: z.string().uuid().optional(),
+  projectTemplateId: z.string().uuid().optional(),
   name: z.string().trim().min(3).max(120),
   customerName: z.string().trim().min(2).max(120).optional(),
   customerEmail: z.string().email().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2),
+  deliveryTemplate: projectDeliveryTemplateSchema,
   notes: z.string().trim().max(4000).optional(),
   customFields: projectCustomFieldValuesSchema.default({}),
 });
@@ -106,9 +133,10 @@ export const projectUpdateSchema = z.object({
   customerName: z.string().trim().min(2).max(120).nullable().optional(),
   customerEmail: z.string().trim().email().nullable().optional(),
   captureAdapter: captureAdapterSchema.optional(),
-  deliveryTemplate: z.string().trim().min(2).optional(),
+  deliveryTemplate: projectDeliveryTemplateSchema.optional(),
   notes: z.string().trim().max(4000).nullable().optional(),
   customFields: projectCustomFieldValuesSchema.optional(),
+  workflowPolicy: projectWorkflowPolicySchema.optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: "At least one project field is required",
 });
@@ -125,8 +153,9 @@ export const projectTemplateSchema = z.object({
   name: z.string().trim().min(2).max(80),
   description: z.string().trim().max(500).nullable().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2),
+  deliveryTemplate: projectDeliveryTemplateSchema,
   notes: z.string().trim().max(4000).nullable().optional(),
+  policy: projectWorkflowPolicySchema.optional(),
 });
 
 export const projectTemplateUpdateSchema = projectTemplateSchema.omit({
@@ -179,7 +208,7 @@ export const portfolioProjectSchema = z.object({
   customerName: z.string().trim().min(2).max(120).nullable().optional(),
   customerEmail: z.string().trim().email().nullable().optional(),
   captureAdapter: captureAdapterSchema,
-  deliveryTemplate: z.string().trim().min(2),
+  deliveryTemplate: projectDeliveryTemplateSchema,
   notes: z.string().trim().max(4000).nullable().optional(),
   customFields: projectCustomFieldValuesSchema.default({}),
 });
@@ -365,8 +394,33 @@ export const uploadInputSchema = z.object({
   posterCamera: uploadPosterCameraSchema.optional(),
   captureJourney: z.object({
     id: z.string().uuid(),
-    sameFrameConfirmed: z.literal(true),
-  }).strict().optional(),
+    qualification: z.enum([
+      AUTOMATIC_PAIRED_CAPTURE_METHOD,
+      ATTESTED_PAIRED_CAPTURE_METHOD,
+    ]).optional(),
+    sameFrameConfirmed: z.literal(true).optional(),
+  }).strict().superRefine((value, context) => {
+    if (
+      value.qualification !== AUTOMATIC_PAIRED_CAPTURE_METHOD &&
+      value.sameFrameConfirmed !== true
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sameFrameConfirmed"],
+        message: "Fallback paired capture requires an explicit same-frame attestation",
+      });
+    }
+    if (
+      value.qualification === AUTOMATIC_PAIRED_CAPTURE_METHOD &&
+      value.sameFrameConfirmed !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["sameFrameConfirmed"],
+        message: "Automatic paired capture cannot be represented as an operator attestation",
+      });
+    }
+  }).optional(),
 });
 
 export const uploadCompleteSchema = z.object({
@@ -730,6 +784,7 @@ export const navigationObstacleSchema = z.object({
 
 export const navigationProfileSchema = z.object({
   versionId: z.string().uuid(),
+  workflowPolicy: projectWorkflowPolicySchema.optional(),
   worldUnit: z.enum(["metres", "scene_units"]).default("metres"),
   agentRadius: z.number().min(0.05).max(2),
   agentHeight: z.number().min(0.5).max(4),
@@ -815,6 +870,34 @@ export const navigationBuildReviewSchema = z.object({
   finalCaptureAgreementResolutions: z.array(
     z.lazy(() => finalCaptureAgreementResolutionSchema),
   ).max(2_000).optional(),
+});
+
+export const navigationWalkTestSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  versionId: z.string().uuid(),
+  startPose: z.object({
+    position: point3Schema,
+    target: point3Schema,
+  }),
+  endPose: z.object({
+    position: point3Schema,
+    target: point3Schema,
+  }),
+  runtimeEvidence: z.object({
+    movementObserved: z.literal(true),
+    collisionFailureReported: z.literal(false),
+    traversalBlockReported: z.literal(false),
+  }).strict(),
+}).strict().superRefine((value, context) => {
+  if (value.startPose.position.every((coordinate, axis) =>
+    coordinate === value.endPose.position[axis]
+  )) {
+    context.addIssue({
+      code: "custom",
+      path: ["endPose", "position"],
+      message: "Complete the walk test after moving away from the chosen start position",
+    });
+  }
 });
 
 const frozenNavigationAssetSchema = <Format extends "json" | "bin">(format: Format) =>

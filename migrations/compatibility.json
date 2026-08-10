@@ -184,6 +184,12 @@
     },
     "0054_durable_release_republish.sql": {
       "phase": "expand"
+    },
+    "0055_project_workflow_policies.sql": {
+      "phase": "expand"
+    },
+    "0056_navigation_walk_tests.sql": {
+      "phase": "expand"
     }
   }
 }

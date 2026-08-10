@@ -19,6 +19,12 @@ import { chromium } from "playwright";
 import { REVISION as threeRevision } from "three";
 import { posterSampleIsReady } from "./poster-quality.mjs";
 import {
+  createPlyCoordinateEvidenceAccumulator,
+  parsePlyCoordinateDescriptor,
+  PLY_COORDINATE_HEADER_BUDGET_BYTES,
+  plyCoordinateHeaderBudgetError,
+} from "./capture-compatibility-core.mjs";
+import {
   buildRecastNavigationArtifact,
   extractCollisionGeometryFromGlb,
   NavigationBuildError,
@@ -751,6 +757,9 @@ async function processNextJob() {
         job.input.format,
         job.input.purpose,
       );
+      const coordinateEvidence = job.input.format === "ply"
+        ? await readPlyCoordinateEvidence(sourcePath)
+        : null;
       const posterRenderer = job.input.purpose === "web_scene"
         ? webScenePosterRenderer(job.input.format)
         : null;
@@ -844,6 +853,7 @@ async function processNextJob() {
           sizeBytes: download.sizeBytes,
           sha256: download.sha256,
           validation,
+          ...(coordinateEvidence ? { coordinateEvidence } : {}),
         },
           ...(posterMetadata
           ? {
@@ -954,6 +964,9 @@ async function processNextJob() {
 
     await reportProgress(12, "Validating Gaussian source");
     const sourceValidation = await validateSource(sourcePath, job.input.format);
+    const coordinateEvidence = job.input.format === "ply"
+      ? await readPlyCoordinateEvidence(sourcePath)
+      : null;
     const preparedSource = await prepareSparkSource(
       sourcePath,
       job.input.format,
@@ -1035,6 +1048,7 @@ async function processNextJob() {
           ...sourceValidation,
           normalization: preparedSource.normalization,
         },
+        ...(coordinateEvidence ? { coordinateEvidence } : {}),
       },
       derivatives: {
         web: { fileName: basename(radPath), sizeBytes: radMetadata.sizeBytes, sha256: radMetadata.sha256 },
@@ -1597,6 +1611,38 @@ async function validateEvidenceSource(sourcePath, format, purpose) {
   } finally {
     await handle.close();
   }
+}
+
+async function readPlyCoordinateEvidence(sourcePath) {
+  const handle = await open(sourcePath, "r");
+  let descriptor;
+  try {
+    const sourceStat = await handle.stat();
+    const header = Buffer.alloc(Math.min(sourceStat.size, PLY_COORDINATE_HEADER_BUDGET_BYTES));
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    try {
+      descriptor = parsePlyCoordinateDescriptor(header.subarray(0, bytesRead));
+    } catch (error) {
+      if (
+        sourceStat.size > PLY_COORDINATE_HEADER_BUDGET_BYTES &&
+        safeMessage(error) === "PLY header has no end_header marker"
+      ) throw plyCoordinateHeaderBudgetError();
+      throw error;
+    }
+  } catch (error) {
+    log("processor.ply_coordinate_evidence_unavailable", {
+      sourcePath: basename(sourcePath),
+      reason: safeMessage(error),
+    });
+    return null;
+  } finally {
+    await handle.close();
+  }
+  const accumulator = createPlyCoordinateEvidenceAccumulator(descriptor);
+  for await (const chunk of createReadStream(sourcePath, { start: descriptor.dataOffset })) {
+    accumulator.consume(chunk);
+  }
+  return accumulator.finish();
 }
 
 // Only the 48-byte header and the CRC-paged XML section are ever read. A

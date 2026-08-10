@@ -36,6 +36,24 @@ import {
   type RenderNativeCorrectionMode,
 } from "./render-native-floorplan";
 import { sha256HexOfBlob } from "./sha256-stream";
+import { parsePlyCoordinateDescriptor, PLY_COORDINATE_HEADER_BUDGET_BYTES, plyCoordinateHeaderBudgetError, preflightPairedPlyCoordinateDescriptors } from "../../scripts/capture-compatibility-core.mjs";
+import {
+  AUTOMATIC_PAIRED_CAPTURE_METHOD,
+  ATTESTED_PAIRED_CAPTURE_METHOD,
+} from "../shared/paired-capture-journey";
+import {
+  projectPolicyForDeliveryTemplate,
+  type ProjectWorkflowPolicy,
+} from "../shared/project-policies";
+import {
+  parseMeasurementGrade,
+  publicationMeasurementDisclaimer,
+} from "../shared/measurement-disclaimers";
+import {
+  adaRouteReviewClearance,
+  navigationClearancePresetSummary,
+  type NavigationClearancePresetId,
+} from "../shared/navigation-clearance-presets";
 import "../../styles.css";
 
 type TurnstileWidgetOptions = {
@@ -86,6 +104,8 @@ type Project = {
   status: string;
   captureAdapter: string;
   deliveryTemplate: string;
+  projectTemplateId: string | null;
+  workflowPolicy?: ProjectWorkflowPolicy;
   notes: string | null;
   customerName: string | null;
   customerEmail: string | null;
@@ -95,6 +115,10 @@ type Project = {
   activeReleaseSlug: string | null;
   updatedAt: string;
 };
+function effectiveProjectWorkflowPolicy(project: Project): ProjectWorkflowPolicy {
+  if (project.workflowPolicy) return project.workflowPolicy;
+  return projectPolicyForDeliveryTemplate(project.deliveryTemplate);
+}
 type ProjectCustomFieldDefinition = {
   id: string;
   key: string;
@@ -210,7 +234,14 @@ type Asset = {
   sha256: string | null;
   integrity_status: string;
 };
-type Version = { id: string; version_number: number; status: string; created_at: string };
+type Version = {
+  id: string;
+  version_number: number;
+  status: string;
+  source_provenance_json?: string | null;
+  manifest_json?: string | null;
+  created_at: string;
+};
 type Job = {
   id: string;
   project_id: string;
@@ -291,6 +322,7 @@ type ProjectDetail = {
   releases: Release[];
   captureBundles: CaptureBundle[];
   previewReadyVersionIds: string[];
+  walkTestReadyVersionIds?: string[];
 };
 type ProjectTemplate = {
   id: string;
@@ -299,6 +331,7 @@ type ProjectTemplate = {
   captureAdapter: string;
   deliveryTemplate: string;
   notes: string | null;
+  policy: ProjectWorkflowPolicy;
   createdAt: string;
   updatedAt: string;
 };
@@ -1101,6 +1134,15 @@ type SpatialWorkspace = {
     created_at: string;
     updated_at: string;
   }>;
+  walkTests: Array<{
+    id: string;
+    navigation_build_id: string;
+    start_pose_json: string;
+    end_pose_json: string;
+    runtime_evidence_json: string;
+    completed_by: string;
+    completed_at: string;
+  }>;
   releaseRepublishIntents: Array<{
     id: string;
     navigation_build_id: string;
@@ -1390,6 +1432,25 @@ let turnstileLoadPromise: Promise<TurnstileApi> | null = null;
 let turnstileInitialisePromise: Promise<void> | null = null;
 let projectOperationId: string | null = null;
 let newCaptureIntakeStep: 1 | 2 | 3 = 1;
+let captureQualificationMode:
+  | typeof AUTOMATIC_PAIRED_CAPTURE_METHOD
+  | typeof ATTESTED_PAIRED_CAPTURE_METHOD = ATTESTED_PAIRED_CAPTURE_METHOD;
+let captureQualificationRenderGeneration = 0;
+let latestWalkTestPose: {
+  position: [number, number, number];
+  target: [number, number, number];
+  observedAt: number;
+} | null = null;
+let previousWalkTestSample: { position: [number, number, number]; observedAt: number } | null = null;
+let activeWalkTestSession: {
+  projectId: string;
+  versionId: string;
+  buildId: string;
+  clientOperationId: string | null;
+  startPose: { position: [number, number, number]; target: [number, number, number] } | null;
+  movementObserved: boolean;
+  runtimeFailure: string | null;
+} | null = null;
 let captureJourneyOperation: {
   id: string;
   primaryUploadOperationId: string;
@@ -1691,7 +1752,7 @@ function bindInterface(): void {
     byId<HTMLDetailsElement>("newProjectOptionalDetails").open = false;
     renderNewProjectMetadataFields();
     renderProjectTemplateOptions();
-    renderNewCaptureHelp();
+    void renderNewCaptureHelp();
     setNewCaptureIntakeStep(1, false);
     newProjectDialog.showModal();
   });
@@ -1705,10 +1766,16 @@ function bindInterface(): void {
     portfolioToolsDialog.showModal();
     void loadRecentAssetHandoff();
   });
-  byId<HTMLSelectElement>("newCaptureAdapter").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLSelectElement>("newCaptureAdapter").addEventListener("change", () => void renderNewCaptureHelp());
   byId<HTMLSelectElement>("newProjectTemplate").addEventListener("change", applySelectedProjectTemplate);
-  byId<HTMLInputElement>("newCaptureAsset").addEventListener("change", renderNewCaptureHelp);
-  byId<HTMLInputElement>("newCaptureGeometry").addEventListener("change", renderNewCaptureHelp);
+  byId<HTMLInputElement>("newCaptureAsset").addEventListener("change", () => {
+    inferNewCaptureAdapter();
+    void renderNewCaptureHelp();
+  });
+  byId<HTMLInputElement>("newCaptureGeometry").addEventListener("change", () => {
+    inferNewCaptureAdapter();
+    void renderNewCaptureHelp();
+  });
   byId<HTMLButtonElement>("newCaptureBack").addEventListener("click", () => {
     setNewCaptureIntakeStep(newCaptureIntakeStep === 3 ? 2 : 1);
   });
@@ -2203,6 +2270,10 @@ function bindInterface(): void {
       errorTarget: byId("releaseError"),
     }, () => publishRelease(form));
   });
+  const qualityPreset = releaseForm.elements.namedItem("qualityPreset");
+  if (qualityPreset instanceof HTMLSelectElement) {
+    qualityPreset.addEventListener("change", () => syncReleaseQualityPreset(releaseForm));
+  }
   byId<HTMLButtonElement>("releaseUseCurrentView").addEventListener(
     "click",
     applyReleaseCurrentView,
@@ -2308,6 +2379,12 @@ function bindInterface(): void {
   });
   const navigationProfileSubmit =
     navigationProfileForm.querySelector<HTMLButtonElement>("[type='submit']")!;
+  const navigationClearancePreset = navigationProfileForm.elements.namedItem("clearancePreset");
+  if (navigationClearancePreset instanceof HTMLSelectElement) {
+    navigationClearancePreset.addEventListener("change", () => {
+      syncNavigationClearancePreset(navigationProfileForm, true);
+    });
+  }
   navigationProfileForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(navigationProfileForm);
@@ -2661,6 +2738,7 @@ function bindInterface(): void {
   window.addEventListener("message", handleComparisonRendererMessage);
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
+  window.addEventListener("message", handleWalkTestRendererMessage);
   versionComparisonDialog.addEventListener("close", resetVersionComparison);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
@@ -3594,6 +3672,21 @@ function renderNewCaptureReview(): void {
   );
 }
 
+function inferNewCaptureAdapter(): void {
+  const select = byId<HTMLSelectElement>("newCaptureAdapter");
+  if (select.value) return;
+  const names = [
+    byId<HTMLInputElement>("newCaptureAsset").files?.[0]?.name,
+    byId<HTMLInputElement>("newCaptureGeometry").files?.[0]?.name,
+  ].filter((name): name is string => Boolean(name)).join(" ").toLowerCase();
+  const inferred = /(?:^|[^a-z0-9])(?:xgrids|lcc)(?:[^a-z0-9]|$)/.test(names)
+    ? "xgrids-lcc"
+    : /(?:^|[^a-z0-9])(?:fjd|trion)(?:[^a-z0-9]|$)/.test(names)
+      ? "fjd-trion"
+      : null;
+  if (inferred) select.value = inferred;
+}
+
 function portableCapturePlan(file: File): {
   format: typeof portableCaptureFormats[number];
   purpose: "gaussian_splat" | "web_scene";
@@ -3620,11 +3713,46 @@ function metricGeometryPlan(file: File): {
   };
 }
 
-function renderNewCaptureHelp(): void {
+type PairedCapturePreflight =
+  | { status: "qualified" }
+  | { status: "unavailable" }
+  | { status: "contradicted"; reason: string };
+
+async function pairedCaptureCanQualifyAutomatically(
+  visual: File,
+  geometry: File,
+): Promise<PairedCapturePreflight> {
+  if (
+    visual.name.split(".").at(-1)?.toLowerCase() !== "ply" ||
+    geometry.name.split(".").at(-1)?.toLowerCase() !== "ply"
+  ) return { status: "unavailable" };
+  try {
+    const [visualHeader, geometryHeader] = await Promise.all([
+      visual.slice(0, PLY_COORDINATE_HEADER_BUDGET_BYTES).arrayBuffer(),
+      geometry.slice(0, PLY_COORDINATE_HEADER_BUDGET_BYTES).arrayBuffer(),
+    ]);
+    const visualDescriptor = parsePlyCoordinateDescriptor(visualHeader);
+    const geometryDescriptor = parsePlyCoordinateDescriptor(geometryHeader);
+    return preflightPairedPlyCoordinateDescriptors(visualDescriptor, geometryDescriptor);
+  } catch (error) {
+    if (
+      errorMessage(error) === "PLY header has no end_header marker" &&
+      (visual.size > PLY_COORDINATE_HEADER_BUDGET_BYTES ||
+        geometry.size > PLY_COORDINATE_HEADER_BUDGET_BYTES)
+    ) throw plyCoordinateHeaderBudgetError();
+    return { status: "unavailable" };
+  }
+}
+
+async function renderNewCaptureHelp(): Promise<void> {
+  const renderGeneration = ++captureQualificationRenderGeneration;
   const adapter = byId<HTMLSelectElement>("newCaptureAdapter").value;
   const file = byId<HTMLInputElement>("newCaptureAsset").files?.[0];
   const geometryInput = byId<HTMLInputElement>("newCaptureGeometry");
   const geometry = geometryInput.files?.[0];
+  const frameConfirmation = byId<HTMLInputElement>("sameCaptureFrameConfirmed");
+  const frameConfirmationRow = byId<HTMLElement>("newCaptureFrameConfirmation");
+  const qualificationStatus = byId("newCaptureQualificationStatus");
   geometryInput.required = true;
   const source = adapter === "xgrids-lcc"
     ? "XGRIDS"
@@ -3646,6 +3774,46 @@ function renderNewCaptureHelp(): void {
   byId("newCaptureGeometryHelp").textContent = geometry
     ? `${geometry.name} will be verified, then used to generate the floor plan, structural collision draft, and navigation draft automatically.`
     : "Required. Choose the registered PLY, E57, LAS, LAZ, or PTS point cloud exported from the same scan. It supplies the floor plan, collision shell, and walking map.";
+  if (!file || !geometry) {
+    captureQualificationMode = ATTESTED_PAIRED_CAPTURE_METHOD;
+    frameConfirmationRow.hidden = true;
+    frameConfirmation.required = false;
+    qualificationStatus.textContent = "Add both files to check their coordinate compatibility.";
+    return;
+  }
+  qualificationStatus.textContent = "Checking embedded frame, scale, and up-axis metadata…";
+  byId<HTMLButtonElement>("newCaptureNext").disabled = true;
+  let preflight: PairedCapturePreflight = { status: "unavailable" };
+  try {
+    preflight = await pairedCaptureCanQualifyAutomatically(file, geometry);
+  } catch (error) {
+    if (renderGeneration !== captureQualificationRenderGeneration) return;
+    byId<HTMLButtonElement>("newCaptureNext").disabled = true;
+    captureQualificationMode = ATTESTED_PAIRED_CAPTURE_METHOD;
+    frameConfirmationRow.hidden = true;
+    frameConfirmation.required = false;
+    qualificationStatus.textContent = errorMessage(error);
+    return;
+  }
+  if (renderGeneration !== captureQualificationRenderGeneration) return;
+  if (preflight.status === "contradicted") {
+    byId<HTMLButtonElement>("newCaptureNext").disabled = true;
+    captureQualificationMode = ATTESTED_PAIRED_CAPTURE_METHOD;
+    frameConfirmationRow.hidden = true;
+    frameConfirmation.required = false;
+    qualificationStatus.textContent = `${preflight.reason} Export both files again from one unchanged Y-up metre frame.`;
+    return;
+  }
+  byId<HTMLButtonElement>("newCaptureNext").disabled = false;
+  captureQualificationMode = preflight.status === "qualified"
+    ? AUTOMATIC_PAIRED_CAPTURE_METHOD
+    : ATTESTED_PAIRED_CAPTURE_METHOD;
+  frameConfirmationRow.hidden = preflight.status === "qualified";
+  frameConfirmation.required = preflight.status !== "qualified";
+  if (preflight.status === "qualified") frameConfirmation.checked = false;
+  qualificationStatus.textContent = preflight.status === "qualified"
+    ? "Automatic qualification available. The processor will verify the shared frame identity, metre scale, Y-up axis, and exact bounds overlap from both uploaded PLY files."
+    : "These files cannot prove their shared frame automatically. Confirm the unchanged coordinate system to use the fallback attestation.";
 }
 
 async function createCapture(form: FormData): Promise<void> {
@@ -3654,14 +3822,27 @@ async function createCapture(form: FormData): Promise<void> {
   const plan = portableCapturePlan(file);
   const geometryFile = form.get("geometry");
   const geometry = geometryFile instanceof File && geometryFile.size > 0 ? geometryFile : null;
-  const adapter = String(form.get("captureAdapter") ?? "open-import");
+  const adapter = String(form.get("captureAdapter") ?? "");
+  if (!captureAdapterProfiles.some((profile) => profile.id === adapter)) {
+    throw new Error("Choose the scanner or export tool that created these capture files.");
+  }
   const template = state.projectTemplates.find((candidate) =>
     candidate.id === String(form.get("projectTemplate") ?? "")
   ) ?? null;
   if (!geometry) {
     throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
   }
-  if (form.get("sameCaptureFrameConfirmed") !== "on") {
+  const qualificationPreflight = await pairedCaptureCanQualifyAutomatically(file, geometry);
+  if (qualificationPreflight.status === "contradicted") {
+    throw new Error(
+      `${qualificationPreflight.reason} Export both files again from one unchanged Y-up metre frame.`,
+    );
+  }
+  const automaticQualification = qualificationPreflight.status === "qualified";
+  captureQualificationMode = automaticQualification
+    ? AUTOMATIC_PAIRED_CAPTURE_METHOD
+    : ATTESTED_PAIRED_CAPTURE_METHOD;
+  if (!automaticQualification && form.get("sameCaptureFrameConfirmed") !== "on") {
     throw new Error(
       "Confirm that both exports come directly from the same capture and still share one registered Y-up metre frame.",
     );
@@ -3688,6 +3869,7 @@ async function createCapture(form: FormData): Promise<void> {
           ...projectCustomFieldsFromForm(byId("newProjectRequiredCustomFields")),
           ...projectCustomFieldsFromForm(byId("newProjectCustomFields")),
         },
+        ...(template ? { projectTemplateId: template.id } : {}),
       }),
     });
     byId("newProjectStatus").textContent = "Project created. Starting resumable upload…";
@@ -3707,7 +3889,8 @@ async function createCapture(form: FormData): Promise<void> {
       clientOperationId: captureJourneyOperation.primaryUploadOperationId,
       captureJourney: {
         id: captureJourneyOperation.id,
-        sameFrameConfirmed: true,
+        qualification: captureQualificationMode,
+        ...(automaticQualification ? {} : { sameFrameConfirmed: true }),
       },
     });
     byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
@@ -3727,14 +3910,15 @@ async function createCapture(form: FormData): Promise<void> {
       clientOperationId: captureJourneyOperation.geometryUploadOperationId,
       captureJourney: {
         id: captureJourneyOperation.id,
-        sameFrameConfirmed: true,
+        qualification: captureQualificationMode,
+        ...(automaticQualification ? {} : { sameFrameConfirmed: true }),
       },
     });
     projectOperationId = null;
     captureJourneyOperation = null;
     window.setTimeout(() => {
       byId<HTMLFormElement>("newProjectForm").reset();
-      renderNewCaptureHelp();
+      void renderNewCaptureHelp();
       setNewCaptureIntakeStep(1, false);
     }, 950);
   } catch (error) {
@@ -3911,7 +4095,7 @@ function applySelectedProjectTemplate(): void {
     adapter.value = template.captureAdapter;
   }
   if (notes instanceof HTMLTextAreaElement && !notes.value.trim()) notes.value = template.notes ?? "";
-  renderNewCaptureHelp();
+  void renderNewCaptureHelp();
 }
 
 function renderPortfolioTools(): void {
@@ -3969,6 +4153,15 @@ function editProjectTemplate(template: ProjectTemplate): void {
     captureAdapter: template.captureAdapter,
     deliveryTemplate: template.deliveryTemplate,
     notes: template.notes ?? "",
+    privacyReview: template.policy.privacyReview,
+    publication: template.policy.publication,
+    navigation: template.policy.navigation,
+    requiredFiles: template.policy.requiredFiles,
+    structureWorkflow: template.policy.structureWorkflow,
+    navigationClearance: template.policy.navigationClearance,
+    measurement: template.policy.measurement,
+    hosting: template.policy.hosting,
+    quality: template.policy.quality,
   };
   for (const [name, value] of Object.entries(fields)) {
     const field = form.elements.namedItem(name);
@@ -4150,6 +4343,18 @@ async function saveProjectTemplate(form: FormData): Promise<void> {
     captureAdapter: String(form.get("captureAdapter") ?? "open-import"),
     deliveryTemplate: String(form.get("deliveryTemplate") ?? "Property showcase"),
     notes: optionalString(form.get("notes")),
+    policy: {
+      schemaVersion: "project-workflow-policy-v1",
+      privacyReview: String(form.get("privacyReview") ?? "strict"),
+      publication: String(form.get("publication") ?? "public-after-approval"),
+      navigation: String(form.get("navigation") ?? "visitor-walk"),
+      requiredFiles: String(form.get("requiredFiles") ?? "visual-and-registered-geometry"),
+      structureWorkflow: String(form.get("structureWorkflow") ?? "automatic-extract-review"),
+      navigationClearance: String(form.get("navigationClearance") ?? "approved-scene"),
+      measurement: String(form.get("measurement") ?? "hidden"),
+      hosting: String(form.get("hosting") ?? "managed-optional"),
+      quality: String(form.get("quality") ?? "standard"),
+    },
   };
   const requestKey = JSON.stringify(body);
   if (!templateId && templateOperation?.requestKey !== requestKey) {
@@ -5269,9 +5474,15 @@ function renderReleases(): void {
     actions.append(exportEvidence);
     if (release.is_active && !release.revoked_at) {
       const revoke = element("button", "danger-button", "Revoke");
-      revoke.addEventListener("click", () => {
-        if (!confirm(`Revoke /s/${release.slug}? Visitors will lose access immediately.`)) return;
-        void runAction({
+      revoke.addEventListener("click", async () => {
+        const confirmed = await confirmPublicationDecision({
+          title: `Revoke /s/${release.slug}?`,
+          message: "Visitors will lose access immediately. The immutable release remains in history.",
+          confirmLabel: "Revoke release",
+          danger: true,
+        });
+        if (!confirmed) return;
+        await runAction({
           key: `revoke-release:${release.slug}`,
           trigger: revoke,
           pendingLabel: "Revoking…",
@@ -5280,9 +5491,14 @@ function renderReleases(): void {
       actions.append(revoke);
     } else if (!release.revoked_at) {
       const rollback = element("button", "quiet-button", "Make active");
-      rollback.addEventListener("click", () => {
-        if (!confirm(`Make this historical release active at /s/${release.slug}?`)) return;
-        void runAction({
+      rollback.addEventListener("click", async () => {
+        const confirmed = await confirmPublicationDecision({
+          title: `Make /s/${release.slug} active?`,
+          message: "This historical release will replace the currently active release on the channel.",
+          confirmLabel: "Make active",
+        });
+        if (!confirmed) return;
+        await runAction({
           key: `rollback-release:${release.id}`,
           trigger: rollback,
           pendingLabel: "Activating…",
@@ -7393,6 +7609,10 @@ function renderSpatial(): void {
     navigationBuildHistory.append(row);
   }
   routes.append(navigationBuildHistory);
+  const approvedNavigationBuild = navigationBuilds.find((build) => build.status === "APPROVED");
+  if (approvedNavigationBuild) {
+    routes.append(renderWalkTestCard(spatial, approvedNavigationBuild));
+  }
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7699,6 +7919,233 @@ function renderSpatial(): void {
   container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
 }
 
+function renderWalkTestCard(
+  spatial: SpatialWorkspace,
+  build: SpatialWorkspace["navigationBuilds"][number],
+): HTMLElement {
+  const project = state.selected?.project;
+  if (
+    project && spatial.version &&
+    (
+      activeWalkTestSession?.projectId !== project.id ||
+      activeWalkTestSession.versionId !== spatial.version.id ||
+      activeWalkTestSession.buildId !== build.id
+    )
+  ) {
+    activeWalkTestSession = {
+      projectId: project.id,
+      versionId: spatial.version.id,
+      buildId: build.id,
+      clientOperationId: null,
+      startPose: null,
+      movementObserved: false,
+      runtimeFailure: null,
+    };
+    latestWalkTestPose = null;
+    previousWalkTestSample = null;
+  }
+  const card = element("section", "release-starting-view walk-test-card");
+  const status = element("p", "field-note", "Preparing the approved scene and walking runtime…");
+  status.id = "walkTestStatus";
+  const heading = element("div");
+  heading.append(
+    element("h3", "", "Walk test"),
+    status,
+  );
+  const frame = document.createElement("iframe");
+  frame.id = "walkTestPreview";
+  frame.title = "Test the approved walking map inside the scene";
+  const evidence = walkTestEvidenceSummary(build);
+  const evidenceSummary = element("p", "field-note", evidence);
+  const reset = element("button", "quiet-button", "Reset walk test");
+  const usePosition = element("button", "quiet-button", "Set test start here");
+  usePosition.disabled = true;
+  usePosition.id = "walkTestUsePosition";
+  const complete = element("button", "primary-button", "Complete walk test");
+  complete.disabled = true;
+  complete.id = "walkTestComplete";
+  reset.addEventListener("click", () => {
+    latestWalkTestPose = null;
+    previousWalkTestSample = null;
+    if (activeWalkTestSession) {
+      activeWalkTestSession.startPose = null;
+      activeWalkTestSession.clientOperationId = null;
+      activeWalkTestSession.movementObserved = false;
+      activeWalkTestSession.runtimeFailure = null;
+    }
+    usePosition.disabled = true;
+    complete.disabled = true;
+    void prepareWalkTest(frame, status, spatial.version!.id);
+  });
+  usePosition.addEventListener("click", () => {
+    if (!latestWalkTestPose || !activeWalkTestSession) return;
+    activeWalkTestSession.startPose = {
+      position: [...latestWalkTestPose.position] as [number, number, number],
+      target: [...latestWalkTestPose.target] as [number, number, number],
+    };
+    activeWalkTestSession.clientOperationId = crypto.randomUUID();
+    activeWalkTestSession.movementObserved = false;
+    activeWalkTestSession.runtimeFailure = null;
+    complete.disabled = true;
+    status.textContent = "Starting point set. Walk away from it through the approved scene, then complete the test.";
+    showToast("Walk-test starting point set");
+  });
+  complete.addEventListener("click", () => {
+    if (!activeWalkTestSession || !latestWalkTestPose) return;
+    void runAction({
+      key: `complete-walk-test:${build.id}`,
+      trigger: complete,
+      pendingLabel: "Recording…",
+      disable: [reset, usePosition],
+    }, () => completeWalkTest(build.id, activeWalkTestSession!, latestWalkTestPose!));
+  });
+  const actions = element("div", "navigation-authoring-actions");
+  actions.append(reset, usePosition, complete);
+  card.append(heading, frame, evidenceSummary, actions);
+  const completed = spatial.walkTests?.find((walkTest) =>
+    walkTest.navigation_build_id === build.id
+  );
+  if (completed) {
+    card.append(element(
+      "p",
+      "generated-readback",
+      `Walk-test receipt recorded ${parseTimestamp(completed.completed_at).toLocaleString()} for this exact approved walking map.`,
+    ));
+  }
+  window.queueMicrotask(() => void prepareWalkTest(frame, status, spatial.version!.id));
+  return card;
+}
+
+async function completeWalkTest(
+  buildId: string,
+  session: NonNullable<typeof activeWalkTestSession>,
+  endPose: NonNullable<typeof latestWalkTestPose>,
+): Promise<void> {
+  if (!session.startPose || !session.movementObserved || session.runtimeFailure) {
+    throw new Error("Set a starting point, walk away from it, and resolve runtime failures before completion.");
+  }
+  await api(`/api/projects/${session.projectId}/spatial/navigation-builds/${buildId}/walk-tests`, {
+    method: "POST",
+    body: JSON.stringify({
+      clientOperationId: session.clientOperationId ??= crypto.randomUUID(),
+      versionId: session.versionId,
+      startPose: session.startPose,
+      endPose: { position: endPose.position, target: endPose.target },
+      runtimeEvidence: {
+        movementObserved: true,
+        collisionFailureReported: false,
+        traversalBlockReported: false,
+      },
+    }),
+  });
+  showToast("Walk test completed and recorded");
+  await Promise.all([
+    loadSpatialWorkspace(session.projectId),
+    selectProject(session.projectId, false, false),
+  ]);
+}
+
+function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][number]): string {
+  try {
+    const artifact = JSON.parse(build.artifact_json ?? "{}") as Record<string, unknown>;
+    const validation = Reflect.get(artifact, "validation");
+    const physical = Reflect.get(artifact, "physicalValidation");
+    const unreachable = validation && typeof validation === "object"
+      ? Reflect.get(validation, "unreachableDestinationIds")
+      : null;
+    const failed = physical && typeof physical === "object"
+      ? Reflect.get(physical, "failedDestinationIds")
+      : null;
+    const unreachableCount = Array.isArray(unreachable) ? unreachable.length : 0;
+    const failedCount = Array.isArray(failed) ? failed.length : 0;
+    return `${unreachableCount} unreachable authored destinations · ${failedCount} failed physical routes in the approved processor receipt.`;
+  } catch {
+    return "The approved build receipt could not be summarized; inspect its immutable evidence above.";
+  }
+}
+
+async function prepareWalkTest(
+  frame: HTMLIFrameElement,
+  status: HTMLElement,
+  versionId: string,
+): Promise<void> {
+  frame.onload = null;
+  frame.src = "about:blank";
+  status.textContent = "Preparing the approved scene and walking runtime…";
+  try {
+    const renderable = await createVersionPreview(versionId);
+    if (!frame.isConnected || state.spatial?.version?.id !== versionId) return;
+    frame.onload = () => sendVersionSpatialRuntime(frame, renderable);
+    frame.src = rendererAssetUrl(renderable).toString();
+  } catch (error) {
+    if (!frame.isConnected) return;
+    status.textContent = `Walk test unavailable: ${errorMessage(error)}`;
+  }
+}
+
+function handleWalkTestRendererMessage(event: MessageEvent<unknown>): void {
+  const frame = document.getElementById("walkTestPreview");
+  const status = document.getElementById("walkTestStatus");
+  if (
+    !(frame instanceof HTMLIFrameElement) || !status ||
+    event.origin !== location.origin || event.source !== frame.contentWindow ||
+    !event.data || typeof event.data !== "object" ||
+    Reflect.get(event.data, "source") !== "spatial-spark"
+  ) return;
+  const type = Reflect.get(event.data, "type");
+  if (type === "ready") {
+    status.textContent = "Ready. Click the scene, then walk with WASD or arrow keys; collision remains enforced by the approved runtime.";
+    return;
+  }
+  if (type === "error") {
+    const message = String(Reflect.get(event.data, "message") ?? "walking runtime error");
+    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
+    const complete = document.getElementById("walkTestComplete");
+    if (complete instanceof HTMLButtonElement) complete.disabled = true;
+    status.textContent = `Runtime warning: ${message}`;
+    return;
+  }
+  if (type === "authored-traversal-state" && Reflect.get(event.data, "phase") === "blocked") {
+    const message = String(Reflect.get(event.data, "message") ?? "review the approved path evidence");
+    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
+    const complete = document.getElementById("walkTestComplete");
+    if (complete instanceof HTMLButtonElement) complete.disabled = true;
+    status.textContent = `Traversal blocked: ${message}`;
+    return;
+  }
+  if (type !== "camera-update") return;
+  const pose = Reflect.get(event.data, "cameraPose");
+  if (!pose || typeof pose !== "object") return;
+  const position = finiteStudioPoint(Reflect.get(pose, "position"));
+  const target = finiteStudioPoint(Reflect.get(pose, "target"));
+  if (!position || !target) return;
+  const observedAt = performance.now();
+  const elapsedSeconds = previousWalkTestSample
+    ? (observedAt - previousWalkTestSample.observedAt) / 1000
+    : 0;
+  const speed = previousWalkTestSample && elapsedSeconds > 0
+    ? Math.hypot(...position.map((value, axis) => value - previousWalkTestSample!.position[axis]!)) /
+      elapsedSeconds
+    : 0;
+  latestWalkTestPose = { position, target, observedAt };
+  previousWalkTestSample = { position, observedAt };
+  const usePosition = document.getElementById("walkTestUsePosition");
+  if (usePosition instanceof HTMLButtonElement) usePosition.disabled = false;
+  if (activeWalkTestSession?.startPose) {
+    activeWalkTestSession.movementObserved = position.some((coordinate, axis) =>
+      coordinate !== activeWalkTestSession!.startPose!.position[axis]
+    );
+  }
+  const complete = document.getElementById("walkTestComplete");
+  if (complete instanceof HTMLButtonElement) {
+    complete.disabled = !activeWalkTestSession?.movementObserved ||
+      Boolean(activeWalkTestSession.runtimeFailure);
+  }
+  status.textContent = `Walking runtime active · current speed ${speed.toFixed(2)} ${worldUnitSymbol(
+    state.spatial?.navigationProfile.worldUnit ?? "metres",
+  )}/s · no runtime collision failure reported.`;
+}
+
 function renderPublish(): void {
   const container = byId("publishOverview");
   container.replaceChildren();
@@ -7718,7 +8165,16 @@ function renderPublish(): void {
   const navigationReady = Boolean(
     releasableVersion && detail.previewReadyVersionIds.includes(releasableVersion.id),
   );
+  const walkTestReady = Boolean(
+    releasableVersion &&
+    (detail.walkTestReadyVersionIds ?? []).includes(releasableVersion.id),
+  );
   const privacy = privacyQaReadiness(state.spatial);
+  const workflowPolicy = effectiveProjectWorkflowPolicy(detail.project);
+  const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
+    subscription.project_id === detail.project.id && subscription.status === "active"
+  ) ?? null;
+  const hostingReady = workflowPolicy.hosting !== "managed-required" || Boolean(hostingSubscription);
   card.append(
     element("span", "eyebrow", "PUBLICATION READINESS"),
     element("h3", "", "Confirm evidence, then publish"),
@@ -7727,7 +8183,18 @@ function renderPublish(): void {
       releasableVersion ? `Version ${releasableVersion.version_number} approved` : "Awaiting QA approval",
     ),
     projectFact("Walking map", navigationReady ? "Verified and approved" : "Not ready"),
+    projectFact("In-scene walk test", walkTestReady ? "Completed and recorded" : "Required before publication"),
     projectFact("Privacy evidence", privacy.ready ? "Ready for human approval" : privacy.message),
+    projectFact(
+      "Managed hosting",
+      workflowPolicy.hosting === "managed-required"
+        ? hostingReady
+          ? `${hostingSubscription!.plan_name} active`
+          : "Required before publication"
+        : hostingSubscription
+          ? `${hostingSubscription.plan_name} active`
+          : "Optional",
+    ),
   );
   const republish = (state.spatial.releaseRepublishIntents ?? [])[0];
   if (republish) {
@@ -7752,7 +8219,7 @@ function renderPublish(): void {
     });
     card.append(review);
   }
-  if (releasableVersion && navigationReady) {
+  if (releasableVersion && navigationReady && walkTestReady && hostingReady) {
     const configure = element("button", "primary-button wide", "Configure publication");
     configure.addEventListener("click", () => {
       void runAction({
@@ -7762,6 +8229,16 @@ function renderPublish(): void {
       }, openReleaseDialog);
     });
     card.append(configure);
+  } else if (releasableVersion && navigationReady && walkTestReady && !hostingReady) {
+    const configureHosting = element("button", "primary-button wide", "Configure managed hosting");
+    configureHosting.addEventListener("click", () => {
+      void runAction({
+        key: `open-hosting:${detail.project.id}`,
+        trigger: configureHosting,
+        pendingLabel: "Loading hosting settings…",
+      }, openDeliveryDialog);
+    });
+    card.append(configureHosting);
   }
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at);
   if (activeRelease) {
@@ -9604,23 +10081,96 @@ function openNavigationProfileDialog(): void {
   setFormValue(form, "maxSlopeDegrees", String(profile.maxSlopeDegrees ?? 45));
   setFormValue(form, "maxSpeed", String(profile.maxSpeed ?? 1.6));
   setFormValue(form, "maxAcceleration", String(profile.maxAcceleration ?? 8));
+  form.dataset.approvedClearance = JSON.stringify({
+    agentRadius: profile.agentRadius,
+    maxStepMetres: profile.maxStepMetres,
+    maxSlopeDegrees: profile.maxSlopeDegrees ?? 45,
+  });
+  setFormValue(
+    form,
+    "clearancePreset",
+    state.selected
+      ? effectiveProjectWorkflowPolicy(state.selected.project).navigationClearance
+      : "approved-scene",
+  );
+  const adaOption = form.querySelector<HTMLOptionElement>(
+    'select[name="clearancePreset"] option[value="ada-route-review"]',
+  );
+  if (adaOption) {
+    adaOption.disabled = profile.worldUnit !== "metres";
+    adaOption.title = adaOption.disabled
+      ? "Metric registration is required before applying a standards-based clearance review."
+      : "";
+  }
+  setFormValue(
+    form,
+    "navigationIntent",
+    state.selected ? effectiveProjectWorkflowPolicy(state.selected.project).navigation : "visitor-walk",
+  );
   byId("navigationProfileSummary").textContent =
     `${profile.worldUnit === "scene_units" ? "Provisional scene-unit" : "Metric"} profile · ` +
     `${profile.agentRadius} ${worldUnitSymbol(profile.worldUnit)} radius · ` +
     `${profile.agentHeight} ${worldUnitSymbol(profile.worldUnit)} standing height · ` +
     `${profile.maxStepMetres} ${worldUnitSymbol(profile.worldUnit)} maximum step.`;
+  syncNavigationClearancePreset(form, true);
   byId("navigationProfileError").textContent = "";
   navigationProfileDialog.showModal();
+}
+
+function syncNavigationClearancePreset(form: HTMLFormElement, applyValues: boolean): void {
+  const presetControl = form.elements.namedItem("clearancePreset");
+  if (!(presetControl instanceof HTMLSelectElement)) return;
+  const preset = presetControl.value as NavigationClearancePresetId;
+  const worldUnit = form.elements.namedItem("worldUnit");
+  if (
+    preset === "ada-route-review" &&
+    (!(worldUnit instanceof HTMLSelectElement) || worldUnit.value !== "metres")
+  ) {
+    presetControl.value = "approved-scene";
+    showNotice(
+      "The US ADA route review needs an accepted metric registration. Keep the approved scene profile until this version has metre evidence.",
+      "error",
+    );
+  }
+  const selected = presetControl.value as NavigationClearancePresetId;
+  if (applyValues && selected === "ada-route-review") {
+    setFormValue(form, "agentRadius", String(adaRouteReviewClearance.agentRadius));
+    setFormValue(form, "maxStepMetres", String(adaRouteReviewClearance.maxStepMetres));
+    setFormValue(form, "maxSlopeDegrees", String(adaRouteReviewClearance.maxSlopeDegrees));
+  } else if (applyValues && selected === "approved-scene") {
+    try {
+      const approved = JSON.parse(form.dataset.approvedClearance ?? "{}") as Record<string, unknown>;
+      for (const name of ["agentRadius", "maxStepMetres", "maxSlopeDegrees"]) {
+        const value = Reflect.get(approved, name);
+        if (typeof value === "number" && Number.isFinite(value)) {
+          setFormValue(form, name, String(value));
+        }
+      }
+    } catch {
+      // The immutable profile values are still present in the form.
+    }
+  }
+  byId("navigationClearancePresetSummary").textContent =
+    navigationClearancePresetSummary(selected);
+  byId<HTMLDetailsElement>("navigationExpertSettings").open = selected === "custom";
 }
 
 async function updateNavigationProfile(form: FormData): Promise<void> {
   const project = state.selected?.project;
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
+  const navigationIntent = String(form.get("navigationIntent") ?? "visitor-walk");
+  const navigationClearance = String(form.get("clearancePreset") ?? "approved-scene");
+  const workflowPolicy = effectiveProjectWorkflowPolicy(project);
   await api(`/api/projects/${project.id}/spatial/navigation-profile`, {
     method: "PUT",
     body: JSON.stringify({
       versionId: version.id,
+      workflowPolicy: {
+        ...workflowPolicy,
+        navigation: navigationIntent,
+        navigationClearance,
+      },
       worldUnit: String(form.get("worldUnit") ?? "metres"),
       agentRadius: Number(form.get("agentRadius")),
       agentHeight: Number(form.get("agentHeight")),
@@ -11462,12 +12012,15 @@ async function selectProject(
 
 function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
   const journey = projectJourneyState(detail);
+  const privacyIsStrict = effectiveProjectWorkflowPolicy(detail.project).privacyReview === "strict";
   if (!journey.hasCapture) return "overview";
+  if (journey.captureQualification?.status === "blocked") return "process";
   if (!journey.renderableVersion) return "process";
   if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
   if (!journey.structureReady) return "structure";
+  if (privacyIsStrict && journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
+  if (!journey.navigationReady || !journey.walkTestReady) return "walk";
   if (journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
-  if (!journey.navigationReady) return "walk";
   if (!journey.privacyApproved) return "privacy";
   if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
   return "overview";
@@ -11494,6 +12047,9 @@ function projectJourneyState(detail: ProjectDetail) {
   const failedJob = journeyJobs.find((job) =>
     ["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state) &&
     !supersededByLaterSuccess(job)) ?? null;
+  const captureQualification = automaticCaptureQualification(
+    renderableVersion ?? detail.versions.find((version) => version.source_provenance_json) ?? null,
+  );
   const hasCapture = detail.assets.length > 0;
   const hasMetricGeometry = detail.assets.some((asset) =>
     asset.kind === "pointcloud" && ["ply", "e57", "las", "laz", "pts"].includes(asset.format)
@@ -11502,6 +12058,10 @@ function projectJourneyState(detail: ProjectDetail) {
   const navigationJob = journeyJobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
   const navigationReady = Boolean(
     renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
+  );
+  const walkTestReady = Boolean(
+    navigationReady && renderableVersion &&
+    (detail.walkTestReadyVersionIds ?? []).includes(renderableVersion.id),
   );
   const structureReady = navigationReady || Boolean(navigationJob);
   // Privacy follows the newest immutable version, including an auxiliary QA
@@ -11524,17 +12084,48 @@ function projectJourneyState(detail: ProjectDetail) {
     renderableVersion,
     activeJob,
     failedJob,
+    captureQualification,
     hasCapture,
     hasMetricGeometry,
     floorplanJob,
     navigationJob,
     navigationReady,
+    walkTestReady,
     structureReady,
     privacyVersion,
     privacyApproved,
     automaticWalkingWorkActive,
     walkingExceptionReviewReady,
   };
+}
+
+function automaticCaptureQualification(version: Version | null): {
+  status: "pending" | "verified" | "blocked";
+  reason: string | null;
+} | null {
+  if (!version?.source_provenance_json) return null;
+  try {
+    const provenance = JSON.parse(version.source_provenance_json) as unknown;
+    const journey = provenance && typeof provenance === "object"
+      ? Reflect.get(provenance, "captureJourney")
+      : null;
+    const qualification = journey && typeof journey === "object"
+      ? Reflect.get(journey, "qualification")
+      : null;
+    if (
+      !qualification || typeof qualification !== "object" ||
+      Reflect.get(qualification, "method") !== AUTOMATIC_PAIRED_CAPTURE_METHOD
+    ) return null;
+    const status = Reflect.get(qualification, "status");
+    if (status !== "pending" && status !== "verified" && status !== "blocked") return null;
+    const reason = Reflect.get(qualification, "reason");
+    return {
+      status,
+      reason: typeof reason === "string" && reason.trim() ? reason : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function ensureProjectWorkspace(view: "spatial" | "measurement", force = false): Promise<void> {
@@ -11641,11 +12232,13 @@ function renderProjectDetail(): void {
     renderableVersion,
     activeJob,
     failedJob,
+    captureQualification,
     hasCapture,
     hasMetricGeometry,
     floorplanJob,
     navigationJob,
     navigationReady,
+    walkTestReady,
     structureReady,
     privacyVersion: latestVersion,
     privacyApproved,
@@ -11663,7 +12256,9 @@ function renderProjectDetail(): void {
       "h3",
       "",
       renderableVersion
-        ? navigationReady
+        ? captureQualification?.status === "blocked"
+          ? "Capture compatibility needs correction."
+          : navigationReady
           ? "Your walkable splat preview is ready."
           : automaticWalkingWorkActive
             ? "Building and verifying the walking map."
@@ -11678,7 +12273,9 @@ function renderProjectDetail(): void {
       "p",
       "muted-copy",
       renderableVersion
-        ? navigationReady
+        ? captureQualification?.status === "blocked"
+          ? `${captureQualification.reason ?? "Automatic qualification could not verify the shared capture frame."} Return to the capture source, export both files again from one unchanged Y-up metre frame, and upload them as a new immutable capture.`
+          : navigationReady
           ? "The visual splat, verified collision, and approved walking map are ready for review."
           : automaticWalkingWorkActive
             ? `${humanStatus(activeJob!.job_type)} is ${humanStatus(activeJob!.state).toLowerCase()}: ${activeJob!.progress_message ?? `${activeJob!.progress}% complete`}. No routine navigation setup is required.`
@@ -11702,6 +12299,25 @@ function renderProjectDetail(): void {
     upload.disabled = detail.project.status === "ARCHIVED";
     upload.addEventListener("click", openUploadDialog);
     journeyActions.append(upload);
+  } else if (captureQualification?.status === "blocked") {
+    if (failedJob) {
+      const retry = element("button", "primary-button", "Retry automatic qualification");
+      retry.addEventListener("click", () => {
+        void runAction({
+          key: `retry-job:${failedJob.id}`,
+          trigger: retry,
+          pendingLabel: "Queueing retry…",
+        }, () => retryJob(failedJob));
+      });
+      journeyActions.append(retry);
+    } else {
+      const correction = element("button", "quiet-button", "Show correction steps");
+      correction.addEventListener("click", () => showNotice(
+        `${captureQualification.reason ?? "The shared capture frame was not verified."} Export the visual and geometry PLY files again from the same unchanged Y-up metre coordinate frame, then start a replacement immutable capture.`,
+        "error",
+      ));
+      journeyActions.append(correction);
+    }
   } else if (renderableVersion && navigationReady) {
     const preview = element("button", "primary-button", "Open private preview");
     preview.addEventListener("click", () => {
@@ -11772,19 +12388,27 @@ function renderProjectDetail(): void {
     projectJourneyStep(
       "2",
       "Process",
-      renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
-      renderableVersion ? "Visual scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
+      captureQualification?.status === "blocked"
+        ? "blocked"
+        : renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
+      captureQualification?.status === "blocked"
+        ? "Capture frame not verified"
+        : renderableVersion ? "Visual scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
       "process",
     ),
     projectJourneyStep(
       "3",
       "Structure",
-      structureReady
+      captureQualification?.status === "blocked"
+        ? "blocked"
+        : structureReady
         ? "complete"
         : walkingExceptionReviewReady || floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
           ? "current"
           : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
-      structureReady
+      captureQualification?.status === "blocked"
+        ? "Correct capture exports first"
+        : structureReady
         ? "Rooms and openings approved"
         : walkingExceptionReviewReady
           ? "Review structural exceptions"
@@ -11801,22 +12425,30 @@ function renderProjectDetail(): void {
     projectJourneyStep(
       "5",
       "Walk test",
-      navigationReady ? "complete" : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
+      walkTestReady ? "complete" : navigationReady
+        ? "current"
+        : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
         ? "current"
         : navigationJob ? "blocked" : "waiting",
-      navigationReady ? "Proof accepted" : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
+      walkTestReady
+        ? "Operator test recorded"
+        : navigationReady
+          ? "Set start and complete test"
+          : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
       "walk",
     ),
     projectJourneyStep(
       "6",
       "Publish",
-      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
+      activeRelease ? "complete" : walkTestReady && privacyApproved ? "current" : "blocked",
       activeRelease
         ? `Live at /${activeRelease.slug}`
         : !privacyApproved
           ? "Privacy approval required"
-          : navigationReady
+          : walkTestReady
             ? "Choose audience and publish"
+            : navigationReady
+              ? "Complete the in-scene walk test"
             : walkingExceptionReviewReady
               ? "Review structural exceptions"
               : "Verified walk required",
@@ -11861,7 +12493,7 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion && navigationReady) {
+  if (releasableVisualVersion && walkTestReady) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({
@@ -11882,6 +12514,13 @@ function renderProjectDetail(): void {
     projectFact("Customer contact", detail.project.customerEmail ?? "Not assigned"),
     projectFact("Capture source", humanStatus(detail.project.captureAdapter)),
     projectFact("Delivery classification", detail.project.deliveryTemplate),
+    projectFact("Privacy policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).privacyReview)),
+    projectFact("Publication policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).publication)),
+    projectFact("Navigation policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).navigation)),
+    projectFact("Required files", humanStatus(effectiveProjectWorkflowPolicy(detail.project).requiredFiles)),
+    projectFact("Structure workflow", humanStatus(effectiveProjectWorkflowPolicy(detail.project).structureWorkflow)),
+    projectFact("Walking clearance", humanStatus(effectiveProjectWorkflowPolicy(detail.project).navigationClearance)),
+    projectFact("Measurement policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).measurement)),
     projectFact("Notes", detail.project.notes ?? "No project notes."),
   );
   for (const field of state.projectFields.filter((candidate) =>
@@ -11980,9 +12619,15 @@ function renderProjectDetail(): void {
     releaseRow.append(exportEvidence);
     if (release.is_active) {
       const revoke = element("button", "danger-button", "Revoke");
-      revoke.addEventListener("click", () => {
-        if (!confirm(`Revoke /s/${release.slug}? Visitors will lose access immediately.`)) return;
-        void runAction({
+      revoke.addEventListener("click", async () => {
+        const confirmed = await confirmPublicationDecision({
+          title: `Revoke /s/${release.slug}?`,
+          message: "Visitors will lose access immediately. The immutable release remains in history.",
+          confirmLabel: "Revoke release",
+          danger: true,
+        });
+        if (!confirmed) return;
+        await runAction({
           key: `revoke-release:${release.slug}`,
           trigger: revoke,
           pendingLabel: "Revoking…",
@@ -11991,9 +12636,14 @@ function renderProjectDetail(): void {
       releaseRow.append(revoke);
     } else if (!release.revoked_at) {
       const rollback = element("button", "quiet-button", "Make active");
-      rollback.addEventListener("click", () => {
-        if (!confirm(`Make this historical release active at /s/${release.slug}?`)) return;
-        void runAction({
+      rollback.addEventListener("click", async () => {
+        const confirmed = await confirmPublicationDecision({
+          title: `Make /s/${release.slug} active?`,
+          message: "This historical release will replace the currently active release on the channel.",
+          confirmLabel: "Make active",
+        });
+        if (!confirmed) return;
+        await runAction({
           key: `rollback-release:${release.id}`,
           trigger: rollback,
           pendingLabel: "Activating…",
@@ -12047,7 +12697,9 @@ function renderProjectDetail(): void {
   domainButton.addEventListener("click", () => {
     void openDomainDialog();
   });
-  optionalTools.append(spatialButton, measurementButton, inviteButton, reviewButton, deliveryButton, domainButton);
+  optionalTools.append(spatialButton);
+  if (effectiveProjectWorkflowPolicy(detail.project).measurement !== "hidden") optionalTools.append(measurementButton);
+  optionalTools.append(inviteButton, reviewButton, deliveryButton, domainButton);
 
   const technicalDetails = element("details", "project-detail-disclosure");
   technicalDetails.append(element("summary", "", "Technical details and source history"));
@@ -13123,7 +13775,10 @@ type UploadOptions = {
   clientOperationId?: string;
   captureJourney?: {
     id: string;
-    sameFrameConfirmed: true;
+    qualification:
+      | typeof AUTOMATIC_PAIRED_CAPTURE_METHOD
+      | typeof ATTESTED_PAIRED_CAPTURE_METHOD;
+    sameFrameConfirmed?: true;
   };
 };
 
@@ -13489,6 +14144,23 @@ async function openReleaseDialog(): Promise<void> {
   ) return;
   const form = byId<HTMLFormElement>("releaseForm");
   form.reset();
+  const accessPolicy = form.elements.namedItem("accessPolicy");
+  if (accessPolicy instanceof HTMLSelectElement) {
+    accessPolicy.value = effectiveProjectWorkflowPolicy(state.selected.project).publication === "private-review"
+      ? "token"
+      : "public";
+  }
+  const qualityPreset = form.elements.namedItem("qualityPreset");
+  if (qualityPreset instanceof HTMLSelectElement) {
+    qualityPreset.value = effectiveProjectWorkflowPolicy(state.selected.project).quality;
+  }
+  const movementMode = form.elements.namedItem("defaultMovementMode");
+  if (movementMode instanceof HTMLSelectElement) {
+    movementMode.value = effectiveProjectWorkflowPolicy(state.selected.project).navigation === "review-walk-and-fly"
+      ? "fly"
+      : "walk";
+  }
+  syncReleaseQualityPreset(form);
   byId<HTMLDetailsElement>("releaseExpertSettings").open = false;
   const slug = form.elements.namedItem("slug");
   const title = form.elements.namedItem("title");
@@ -13628,6 +14300,38 @@ function syncReleaseTransformModes(form: HTMLFormElement): void {
   }
   applyTransform.disabled = hasRotation;
   evidence.disabled = hasRotation;
+  const acceptedTransform = applyTransform.checked && Boolean(evidence.value);
+  for (const name of [
+    "releaseMetresPerSourceUnit",
+    "releaseYawDegrees",
+    "releaseTranslationX",
+    "releaseTranslationY",
+    "releaseTranslationZ",
+  ]) {
+    const input = form.elements.namedItem(name);
+    if (input instanceof HTMLInputElement) input.readOnly = acceptedTransform;
+  }
+  for (const name of ["releaseWorldUnit", "releaseSourceUpAxis"]) {
+    const select = form.elements.namedItem(name);
+    if (!(select instanceof HTMLSelectElement)) continue;
+    select.setAttribute("aria-readonly", String(acceptedTransform));
+    select.tabIndex = acceptedTransform ? -1 : 0;
+    select.style.pointerEvents = acceptedTransform ? "none" : "";
+  }
+}
+
+function syncReleaseQualityPreset(form: HTMLFormElement): void {
+  const preset = form.elements.namedItem("qualityPreset");
+  const budget = form.elements.namedItem("splatBudgetMillions");
+  if (!(preset instanceof HTMLSelectElement) || !(budget instanceof HTMLInputElement)) return;
+  const policy = state.spatial?.deliveryPolicy ?? {};
+  const budgetByPreset = {
+    "data-saver": Reflect.get(policy, "mobile_lite_budget"),
+    standard: Reflect.get(policy, "desktop_standard_budget"),
+    "high-detail": Reflect.get(policy, "desktop_high_budget"),
+  };
+  const selected = Number(budgetByPreset[preset.value as keyof typeof budgetByPreset]);
+  if (Number.isFinite(selected) && selected > 0) budget.value = String(selected);
 }
 
 function hasEnteredSceneRotation(form: HTMLFormElement): boolean {
@@ -13786,11 +14490,25 @@ function setProvisionalReleaseDisclaimer(
 ): void {
   const disclaimer = form.elements.namedItem("measurementDisclaimer");
   if (!(disclaimer instanceof HTMLTextAreaElement)) return;
-  disclaimer.readOnly = provisional;
-  disclaimer.title = provisional
-    ? "The platform warning is mandatory and cannot be edited for provisional scene-unit releases."
-    : "";
-  if (provisional) disclaimer.value = PROVISIONAL_MEASUREMENT_DISCLAIMER;
+  disclaimer.readOnly = true;
+  disclaimer.title = "The platform generates this warning from the approved version's measurement reliance grade and accepted coordinate evidence.";
+  const approvedVersion = auxiliaryCollisionTargetVersion();
+  let manifest: unknown = null;
+  try {
+    manifest = approvedVersion?.manifest_json
+      ? JSON.parse(approvedVersion.manifest_json)
+      : null;
+  } catch {
+    manifest = null;
+  }
+  const grade = parseMeasurementGrade(
+    manifest && typeof manifest === "object" ? Reflect.get(manifest, "measurementGrade") : null,
+  );
+  disclaimer.value = grade
+    ? publicationMeasurementDisclaimer(grade, provisional)
+    : provisional
+      ? PROVISIONAL_MEASUREMENT_DISCLAIMER
+      : publicationMeasurementDisclaimer("visual-only");
 }
 
 function parseReleaseSourceToWorld(form: FormData): {
@@ -14348,6 +15066,28 @@ function clearNotice(): void {
   notice.hidden = true;
   notice.textContent = "";
   notice.className = "notice-card";
+}
+
+async function confirmPublicationDecision(options: {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+}): Promise<boolean> {
+  const dialog = byId<HTMLDialogElement>("publicationConfirmationDialog");
+  const submit = byId<HTMLButtonElement>("publicationConfirmationSubmit");
+  if (dialog.open) dialog.close("cancel");
+  byId("publicationConfirmationTitle").textContent = options.title;
+  byId("publicationConfirmationMessage").textContent = options.message;
+  submit.textContent = options.confirmLabel;
+  submit.className = options.danger ? "danger-button" : "primary-button";
+  dialog.returnValue = "cancel";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), {
+      once: true,
+    });
+    dialog.showModal();
+  });
 }
 
 function showToast(message: string): void {
