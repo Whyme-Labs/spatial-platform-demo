@@ -33,6 +33,7 @@ export const projectDeliveryTemplates = [
 export type ProjectDeliveryTemplate = typeof projectDeliveryTemplates[number];
 
 export const legacyProjectDeliveryTemplateAliases = {
+  "indoor-experience": "Property showcase",
   "property-tour": "Property showcase",
   "venue-navigator": "Venue navigator",
   "operations-twin": "Measured capture pack",

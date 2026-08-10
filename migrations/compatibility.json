@@ -190,6 +190,9 @@
     },
     "0056_navigation_walk_tests.sql": {
       "phase": "expand"
+    },
+    "0057_canonical_delivery_templates.sql": {
+      "phase": "expand"
     }
   }
 }

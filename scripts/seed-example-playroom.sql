@@ -21,7 +21,7 @@ INSERT OR IGNORE INTO projects (
   'playroom-indoor-example',
   'PUBLISHED',
   'open-import',
-  'indoor-experience',
+  'Property showcase',
   'Public Apache-2.0 example used to validate Spark browser delivery, source provenance, camera alignment, and R2 range serving.',
   '00000000-0000-4000-8000-000000000002',
   '2026-07-26T15:30:00.000Z',

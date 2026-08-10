@@ -110,6 +110,7 @@ describe("behavior-driving project policies", () => {
   });
 
   it("normalizes each documented legacy identifier explicitly", () => {
+    expect(normalizeProjectDeliveryTemplate("indoor-experience")).toBe("Property showcase");
     expect(normalizeProjectDeliveryTemplate("property-tour")).toBe("Property showcase");
     expect(normalizeProjectDeliveryTemplate("venue-navigator")).toBe("Venue navigator");
     expect(normalizeProjectDeliveryTemplate("operations-twin")).toBe("Measured capture pack");
