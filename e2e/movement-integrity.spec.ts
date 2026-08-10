@@ -24,6 +24,13 @@ type HostMessage = { type: string; code?: string };
 test("the public renderer does not post ready before its walking runtime exists", async ({
   page,
 }) => {
+  const rapierInitWarnings: string[] = [];
+  page.on("console", (message) => {
+    const text = message.text();
+    if (text.includes("deprecated parameters for the initialization function")) {
+      rapierInitWarnings.push(text);
+    }
+  });
   const fixture = await buildFixture();
   await mountFixture(page, fixture, { sendRuntime: false });
 
@@ -38,6 +45,7 @@ test("the public renderer does not post ready before its walking runtime exists"
   await expect
     .poll(async () => (await messagesOfType(page, "ready")).length, { timeout: 15_000 })
     .toBeGreaterThan(0);
+  expect(rapierInitWarnings).toEqual([]);
 });
 
 test("a fatal walking-map error is never followed by ready", async ({ page }) => {

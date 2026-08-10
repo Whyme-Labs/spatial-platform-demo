@@ -1032,4 +1032,3 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | Viewer / Retry release | Retry button pending | Error panel remains actionable | Single-flight with the load action | WORKFLOW-A |
 | Viewer / Share | Share button pending | Clipboard fallback, then explicit guidance | Manual retry | WORKFLOW-A |
 | Viewer / Room/floor-plan navigation | Room control pending until the Spark camera acknowledgement; other moves are single-flight | Inline navigator error; control and keyboard target restored | Explicit retry sends a new request ID; cameras outside collision are rejected | WORKFLOW-A |
-

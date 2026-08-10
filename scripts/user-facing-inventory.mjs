@@ -306,7 +306,7 @@ function renderReport(value) {
     sectionTable("Persisted states", ["State set", "Field", "Values", "Source", "Policy"], value.states.map((state) => [state.id, state.field, state.values.join(", "), state.source, "STATE-A"])),
     sectionTable("Asynchronous workflows", ["Surface / action", "Pending", "Failure", "Retry/idempotency", "Policy"], value.workflows.map((workflow) => [`${workflow.surface} / ${workflow.action}`, workflow.pending, workflow.failure, workflow.retry, "WORKFLOW-A"])),
   ];
-  return `${lines.join("\n")}\n`;
+  return `${lines.join("\n").trimEnd()}\n`;
 }
 
 function sectionTable(title, headers, rows) {
