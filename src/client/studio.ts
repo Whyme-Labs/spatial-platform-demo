@@ -18,9 +18,15 @@ import {
 } from "../shared/scene-rotation";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
+  assetProducerIds,
+  assetProducerForLegacyAdapter,
   captureAdapterDisplayLabel,
   captureAdapterProfiles,
   captureFormatsForPurpose,
+  captureOriginForLegacyAdapter,
+  captureOriginIds,
+  planProducedAssetImport,
+  type CaptureAdapterId,
   type CaptureAssetFormat,
   type CaptureAssetPurpose,
 } from "../shared/capture-adapters";
@@ -42,6 +48,8 @@ import {
   ATTESTED_PAIRED_CAPTURE_METHOD,
 } from "../shared/paired-capture-journey";
 import {
+  legacyUnspecifiedProjectWorkflowPolicy,
+  parseProjectWorkflowPolicy,
   projectPolicyForDeliveryTemplate,
   type ProjectWorkflowPolicy,
 } from "../shared/project-policies";
@@ -103,6 +111,8 @@ type Project = {
   slug: string;
   status: string;
   captureAdapter: string;
+  captureOrigin?: string;
+  assetProducer: string | null;
   deliveryTemplate: string;
   projectTemplateId: string | null;
   workflowPolicy?: ProjectWorkflowPolicy;
@@ -240,8 +250,30 @@ type Version = {
   status: string;
   source_provenance_json?: string | null;
   manifest_json?: string | null;
+  workflow_policy_revision_id?: string | null;
+  workflow_policy_json?: string | null;
+  workflow_policy_delivery_template?: string | null;
   created_at: string;
 };
+function effectiveVersionWorkflowPolicy(
+  project: Project,
+  version: Version | null | undefined,
+): ProjectWorkflowPolicy {
+  if (!version) return effectiveProjectWorkflowPolicy(project);
+  if (
+    version.workflow_policy_revision_id === undefined &&
+    version.workflow_policy_json === undefined
+  ) return effectiveProjectWorkflowPolicy(project);
+  if (!version.workflow_policy_revision_id || !version.workflow_policy_json) {
+    return legacyUnspecifiedProjectWorkflowPolicy;
+  }
+  try {
+    return parseProjectWorkflowPolicy(JSON.parse(version.workflow_policy_json)) ??
+      legacyUnspecifiedProjectWorkflowPolicy;
+  } catch {
+    return legacyUnspecifiedProjectWorkflowPolicy;
+  }
+}
 type Job = {
   id: string;
   project_id: string;
@@ -1309,6 +1341,21 @@ type ProjectSection =
   | "measurement"
   | "expert";
 
+type ProjectStageCapability =
+  | "structure-processing-poll"
+  | "privacy-evidence-poll";
+
+const projectStageCapabilities: Record<ProjectSection, readonly ProjectStageCapability[]> = {
+  overview: [],
+  process: [],
+  structure: ["structure-processing-poll"],
+  privacy: ["privacy-evidence-poll"],
+  walk: [],
+  publish: [],
+  measurement: [],
+  expert: [],
+};
+
 const byId = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing element #${id}`);
@@ -1392,6 +1439,15 @@ const state: {
   projectSection: "overview",
   view: "projects",
 };
+
+function projectPollingContextIsActive(
+  projectId: string,
+  capability: ProjectStageCapability,
+): boolean {
+  return state.selected?.project.id === projectId &&
+    state.view === "project" &&
+    projectStageCapabilities[state.projectSection].includes(capability);
+}
 
 let authenticationStatus: "checking" | "authenticated" | "signed-out" | "unavailable" = "checking";
 
@@ -1777,6 +1833,7 @@ function bindInterface(): void {
     void loadRecentAssetHandoff();
   });
   byId<HTMLSelectElement>("newCaptureAdapter").addEventListener("change", () => void renderNewCaptureHelp());
+  byId<HTMLSelectElement>("newCaptureOrigin").addEventListener("change", () => void renderNewCaptureHelp());
   byId<HTMLSelectElement>("newProjectTemplate").addEventListener("change", applySelectedProjectTemplate);
   byId<HTMLInputElement>("newCaptureAsset").addEventListener("change", () => {
     inferNewCaptureAdapter();
@@ -2683,6 +2740,7 @@ function bindInterface(): void {
   });
   const captureBundleVersion = byId<HTMLSelectElement>("captureBundleVersion");
   captureBundleVersion.addEventListener("change", () => {
+    applyCaptureBundleVersionDefaults(captureBundleVersion.value);
     renderCaptureBundleAssets(captureBundleVersion.value);
     renderCaptureBundlePreview();
   });
@@ -3675,12 +3733,16 @@ function advanceNewCaptureIntake(): void {
 
 function renderNewCaptureReview(): void {
   const form = byId<HTMLFormElement>("newProjectForm");
-  const adapter = form.elements.namedItem("captureAdapter");
+  const origin = form.elements.namedItem("captureOrigin");
+  const producer = form.elements.namedItem("assetProducer");
   const capture = form.elements.namedItem("capture");
   const geometry = form.elements.namedItem("geometry");
   const review = byId("newCaptureReview");
-  const adapterLabel = adapter instanceof HTMLSelectElement
-    ? adapter.selectedOptions[0]?.textContent ?? "Not selected"
+  const originLabel = origin instanceof HTMLSelectElement
+    ? origin.selectedOptions[0]?.textContent ?? "Not selected"
+    : "Not selected";
+  const producerLabel = producer instanceof HTMLSelectElement
+    ? producer.selectedOptions[0]?.textContent ?? "Not selected"
     : "Not selected";
   const captureName = capture instanceof HTMLInputElement
     ? capture.files?.[0]?.name ?? "Not selected"
@@ -3690,7 +3752,8 @@ function renderNewCaptureReview(): void {
     : "Not selected";
   review.replaceChildren(
     projectFact("Scene", String(new FormData(form).get("name") ?? "")),
-    projectFact("Capture source", adapterLabel),
+    projectFact("Capture origin", originLabel),
+    projectFact("Asset producer", producerLabel),
     projectFact("3D appearance", captureName),
     projectFact("Measurement geometry", geometryName),
     element("h4", "", "The platform will"),
@@ -3704,7 +3767,7 @@ function renderNewCaptureReview(): void {
 
 function inferNewCaptureAdapter(): void {
   const select = byId<HTMLSelectElement>("newCaptureAdapter");
-  if (select.value) return;
+  const origin = byId<HTMLSelectElement>("newCaptureOrigin");
   const names = [
     byId<HTMLInputElement>("newCaptureAsset").files?.[0]?.name,
     byId<HTMLInputElement>("newCaptureGeometry").files?.[0]?.name,
@@ -3714,7 +3777,8 @@ function inferNewCaptureAdapter(): void {
     : /(?:^|[^a-z0-9])(?:fjd|trion)(?:[^a-z0-9]|$)/.test(names)
       ? "fjd-trion"
       : null;
-  if (inferred) select.value = inferred;
+  if (inferred && !select.value) select.value = inferred;
+  if (inferred && !origin.value) origin.value = inferred === "xgrids-lcc" ? "xgrids" : "fjd";
 }
 
 function portableCapturePlan(file: File): {
@@ -3776,7 +3840,7 @@ async function pairedCaptureCanQualifyAutomatically(
 
 async function renderNewCaptureHelp(): Promise<void> {
   const renderGeneration = ++captureQualificationRenderGeneration;
-  const adapter = byId<HTMLSelectElement>("newCaptureAdapter").value;
+  const producer = byId<HTMLSelectElement>("newCaptureAdapter").value;
   const file = byId<HTMLInputElement>("newCaptureAsset").files?.[0];
   const geometryInput = byId<HTMLInputElement>("newCaptureGeometry");
   const geometry = geometryInput.files?.[0];
@@ -3784,9 +3848,9 @@ async function renderNewCaptureHelp(): Promise<void> {
   const frameConfirmationRow = byId<HTMLElement>("newCaptureFrameConfirmation");
   const qualificationStatus = byId("newCaptureQualificationStatus");
   geometryInput.required = true;
-  const source = adapter === "xgrids-lcc"
+  const source = producer === "xgrids-lcc"
     ? "XGRIDS"
-    : adapter === "fjd-trion"
+    : producer === "fjd-trion"
       ? "FJD"
       : "This export";
   let message = `${source} scenes need a browser visual (PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD) plus measurement geometry from the same scan. Native project files remain supporting evidence.`;
@@ -3852,9 +3916,13 @@ async function createCapture(form: FormData): Promise<void> {
   const plan = portableCapturePlan(file);
   const geometryFile = form.get("geometry");
   const geometry = geometryFile instanceof File && geometryFile.size > 0 ? geometryFile : null;
-  const adapter = String(form.get("captureAdapter") ?? "");
-  if (!captureAdapterProfiles.some((profile) => profile.id === adapter)) {
-    throw new Error("Choose the scanner or export tool that created these capture files.");
+  const captureOrigin = String(form.get("captureOrigin") ?? "");
+  const assetProducer = String(form.get("assetProducer") ?? "");
+  if (!captureOriginIds.includes(captureOrigin as typeof captureOriginIds[number])) {
+    throw new Error("Choose where the original capture observations came from.");
+  }
+  if (!assetProducerIds.includes(assetProducer as typeof assetProducerIds[number])) {
+    throw new Error("Choose the pipeline that produced these capture files.");
   }
   const template = state.projectTemplates.find((candidate) =>
     candidate.id === String(form.get("projectTemplate") ?? "")
@@ -3878,6 +3946,15 @@ async function createCapture(form: FormData): Promise<void> {
     );
   }
   const geometryPlan = geometry ? metricGeometryPlan(geometry) : null;
+  for (const asset of [plan, geometryPlan]) {
+    if (!asset) continue;
+    const compatibility = planProducedAssetImport({
+      producer: assetProducer as typeof assetProducerIds[number],
+      purpose: asset.purpose,
+      format: asset.format,
+    });
+    if (!compatibility.accepted) throw new Error(compatibility.reason);
+  }
   projectOperationId ??= crypto.randomUUID();
   captureJourneyOperation ??= {
     id: crypto.randomUUID(),
@@ -3892,7 +3969,9 @@ async function createCapture(form: FormData): Promise<void> {
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")),
         customerEmail: optionalString(form.get("customerEmail")),
-        captureAdapter: adapter,
+        captureOrigin,
+        assetProducer,
+        capturePlan: [plan, geometryPlan].filter((asset) => asset !== null),
         deliveryTemplate: template?.deliveryTemplate ?? "Property showcase",
         notes: optionalString(form.get("notes")),
         customFields: {
@@ -4111,7 +4190,7 @@ function applySelectedProjectTemplate(): void {
   const templateId = byId<HTMLSelectElement>("newProjectTemplate").value;
   const template = state.projectTemplates.find((candidate) => candidate.id === templateId);
   if (!template) return;
-  const adapter = form.elements.namedItem("captureAdapter");
+  const adapter = form.elements.namedItem("assetProducer");
   const notes = form.elements.namedItem("notes");
   if (adapter instanceof HTMLSelectElement) {
     const supported = Array.from(adapter.options).some((option) =>
@@ -8337,7 +8416,7 @@ function renderPublish(): void {
     (detail.walkTestReadyVersionIds ?? []).includes(releasableVersion.id),
   );
   const privacy = privacyQaReadiness(state.spatial);
-  const workflowPolicy = effectiveProjectWorkflowPolicy(detail.project);
+  const workflowPolicy = effectiveVersionWorkflowPolicy(detail.project, releasableVersion);
   const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
     subscription.project_id === detail.project.id && subscription.status === "active"
   ) ?? null;
@@ -9415,9 +9494,7 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
     await new Promise((resolve) => window.setTimeout(resolve, attempt < 4 ? 1_500 : 5_000));
     if (
       generation !== semanticExtractionPollGeneration ||
-      state.selected?.project.id !== projectId ||
-      state.view !== "project" ||
-      state.projectSection !== "structure"
+      !projectPollingContextIsActive(projectId, "structure-processing-poll")
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -9429,7 +9506,10 @@ async function pollSemanticExtraction(projectId: string, extractionId: string): 
     );
     if (!extraction || !["QUEUED", "PROCESSING"].includes(extraction.status)) return;
   }
-  if (generation === semanticExtractionPollGeneration && state.selected?.project.id === projectId) {
+  if (
+    generation === semanticExtractionPollGeneration &&
+    projectPollingContextIsActive(projectId, "structure-processing-poll")
+  ) {
     showNotice(
       "Semantic extraction is still running. Its verified inputs and queued job are retained; refresh later.",
       "error",
@@ -10033,9 +10113,7 @@ async function pollFloorplanExtraction(projectId: string, extractionId: string):
     await new Promise((resolve) => window.setTimeout(resolve, attempt < 4 ? 1_500 : 5_000));
     if (
       generation !== floorplanExtractionPollGeneration ||
-      state.selected?.project.id !== projectId ||
-      state.view !== "project" ||
-      state.projectSection !== "structure"
+      !projectPollingContextIsActive(projectId, "structure-processing-poll")
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -10047,7 +10125,10 @@ async function pollFloorplanExtraction(projectId: string, extractionId: string):
     );
     if (!extraction || !["QUEUED", "PROCESSING"].includes(extraction.status)) return;
   }
-  if (generation === floorplanExtractionPollGeneration && state.selected?.project.id === projectId) {
+  if (
+    generation === floorplanExtractionPollGeneration &&
+    projectPollingContextIsActive(projectId, "structure-processing-poll")
+  ) {
     showNotice(
       "Floor-plan extraction is still running. Its immutable inputs and queued job are retained; refresh later.",
       "error",
@@ -10240,6 +10321,12 @@ function openNavigationProfileDialog(): void {
   const profile = state.spatial?.navigationProfile;
   if (!profile) return;
   const form = byId<HTMLFormElement>("navigationProfileForm");
+  const versionPolicy = state.selected
+    ? effectiveVersionWorkflowPolicy(
+      state.selected.project,
+      state.selected.versions.find((version) => version.id === state.spatial?.version?.id),
+    )
+    : legacyUnspecifiedProjectWorkflowPolicy;
   setFormValue(form, "worldUnit", profile.worldUnit ?? "metres");
   setFormValue(form, "agentRadius", String(profile.agentRadius));
   setFormValue(form, "agentHeight", String(profile.agentHeight));
@@ -10256,9 +10343,7 @@ function openNavigationProfileDialog(): void {
   setFormValue(
     form,
     "clearancePreset",
-    state.selected
-      ? effectiveProjectWorkflowPolicy(state.selected.project).navigationClearance
-      : "approved-scene",
+    versionPolicy.navigationClearance,
   );
   const adaOption = form.querySelector<HTMLOptionElement>(
     'select[name="clearancePreset"] option[value="ada-route-review"]',
@@ -10272,8 +10357,15 @@ function openNavigationProfileDialog(): void {
   setFormValue(
     form,
     "navigationIntent",
-    state.selected ? effectiveProjectWorkflowPolicy(state.selected.project).navigation : "visitor-walk",
+    versionPolicy.navigation,
   );
+  for (const fieldName of ["navigationIntent", "clearancePreset"]) {
+    const control = form.elements.namedItem(fieldName);
+    if (control instanceof HTMLSelectElement) {
+      control.disabled = true;
+      control.title = "This value is fixed by the immutable policy for this scene version.";
+    }
+  }
   byId("navigationProfileSummary").textContent =
     `${profile.worldUnit === "scene_units" ? "Provisional scene-unit" : "Metric"} profile · ` +
     `${profile.agentRadius} ${worldUnitSymbol(profile.worldUnit)} radius · ` +
@@ -10326,18 +10418,10 @@ async function updateNavigationProfile(form: FormData): Promise<void> {
   const project = state.selected?.project;
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
-  const navigationIntent = String(form.get("navigationIntent") ?? "visitor-walk");
-  const navigationClearance = String(form.get("clearancePreset") ?? "approved-scene");
-  const workflowPolicy = effectiveProjectWorkflowPolicy(project);
   await api(`/api/projects/${project.id}/spatial/navigation-profile`, {
     method: "PUT",
     body: JSON.stringify({
       versionId: version.id,
-      workflowPolicy: {
-        ...workflowPolicy,
-        navigation: navigationIntent,
-        navigationClearance,
-      },
       worldUnit: String(form.get("worldUnit") ?? "metres"),
       agentRadius: Number(form.get("agentRadius")),
       agentHeight: Number(form.get("agentHeight")),
@@ -10794,9 +10878,7 @@ async function pollPrivacyScan(projectId: string, scanId: string): Promise<void>
     await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1_500 : 3_000));
     if (
       generation !== privacyScanPollGeneration ||
-      state.selected?.project.id !== projectId ||
-      state.view !== "project" ||
-      state.projectSection !== "structure"
+      !projectPollingContextIsActive(projectId, "privacy-evidence-poll")
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -10807,7 +10889,10 @@ async function pollPrivacyScan(projectId: string, scanId: string): Promise<void>
     const scan = state.spatial?.privacyScans.find((candidate) => candidate.id === scanId);
     if (!scan || !["QUEUED", "RUNNING"].includes(scan.status)) return;
   }
-  if (generation === privacyScanPollGeneration && state.selected?.project.id === projectId) {
+  if (
+    generation === privacyScanPollGeneration &&
+    projectPollingContextIsActive(projectId, "privacy-evidence-poll")
+  ) {
     showNotice("Privacy detection is still running. Refresh later; the queued evidence is retained.", "error");
   }
 }
@@ -10965,10 +11050,17 @@ async function createCaptureCompletenessReport(form: FormData): Promise<void> {
   if (file.size > 750 * 1024) throw new Error("Trajectory JSON must be 750 KiB or smaller.");
   const parsed = JSON.parse(await file.text()) as unknown;
   const points = parseCanonicalTrajectory(parsed);
+  const versionId = String(form.get("versionId") ?? "");
+  const captureAdapter = versionCaptureAdapter(
+    state.selected?.versions.find((version) => version.id === versionId),
+  );
+  if (!captureAdapter) {
+    throw new Error("The selected immutable version does not record its asset producer.");
+  }
   const body = {
-    versionId: String(form.get("versionId") ?? ""),
+    versionId,
     source: {
-      adapter: project.captureAdapter,
+      adapter: captureAdapter,
       fileName: file.name,
       format: "canonical_pose_json_v1",
       coordinateFrame: String(form.get("coordinateFrame") ?? "").trim(),
@@ -11346,9 +11438,7 @@ async function pollRawSceneChange(projectId: string, reportId: string): Promise<
     await new Promise((resolve) => window.setTimeout(resolve, attempt < 4 ? 1_500 : 5_000));
     if (
       generation !== rawSceneChangePollGeneration ||
-      state.selected?.project.id !== projectId ||
-      state.view !== "project" ||
-      state.projectSection !== "structure"
+      !projectPollingContextIsActive(projectId, "privacy-evidence-poll")
     ) return;
     try {
       await loadSpatialWorkspace(projectId);
@@ -11358,7 +11448,10 @@ async function pollRawSceneChange(projectId: string, reportId: string): Promise<
     const report = state.spatial?.rawChangeReports.find((candidate) => candidate.id === reportId);
     if (!report || !["QUEUED", "RUNNING"].includes(report.status)) return;
   }
-  if (generation === rawSceneChangePollGeneration && state.selected?.project.id === projectId) {
+  if (
+    generation === rawSceneChangePollGeneration &&
+    projectPollingContextIsActive(projectId, "privacy-evidence-poll")
+  ) {
     showNotice("Raw-scene processing is still running. Refresh later; the queued evidence is retained.", "error");
   }
 }
@@ -12295,6 +12388,22 @@ function automaticCaptureQualification(version: Version | null): {
   }
 }
 
+function versionCaptureAdapter(version: Version | null | undefined): string | null {
+  if (!version?.source_provenance_json) return null;
+  try {
+    const provenance = JSON.parse(version.source_provenance_json) as unknown;
+    if (!provenance || typeof provenance !== "object") return null;
+    const candidate = Reflect.get(provenance, "assetProducer") ??
+      Reflect.get(provenance, "adapter");
+    return typeof candidate === "string" &&
+        captureAdapterProfiles.some((profile) => profile.id === candidate)
+      ? candidate
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function ensureProjectWorkspace(view: "spatial" | "measurement", force = false): Promise<void> {
   const projectId = state.selected?.project.id;
   if (!projectId) return;
@@ -12679,7 +12788,20 @@ function renderProjectDetail(): void {
   overview.append(
     projectFact("Customer", detail.project.customerName ?? "Not assigned"),
     projectFact("Customer contact", detail.project.customerEmail ?? "Not assigned"),
-    projectFact("Capture source", humanStatus(detail.project.captureAdapter)),
+    projectFact(
+      "Capture origin",
+      humanStatus(detail.project.captureOrigin ?? captureOriginForLegacyAdapter(
+        detail.project.captureAdapter as CaptureAdapterId,
+      )),
+    ),
+    projectFact(
+      "Asset producer",
+      detail.project.assetProducer || assetProducerForLegacyAdapter(
+        detail.project.captureAdapter as CaptureAdapterId,
+      )
+        ? humanStatus(detail.project.assetProducer ?? detail.project.captureAdapter)
+        : "Not recorded",
+    ),
     projectFact("Delivery classification", detail.project.deliveryTemplate),
     projectFact("Privacy policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).privacyReview)),
     projectFact("Publication policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).publication)),
@@ -12959,15 +13081,27 @@ function openCaptureBundleDialog(): void {
     showNotice("A verified immutable asset is required before registering a capture bundle.", "error");
     return;
   }
-  setFormValue(form, "adapter", detail.project.captureAdapter);
-  const defaults = captureAdapterDefaults(detail.project.captureAdapter);
-  setFormValue(form, "vendor", defaults.vendor);
-  setFormValue(form, "model", defaults.model);
-  setFormValue(form, "exporterName", defaults.exporter);
+  applyCaptureBundleVersionDefaults(versionSelect.value);
   setFormValue(form, "exportedAt", datetimeLocalValue(new Date()));
   renderCaptureBundleAssets(versionSelect.value);
   renderCaptureBundlePreview();
   captureBundleDialog.showModal();
+}
+
+function applyCaptureBundleVersionDefaults(versionId: string): void {
+  const detail = state.selected;
+  if (!detail) return;
+  const captureProducer = versionCaptureAdapter(
+    detail.versions.find((version) => version.id === versionId),
+  );
+  const form = byId<HTMLFormElement>("captureBundleForm");
+  setFormValue(form, "adapter", captureProducer ?? "");
+  const defaults = captureProducer
+    ? captureAdapterDefaults(captureProducer)
+    : { vendor: "", model: "", exporter: "" };
+  setFormValue(form, "vendor", defaults.vendor);
+  setFormValue(form, "model", defaults.model);
+  setFormValue(form, "exporterName", defaults.exporter);
 }
 
 function captureAdapterDefaults(adapter: string): {
@@ -13284,10 +13418,17 @@ async function registerCaptureBundle(form: FormData): Promise<void> {
     .map((item) => item.trim())
     .filter(Boolean);
   if (limitations.length > 20) throw new Error("Record no more than 20 known limitations.");
+  const versionId = String(form.get("versionId") ?? "");
+  const captureProducer = versionCaptureAdapter(
+    detail.versions.find((version) => version.id === versionId),
+  );
+  if (!captureProducer) {
+    throw new Error("The selected immutable version does not record its asset producer.");
+  }
   const body = {
-    versionId: String(form.get("versionId") ?? ""),
+    versionId,
     schemaVersion: "1.0.0",
-    adapter: detail.project.captureAdapter,
+    adapter: captureProducer,
     captureSystem: {
       vendor: String(form.get("vendor") ?? "").trim(),
       model: String(form.get("model") ?? "").trim(),
@@ -13564,10 +13705,24 @@ function openEditProjectDialog(): void {
   setValue("name", project.name);
   setValue("customerName", project.customerName ?? "");
   setValue("customerEmail", project.customerEmail ?? "");
-  setValue("captureAdapter", project.captureAdapter);
+  setValue(
+    "captureOrigin",
+    project.captureOrigin ?? captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId),
+  );
+  setValue("assetProducer", project.assetProducer ?? "");
   setValue("deliveryTemplate", project.deliveryTemplate);
   setValue("notes", project.notes ?? "");
   renderProjectCustomFieldForm("editProjectCustomFields", project.customFields);
+  const canGovern = state.user?.role === "platform_admin";
+  for (const name of ["captureOrigin", "assetProducer", "deliveryTemplate"]) {
+    const field = form.elements.namedItem(name);
+    if (field instanceof HTMLSelectElement) {
+      field.disabled = !canGovern;
+      field.title = canGovern
+        ? "Changes become defaults for the next immutable scene version."
+        : "A platform administrator must approve this governed transition.";
+    }
+  }
   byId("editProjectError").textContent = "";
   editProjectDialog.showModal();
 }
@@ -13575,6 +13730,7 @@ function openEditProjectDialog(): void {
 async function updateProject(form: FormData): Promise<void> {
   const project = state.selected?.project;
   if (!project) return;
+  const assetProducer = String(form.get("assetProducer") ?? "");
   try {
     await api(`/api/projects/${project.id}`, {
       method: "PATCH",
@@ -13582,10 +13738,14 @@ async function updateProject(form: FormData): Promise<void> {
         name: String(form.get("name") ?? ""),
         customerName: optionalString(form.get("customerName")) ?? null,
         customerEmail: optionalString(form.get("customerEmail")) ?? null,
-        captureAdapter: String(form.get("captureAdapter") ?? project.captureAdapter),
-        deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
         notes: optionalString(form.get("notes")) ?? null,
         customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
+        ...(state.user?.role === "platform_admin" ? {
+          captureOrigin: String(form.get("captureOrigin") ?? project.captureOrigin ??
+            captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
+          assetProducer: assetProducer || null,
+          deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
+        } : {}),
       }),
     });
     editProjectDialog.close();
@@ -13661,12 +13821,13 @@ async function changeProjectLifecycle(action: "archive" | "restore"): Promise<vo
 function openUploadDialog(): void {
   if (!state.selected) return;
   const projectId = state.selected.project.id;
+  const captureProducer = state.selected.project.assetProducer ?? state.selected.project.captureAdapter;
   const profile = captureAdapterProfiles.find((candidate) =>
-    candidate.id === state.selected?.project.captureAdapter
+    candidate.id === captureProducer
   );
   const guidance = byId("uploadAdapterGuidance");
   guidance.replaceChildren(
-    element("strong", "", profile?.label ?? humanStatus(state.selected.project.captureAdapter)),
+    element("strong", "", profile?.label ?? humanStatus(captureProducer)),
     element("p", "muted-copy", profile?.summary ?? "Preserve the immutable source and declare its role truthfully."),
     element(
       "small",
@@ -13677,9 +13838,9 @@ function openUploadDialog(): void {
     ),
   );
   const defaultPurpose: CaptureAssetPurpose =
-    state.selected.project.captureAdapter === "phone-video"
+    captureProducer === "phone-video"
       ? "source_video"
-      : state.selected.project.captureAdapter === "drone-imagery"
+      : captureProducer === "drone-imagery"
         ? "source_images"
         : "gaussian_splat";
   byId<HTMLSelectElement>("uploadPurpose").value = defaultPurpose;
@@ -14311,19 +14472,21 @@ async function openReleaseDialog(): Promise<void> {
   ) return;
   const form = byId<HTMLFormElement>("releaseForm");
   form.reset();
+  const version = state.selected.versions.find((candidate) => candidate.id === versionId);
+  const versionPolicy = effectiveVersionWorkflowPolicy(state.selected.project, version);
   const accessPolicy = form.elements.namedItem("accessPolicy");
   if (accessPolicy instanceof HTMLSelectElement) {
-    accessPolicy.value = effectiveProjectWorkflowPolicy(state.selected.project).publication === "private-review"
+    accessPolicy.value = versionPolicy.publication === "private-review"
       ? "token"
       : "public";
   }
   const qualityPreset = form.elements.namedItem("qualityPreset");
   if (qualityPreset instanceof HTMLSelectElement) {
-    qualityPreset.value = effectiveProjectWorkflowPolicy(state.selected.project).quality;
+    qualityPreset.value = versionPolicy.quality;
   }
   const movementMode = form.elements.namedItem("defaultMovementMode");
   if (movementMode instanceof HTMLSelectElement) {
-    movementMode.value = effectiveProjectWorkflowPolicy(state.selected.project).navigation === "review-walk-and-fly"
+    movementMode.value = versionPolicy.navigation === "review-walk-and-fly"
       ? "fly"
       : "walk";
   }

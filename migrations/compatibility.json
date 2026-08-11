@@ -196,6 +196,12 @@
     },
     "0058_processor_canary_delivery_template.sql": {
       "phase": "expand"
+    },
+    "0059_capture_provenance.sql": {
+      "phase": "expand"
+    },
+    "0060_workflow_policy_revisions.sql": {
+      "phase": "expand"
     }
   }
 }

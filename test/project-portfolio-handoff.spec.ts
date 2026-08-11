@@ -121,6 +121,15 @@ describe("advanced project metadata and cross-organisation portfolio handoff", (
       }),
     });
     expect(changedProjectReplay.status).toBe(409);
+    const sourceOnlyTransition = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ captureOrigin: "phone", assetProducer: null }),
+      },
+    );
+    expect(sourceOnlyTransition.status).toBe(200);
     const portableExport = await exports.default.fetch(`${origin}/api/projects/export`, {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -206,7 +215,8 @@ describe("advanced project metadata and cross-organisation portfolio handoff", (
     });
 
     const destinationProject = await env.DB.prepare(`
-      SELECT p.organisation_id, p.status, d.key, v.value_json
+      SELECT p.organisation_id, p.status, p.capture_adapter_v2,
+        p.capture_origin, p.asset_producer, d.key, v.value_json
       FROM projects p
       JOIN project_custom_field_values v ON v.project_id = p.id
       JOIN project_custom_field_definitions d ON d.id = v.field_id
@@ -214,12 +224,18 @@ describe("advanced project metadata and cross-organisation portfolio handoff", (
     `).bind(handoffResult.projects[0]!.id).first<{
       organisation_id: string;
       status: string;
+      capture_adapter_v2: string;
+      capture_origin: string;
+      asset_producer: string | null;
       key: string;
       value_json: string;
     }>();
     expect(destinationProject).toEqual({
       organisation_id: destination.organisationId,
       status: "DRAFT",
+      capture_adapter_v2: "phone-video",
+      capture_origin: "phone",
+      asset_producer: null,
       key: "portfolio_code",
       value_json: JSON.stringify("VENUE-001"),
     });

@@ -54,8 +54,13 @@ describe("capture adapter evidence ingestion", () => {
       env.DB.prepare(`
         INSERT INTO scene_versions
           (id, project_id, version_number, status, source_provenance_json, created_by)
-        VALUES (?, ?, 1, 'PUBLISHED', '{}', ?)
-      `).bind(versionId, project.id, projectRow!.created_by),
+        VALUES (?, ?, 1, 'PUBLISHED', ?, ?)
+      `).bind(
+        versionId,
+        project.id,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        projectRow!.created_by,
+      ),
       env.DB.prepare(`
         INSERT INTO assets
           (id, organisation_id, project_id, version_id, kind, format, object_key,
@@ -246,6 +251,120 @@ describe("capture adapter evidence ingestion", () => {
       .toBe(verifiedSha256);
   });
 
+  it("validates auxiliary evidence against the target version's frozen asset producer", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Frozen producer ${crypto.randomUUID().slice(0, 8)}`,
+        captureOrigin: "fjd",
+        assetProducer: "fjd-trion",
+        deliveryTemplate: "Property showcase",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const visualResponse = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        fileName: "frozen.rad",
+        sizeBytes: 16,
+        format: "rad",
+        purpose: "web_scene",
+        mimeType: "application/octet-stream",
+      }),
+    });
+    expect(visualResponse.status).toBe(201);
+    const visual = await visualResponse.json<{ upload: { versionId: string } }>();
+    await env.DB.prepare(
+      "UPDATE scene_versions SET status = 'INGESTED' WHERE id = ?",
+    ).bind(visual.upload.versionId).run();
+
+    const transition = await exports.default.fetch(`${origin}/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ assetProducer: "xgrids-lcc" }),
+    });
+    expect(transition.status).toBe(200);
+
+    const auxiliary = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        targetVersionId: visual.upload.versionId,
+        fileName: "fjd-collision.glb",
+        sizeBytes: 16,
+        format: "glb",
+        purpose: "collision_mesh",
+        mimeType: "model/gltf-binary",
+      }),
+    });
+    expect(auxiliary.status).toBe(201);
+    await expect(auxiliary.json()).resolves.toMatchObject({
+      upload: { versionId: visual.upload.versionId },
+    });
+  });
+
+  it("records an explicit source-only transition instead of silently retaining the old producer", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: `Source only ${crypto.randomUUID().slice(0, 8)}`,
+        captureOrigin: "third-party",
+        assetProducer: "open-import",
+        deliveryTemplate: "Property showcase",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const transition = await exports.default.fetch(`${origin}/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ captureOrigin: "phone", assetProducer: null }),
+    });
+    expect(transition.status).toBe(200);
+    await expect(transition.json()).resolves.toMatchObject({
+      project: {
+        captureOrigin: "phone",
+        captureAdapter: "phone-video",
+        assetProducer: null,
+      },
+    });
+
+    const derived = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        fileName: "derived.rad",
+        sizeBytes: 16,
+        format: "rad",
+        purpose: "web_scene",
+        mimeType: "application/octet-stream",
+      }),
+    });
+    expect(derived.status).toBe(422);
+    await expect(derived.json()).resolves.toMatchObject({
+      error: expect.stringContaining("pipeline that produced"),
+    });
+
+    const source = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        fileName: "capture.mp4",
+        sizeBytes: 16,
+        format: "mp4",
+        purpose: "source_video",
+        mimeType: "video/mp4",
+      }),
+    });
+    expect(source.status).toBe(201);
+  });
+
   it("qualifies paired PLY coordinates and queues floor-plan generation when geometry finishes first", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
@@ -394,6 +513,15 @@ describe("capture adapter evidence ingestion", () => {
       captureJourney,
     });
     expect(geometry.upload.versionId).toBe(visual.upload.versionId);
+    const policyTransition = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ deliveryTemplate: "Venue navigator" }),
+      },
+    );
+    expect(policyTransition.status).toBe(200);
     const pairedVersion = await env.DB.prepare(`
       SELECT source_provenance_json
       FROM scene_versions
@@ -515,6 +643,15 @@ describe("capture adapter evidence ingestion", () => {
       structureWorkflow: "automatic-extract-review",
       coordinateAssurance: "registered_y_up_metric_frame",
     });
+    const restoreProjectDefaults = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ deliveryTemplate: "Property showcase" }),
+      },
+    );
+    expect(restoreProjectDefaults.status).toBe(200);
 
     const failingJourney = {
       id: crypto.randomUUID(),
@@ -775,7 +912,7 @@ describe("capture adapter evidence ingestion", () => {
     });
   });
 
-  it("rejects an incompatible purpose and format before creating an R2 upload", async () => {
+  it("rejects a derived asset before a source-only project records its producer", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
       method: "POST",
@@ -801,7 +938,7 @@ describe("capture adapter evidence ingestion", () => {
     });
     expect(rejected.status).toBe(422);
     await expect(rejected.json()).resolves.toMatchObject({
-      error: expect.stringContaining("not compatible"),
+      error: expect.stringContaining("pipeline that produced"),
     });
   });
 });

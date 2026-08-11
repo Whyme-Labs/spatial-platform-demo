@@ -17,6 +17,7 @@ import worker, {
 import { sha256Hex, signSceneToken } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 import { publicationMeasurementDisclaimer } from "../src/shared/measurement-disclaimers";
+import { projectPolicyForDeliveryTemplate } from "../src/shared/project-policies";
 
 const origin = "https://spatial.test";
 const VISUAL_ONLY_MEASUREMENT_DISCLAIMER = publicationMeasurementDisclaimer("visual-only");
@@ -159,9 +160,15 @@ describe("Spatial Studio Worker", () => {
         member!.userId,
       ),
       env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(versionId, projectId, member!.userId),
+        INSERT INTO scene_versions (
+          id, project_id, version_number, status, source_provenance_json, created_by
+        ) VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?)
+      `).bind(
+        versionId,
+        projectId,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        member!.userId,
+      ),
     ]);
     await expect(env.DB.prepare(`
       INSERT INTO scene_navigation_traversals (
@@ -3640,9 +3647,11 @@ describe("Spatial Studio Worker", () => {
         }),
       },
     );
-    expect(unsupportedFlyRelease.status).toBe(400);
+    expect(unsupportedFlyRelease.status).toBe(422);
     await expect(unsupportedFlyRelease.json()).resolves.toMatchObject({
-      details: { project: [expect.stringContaining("no approved scene version")] },
+      details: {
+        defaultMovementMode: [expect.stringContaining("walking")],
+      },
     });
 
     const navigationReportKey =
@@ -3720,6 +3729,16 @@ describe("Spatial Studio Worker", () => {
     const pairedJourneyId = crypto.randomUUID();
     const pairedGeometryAssetId = crypto.randomUUID();
     const pairedVisualSha256 = await sha256Hex(sceneBytes);
+    const processorCoordinateEvidence = {
+      schemaVersion: "ply-coordinate-evidence-v1",
+      method: "automatic-ply-coordinate-evidence-v1",
+      coordinateFrameId: `capture-journey:${pairedJourneyId}`,
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      vertexCount: 2,
+      finitePointCount: 2,
+      bounds: { min: [0, 0, 0], max: [2, 2, 2] },
+    };
     await env.DB.batch([
       env.DB.prepare(`
         UPDATE assets SET sha256 = ? WHERE id = ? AND version_id = ?
@@ -3747,7 +3766,7 @@ describe("Spatial Studio Worker", () => {
       `).bind(JSON.stringify({
         adapter: "open-import",
         captureJourney: {
-          schemaVersion: "paired-capture-journey-v1",
+          schemaVersion: "paired-capture-journey-v2",
           id: pairedJourneyId,
           captureAdapter: "open-import",
           primaryAssetId: completed.asset.id,
@@ -3756,6 +3775,16 @@ describe("Spatial Studio Worker", () => {
           sourceCoordinateFrameId: `capture-journey:${pairedJourneyId}`,
           confirmedBy: provisionalEvidenceOwner!.created_by,
           confirmedAt: new Date().toISOString(),
+          qualification: {
+            method: "automatic-ply-coordinate-evidence-v1",
+            status: "verified",
+            coordinateFrameId: `capture-journey:${pairedJourneyId}`,
+            sourceUpAxis: "Y",
+            worldUnit: "metres",
+            overlapBounds: { min: [0, 0, 0], max: [2, 2, 2] },
+            visual: processorCoordinateEvidence,
+            geometry: processorCoordinateEvidence,
+          },
         },
       }), completed.asset.versionId),
     ]);
@@ -5623,9 +5652,15 @@ describe("Spatial Studio Worker", () => {
         VALUES (?, ?, 'Authored venue', ?, 'QA_REQUIRED', 'open-import', 'venue-navigator', ?)
       `).bind(projectId, member!.organisationId, `authored-${projectId.slice(0, 8)}`, member!.userId),
       env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(versionId, projectId, member!.userId),
+        INSERT INTO scene_versions (
+          id, project_id, version_number, status, source_provenance_json, created_by
+        ) VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?)
+      `).bind(
+        versionId,
+        projectId,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        member!.userId,
+      ),
       env.DB.prepare(`
         INSERT INTO assets (
           id, organisation_id, project_id, version_id, kind, format, object_key,
@@ -6556,9 +6591,15 @@ describe("Spatial Studio Worker", () => {
         VALUES (?, ?, 'Capture coverage', ?, 'QA_REQUIRED', 'open-import', 'venue-navigator', ?)
       `).bind(projectId, member!.organisationId, `coverage-${projectId.slice(0, 8)}`, member!.userId),
       env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(versionId, projectId, member!.userId),
+        INSERT INTO scene_versions (
+          id, project_id, version_number, status, source_provenance_json, created_by
+        ) VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?)
+      `).bind(
+        versionId,
+        projectId,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        member!.userId,
+      ),
       env.DB.prepare(`
         INSERT INTO scene_entities
           (id, organisation_id, project_id, version_id, kind, label, geometry_json, metadata_json, created_by)
@@ -6630,9 +6671,14 @@ describe("Spatial Studio Worker", () => {
       ),
       env.DB.prepare(`
         INSERT INTO scene_versions
-          (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(provisionalVersionId, provisionalProjectId, member!.userId),
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?)
+      `).bind(
+        provisionalVersionId,
+        provisionalProjectId,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        member!.userId,
+      ),
       env.DB.prepare(`
         INSERT INTO scene_navigation_profiles (
           version_id, organisation_id, project_id, world_unit, agent_radius,
@@ -6659,6 +6705,12 @@ describe("Spatial Studio Worker", () => {
         member!.userId,
       ),
     ]);
+    const producerTransition = await exports.default.fetch(`${origin}/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ assetProducer: "fjd-trion" }),
+    });
+    expect(producerTransition.status).toBe(200);
     const provisionalResponse = await exports.default.fetch(
       `${origin}/api/projects/${provisionalProjectId}/spatial/capture-completeness`,
       {
@@ -7135,6 +7187,20 @@ describe("Spatial Studio Worker", () => {
     const projectId = crypto.randomUUID();
     const versionId = crypto.randomUUID();
     const provisionalVersionId = crypto.randomUUID();
+    const workflowPolicyRevisionId = crypto.randomUUID();
+    const measurementJourneyId = crypto.randomUUID();
+    const measurementVisualAssetId = crypto.randomUUID();
+    const measurementGeometryAssetId = crypto.randomUUID();
+    const measurementCoordinateEvidence = {
+      schemaVersion: "ply-coordinate-evidence-v1",
+      method: "automatic-ply-coordinate-evidence-v1",
+      coordinateFrameId: `capture-journey:${measurementJourneyId}`,
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      vertexCount: 2,
+      finitePointCount: 2,
+      bounds: { min: [0, 0, 0], max: [5, 3, 6] },
+    };
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO projects
@@ -7142,13 +7208,84 @@ describe("Spatial Studio Worker", () => {
         VALUES (?, ?, 'Measured suite', ?, 'QA_REQUIRED', 'open-import', 'measured-floor-plan', ?)
       `).bind(projectId, member!.organisationId, `measured-${projectId.slice(0, 8)}`, member!.userId),
       env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(versionId, projectId, member!.userId),
+        INSERT INTO project_workflow_policy_revisions (
+          id, organisation_id, project_id, revision_number, delivery_template,
+          policy_json, transition_reason, created_by
+        ) VALUES (?, ?, ?, 1, 'Measured capture pack', ?, 'Measurement test fixture', ?)
+      `).bind(
+        workflowPolicyRevisionId,
+        member!.organisationId,
+        projectId,
+        JSON.stringify(projectPolicyForDeliveryTemplate("Measured capture pack")),
+        member!.userId,
+      ),
+      env.DB.prepare(
+        "UPDATE projects SET workflow_policy_revision_id = ? WHERE id = ?",
+      ).bind(workflowPolicyRevisionId, projectId),
       env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 2, 'QA_REQUIRED', ?)
-      `).bind(provisionalVersionId, projectId, member!.userId),
+        INSERT INTO scene_versions (
+          id, project_id, version_number, status, source_provenance_json,
+          created_by, workflow_policy_revision_id
+        ) VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?, ?), (?, ?, 2, 'QA_REQUIRED', ?, ?, ?)
+      `).bind(
+        versionId,
+        projectId,
+        JSON.stringify({
+          assetProducer: "open-import",
+          adapter: "open-import",
+          captureJourney: {
+            schemaVersion: "paired-capture-journey-v2",
+            id: measurementJourneyId,
+            captureAdapter: "open-import",
+            primaryAssetId: measurementVisualAssetId,
+            geometryAssetId: measurementGeometryAssetId,
+            declaration: "same-capture-registered-y-up-metres",
+            sourceCoordinateFrameId: `capture-journey:${measurementJourneyId}`,
+            confirmedBy: member!.userId,
+            confirmedAt: new Date().toISOString(),
+            qualification: {
+              method: "automatic-ply-coordinate-evidence-v1",
+              status: "verified",
+              coordinateFrameId: `capture-journey:${measurementJourneyId}`,
+              sourceUpAxis: "Y",
+              worldUnit: "metres",
+              overlapBounds: { min: [0, 0, 0], max: [5, 3, 6] },
+              visual: measurementCoordinateEvidence,
+              geometry: measurementCoordinateEvidence,
+            },
+          },
+        }),
+        member!.userId,
+        workflowPolicyRevisionId,
+        provisionalVersionId,
+        projectId,
+        JSON.stringify({ assetProducer: "open-import", adapter: "open-import" }),
+        member!.userId,
+        workflowPolicyRevisionId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES
+          (?, ?, ?, ?, 'master', 'ply', ?, 'measured-visual.ply',
+            'application/octet-stream', 16, ?, 'verified'),
+          (?, ?, ?, ?, 'pointcloud', 'ply', ?, 'measured-geometry.ply',
+            'application/octet-stream', 16, ?, 'verified')
+      `).bind(
+        measurementVisualAssetId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        `masters-private/${member!.organisationId}/${projectId}/${versionId}/measured-visual.ply`,
+        "a".repeat(64),
+        measurementGeometryAssetId,
+        member!.organisationId,
+        projectId,
+        versionId,
+        `raw-private/${member!.organisationId}/${projectId}/${versionId}/measured-geometry.ply`,
+        "b".repeat(64),
+      ),
       env.DB.prepare(`
         INSERT INTO scene_navigation_profiles (
           version_id, organisation_id, project_id, world_unit, agent_radius,

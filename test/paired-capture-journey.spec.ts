@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bindPairedCaptureGeometry,
   createPairedCaptureJourney,
+  pairedCaptureJourneyHasProcessorQualification,
   pairedCaptureIdentityTransform,
   parsePairedCaptureJourney,
 } from "../src/shared/paired-capture-journey";
@@ -49,6 +50,18 @@ describe("paired capture journey receipts", () => {
       method: "automatic-ply-coordinate-evidence-v1",
       status: "pending",
     });
+  });
+
+  it("distinguishes operator attestation from processor-qualified registration", () => {
+    const attested = createPairedCaptureJourney({
+      request: { id: crypto.randomUUID(), sameFrameConfirmed: true },
+      captureAdapter: "open-import",
+      primaryAssetId: crypto.randomUUID(),
+      confirmedBy: crypto.randomUUID(),
+      confirmedAt: new Date().toISOString(),
+    });
+
+    expect(pairedCaptureJourneyHasProcessorQualification(attested)).toBe(false);
   });
 
   it("rejects contradictory or fabricated automatic coordinate evidence", () => {

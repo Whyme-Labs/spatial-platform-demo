@@ -107,8 +107,32 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
   },
 };
 
+export const legacyUnspecifiedProjectWorkflowPolicy: ProjectWorkflowPolicy = {
+  schemaVersion: "project-workflow-policy-v1",
+  privacyReview: "strict",
+  publication: "private-review",
+  navigation: "review-walk-and-fly",
+  measurement: "hidden",
+  hosting: "managed-optional",
+  quality: "standard",
+  requiredFiles: "visual-and-registered-geometry",
+  structureWorkflow: "review-every-proposal",
+  navigationClearance: "custom",
+};
+
 export function projectPolicyForDeliveryTemplate(deliveryTemplate: string): ProjectWorkflowPolicy {
   return deliveryPolicies[normalizeProjectDeliveryTemplate(deliveryTemplate)];
+}
+
+export function projectPolicyForPersistedDeliveryTemplate(
+  deliveryTemplate: string,
+): ProjectWorkflowPolicy {
+  try {
+    return projectPolicyForDeliveryTemplate(deliveryTemplate);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return legacyUnspecifiedProjectWorkflowPolicy;
+  }
 }
 
 export function structureWorkflowAllowsAutomaticProposal(

@@ -71,8 +71,12 @@ describe("vendor-neutral floor-plan workflow", () => {
     expect(projectResponse.status).toBe(201);
     const { project } = await projectResponse.json<{ project: { id: string } }>();
     const storedProject = await env.DB.prepare(
-      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
-    ).bind(project.id).first<{ organisation_id: string; created_by: string }>();
+      "SELECT organisation_id, created_by, workflow_policy_revision_id FROM projects WHERE id = ?",
+    ).bind(project.id).first<{
+      organisation_id: string;
+      created_by: string;
+      workflow_policy_revision_id: string;
+    }>();
     expect(storedProject).toBeTruthy();
 
     const versionId = crypto.randomUUID();
@@ -84,9 +88,22 @@ describe("vendor-neutral floor-plan workflow", () => {
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO scene_versions
-          (id, project_id, version_number, status, source_provenance_json, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', '{"registered":true,"units":"metres","upAxis":"y"}', ?)
-      `).bind(versionId, project.id, storedProject!.created_by),
+          (id, project_id, version_number, status, source_provenance_json, created_by,
+            workflow_policy_revision_id)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?, ?)
+      `).bind(
+        versionId,
+        project.id,
+        JSON.stringify({
+          registered: true,
+          units: "metres",
+          upAxis: "y",
+          assetProducer: "open-import",
+          adapter: "open-import",
+        }),
+        storedProject!.created_by,
+        storedProject!.workflow_policy_revision_id,
+      ),
       env.DB.prepare(`
         INSERT INTO assets (
           id, organisation_id, project_id, version_id, kind, format, object_key,
@@ -664,17 +681,19 @@ describe("vendor-neutral floor-plan workflow", () => {
         INSERT INTO releases (
           id, organisation_id, project_id, version_id, web_asset_id, access_policy,
           viewer_config_json, spatial_snapshot_json, published_at, created_by,
-          client_operation_id, release_number
-        ) VALUES (?, ?, ?, ?, ?, 'unlisted', '{}', '{}', ?, ?, ?, 1)
+          client_operation_id, release_number, workflow_policy_revision_id
+        ) VALUES (?, ?, ?, ?, ?, 'unlisted', ?, '{}', ?, ?, ?, 1, ?)
       `).bind(
         sourceReleaseId,
         storedProject!.organisation_id,
         project.id,
         versionId,
         assetId,
+        JSON.stringify({ defaultMovementMode: "walk" }),
         new Date().toISOString(),
         storedProject!.created_by,
         crypto.randomUUID(),
+        storedProject!.workflow_policy_revision_id,
       ),
       env.DB.prepare(`
         INSERT INTO release_channels (
@@ -686,6 +705,19 @@ describe("vendor-neutral floor-plan workflow", () => {
         project.id,
         `durable-republish-${project.id.slice(0, 8)}`,
         sourceReleaseId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO project_hosting_subscriptions (
+          id, organisation_id, project_id, plan_code, status,
+          current_period_start, current_period_end, renews_automatically,
+          archive_on_expiry, created_by
+        ) VALUES (?, ?, ?, 'venue', 'active', datetime('now'),
+          datetime('now', '+1 day'), 0, 1, ?)
+      `).bind(
+        crypto.randomUUID(),
+        storedProject!.organisation_id,
+        project.id,
+        storedProject!.created_by,
       ),
     ]);
     const reviewResponses = await Promise.all([
@@ -1053,7 +1085,7 @@ describe("vendor-neutral floor-plan workflow", () => {
       republishIntent: {
         id: reviewed.republishIntent.id,
         status: "failed",
-        error: expect.stringContaining("approved collision, navigation report, and Detour navmesh"),
+        error: expect.stringContaining("navigation clearance"),
       },
     });
     await expect(env.DB.prepare(`
@@ -1061,7 +1093,7 @@ describe("vendor-neutral floor-plan workflow", () => {
       FROM release_republish_intents WHERE id = ?
     `).bind(reviewed.republishIntent.id).first()).resolves.toMatchObject({
       status: "failed",
-      error_message: expect.stringContaining("approved collision, navigation report, and Detour navmesh"),
+      error_message: expect.stringContaining("navigation clearance"),
       completed_at: expect.any(String),
     });
     // The per-finding receipt freezes with the build the operator approved.

@@ -81,8 +81,13 @@ async function seedEvidenceJob(): Promise<Fixture> {
     env.DB.prepare(`
       INSERT INTO scene_versions
         (id, project_id, version_number, status, source_provenance_json, created_by)
-      VALUES (?, ?, 1, 'PROCESSING', '{}', ?)
-    `).bind(versionId, project.id, userId),
+      VALUES (?, ?, 1, 'PROCESSING', ?, ?)
+    `).bind(
+      versionId,
+      project.id,
+      JSON.stringify({ assetProducer: "fjd-trion", adapter: "fjd-trion" }),
+      userId,
+    ),
     env.DB.prepare(`
       INSERT INTO assets
         (id, organisation_id, project_id, version_id, kind, format, object_key,

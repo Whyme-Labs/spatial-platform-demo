@@ -17,8 +17,20 @@ describe("measurement evidence unit lock", () => {
     );
 
     expect(route).not.toContain("isMetricSpatialVersion(");
+    expect(route.match(/INSERT INTO measurement_briefs/g)).toHaveLength(1);
+    expect(route).toContain("const eligibilityResults = await context.env.DB.batch([");
+    expect(route).toContain(
+      "WHERE (? <> 'project_verified' OR ${recognizedMeasurementRegistrationPredicateSql})",
+    );
+    expect(route).toContain("AND ${metricSpatialVersionPredicateSql}");
+    expect(workerSource).toMatch(
+      /const metricSpatialVersionPredicateSql[\s\S]*scene_navigation_profiles[\s\S]*scene_entities[\s\S]*scene_navigation_obstacles/,
+    );
+    expect(workerSource).toMatch(
+      /const recognizedMeasurementRegistrationPredicateSql[\s\S]*review_generation[\s\S]*canonical_manifest_json[\s\S]*source_provenance_json/,
+    );
     expect(route).toMatch(
-      /INSERT INTO measurement_briefs[\s\S]*SELECT[\s\S]*scene_navigation_profiles[\s\S]*scene_entities[\s\S]*scene_navigation_obstacles[\s\S]*RETURNING id/,
+      /registration_eligible[\s\S]*if \(registrationGuard\)[\s\S]*registration evidence changed during creation[\s\S]*recognized processor-qualified/,
     );
   });
 

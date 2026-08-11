@@ -176,11 +176,15 @@ test.describe("authenticated studio UI", () => {
     await dialog.getByRole("button", { name: "Continue to files", exact: true }).click();
 
     await expect(dialog.getByRole("combobox", {
-      name: "Which scanner or export tool created these files?",
+      name: "Where did the observations come from?",
       exact: true,
     })).toBeVisible();
     await dialog.getByRole("combobox", {
-      name: "Which scanner or export tool created these files?",
+      name: "Where did the observations come from?",
+      exact: true,
+    }).selectOption("third-party");
+    await dialog.getByRole("combobox", {
+      name: "Which pipeline produced these files?",
       exact: true,
     }).selectOption("open-import");
     await expect(dialog.getByLabel("3D appearance file", { exact: true })).toBeVisible();
@@ -207,7 +211,7 @@ test.describe("authenticated studio UI", () => {
     );
     await expect(dialog.locator("#newCaptureFrameConfirmation")).toBeHidden();
     await dialog.getByRole("combobox", {
-      name: "Which scanner or export tool created these files?",
+      name: "Which pipeline produced these files?",
       exact: true,
     }).selectOption("open-import");
     await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
@@ -298,7 +302,7 @@ test.describe("authenticated studio UI", () => {
           id: "93939393-9393-4939-8939-939393939393",
           name: "Museum evidence pack",
           description: "Defaults for specialist gallery evidence.",
-          captureAdapter: "phone-video",
+          captureAdapter: "open-import",
           deliveryTemplate: "Venue navigator",
           notes: "Preserve the accessible public route.",
           createdAt: now,
@@ -317,9 +321,7 @@ test.describe("authenticated studio UI", () => {
     await dialog.locator("#newProjectTemplate")
       .selectOption("93939393-9393-4939-8939-939393939393");
 
-    await expect(dialog.locator("#newCaptureAdapter optgroup[label='Specialist evidence sources']"))
-      .toContainText("Phone / video evidence");
-    await expect(dialog.locator("#newCaptureAdapter")).toHaveValue("phone-video");
+    await expect(dialog.locator("#newCaptureAdapter")).toHaveValue("open-import");
     await expect(dialog.locator("textarea[name='notes']")).toHaveValue(
       "Preserve the accessible public route.",
     );

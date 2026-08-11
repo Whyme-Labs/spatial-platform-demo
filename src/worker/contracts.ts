@@ -1,8 +1,10 @@
 import { z } from "zod";
 import {
+  assetProducerIds,
   captureAdapterIds,
   captureAssetFormats,
   captureAssetPurposes,
+  captureOriginIds,
 } from "../shared/capture-adapters";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../shared/world-units";
 import {
@@ -22,6 +24,12 @@ import {
 } from "../shared/paired-capture-journey";
 
 const captureAdapterSchema = z.enum(captureAdapterIds);
+const captureOriginSchema = z.enum(captureOriginIds);
+const assetProducerSchema = z.enum(assetProducerIds);
+const capturePlanItemSchema = z.object({
+  purpose: z.enum(captureAssetPurposes),
+  format: z.enum(captureAssetFormats),
+}).strict();
 const projectDeliveryTemplateSchema = z.enum(projectDeliveryTemplateInputs)
   .transform(normalizeProjectDeliveryTemplate);
 export const projectWorkflowPolicySchema = z.object({
@@ -122,10 +130,30 @@ export const projectInputSchema = z.object({
   name: z.string().trim().min(3).max(120),
   customerName: z.string().trim().min(2).max(120).optional(),
   customerEmail: z.string().email().optional(),
-  captureAdapter: captureAdapterSchema,
+  captureAdapter: captureAdapterSchema.optional(),
+  captureOrigin: captureOriginSchema.optional(),
+  assetProducer: assetProducerSchema.optional(),
+  capturePlan: z.array(capturePlanItemSchema).min(1).optional(),
   deliveryTemplate: projectDeliveryTemplateSchema,
   notes: z.string().trim().max(4000).optional(),
   customFields: projectCustomFieldValuesSchema.default({}),
+}).superRefine((project, context) => {
+  const explicitProvenance = project.captureOrigin !== undefined ||
+    project.assetProducer !== undefined || project.capturePlan !== undefined;
+  if (!project.captureAdapter && !project.assetProducer) {
+    context.addIssue({
+      code: "custom",
+      path: ["assetProducer"],
+      message: "Choose the pipeline that produced the submitted assets",
+    });
+  }
+  if (explicitProvenance && !project.captureOrigin) {
+    context.addIssue({
+      code: "custom",
+      path: ["captureOrigin"],
+      message: "Declare where the original observations came from",
+    });
+  }
 });
 
 export const projectUpdateSchema = z.object({
@@ -133,6 +161,8 @@ export const projectUpdateSchema = z.object({
   customerName: z.string().trim().min(2).max(120).nullable().optional(),
   customerEmail: z.string().trim().email().nullable().optional(),
   captureAdapter: captureAdapterSchema.optional(),
+  captureOrigin: captureOriginSchema.optional(),
+  assetProducer: assetProducerSchema.nullable().optional(),
   deliveryTemplate: projectDeliveryTemplateSchema.optional(),
   notes: z.string().trim().max(4000).nullable().optional(),
   customFields: projectCustomFieldValuesSchema.optional(),
@@ -784,7 +814,6 @@ export const navigationObstacleSchema = z.object({
 
 export const navigationProfileSchema = z.object({
   versionId: z.string().uuid(),
-  workflowPolicy: projectWorkflowPolicySchema.optional(),
   worldUnit: z.enum(["metres", "scene_units"]).default("metres"),
   agentRadius: z.number().min(0.05).max(2),
   agentHeight: z.number().min(0.5).max(4),
@@ -793,7 +822,7 @@ export const navigationProfileSchema = z.object({
   maxSlopeDegrees: z.number().min(0).max(89).default(45),
   maxSpeed: z.number().min(0.1).max(20).default(1.6),
   maxAcceleration: z.number().min(0.1).max(100).default(8),
-}).superRefine((value, context) => {
+}).strict().superRefine((value, context) => {
   if (value.agentHeight <= value.agentRadius * 2) {
     context.addIssue({
       code: "custom",

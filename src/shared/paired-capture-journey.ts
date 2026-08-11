@@ -133,6 +133,14 @@ export function pairedCaptureJourneyIsVerified(journey: PairedCaptureJourney): b
     journey.qualification?.status === "verified";
 }
 
+export function pairedCaptureJourneyHasProcessorQualification(
+  journey: PairedCaptureJourney,
+): boolean {
+  return journey.schemaVersion === PAIRED_CAPTURE_JOURNEY_SCHEMA_VERSION &&
+    journey.qualification?.method === AUTOMATIC_PAIRED_CAPTURE_METHOD &&
+    journey.qualification.status === "verified";
+}
+
 export function parsePairedCaptureJourney(value: unknown): PairedCaptureJourney | null {
   if (!value || typeof value !== "object") return null;
   const id = Reflect.get(value, "id");

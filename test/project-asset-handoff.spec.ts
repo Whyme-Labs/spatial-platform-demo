@@ -267,14 +267,16 @@ describe("asset-bearing cross-organisation project handoff", () => {
     });
 
     const destinationProject = await env.DB.prepare(`
-      SELECT organisation_id, status FROM projects WHERE id = ?
+      SELECT organisation_id, status, asset_producer FROM projects WHERE id = ?
     `).bind(completed.handoff.targetProjectId).first<{
       organisation_id: string;
       status: string;
+      asset_producer: string | null;
     }>();
     expect(destinationProject).toEqual({
       organisation_id: destinationId,
       status: "INGESTED",
+      asset_producer: null,
     });
     const copiedAsset = await env.DB.prepare(`
       SELECT organisation_id, project_id, size_bytes, sha256, integrity_status,

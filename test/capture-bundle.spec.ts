@@ -124,14 +124,18 @@ describe("vendor-neutral capture bundle", () => {
         clientOperationId: crypto.randomUUID(),
         name: `Capture bundle ${crypto.randomUUID().slice(0, 8)}`,
         captureAdapter: "open-import",
-        deliveryTemplate: "operations-twin",
+        deliveryTemplate: "Measured capture pack",
       }),
     });
     expect(projectResponse.status).toBe(201);
     const project = await projectResponse.json<{ project: { id: string } }>();
     const storedProject = await env.DB.prepare(
-      "SELECT organisation_id, created_by FROM projects WHERE id = ?",
-    ).bind(project.project.id).first<{ organisation_id: string; created_by: string }>();
+      "SELECT organisation_id, created_by, workflow_policy_revision_id FROM projects WHERE id = ?",
+    ).bind(project.project.id).first<{
+      organisation_id: string;
+      created_by: string;
+      workflow_policy_revision_id: string;
+    }>();
     expect(storedProject).toBeTruthy();
 
     const versionId = crypto.randomUUID();
@@ -150,9 +154,16 @@ describe("vendor-neutral capture bundle", () => {
     await env.DB.batch([
       env.DB.prepare(`
         INSERT INTO scene_versions
-          (id, project_id, version_number, status, source_provenance_json, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', '{"registered":true}', ?)
-      `).bind(versionId, project.project.id, storedProject!.created_by),
+          (id, project_id, version_number, status, source_provenance_json, created_by,
+            workflow_policy_revision_id)
+        VALUES (?, ?, 1, 'QA_REQUIRED', ?, ?, ?)
+      `).bind(
+        versionId,
+        project.project.id,
+        JSON.stringify({ registered: true, assetProducer: "open-import", adapter: "open-import" }),
+        storedProject!.created_by,
+        storedProject!.workflow_policy_revision_id,
+      ),
       env.DB.prepare(`
         INSERT INTO assets (
           id, organisation_id, project_id, version_id, kind, format, object_key,
@@ -184,6 +195,15 @@ describe("vendor-neutral capture bundle", () => {
         await sha256Hex(gaussianBytes),
       ),
     ]);
+    const producerTransition = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ assetProducer: "fjd-trion" }),
+      },
+    );
+    expect(producerTransition.status).toBe(200);
 
     const operationId = crypto.randomUUID();
     const body = {
@@ -225,7 +245,7 @@ describe("vendor-neutral capture bundle", () => {
       assets: [
         {
           assetId: pointCloudId,
-          roles: ["raw_capture", "metric_point_cloud"],
+          roles: ["raw_capture", "metric_point_cloud", "traversal_evidence"],
           description: "Immutable capture and metric geometry export.",
         },
         {
@@ -424,6 +444,62 @@ describe("vendor-neutral capture bundle", () => {
         result: "ready_with_warnings",
         review_decision: "needs_vendor_evidence",
       }],
+    });
+
+    const accepted = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/capture-bundles/${created.manifest.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "accepted",
+          note: "The registered metric point cloud is accepted as traversal evidence.",
+        }),
+      },
+    );
+    expect(accepted.status).toBe(200);
+
+    const measurementBrief = (intendedUse: string) => ({
+      versionId,
+      productType: "measured_floor_plan",
+      intendedUse,
+      units: "metres",
+      toleranceMm: 50,
+      relianceClass: "project_verified",
+    });
+    const acceptedBrief = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/measurement/briefs`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(measurementBrief("Accepted manifest registration")),
+      },
+    );
+    expect(acceptedBrief.status).toBe(201);
+
+    const withdrawn = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/capture-bundles/${created.manifest.id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "needs_vendor_evidence",
+          note: "Withdraw reliance while the supplier evidence is rechecked.",
+        }),
+      },
+    );
+    expect(withdrawn.status).toBe(200);
+    const withdrawnBrief = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/measurement/briefs`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(measurementBrief("Withdrawn manifest registration")),
+      },
+    );
+    expect(withdrawnBrief.status).toBe(422);
+    await expect(withdrawnBrief.json()).resolves.toMatchObject({
+      error: expect.stringContaining("registration evidence"),
     });
   });
 });

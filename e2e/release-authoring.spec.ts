@@ -103,6 +103,29 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
 });
 
+test("privacy polling stays active on the Privacy stage until delayed evidence completes", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      originalSetTimeout(handler, Math.min(timeout ?? 0, 25), ...args)) as typeof window.setTimeout;
+  });
+  const polling = { spatialReads: 0 };
+  await mockApprovedProject(page, () => undefined, { delayedPrivacyScan: polling });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Privacy", exact: true }).click();
+  await page.getByRole("button", { name: "Run automated privacy scan", exact: true }).click();
+
+  await expect(page.locator("#privacyAssuranceCard").getByText("Running", { exact: true })).toBeVisible();
+  await expect(page.locator("#privacyAssuranceCard").getByText("Completed", { exact: true })).toBeVisible();
+  await expect(page.getByText(
+    "No privacy candidates were detected. The completed scan remains part of the QA evidence.",
+    { exact: true },
+  )).toBeVisible();
+  expect(polling.spatialReads).toBeGreaterThanOrEqual(3);
+});
+
 test("a novice can upload, inspect every stage, walk test, and publish using visible controls", async ({ page }) => {
   let publishedBody: Record<string, unknown> | null = null;
   await mockApprovedProject(page, (body) => {
@@ -116,7 +139,11 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await intake.getByLabel("Scene name", { exact: true }).fill("Corrected Spark room");
   await intake.getByRole("button", { name: "Continue to files", exact: true }).click();
   await intake.getByRole("combobox", {
-    name: "Which scanner or export tool created these files?",
+    name: "Where did the observations come from?",
+    exact: true,
+  }).selectOption("third-party");
+  await intake.getByRole("combobox", {
+    name: "Which pipeline produced these files?",
     exact: true,
   }).selectOption("open-import");
   await intake.getByLabel("3D appearance file", { exact: true }).setInputFiles({
@@ -553,6 +580,7 @@ async function mockApprovedProject(
     walkingState?: "building" | "exception";
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
+    delayedPrivacyScan?: { spatialReads: number };
   } = {},
 ): Promise<void> {
   let projectCreated = !options.captureIntake;
@@ -561,6 +589,7 @@ async function mockApprovedProject(
     : "approved";
   let novicePrivacyResolved = false;
   let noviceWalkTestCompleted = !options.noviceLifecycle;
+  let delayedPrivacyScanStatus: "RUNNING" | "COMPLETED" | null = null;
   const uploads = new Map<string, {
     assetId: string;
     fileName: string;
@@ -655,6 +684,18 @@ async function mockApprovedProject(
     }
     if (path === "/api/projects" && method === "GET") {
       return json(route, 200, { projects: projectCreated ? [project] : [] });
+    }
+    if (
+      options.delayedPrivacyScan && method === "POST" &&
+      path === `/api/projects/${projectId}/privacy-scans`
+    ) {
+      delayedPrivacyScanStatus = "RUNNING";
+      return json(route, 202, {
+        scan: {
+          id: "60606060-6060-4060-8060-606060606060",
+          status: "QUEUED",
+        },
+      });
     }
     if (path === `/api/projects/${projectId}/uploads` && method === "POST" && options.captureIntake) {
       const body = request.postDataJSON() as {
@@ -777,7 +818,7 @@ async function mockApprovedProject(
             size_bytes: 73_400_000,
             integrity_status: "verified",
           },
-          ...(options.noviceLifecycle
+          ...(options.noviceLifecycle || options.delayedPrivacyScan
             ? [
               {
                 id: "57575757-5757-4575-8575-575757575757",
@@ -904,6 +945,12 @@ async function mockApprovedProject(
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {
+      if (options.delayedPrivacyScan && delayedPrivacyScanStatus) {
+        options.delayedPrivacyScan.spatialReads += 1;
+        if (options.delayedPrivacyScan.spatialReads >= 3) {
+          delayedPrivacyScanStatus = "COMPLETED";
+        }
+      }
       const reviewedTransform = options.reviewedTransform
         ? [{
           id: "66666666-6666-4666-8666-666666666666",
@@ -956,7 +1003,22 @@ async function mockApprovedProject(
         routes: [],
         routeStops: [],
         privacyRegions: [],
-        privacyScans: options.noviceLifecycle && noviceStage !== "structure"
+        privacyScans: delayedPrivacyScanStatus
+          ? [{
+            id: "60606060-6060-4060-8060-606060606060",
+            status: delayedPrivacyScanStatus,
+            detector: "fixture-detector",
+            detector_version: "fixture/1",
+            attempt_count: 1,
+            max_attempts: 3,
+            input_count: 1,
+            candidate_count: 0,
+            evidence_json: delayedPrivacyScanStatus === "COMPLETED" ? "{}" : null,
+            error_json: null,
+            created_at: now,
+            completed_at: delayedPrivacyScanStatus === "COMPLETED" ? now : null,
+          }]
+          : options.noviceLifecycle && noviceStage !== "structure"
           ? [{
             id: "60606060-6060-4060-8060-606060606060",
             status: "COMPLETED",

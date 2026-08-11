@@ -8,6 +8,46 @@ export const captureAdapterIds = [
 
 export type CaptureAdapterId = typeof captureAdapterIds[number];
 
+export const captureOriginIds = [
+  "xgrids",
+  "fjd",
+  "phone",
+  "drone",
+  "third-party",
+] as const;
+
+export type CaptureOriginId = typeof captureOriginIds[number];
+
+export const assetProducerIds = [
+  "xgrids-lcc",
+  "fjd-trion",
+  "open-import",
+] as const;
+
+export type AssetProducerId = typeof assetProducerIds[number];
+
+export function captureOriginForLegacyAdapter(adapter: CaptureAdapterId): CaptureOriginId {
+  if (adapter === "xgrids-lcc") return "xgrids";
+  if (adapter === "fjd-trion") return "fjd";
+  if (adapter === "phone-video") return "phone";
+  if (adapter === "drone-imagery") return "drone";
+  return "third-party";
+}
+
+export function assetProducerForLegacyAdapter(adapter: CaptureAdapterId): AssetProducerId | null {
+  return assetProducerIds.includes(adapter as AssetProducerId)
+    ? adapter as AssetProducerId
+    : null;
+}
+
+export function captureAdapterForOrigin(origin: CaptureOriginId): CaptureAdapterId {
+  if (origin === "xgrids") return "xgrids-lcc";
+  if (origin === "fjd") return "fjd-trion";
+  if (origin === "phone") return "phone-video";
+  if (origin === "drone") return "drone-imagery";
+  return "open-import";
+}
+
 export const captureAssetPurposes = [
   "gaussian_splat",
   "web_scene",
@@ -248,4 +288,16 @@ export function planCaptureAssetImport(input: {
     assetKind: assetKindByPurpose[input.purpose],
     browserRenderable: input.purpose === "web_scene",
   };
+}
+
+export function planProducedAssetImport(input: {
+  producer: AssetProducerId;
+  purpose: CaptureAssetPurpose;
+  format: CaptureAssetFormat;
+}): CaptureAssetImportPlan {
+  return planCaptureAssetImport({
+    adapter: input.producer,
+    purpose: input.purpose,
+    format: input.format,
+  });
 }
