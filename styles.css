@@ -3148,14 +3148,17 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
   }
 
   body.studio-page .navigation-build-row {
+    display:grid;
+    grid-template-columns:minmax(0, 1fr);
     align-items:stretch;
-    flex-direction:column;
   }
 
   body.studio-page .navigation-build-actions {
     display:grid;
     grid-template-columns:minmax(0, 1fr) auto;
     justify-content:stretch;
+    width:100%;
+    min-width:0;
   }
 
   body.studio-page .navigation-build-actions > :only-child {

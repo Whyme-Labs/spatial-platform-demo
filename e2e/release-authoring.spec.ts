@@ -106,8 +106,16 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
 test("privacy polling stays active on the Privacy stage until delayed evidence completes", async ({ page }) => {
   await page.addInitScript(() => {
     const originalSetTimeout = window.setTimeout.bind(window);
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
-      originalSetTimeout(handler, Math.min(timeout ?? 0, 25), ...args)) as typeof window.setTimeout;
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      const duration = timeout ?? 0;
+      const acceleratePrivacyPolling = (window as Window & {
+        __spatialAcceleratePrivacyPolling?: boolean;
+      }).__spatialAcceleratePrivacyPolling;
+      const effectiveDuration = acceleratePrivacyPolling && [1_500, 3_000].includes(duration)
+        ? 25
+        : duration;
+      return originalSetTimeout(handler, effectiveDuration, ...args);
+    }) as typeof window.setTimeout;
   });
   const polling = { spatialReads: 0 };
   await mockApprovedProject(page, () => undefined, { delayedPrivacyScan: polling });
@@ -118,6 +126,10 @@ test("privacy polling stays active on the Privacy stage until delayed evidence c
   await page.getByRole("button", { name: "Run automated privacy scan", exact: true }).click();
 
   await expect(page.locator("#privacyAssuranceCard").getByText("Running", { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    (window as Window & { __spatialAcceleratePrivacyPolling?: boolean })
+      .__spatialAcceleratePrivacyPolling = true;
+  });
   await expect(page.locator("#privacyAssuranceCard").getByText("Completed", { exact: true })).toBeVisible();
   await expect(page.getByText(
     "No privacy candidates were detected. The completed scan remains part of the QA evidence.",
@@ -508,6 +520,7 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
   const firstApprove = card.getByRole("button", { name: "Approve navigation", exact: true }).first();
+  const firstReject = card.getByRole("button", { name: "Reject", exact: true }).first();
   const buildEvidence = card.getByText("Inspect build evidence", { exact: true }).first();
   await expect(buildEvidence).toBeVisible();
   await buildEvidence.click();
@@ -529,9 +542,10 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
       authorTraversal.boundingBox(),
       buildNavigation.boundingBox(),
       firstApprove.boundingBox(),
+      firstReject.boundingBox(),
     ]);
-    const [createBox, tuneBox, traversalBox, buildBox, approveBox] = boxes;
-    if (!createBox || !tuneBox || !traversalBox || !buildBox || !approveBox) {
+    const [createBox, tuneBox, traversalBox, buildBox, approveBox, rejectBox] = boxes;
+    if (!createBox || !tuneBox || !traversalBox || !buildBox || !approveBox || !rejectBox) {
       throw new Error(`${viewport.width}px navigation controls are not measurable`);
     }
 
@@ -543,6 +557,16 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
     ] as const) {
       expect(gap, `${viewport.width}px ${label} controls overlap`).toBeGreaterThan(0);
     }
+
+    const horizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(horizontalOverflow, `${viewport.width}px page overflows horizontally`).toBeLessThanOrEqual(1);
+    expect(approveBox.x, `${viewport.width}px approval starts off-canvas`).toBeGreaterThanOrEqual(0);
+    expect(
+      rejectBox.x + rejectBox.width,
+      `${viewport.width}px rejection ends off-canvas`,
+    ).toBeLessThanOrEqual(viewport.width + 1);
   }
 });
 
