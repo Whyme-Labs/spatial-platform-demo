@@ -3965,12 +3965,88 @@ describe("Spatial Studio Worker", () => {
       env.DB.prepare("DELETE FROM releases WHERE id = ?")
         .bind(republished!.releaseId),
     ]);
+    const legacyPolicyRevisionId = crypto.randomUUID();
+    const originalPolicyRevision = await env.DB.prepare(`
+      SELECT workflow_policy_revision_id FROM releases WHERE id = ?
+    `).bind(release.release.id).first<{ workflow_policy_revision_id: string }>();
+    const nextRevisionNumber = await env.DB.prepare(`
+      SELECT COALESCE(MAX(revision_number), 0) + 1 AS value
+      FROM project_workflow_policy_revisions WHERE project_id = ?
+    `).bind(project.id).first<{ value: number }>();
+    const currentPolicy = await env.DB.prepare(`
+      SELECT delivery_template, workflow_policy_json, created_by
+      FROM projects WHERE id = ?
+    `).bind(project.id).first<{
+      delivery_template: string;
+      workflow_policy_json: string;
+      created_by: string;
+    }>();
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO project_workflow_policy_revisions (
+          id, organisation_id, project_id, revision_number, delivery_template,
+          policy_json, transition_reason, created_by, classification_status
+        ) VALUES (?, ?, ?, ?, ?, ?, 'Legacy republish regression fixture', ?, 'legacy_unknown')
+      `).bind(
+        legacyPolicyRevisionId,
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        nextRevisionNumber!.value,
+        currentPolicy!.delivery_template,
+        currentPolicy!.workflow_policy_json,
+        currentPolicy!.created_by,
+      ),
+      env.DB.prepare("UPDATE scene_versions SET workflow_policy_revision_id = ? WHERE id = ?")
+        .bind(legacyPolicyRevisionId, completed.asset.versionId),
+      env.DB.prepare("UPDATE releases SET workflow_policy_revision_id = ? WHERE id = ?")
+        .bind(legacyPolicyRevisionId, release.release.id),
+      env.DB.prepare(`
+        INSERT INTO release_republish_intents (
+          id, organisation_id, project_id, version_id, navigation_build_id,
+          source_release_id, status, requested_by, client_operation_id
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      `).bind(
+        crypto.randomUUID(),
+        provisionalEvidenceOwner!.organisation_id,
+        project.id,
+        completed.asset.versionId,
+        navigationBuildId,
+        release.release.id,
+        provisionalEvidenceOwner!.created_by,
+        crypto.randomUUID(),
+      ),
+    ]);
+    await expect(completeReleaseRepublishIntent(
+      env,
+      navigationBuildId,
+      "legacy-policy-republish-test",
+    )).resolves.toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("unclassified workflow policy"),
+    });
+    await env.DB.batch([
+      env.DB.prepare("UPDATE scene_versions SET workflow_policy_revision_id = ? WHERE id = ?")
+        .bind(originalPolicyRevision!.workflow_policy_revision_id, completed.asset.versionId),
+      env.DB.prepare("UPDATE releases SET workflow_policy_revision_id = ? WHERE id = ?")
+        .bind(originalPolicyRevision!.workflow_policy_revision_id, release.release.id),
+    ]);
     const publishedManifestResponse = await exports.default.fetch(
       `${origin}/api/releases/${release.release.slug}/manifest`,
     );
     expect(publishedManifestResponse.status).toBe(200);
     expect(publishedManifestResponse.headers.get("cache-control")).toBe("private, no-store");
-    await expect(publishedManifestResponse.json()).resolves.not.toHaveProperty("telemetry");
+    const publishedManifest = await publishedManifestResponse.json<{
+      release: { workflowPolicyRevisionId: string | null };
+      scene: { assetId: string; sha256: string | null };
+      telemetry?: unknown;
+    }>();
+    expect(publishedManifest).toMatchObject({
+      release: {
+        workflowPolicyRevisionId: originalPolicyRevision!.workflow_policy_revision_id,
+      },
+      scene: { assetId: completed.asset.id, sha256: pairedVisualSha256 },
+    });
+    expect(publishedManifest).not.toHaveProperty("telemetry");
     const unauthenticatedTelemetrySession = await exports.default.fetch(
       `${origin}/api/releases/${release.release.slug}/telemetry-session`,
       {
@@ -5127,6 +5203,10 @@ describe("Spatial Studio Worker", () => {
       { method: "DELETE", headers: { cookie } },
     );
     expect(revokeResponse.status).toBe(204);
+    const revokedShell = await exports.default.fetch(
+      `${origin}/s/publishable-apartment`,
+    );
+    expect(revokedShell.status).toBe(410);
     const revokedManifest = await exports.default.fetch(
       `${origin}/api/releases/publishable-apartment/manifest`,
     );

@@ -43,6 +43,7 @@ type ReleaseManifest = {
     publishedAt: string;
     expiresAt: string | null;
     accessPolicy: string;
+    workflowPolicyRevisionId: string | null;
   };
   project: {
     id: string;
@@ -53,6 +54,8 @@ type ReleaseManifest = {
     provenance: unknown;
   };
   scene: {
+    assetId: string;
+    sha256: string | null;
     format: string;
     contentUrl: string;
     posterUrl: string | null;

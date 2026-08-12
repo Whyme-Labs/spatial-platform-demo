@@ -7,13 +7,15 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = resolve(repositoryRoot, "docs/verification/user-facing-inventory.md");
 const writeMode = process.argv.includes("--write");
 
-const [studioHtml, landingHtml, studioSource, viewerSource, workerSource, fieldRegistry, actionAudit] =
+const [studioHtml, landingHtml, studioSource, compareSource, viewerSource, workerSource, comparisonRouteSource, fieldRegistry, actionAudit] =
   await Promise.all([
     projectFile("studio.html"),
     projectFile("index.html"),
     projectFile("src/client/studio.ts"),
+    projectFile("src/client/studio/stages/compare.ts"),
     projectFile("src/client/viewer.ts"),
     projectFile("src/worker/index.ts"),
+    projectFile("src/worker/routes/comparison.ts"),
     projectJson("config/studio-field-registry.json"),
     projectFile("docs/ACTION_STATE_AUDIT.md"),
   ]);
@@ -24,6 +26,7 @@ const htmlSurfaces = [
 ];
 const dynamicControls = [
   ...extractDynamicControls("src/client/studio.ts", studioSource),
+  ...extractDynamicControls("src/client/studio/stages/compare.ts", compareSource),
   ...extractDynamicControls("src/client/viewer.ts", viewerSource),
 ];
 const inventory = {
@@ -33,7 +36,10 @@ const inventory = {
     ["customer_reviewer", "Customer reviewer", "Invited-project review, comments, and decisions only."],
     ["customer_readonly", "Customer read only", "Invited-project viewing without comments or decisions."],
   ].map(([id, label, scope]) => ({ id, label, scope })),
-  routes: extractRoutes(workerSource, studioHtml),
+  routes: extractRoutes([
+    { path: "src/worker/index.ts", source: workerSource },
+    { path: "src/worker/routes/comparison.ts", source: comparisonRouteSource },
+  ], studioHtml),
   htmlSurfaces,
   dynamicControls,
   fields: expandFieldRegistry(fieldRegistry),
@@ -173,7 +179,10 @@ function dynamicElementTag(initializer) {
   if (!initializer || !ts.isCallExpression(initializer)) return null;
   const argument = initializer.arguments[0];
   if (!argument || (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument))) return null;
-  if (ts.isIdentifier(initializer.expression) && initializer.expression.text === "element") return argument.text;
+  if (
+    ts.isIdentifier(initializer.expression) &&
+    ["element", "createElement"].includes(initializer.expression.text)
+  ) return argument.text;
   if (
     ts.isPropertyAccessExpression(initializer.expression) &&
     ts.isIdentifier(initializer.expression.expression) &&
@@ -183,12 +192,14 @@ function dynamicElementTag(initializer) {
   return null;
 }
 
-function extractRoutes(worker, studio) {
+function extractRoutes(workerSources, studio) {
   const routes = [];
-  for (const match of worker.matchAll(/app\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g)) {
-    const method = (match[1] ?? "").toUpperCase();
-    const path = match[2] ?? "";
-    routes.push({ id: `${method} ${path}`, method, path, audience: routeAudience(method, path), source: `src/worker/index.ts:${lineAt(worker, match.index ?? 0)}` });
+  for (const worker of workerSources) {
+    for (const match of worker.source.matchAll(/app\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]/g)) {
+      const method = (match[1] ?? "").toUpperCase();
+      const path = match[2] ?? "";
+      routes.push({ id: `${method} ${path}`, method, path, audience: routeAudience(method, path), source: `${worker.path}:${lineAt(worker.source, match.index ?? 0)}` });
+    }
   }
   const clientPaths = new Set();
   for (const match of studio.matchAll(/data-section=["']([^"']+)["']/g)) clientPaths.add(`#${match[1]}`);

@@ -134,7 +134,8 @@
           "REFRESH_TOKEN_PEPPER",
           "SESSION_PEPPER",
           "WORKER_API_TOKEN",
-          "TURNSTILE_SECRET_KEY"
+          "TURNSTILE_SECRET_KEY",
+          "STAGING_LIFECYCLE_CANARY_TOKEN"
         ]
       },
       "triggers": {

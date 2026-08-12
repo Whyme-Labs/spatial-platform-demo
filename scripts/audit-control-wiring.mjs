@@ -5,7 +5,10 @@ import ts from "typescript";
 const entryPoints = [
   {
     html: "studio.html",
-    scripts: ["src/client/studio.ts"],
+    scripts: [
+      "src/client/studio.ts",
+      "src/client/studio/stages/compare.ts",
+    ],
   },
   {
     html: "index.html",
@@ -21,7 +24,10 @@ let auditedDynamicButtons = 0;
 let auditedDynamicLinks = 0;
 let auditedRegistryFields = 0;
 const studioFieldRegistry = JSON.parse(await readProjectFile("config/studio-field-registry.json"));
-const workerSource = await readProjectFile("src/worker/index.ts");
+const workerSource = (await Promise.all([
+  "src/worker/index.ts",
+  "src/worker/routes/comparison.ts",
+].map(readProjectFile))).join("\n");
 
 for (const entryPoint of entryPoints) {
   const html = await readProjectFile(entryPoint.html);

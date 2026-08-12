@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   bindPairedCaptureGeometry,
   createPairedCaptureJourney,
-  pairedCaptureJourneyHasProcessorQualification,
+  pairedCaptureJourneyHasAcceptedRegistration,
+  pairedCaptureJourneyMeetsAssurance,
+  pairedCaptureJourneyRegistrationAssurance,
   pairedCaptureIdentityTransform,
   parsePairedCaptureJourney,
 } from "../src/shared/paired-capture-journey";
@@ -61,7 +63,9 @@ describe("paired capture journey receipts", () => {
       confirmedAt: new Date().toISOString(),
     });
 
-    expect(pairedCaptureJourneyHasProcessorQualification(attested)).toBe(false);
+    expect(pairedCaptureJourneyRegistrationAssurance(attested)).toBe("operator-attested");
+    expect(pairedCaptureJourneyHasAcceptedRegistration(attested)).toBe(true);
+    expect(pairedCaptureJourneyMeetsAssurance(attested, "processor-qualified")).toBe(false);
   });
 
   it("rejects contradictory or fabricated automatic coordinate evidence", () => {
@@ -95,7 +99,11 @@ describe("paired capture journey receipts", () => {
       geometry,
     };
 
-    expect(parsePairedCaptureJourney({ ...pending, qualification })).not.toBeNull();
+    const qualified = parsePairedCaptureJourney({ ...pending, qualification });
+    expect(qualified).not.toBeNull();
+    expect(pairedCaptureJourneyMeetsAssurance(qualified!, "processor-qualified")).toBe(true);
+    expect(pairedCaptureJourneyMeetsAssurance(qualified!, "independently-reviewed")).toBe(false);
+    expect(pairedCaptureJourneyMeetsAssurance(qualified!, "professionally-controlled")).toBe(false);
     expect(parsePairedCaptureJourney({
       ...pending,
       qualification: {

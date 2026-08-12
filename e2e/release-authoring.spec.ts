@@ -238,6 +238,11 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
   const qa = page.locator("#qaDialog");
   await expect(qa.getByText("Privacy evidence is ready", { exact: true })).toBeVisible();
+  await expect(qa.locator("select[name='visualGrade'] option")).toHaveText([
+    "A — Client-ready: no visible defects at the approved framing and quality preset",
+    "B — Acceptable: minor defects do not distract from the intended experience",
+    "C — Conditional: visible defects require an explicit acceptance note before release",
+  ]);
   await qa.getByRole("checkbox", {
     name: "I confirm privacy and publication review is approved.",
     exact: true,
@@ -276,6 +281,36 @@ test("QA recovery opens the visible privacy task", async ({ page }) => {
 
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
   await expect(page.locator("#privacyAssuranceCard")).toBeVisible();
+});
+
+test("comparison leaves Privacy and becomes its own stage only with two versions", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Privacy", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/compare$`));
+  await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Visual version comparison", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compare scenes side by side", exact: true })).toBeEnabled();
+  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toHaveCount(0);
+});
+
+test("a one-version project keeps comparison in Expert and canonicalizes a Compare deep link", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto(`/studio.html#project/${projectId}/compare`);
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
+  await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compare scenes side by side", exact: true })).toBeDisabled();
+  await expect(page.getByText("Two immutable versions are required before geometry can be compared.", { exact: true })).toBeVisible();
 });
 
 test("publication keeps technical overrides behind an expert disclosure", async ({ page }) => {

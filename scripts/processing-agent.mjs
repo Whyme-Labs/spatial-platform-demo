@@ -51,6 +51,7 @@ import {
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
+  boundedHttpByteRange,
   ProcessingAgentError,
   compareRegisteredScenes,
   extractMetricFloorPlan,
@@ -2028,15 +2029,14 @@ async function startPosterServer(scenePath, posterCamera, sceneDescriptor) {
       return streamFile(response, join(sparkAssets, fileName), contentType);
     }
     if (pathname === sceneDescriptor.path) {
-      const range = request.headers.range?.match(/^bytes=(\d+)-(\d*)$/);
+      const range = boundedHttpByteRange(request.headers.range, sceneStats.size);
       if (range) {
-        const start = Number(range[1]);
-        const end = range[2] ? Number(range[2]) : sceneStats.size - 1;
-        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= sceneStats.size) {
+        if (!range.satisfiable) {
           response.writeHead(416, { "Content-Range": `bytes */${sceneStats.size}` });
           response.end();
           return;
         }
+        const { start, end } = range;
         response.writeHead(206, {
           "Content-Type": "application/octet-stream",
           "Accept-Ranges": "bytes",

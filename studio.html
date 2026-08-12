@@ -83,6 +83,7 @@
           <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
           <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
           <button id="projectPrivacyTab" type="button" data-project-section="privacy">Privacy</button>
+          <button id="projectCompareTab" type="button" data-project-section="compare" hidden>Compare</button>
           <button id="projectWalkTab" type="button" data-project-section="walk">Walk test</button>
           <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
           <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
@@ -692,7 +693,7 @@
       <button id="qaOpenPrivacyWorkspace" class="quiet-button wide" type="button">Open privacy evidence workspace</button>
       <div class="mock-form-grid">
         <label class="full"><span>Web asset</span><select name="webAssetId" id="qaAssetSelect" required></select></label>
-        <label><span>Visual grade</span><select name="visualGrade"><option>A</option><option>B</option><option>C</option></select></label>
+        <label><span>Visual quality decision</span><select name="visualGrade"><option value="A">A — Client-ready: no visible defects at the approved framing and quality preset</option><option value="B">B — Acceptable: minor defects do not distract from the intended experience</option><option value="C">C — Conditional: visible defects require an explicit acceptance note before release</option></select></label>
         <label><span>Measurement grade</span><select name="measurementGrade"><option value="visual-only">Visual only</option><option value="indicative">Indicative</option><option value="project-verified">Project verified</option><option value="professional-certified">Professional certified</option></select></label>
         <label class="full"><span>QA notes</span><textarea name="notes" maxlength="4000"></textarea></label>
         <label class="full checkbox-row"><input name="privacyApproved" type="checkbox" required /> I confirm privacy and publication review is approved.</label>

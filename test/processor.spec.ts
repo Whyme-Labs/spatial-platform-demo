@@ -3,6 +3,7 @@ import { zipSync } from "fflate";
 import {
   automaticallyRegisterSceneSignatures,
   assertRegisteredSceneChangeCapacity,
+  boundedHttpByteRange,
   compareRegisteredScenes,
   inspectSpzContainer,
   parsePlySceneSignature,
@@ -71,6 +72,22 @@ describe("processing agent core", () => {
       code: "UNSUPPORTED_POSTER_SCENE",
       retryable: false,
     }));
+  });
+
+  it("clamps Spark RAD range reads at EOF and rejects starts past EOF", () => {
+    expect(boundedHttpByteRange("bytes=0-1048575", 44_123)).toEqual({
+      satisfiable: true,
+      start: 0,
+      end: 44_122,
+    });
+    expect(boundedHttpByteRange("bytes=8192-", 44_123)).toEqual({
+      satisfiable: true,
+      start: 8_192,
+      end: 44_122,
+    });
+    expect(boundedHttpByteRange("bytes=44123-50000", 44_123)).toEqual({
+      satisfiable: false,
+    });
   });
 
   it("keeps evidence posters on the Spark RAD lane", () => {

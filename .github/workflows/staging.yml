@@ -100,6 +100,15 @@ jobs:
           node scripts/processor-canary.mjs --env staging \
             --report .cache/staging-acceptance/processor-canary.json
 
+      - name: Prove the authenticated API lifecycle and Studio/release rendering in Chrome
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          STAGING_LIFECYCLE_CANARY_TOKEN: ${{ secrets.STAGING_LIFECYCLE_CANARY_TOKEN }}
+        run: >-
+          npm run verify:staging:lifecycle --
+          --report .cache/staging-acceptance/lifecycle-canary.json
+          --screenshot .cache/staging-acceptance/lifecycle-canary.png
+
       - name: Upload staging acceptance evidence
         if: ${{ !cancelled() && steps.acceptance.outcome != 'skipped' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -108,5 +117,7 @@ jobs:
           path: |
             .cache/staging-acceptance/report.json
             .cache/staging-acceptance/processor-canary.json
+            .cache/staging-acceptance/lifecycle-canary.json
+            .cache/staging-acceptance/lifecycle-canary.png
           retention-days: 30
           if-no-files-found: error

@@ -278,6 +278,15 @@ describe("asset-bearing cross-organisation project handoff", () => {
       status: "INGESTED",
       asset_producer: null,
     });
+    await expect(env.DB.prepare(`
+      SELECT revision.classification_status
+      FROM scene_versions version
+      JOIN project_workflow_policy_revisions revision
+        ON revision.id = version.workflow_policy_revision_id
+      WHERE version.project_id = ?
+    `).bind(completed.handoff.targetProjectId).first()).resolves.toMatchObject({
+      classification_status: "legacy_unknown",
+    });
     const copiedAsset = await env.DB.prepare(`
       SELECT organisation_id, project_id, size_bytes, sha256, integrity_status,
         object_key

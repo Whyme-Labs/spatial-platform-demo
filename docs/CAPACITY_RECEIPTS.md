@@ -2,9 +2,65 @@
 
 Last measured: 2026-08-02
 
+## Staging lifecycle canary budgets
+
+Last measured: 2026-08-12
+
+The first complete synthetic lifecycle ran against Cloudflare staging
+application version `1491168a-0129-4c17-b905-0cc05022a3c` and processor Worker
+version `ae1426bd-c415-4e07-9b96-ba6669520a0a`. The processor used container
+image digest
+`sha256:8c3794befb4d7251f994258c177b5804dd503bd292bb1fcf475304100b8c06da`.
+Rerun it from the repository root with a staging-only canary credential:
+
+```bash
+STAGING_LIFECYCLE_CANARY_TOKEN='<staging secret>' \
+STAGING_APP_ORIGIN='https://spatial-studio-staging.swmengappdev.workers.dev' \
+npm run verify:staging:lifecycle -- \
+  --report .cache/staging-acceptance/lifecycle-canary.json \
+  --screenshot .cache/staging-acceptance/lifecycle-canary.png
+```
+
+Hardened run `2026-08-12T14-58-37-247Z-f864bc47-f6e0-489f-b52a-bde9de7074e8`
+completed in 117,265 ms. It authenticated the fixed service identity, created a
+project, uploaded a deterministic 688,551-byte/12,288-splat Gaussian PLY and a
+26,756-byte/1,898-point registered metric PLY, passed the real processor,
+reviewed the automatic floor plan and Recast navigation, recorded a walk test,
+completed privacy and QA, rendered authenticated Studio and the token release
+in mobile/touch Chrome, revoked the release, archived the project, deleted 13
+R2 objects, and revoked the session. Immutable archived D1 evidence was
+retained deliberately.
+
+| Named budget | Observed maximum | Tripwire |
+| --- | ---: | ---: |
+| `lifecycle_canary_window_seconds` | 117.265 s complete lifecycle | 1,800 s |
+| `api_request_milliseconds` | 1,727 ms | 60,000 ms |
+| `object_request_milliseconds` | 460 ms | 30,000 ms |
+| `chrome_navigation_milliseconds` | 650 ms | 30,000 ms |
+| `chrome_ready_milliseconds` | 1,861 ms | 120,000 ms |
+| global-deadline-bounded Wrangler subprocess | 4,828 ms | remaining lifecycle window |
+
+Authenticated Studio reached its visible project workspace in 2,037 ms. The
+public release reached a ready Spark renderer in 2,002 ms. The canary polls
+asynchronous state every 5,000 ms; this is a request-cadence control rather than
+a developer-facing capacity ceiling. Every network, Chrome, D1, and R2 action
+is bounded by the remaining global lifecycle window. Wrangler is terminated if
+that window expires, and a run that crosses the window cannot report success.
+Every timeout failure names its budget, limit, requested duration, and
+operation. Remeasure after processor, fixture, region, or Chrome changes;
+resize a tripwire if a known-good run approaches it.
+
+The successful served release contained 45,280 bytes. Its downloaded SHA-256,
+`d5beabb1ebfe5c2bad59e1a587b32e038cfeee01eb19ec18c6e0dc9122592917`,
+matched both the immutable asset record and public manifest. The earlier exact
+fixture exposed a poster-server range bug: Spark requested beyond EOF and the
+server returned 416. Clamping a valid range end to the 45,280-byte asset's final
+byte produced the poster locally and passed the live processor on its first
+attempt.
+
 ## PLY coordinate-header preflight
 
-Last measured: 2026-08-10
+Last measured: 2026-08-12
 
 The checked repository and ignored qualification corpus contains ten readable
 PLY files. The largest header ends at byte 1,532 in each FJD P2 Horse Gaussian
@@ -393,8 +449,8 @@ npm run audit:inventory
 npm run qa:data:local
 ```
 
-The inventory audit measured 4 roles, 190 Worker/client routes, 37 forms, 37
-dialogs, 244 governed fields, 316 static/generated controls, 68 persisted state
+The inventory audit measured 4 roles, 191 Worker/client routes, 37 forms, 37
+dialogs, 246 governed fields, 318 static/generated controls, 68 persisted state
 sets, and 59 asynchronous workflows. The committed generated inventory records
 the source location and acceptance/edge policy for every row.
 

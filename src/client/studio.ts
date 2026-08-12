@@ -16,6 +16,15 @@ import {
   SCENE_ROTATION_MAX_DEGREES,
   SCENE_ROTATION_MIN_DEGREES,
 } from "../shared/scene-rotation";
+import {
+  comparisonWorkspaceAvailable,
+  resolveComparisonWorkspaceSection,
+} from "./project-stage-policy";
+import {
+  createCompareDomain,
+  type GeometryChangeReport,
+  type RegisteredSceneChangeReport,
+} from "./studio/stages/compare";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
   assetProducerIds,
@@ -253,6 +262,7 @@ type Version = {
   workflow_policy_revision_id?: string | null;
   workflow_policy_json?: string | null;
   workflow_policy_delivery_template?: string | null;
+  workflow_policy_classification_status?: "classified" | "legacy_unknown";
   created_at: string;
 };
 function effectiveVersionWorkflowPolicy(
@@ -478,12 +488,6 @@ type ReviewDetail = {
   reviewers?: Reviewer[];
   versions?: Version[];
 };
-type ComparisonCameraPose = {
-  position: [number, number, number];
-  target: [number, number, number];
-  up: [number, number, number];
-  fovDegrees: number;
-};
 type VersionRenderable = {
   versionId: string;
   assetId: string;
@@ -538,23 +542,75 @@ type SceneAuthoringRenderable = Pick<
   | "sessionExpiresAt"
   | "viewer"
 > & { purpose: "spatial-authoring" };
-type VersionComparison = {
-  requested: { left: string; right: string };
-  versions: Array<Version & {
-    source_provenance_json: string | null;
-    manifest_json: string | null;
-    updated_at: string;
-  }>;
-  assets: Array<Asset & {
-    mime_type: string;
-    sha256: string | null;
-  }>;
-  reviewComments: Array<{ version_id: string; kind: string; status: string; count: number }>;
-  reviewDecisions: Array<{ version_id: string; decision: string; count: number; latest_at: string }>;
-  reviewDecisionHistory: Array<ReviewDecision & { version_id: string }>;
-  reviewCommentHistory: Array<ReviewComment & { version_id: string }>;
-  renderables: VersionRenderable[];
-};
+
+function sendVersionSpatialRuntime(
+  frame: HTMLIFrameElement,
+  renderable: VersionRenderable,
+): void {
+  const spatial = renderable.spatial;
+  const artifactNavMesh = spatial.navigationArtifact
+    ? Reflect.get(spatial.navigationArtifact, "navMesh")
+    : null;
+  const navigationMesh = artifactNavMesh && typeof artifactNavMesh === "object"
+    ? {
+        version: "recast-debug-triangles-v6",
+        vertices: Reflect.get(artifactNavMesh, "vertices"),
+        indices: Reflect.get(artifactNavMesh, "indices"),
+        sourceEntityIds: [],
+      }
+    : spatial.navigationMesh;
+  const doorwayEntityIds = new Set(
+    spatial.entities
+      .filter((entity) => entity.kind === "doorway")
+      .map((entity) => entity.id),
+  );
+  frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "set-spatial-runtime",
+    collisionBoxes: spatial.collisionProxy.boxes,
+    navigationMesh,
+    obstacleBoxes: spatial.obstacleProxy.boxes,
+    doorwayBoxes: spatial.collisionProxy.boxes.filter((box) =>
+      doorwayEntityIds.has(box.entityId)
+    ),
+    navigationProfile: spatial.navigationProfile,
+    navigationArtifact: spatial.navigationArtifact,
+    collisionUrl: renderable.collisionUrl,
+    defaultMovementMode: renderable.viewer?.defaultMovementMode ?? "walk",
+  }, location.origin);
+}
+
+function rendererAssetUrl(renderable: Pick<
+  VersionRenderable,
+  "contentUrl" | "format" | "viewer"
+>): URL {
+  const url = new URL("/renderer/index.html", location.origin);
+  url.searchParams.set("content", renderable.contentUrl);
+  url.searchParams.set("format", renderable.format);
+  url.searchParams.set("budget", String(renderable.viewer?.splatBudgetMillions ?? 1.25));
+  const rotation = renderable.viewer?.sceneRotationDegrees;
+  if (rotation) url.searchParams.set("rotation", rotation.join(","));
+  if (renderable.viewer?.sourceToWorld) {
+    url.searchParams.set(
+      "sourceToWorld",
+      JSON.stringify(renderable.viewer.sourceToWorld),
+    );
+  }
+  const camera = renderable.viewer?.initialCamera;
+  if (camera) {
+    url.searchParams.set("camera", camera.position.join(","));
+    url.searchParams.set("target", camera.target.join(","));
+    if (camera.up) url.searchParams.set("up", camera.up.join(","));
+    url.searchParams.set("fov", String(camera.fovDegrees ?? 58));
+  }
+  return url;
+}
+
+function validNumberTuple(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => Number.isFinite(item));
+}
 type HostingPlan = {
   code: string;
   name: string;
@@ -675,182 +731,6 @@ type SpatialEntity = {
   geometry_json: string | null;
   world_unit: WorldUnit;
   status: string;
-};
-type GeometryChangeSummary = {
-  method: string;
-  result: "changes_detected" | "no_material_change" | "insufficient_correspondence";
-  scope: string;
-  limitation: string;
-  thresholdMm: number;
-  coordinateAssurance: string;
-  registrationEvidence: string;
-  versions: {
-    from: { id: string; versionNumber: number };
-    to: { id: string; versionNumber: number };
-  };
-  summary: {
-    comparable: number;
-    changed: number;
-    unchanged: number;
-    added: number;
-    removed: number;
-    p50DeviationMm: number | null;
-    p95DeviationMm: number | null;
-    maxDeviationMm: number | null;
-  };
-  comparisons: Array<{
-    key: string;
-    label: string;
-    kind: string;
-    classification: "changed" | "unchanged";
-    centroidDisplacementMm: number;
-    boundaryDeviationMm: number;
-    verticalDeviationMm: number;
-    maxDeviationMm: number;
-    areaFromM2: number;
-    areaToM2: number;
-    areaDeltaM2: number;
-    areaDeltaPercent: number | null;
-  }>;
-  added: Array<{ key: string; label: string; kind: string; entityId: string }>;
-  removed: Array<{ key: string; label: string; kind: string; entityId: string }>;
-  blockers: string[];
-  invalidGeometry: Array<{ version: string; entityId: string; label: string; reason: string }>;
-  visual: {
-    coordinatePlane: "XZ";
-    units: "metres";
-    bounds: {
-      minX: number;
-      minZ?: number;
-      maxX: number;
-      maxZ?: number;
-      minY?: number;
-      maxY?: number;
-    } | null;
-    overlays: Array<{
-      key: string;
-      label: string;
-      kind: string;
-      classification: "changed" | "unchanged" | "added" | "removed";
-      fromPoints: Array<[number, number]> | null;
-      toPoints: Array<[number, number]> | null;
-    }>;
-  };
-};
-type GeometryChangeReport = {
-  id: string;
-  from_version_id: string;
-  to_version_id: string;
-  status: "ready" | "reviewed";
-  summary_json: string;
-  method: string;
-  result: string | null;
-  threshold_mm: number | null;
-  coordinate_assurance: string | null;
-  registration_evidence: string | null;
-  source_geometry_hash: string | null;
-  review_decision: "accepted" | "needs_recapture" | null;
-  review_note: string | null;
-  reviewed_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-type RegisteredSceneChangeSummary = {
-  method: "registered-ply-voxel-change-v1";
-  result: "changes_detected" | "no_material_change" | "registration_blocked";
-  scope: string;
-  limitation: string;
-  parameters: {
-    voxelSizeM: number;
-    structuralChangeThresholdPercent: number;
-    photometricChangeThresholdPercent: number;
-    centroidChangeThresholdMm: number;
-  };
-  sources: {
-    baseline: { vertexCount: number; sampledPointCount: number; samplingStride: number; voxelCount: number; hasPhotometricData: boolean };
-    candidate: { vertexCount: number; sampledPointCount: number; samplingStride: number; voxelCount: number; hasPhotometricData: boolean };
-  };
-  summary: {
-    baselineVoxels: number;
-    candidateVoxels: number;
-    commonVoxels: number;
-    addedVoxels: number;
-    removedVoxels: number;
-    structurallyChangedPercent: number;
-    photometricallyComparableVoxels: number;
-    changedCommonVoxels: number;
-    p95CentroidDisplacementMm: number | null;
-    maximumCentroidDisplacementMm: number | null;
-    p95PhotometricDeltaPercent: number | null;
-    maximumPhotometricDeltaPercent: number | null;
-  };
-  materialSignals: string[];
-  registration?: {
-    method?: "bounded-yaw-icp-v1";
-    status?: "accepted" | "blocked";
-    coordinateAssurance: string;
-    evidence: string;
-    performedByProcessor: boolean;
-    transform?: {
-      matrix4x4: number[];
-      yawDegrees: number;
-      translationM: number[];
-      scale: number;
-    };
-    summary?: {
-      overlapPercent: number;
-      rmseMm: number;
-      p95ResidualMm: number;
-      maximumResidualMm: number;
-      ambiguous: boolean;
-      iterations: number;
-    };
-    qualityGates?: Array<{
-      name: string;
-      threshold: number | boolean;
-      observed: number | boolean;
-      passed: boolean;
-    }>;
-  };
-};
-type RegisteredSceneChangeReport = {
-  id: string;
-  baseline_version_id: string;
-  candidate_version_id: string;
-  baseline_asset_id: string;
-  candidate_asset_id: string;
-  job_id: string;
-  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "DEAD_LETTER" | "REVIEWED";
-  coordinate_assurance: string;
-  registration_evidence: string;
-  registration_mode: "declared" | "automatic_rigid";
-  registration_status: "accepted" | "blocked" | null;
-  registration_search_radius_m: number;
-  registration_maximum_rmse_mm: number;
-  registration_minimum_overlap_percent: number;
-  voxel_size_m: number;
-  structural_threshold_percent: number;
-  photometric_threshold_percent: number;
-  centroid_threshold_mm: number;
-  maximum_sample_points: number;
-  result: "changes_detected" | "no_material_change" | null;
-  summary_json: string | null;
-  error_json: string | null;
-  review_decision: "accepted" | "needs_recapture" | "investigate" | null;
-  review_note: string | null;
-  reviewed_at: string | null;
-  created_at: string;
-  completed_at: string | null;
-  job_state: string;
-  job_progress: number;
-  job_progress_message: string | null;
-  job_error_json: string | null;
-  attempt_count: number;
-  max_attempts: number;
-  baseline_version_number: number;
-  candidate_version_number: number;
-  baseline_file_name: string;
-  candidate_file_name: string;
 };
 type CaptureCompletenessSummary = {
   method: "authored-room-trajectory-coverage-v1";
@@ -1336,6 +1216,7 @@ type ProjectSection =
   | "process"
   | "structure"
   | "privacy"
+  | "compare"
   | "walk"
   | "publish"
   | "measurement"
@@ -1343,13 +1224,15 @@ type ProjectSection =
 
 type ProjectStageCapability =
   | "structure-processing-poll"
-  | "privacy-evidence-poll";
+  | "privacy-evidence-poll"
+  | "comparison-evidence-poll";
 
 const projectStageCapabilities: Record<ProjectSection, readonly ProjectStageCapability[]> = {
   overview: [],
   process: [],
   structure: ["structure-processing-poll"],
   privacy: ["privacy-evidence-poll"],
+  compare: ["comparison-evidence-poll"],
   walk: [],
   publish: [],
   measurement: [],
@@ -1381,7 +1264,6 @@ const state: {
   measurement: MeasurementWorkspace | null;
   measurementProjectId: string | null;
   recoverableUploads: RecoverableUpload[];
-  comparison: VersionComparison | null;
   team: TeamWorkspace | null;
   identityProviders: EnterpriseIdentityProvider[];
   captureAgents: CaptureAgentCredential[];
@@ -1419,7 +1301,6 @@ const state: {
   measurement: null,
   measurementProjectId: null,
   recoverableUploads: [],
-  comparison: null,
   team: null,
   identityProviders: [],
   captureAgents: [],
@@ -1474,15 +1355,10 @@ const routeDialog = byId<HTMLDialogElement>("routeDialog");
 const privacyCandidateDialog = byId<HTMLDialogElement>("privacyCandidateDialog");
 const measurementBriefDialog = byId<HTMLDialogElement>("measurementBriefDialog");
 const checkPointDialog = byId<HTMLDialogElement>("checkPointDialog");
-const geometryChangeDialog = byId<HTMLDialogElement>("geometryChangeDialog");
-const geometryChangeReviewDialog = byId<HTMLDialogElement>("geometryChangeReviewDialog");
-const rawSceneChangeDialog = byId<HTMLDialogElement>("rawSceneChangeDialog");
-const rawSceneChangeReviewDialog = byId<HTMLDialogElement>("rawSceneChangeReviewDialog");
 const captureCompletenessDialog = byId<HTMLDialogElement>("captureCompletenessDialog");
 const captureCompletenessReviewDialog = byId<HTMLDialogElement>("captureCompletenessReviewDialog");
 const captureBundleDialog = byId<HTMLDialogElement>("captureBundleDialog");
 const captureBundleReviewDialog = byId<HTMLDialogElement>("captureBundleReviewDialog");
-const versionComparisonDialog = byId<HTMLDialogElement>("versionComparisonDialog");
 const teamInvitationDialog = byId<HTMLDialogElement>("teamInvitationDialog");
 const identityProviderDialog = byId<HTMLDialogElement>("identityProviderDialog");
 const captureAgentDialog = byId<HTMLDialogElement>("captureAgentDialog");
@@ -1574,14 +1450,6 @@ let activeUpload: {
 } | null = null;
 let uploadAbortController: AbortController | null = null;
 let privacyScanOperation: { versionId: string; id: string } | null = null;
-let geometryChangeOperation: {
-  id: string;
-  requestKey: string;
-} | null = null;
-let rawSceneChangeOperation: {
-  id: string;
-  requestKey: string;
-} | null = null;
 let captureCompletenessOperation: {
   id: string;
   requestKey: string;
@@ -1610,13 +1478,8 @@ const floorplanExportOperations = new Map<string, { id: string; requestKey: stri
 let customDomainWorkspace: CustomDomainWorkspace | null = null;
 const customDomainChallenges = new Map<string, string>();
 let privacyScanPollGeneration = 0;
-let rawSceneChangePollGeneration = 0;
 let semanticExtractionPollGeneration = 0;
 let floorplanExtractionPollGeneration = 0;
-let comparisonProjectId: string | null = null;
-let comparisonVersions: Version[] = [];
-let comparisonGeneration = 0;
-let comparisonSyncAt = 0;
 type CaptureAgreementFinding = {
   kind: string;
   barrierId: string;
@@ -1652,12 +1515,33 @@ let sceneAuthoringWorkspace: {
   captureAgreementFindings: CaptureAgreementFinding[];
   captureAgreementClassifications: Map<string, string>;
 } | null = null;
-let latestReleaseCameraPose: ComparisonCameraPose | null = null;
-const comparisonFrameReady = { left: false, right: false };
-const comparisonFrameTimeouts: { left: number | null; right: number | null } = {
-  left: null,
-  right: null,
+type ReleaseCameraPose = {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fovDegrees: number;
 };
+let latestReleaseCameraPose: ReleaseCameraPose | null = null;
+
+const compareDomain = createCompareDomain({
+  currentProject: () => state.selected
+    ? {
+        id: state.selected.project.id,
+        versions: state.selected.versions,
+        assets: state.selected.assets,
+      }
+    : null,
+  currentRawReports: () => state.spatial?.rawChangeReports ?? [],
+  loadSpatialWorkspace,
+  pollingContextIsActive: (projectId) =>
+    projectPollingContextIsActive(projectId, "comparison-evidence-poll"),
+  showNotice: (message) => showNotice(message, "error"),
+  showToast,
+  humanStatus,
+  statusClass,
+  formatBytes,
+  parseTimestamp,
+});
 
 bindInterface();
 void initialise();
@@ -1725,6 +1609,7 @@ async function initialise(): Promise<void> {
 }
 
 function bindInterface(): void {
+  compareDomain.bind();
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, () => {
     transitionToSignedOut("Your session expired. Sign in again.");
   });
@@ -2637,69 +2522,6 @@ function bindInterface(): void {
       errorTarget: byId("checkPointError"),
     }, () => createCheckPoint(form));
   });
-  const geometryChangeSubmit = geometryChangeForm.querySelector<HTMLButtonElement>("[type='submit']")!;
-  geometryChangeForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(geometryChangeForm);
-    if (String(form.get("fromVersionId")) === String(form.get("toVersionId"))) {
-      byId("geometryChangeError").textContent = "Choose two distinct immutable versions.";
-      return;
-    }
-    void runAction({
-      key: "generate-geometry-change",
-      trigger: geometryChangeSubmit,
-      form: geometryChangeForm,
-      pendingLabel: "Comparing geometry…",
-      errorTarget: byId("geometryChangeError"),
-    }, () => generateChangeReport(form));
-  });
-  const geometryChangeReviewSubmit = geometryChangeReviewForm.querySelector<HTMLButtonElement>("[type='submit']")!;
-  geometryChangeReviewForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(geometryChangeReviewForm);
-    const reportId = String(form.get("reportId") ?? "");
-    void runAction({
-      key: `review-geometry-change:${reportId}`,
-      trigger: geometryChangeReviewSubmit,
-      form: geometryChangeReviewForm,
-      pendingLabel: "Recording review…",
-      errorTarget: byId("geometryChangeReviewError"),
-    }, () => reviewGeometryChangeReport(form));
-  });
-  const rawSceneChangeSubmit = rawSceneChangeForm.querySelector<HTMLButtonElement>("[type='submit']")!;
-  rawSceneChangeForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(rawSceneChangeForm);
-    if (String(form.get("baselineVersionId")) === String(form.get("candidateVersionId"))) {
-      byId("rawSceneChangeError").textContent = "Choose two distinct immutable versions.";
-      return;
-    }
-    if (!String(form.get("baselineAssetId")) || !String(form.get("candidateAssetId"))) {
-      byId("rawSceneChangeError").textContent = "Each version needs a verified source, master, or point-cloud PLY.";
-      return;
-    }
-    void runAction({
-      key: "create-raw-scene-change",
-      trigger: rawSceneChangeSubmit,
-      form: rawSceneChangeForm,
-      pendingLabel: "Queueing registration…",
-      errorTarget: byId("rawSceneChangeError"),
-    }, () => createRawSceneChangeReport(form));
-  });
-  const rawSceneChangeReviewSubmit =
-    rawSceneChangeReviewForm.querySelector<HTMLButtonElement>("[type='submit']")!;
-  rawSceneChangeReviewForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(rawSceneChangeReviewForm);
-    const reportId = String(form.get("reportId") ?? "");
-    void runAction({
-      key: `review-raw-scene-change:${reportId}`,
-      trigger: rawSceneChangeReviewSubmit,
-      form: rawSceneChangeReviewForm,
-      pendingLabel: "Recording review…",
-      errorTarget: byId("rawSceneChangeReviewError"),
-    }, () => reviewRawSceneChangeReport(form));
-  });
   const captureCompletenessSubmit = captureCompletenessForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   captureCompletenessForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2763,24 +2585,6 @@ function bindInterface(): void {
       errorTarget: byId("captureBundleReviewError"),
     }, () => reviewCaptureBundle(form));
   });
-  const comparisonSubmit = byId<HTMLButtonElement>("comparisonSubmit");
-  versionComparisonForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(versionComparisonForm);
-    const left = String(form.get("left") ?? "");
-    const right = String(form.get("right") ?? "");
-    if (left === right) {
-      byId("comparisonError").textContent = "Choose two distinct immutable versions.";
-      return;
-    }
-    void runAction({
-      key: "load-version-comparison",
-      trigger: comparisonSubmit,
-      form: versionComparisonForm,
-      pendingLabel: "Loading comparison…",
-      errorTarget: byId("comparisonError"),
-    }, () => loadVersionComparison(left, right));
-  });
   const teamInvitationSubmit = teamInvitationForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   teamInvitationForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2805,21 +2609,9 @@ function bindInterface(): void {
       errorTarget: byId("identityProviderError"),
     }, () => createIdentityProvider(form));
   });
-  for (const side of ["left", "right"] as const) {
-    const retry = byId<HTMLButtonElement>(side === "left" ? "compareLeftRetry" : "compareRightRetry");
-    retry.addEventListener("click", () => {
-      void runAction({
-        key: `retry-comparison-renderer:${side}`,
-        trigger: retry,
-        pendingLabel: "Retrying renderer…",
-      }, () => retryComparisonRenderer(side));
-    });
-  }
-  window.addEventListener("message", handleComparisonRendererMessage);
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
   window.addEventListener("message", handleWalkTestRendererMessage);
-  versionComparisonDialog.addEventListener("close", resetVersionComparison);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
   });
@@ -2844,6 +2636,7 @@ function bindInterface(): void {
     [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
     [byId<HTMLButtonElement>("projectPrivacyTab"), "privacy"],
+    [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
     [byId<HTMLButtonElement>("projectWalkTab"), "walk"],
     [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
@@ -3291,6 +3084,7 @@ function projectSectionFromHash(): ProjectSection {
   if (section === "process") return "process";
   if (candidate === "spatial" || section === "scene" || section === "structure") return "structure";
   if (section === "privacy") return "privacy";
+  if (section === "compare") return "compare";
   if (section === "walk") return "walk";
   if (section === "publish") return "publish";
   if (candidate === "measurement" || section === "measurement") return "measurement";
@@ -3349,10 +3143,22 @@ function activateView(
   updateLocation = true,
   historyMode: "replace" | "push" = "replace",
 ): void {
+  let comparisonSectionRedirected = false;
   if (isReviewer() && view !== "reviews") view = "reviews";
   if (view === "project" && !state.selected) view = "projects";
   if (view === "team" && state.user?.role !== "platform_admin") view = "projects";
+  if (view === "project" && state.selected) {
+    const resolvedSection = resolveComparisonWorkspaceSection(
+      state.projectSection,
+      state.selected.versions.length,
+    ) as ProjectSection;
+    comparisonSectionRedirected = resolvedSection !== state.projectSection;
+    state.projectSection = resolvedSection;
+  }
   state.view = view;
+  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonWorkspaceAvailable(
+    state.selected?.versions.length ?? 0,
+  );
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
   });
@@ -3385,7 +3191,7 @@ function activateView(
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
   byId("spatialWorkspace").hidden = !projectVisible ||
-    !["structure", "privacy", "walk", "expert"].includes(state.projectSection);
+    !["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection);
   byId("publishWorkspace").hidden = !projectVisible || state.projectSection !== "publish";
   byId("measurementWorkspace").hidden = !projectVisible || state.projectSection !== "measurement";
   byId("hostingWorkspace").hidden = view !== "hosting";
@@ -3427,16 +3233,17 @@ function activateView(
   const spatialHeading: readonly [string, string] | undefined = ({
     structure: ["STRUCTURE", "Review reconstructed rooms and openings"],
     privacy: ["PRIVACY", "Review privacy evidence before approval"],
+    compare: ["COMPARE", "Review change evidence across immutable versions"],
     walk: ["WALK TEST", "Verify movement, clearance, and destinations"],
     expert: ["EXPERT", "Inspect technical evidence and recovery controls"],
-  } as const)[state.projectSection as "structure" | "privacy" | "walk" | "expert"];
+  } as const)[state.projectSection as "structure" | "privacy" | "compare" | "walk" | "expert"];
   if (spatialHeading) {
     byId("spatialWorkspaceEyebrow").textContent = spatialHeading[0];
     byId("spatialWorkspaceTitle").textContent = spatialHeading[1];
   }
   renderJobs();
   if (view === "reviews") renderReviews();
-  if (projectVisible && ["structure", "privacy", "walk", "expert"].includes(state.projectSection)) {
+  if (projectVisible && ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)) {
     renderSpatial();
     void ensureProjectWorkspace("spatial");
   }
@@ -3453,6 +3260,8 @@ function activateView(
   const nextHash = hashForView(view);
   if (updateLocation && window.location.hash !== nextHash) {
     window.history[historyMode === "push" ? "pushState" : "replaceState"](null, "", nextHash);
+  } else if (comparisonSectionRedirected && window.location.hash !== nextHash) {
+    window.history.replaceState(null, "", nextHash);
   }
 }
 
@@ -3471,10 +3280,9 @@ function transitionToSignedOut(message = ""): void {
   state.user = null;
   state.organisations = [];
   state.pendingInvitations = [];
-  rawSceneChangePollGeneration += 1;
+  compareDomain.cancel();
   semanticExtractionPollGeneration += 1;
   floorplanExtractionPollGeneration += 1;
-  comparisonGeneration += 1;
   clearAssetHandoffPoll();
   clearTenantWorkspace();
   renderIdentity();
@@ -5831,7 +5639,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
   activity.append(summary);
   if ((detail.versions?.length ?? 0) >= 2) {
     const compare = element("button", "quiet-button", "Compare immutable versions");
-    compare.addEventListener("click", () => openVersionComparison(project.id, detail.versions ?? []));
+    compare.addEventListener("click", () => compareDomain.openVersionComparison(project.id, detail.versions ?? []));
     activity.append(compare);
   }
   if (!openComments.length && !detail.decisions.length) {
@@ -7023,366 +6831,6 @@ async function loadReviewDetail(project: ReviewProject): Promise<void> {
   }
 }
 
-function openVersionComparison(projectId: string, versions: Version[]): void {
-  if (versions.length < 2) {
-    showNotice("At least two immutable versions are required for comparison.", "error");
-    return;
-  }
-  comparisonProjectId = projectId;
-  comparisonVersions = [...versions].sort((left, right) => right.version_number - left.version_number);
-  state.comparison = null;
-  const left = byId<HTMLSelectElement>("comparisonLeftVersion");
-  const right = byId<HTMLSelectElement>("comparisonRightVersion");
-  const options = comparisonVersions.map((version) => {
-    const option = document.createElement("option");
-    option.value = version.id;
-    option.textContent = `v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleDateString()}`;
-    return option;
-  });
-  left.replaceChildren(...options.map((option) => option.cloneNode(true)));
-  right.replaceChildren(...options.map((option) => option.cloneNode(true)));
-  left.value = comparisonVersions[1]!.id;
-  right.value = comparisonVersions[0]!.id;
-  resetComparisonPresentation();
-  byId("comparisonError").textContent = "";
-  versionComparisonDialog.showModal();
-  window.requestAnimationFrame(() => byId<HTMLButtonElement>("comparisonSubmit").click());
-}
-
-async function loadVersionComparison(leftId: string, rightId: string): Promise<void> {
-  if (!comparisonProjectId) throw new Error("The comparison project is no longer available.");
-  if (leftId === rightId) throw new Error("Choose two distinct immutable versions.");
-  const generation = ++comparisonGeneration;
-  const loading = byId("comparisonLoading");
-  loading.hidden = false;
-  loading.querySelector("span")!.textContent = "Preparing signed comparison sessions…";
-  byId("comparisonGrid").setAttribute("aria-busy", "true");
-  resetComparisonFrames();
-  try {
-    const comparison = await api<VersionComparison>(
-      `/api/projects/${comparisonProjectId}/versions/compare?left=${encodeURIComponent(leftId)}&right=${encodeURIComponent(rightId)}`,
-      { timeoutMs: 20_000, retries: 2 },
-    );
-    if (generation !== comparisonGeneration || !versionComparisonDialog.open) return;
-    state.comparison = comparison;
-    renderVersionComparison(comparison);
-  } catch (error) {
-    if (generation === comparisonGeneration) {
-      loading.hidden = true;
-      byId("comparisonGrid").removeAttribute("aria-busy");
-      setComparisonSideStatus("left", "Comparison unavailable", "error");
-      setComparisonSideStatus("right", "Comparison unavailable", "error");
-    }
-    throw error;
-  }
-}
-
-function renderVersionComparison(comparison: VersionComparison): void {
-  const sides = [
-    ["left", comparison.requested.left],
-    ["right", comparison.requested.right],
-  ] as const;
-  for (const [side, versionId] of sides) {
-    const version = comparison.versions.find((candidate) => candidate.id === versionId);
-    if (!version) {
-      setComparisonSideStatus(side, "Version unavailable", "error");
-      continue;
-    }
-    byId(side === "left" ? "compareLeftTitle" : "compareRightTitle").textContent =
-      `Version ${version.version_number} · ${humanStatus(version.status)}`;
-    renderComparisonEvidence(side, comparison, version);
-    const renderable = comparison.renderables.find((candidate) => candidate.versionId === version.id);
-    const elements = comparisonSideElements(side);
-    if (!renderable) {
-      comparisonFrameReady[side] = true;
-      elements.frame.hidden = true;
-      elements.empty.hidden = false;
-      elements.empty.textContent = "This version cannot be compared until both its verified web scene and approved walking package are available.";
-      elements.retry.hidden = true;
-      setComparisonSideStatus(side, "Comparison blocked", "error");
-      continue;
-    }
-    elements.empty.hidden = true;
-    elements.frame.hidden = false;
-    elements.retry.hidden = true;
-    setComparisonSideStatus(side, "Starting Spark…", "");
-    elements.frame.onload = () => sendVersionSpatialRuntime(elements.frame, renderable);
-    elements.frame.src = versionRendererUrl(renderable).toString();
-    elements.frame.dataset.generation = String(comparisonGeneration);
-    comparisonFrameTimeouts[side] = window.setTimeout(() => {
-      if (comparisonFrameReady[side] || !versionComparisonDialog.open) return;
-      setComparisonSideStatus(side, "Renderer timed out", "error");
-      elements.retry.hidden = false;
-      finishComparisonLoadingIfSettled();
-    }, 25_000);
-  }
-  finishComparisonLoadingIfSettled();
-}
-
-function sendVersionSpatialRuntime(
-  frame: HTMLIFrameElement,
-  renderable: VersionRenderable,
-): void {
-  const spatial = renderable.spatial;
-  const artifactNavMesh = spatial.navigationArtifact
-    ? Reflect.get(spatial.navigationArtifact, "navMesh")
-    : null;
-  const navigationMesh = artifactNavMesh && typeof artifactNavMesh === "object"
-    ? {
-        version: "recast-debug-triangles-v6",
-        vertices: Reflect.get(artifactNavMesh, "vertices"),
-        indices: Reflect.get(artifactNavMesh, "indices"),
-        sourceEntityIds: [],
-      }
-    : spatial.navigationMesh;
-  const doorwayEntityIds = new Set(
-    spatial.entities
-      .filter((entity) => entity.kind === "doorway")
-      .map((entity) => entity.id),
-  );
-  frame.contentWindow?.postMessage({
-    source: "spatial-host",
-    type: "set-spatial-runtime",
-    collisionBoxes: spatial.collisionProxy.boxes,
-    navigationMesh,
-    obstacleBoxes: spatial.obstacleProxy.boxes,
-    doorwayBoxes: spatial.collisionProxy.boxes.filter((box) =>
-      doorwayEntityIds.has(box.entityId)
-    ),
-    navigationProfile: spatial.navigationProfile,
-    navigationArtifact: spatial.navigationArtifact,
-    collisionUrl: renderable.collisionUrl,
-    defaultMovementMode: renderable.viewer?.defaultMovementMode ?? "walk",
-  }, location.origin);
-}
-
-function versionRendererUrl(renderable: VersionRenderable): URL {
-  return rendererAssetUrl(renderable);
-}
-
-function rendererAssetUrl(renderable: Pick<
-  VersionRenderable,
-  "contentUrl" | "format" | "viewer"
->): URL {
-  const url = new URL("/renderer/index.html", location.origin);
-  url.searchParams.set("content", renderable.contentUrl);
-  url.searchParams.set("format", renderable.format);
-  url.searchParams.set("budget", String(renderable.viewer?.splatBudgetMillions ?? 1.25));
-  const rotation = renderable.viewer?.sceneRotationDegrees;
-  if (rotation) url.searchParams.set("rotation", rotation.join(","));
-  if (renderable.viewer?.sourceToWorld) {
-    url.searchParams.set(
-      "sourceToWorld",
-      JSON.stringify(renderable.viewer.sourceToWorld),
-    );
-  }
-  const camera = renderable.viewer?.initialCamera;
-  if (camera) {
-    url.searchParams.set("camera", camera.position.join(","));
-    url.searchParams.set("target", camera.target.join(","));
-    if (camera.up) url.searchParams.set("up", camera.up.join(","));
-    url.searchParams.set("fov", String(camera.fovDegrees ?? 58));
-  }
-  return url;
-}
-
-function renderComparisonEvidence(
-  side: "left" | "right",
-  comparison: VersionComparison,
-  version: VersionComparison["versions"][number],
-): void {
-  const container = byId(side === "left" ? "compareLeftEvidence" : "compareRightEvidence");
-  container.replaceChildren();
-  const renderable = comparison.renderables.find((candidate) => candidate.versionId === version.id);
-  const facts = element("div", "comparison-facts");
-  facts.append(
-    comparisonFact("Created", parseTimestamp(version.created_at).toLocaleString()),
-    comparisonFact("Web asset", renderable ? `${renderable.format.toUpperCase()} · ${formatBytes(renderable.sizeBytes)}` : "Not attached"),
-    comparisonFact("Integrity", renderable?.sha256 ? renderable.sha256.slice(0, 12) : "No verified hash"),
-  );
-  container.append(facts);
-
-  const decisions = comparison.reviewDecisionHistory.filter((item) => item.version_id === version.id);
-  const decisionHistory = element("section", "comparison-history");
-  decisionHistory.append(element("strong", "", "Approval history"));
-  if (!decisions.length) {
-    decisionHistory.append(element("div", "comparison-history-line", "No approval decision has been recorded."));
-  }
-  for (const decision of decisions) {
-    decisionHistory.append(element(
-      "div",
-      `comparison-history-line ${decision.decision}`,
-      `${decision.decision === "approved" ? "Approved" : "Changes requested"} | ${decision.reviewer_name ?? decision.reviewer_email ?? "Reviewer"} | ${parseTimestamp(decision.created_at).toLocaleString()}${decision.note ? `: ${decision.note}` : ""}`,
-    ));
-  }
-  container.append(decisionHistory);
-
-  const comments = comparison.reviewCommentHistory.filter((item) => item.version_id === version.id);
-  const commentHistory = element("section", "comparison-history");
-  commentHistory.append(element("strong", "", "Review comments"));
-  if (!comments.length) {
-    commentHistory.append(element("div", "comparison-history-line", "No comments are attached to this version."));
-  }
-  for (const comment of comments.slice(0, 16)) {
-    commentHistory.append(element(
-      "div",
-      `comparison-history-line ${comment.status}`,
-      `${humanStatus(comment.kind)} | ${humanStatus(comment.status)} | ${comment.author_name ?? comment.author_email ?? "Reviewer"} | ${parseTimestamp(comment.created_at).toLocaleString()}: ${comment.body}`,
-    ));
-  }
-  container.append(commentHistory);
-}
-
-function comparisonFact(label: string, value: string): HTMLElement {
-  const fact = element("div", "comparison-fact");
-  fact.append(element("small", "", label), element("strong", "", value));
-  return fact;
-}
-
-function comparisonSideElements(side: "left" | "right"): {
-  frame: HTMLIFrameElement;
-  empty: HTMLElement;
-  retry: HTMLButtonElement;
-  status: HTMLElement;
-} {
-  const prefix = side === "left" ? "Left" : "Right";
-  return {
-    frame: byId<HTMLIFrameElement>(`compare${prefix}Frame`),
-    empty: byId(`compare${prefix}Empty`),
-    retry: byId<HTMLButtonElement>(`compare${prefix}Retry`),
-    status: byId(`compare${prefix}Status`),
-  };
-}
-
-function setComparisonSideStatus(side: "left" | "right", text: string, stateClass: "" | "ready" | "error"): void {
-  const status = comparisonSideElements(side).status;
-  status.textContent = text;
-  status.className = `comparison-status${stateClass ? ` ${stateClass}` : ""}`;
-}
-
-function handleComparisonRendererMessage(event: MessageEvent<unknown>): void {
-  if (event.origin !== location.origin || !versionComparisonDialog.open) return;
-  const leftFrame = comparisonSideElements("left").frame;
-  const rightFrame = comparisonSideElements("right").frame;
-  const side = event.source === leftFrame.contentWindow
-    ? "left"
-    : event.source === rightFrame.contentWindow
-      ? "right"
-      : null;
-  if (!side || !event.data || typeof event.data !== "object") return;
-  if (Reflect.get(event.data, "source") !== "spatial-spark") return;
-  const messageType = Reflect.get(event.data, "type");
-  if (messageType === "progress") {
-    const progress = Number(Reflect.get(event.data, "progress"));
-    const detail = String(Reflect.get(event.data, "detail") ?? "Loading scene");
-    setComparisonSideStatus(side, `${Math.round(progress)}% · ${detail}`, "");
-    return;
-  }
-  if (messageType === "ready") {
-    clearComparisonFrameTimeout(side);
-    comparisonFrameReady[side] = true;
-    const elapsed = Number(Reflect.get(event.data, "timeToFirstFrameMs"));
-    setComparisonSideStatus(side, Number.isFinite(elapsed) ? `Spark ready · ${elapsed} ms` : "Spark ready", "ready");
-    comparisonSideElements(side).retry.hidden = true;
-    finishComparisonLoadingIfSettled();
-    return;
-  }
-  if (messageType === "error") {
-    clearComparisonFrameTimeout(side);
-    comparisonFrameReady[side] = false;
-    const message = String(Reflect.get(event.data, "message") ?? "The Spark renderer could not load this version.");
-    setComparisonSideStatus(side, message, "error");
-    comparisonSideElements(side).retry.hidden = false;
-    finishComparisonLoadingIfSettled();
-    return;
-  }
-  if (
-    messageType !== "camera-update" ||
-    !byId<HTMLInputElement>("comparisonSync").checked ||
-    !comparisonFrameReady.left ||
-    !comparisonFrameReady.right
-  ) return;
-  const now = performance.now();
-  if (now - comparisonSyncAt < 100) return;
-  const pose = Reflect.get(event.data, "cameraPose");
-  if (!validComparisonCameraPose(pose)) return;
-  comparisonSyncAt = now;
-  const target = comparisonSideElements(side === "left" ? "right" : "left").frame;
-  target.contentWindow?.postMessage({
-    source: "spatial-host",
-    type: "sync-camera",
-    cameraPose: pose,
-  }, location.origin);
-}
-
-function validComparisonCameraPose(value: unknown): value is ComparisonCameraPose {
-  if (!value || typeof value !== "object") return false;
-  return (
-    validNumberTuple(Reflect.get(value, "position")) &&
-    validNumberTuple(Reflect.get(value, "target")) &&
-    validNumberTuple(Reflect.get(value, "up")) &&
-    Number.isFinite(Number(Reflect.get(value, "fovDegrees")))
-  );
-}
-
-function validNumberTuple(value: unknown): value is [number, number, number] {
-  return Array.isArray(value) && value.length === 3 && value.every((item) => Number.isFinite(item));
-}
-
-async function retryComparisonRenderer(_side: "left" | "right"): Promise<void> {
-  const left = byId<HTMLSelectElement>("comparisonLeftVersion").value;
-  const right = byId<HTMLSelectElement>("comparisonRightVersion").value;
-  await loadVersionComparison(left, right);
-}
-
-function finishComparisonLoadingIfSettled(): void {
-  const retryVisible = !comparisonSideElements("left").retry.hidden || !comparisonSideElements("right").retry.hidden;
-  if ((!comparisonFrameReady.left || !comparisonFrameReady.right) && !retryVisible) return;
-  byId("comparisonLoading").hidden = true;
-  byId("comparisonGrid").removeAttribute("aria-busy");
-}
-
-function clearComparisonFrameTimeout(side: "left" | "right"): void {
-  if (comparisonFrameTimeouts[side] !== null) {
-    window.clearTimeout(comparisonFrameTimeouts[side]!);
-    comparisonFrameTimeouts[side] = null;
-  }
-}
-
-function resetComparisonFrames(): void {
-  for (const side of ["left", "right"] as const) {
-    clearComparisonFrameTimeout(side);
-    comparisonFrameReady[side] = false;
-    const elements = comparisonSideElements(side);
-    elements.frame.onload = null;
-    elements.frame.removeAttribute("src");
-    elements.frame.hidden = true;
-    elements.empty.hidden = false;
-    elements.empty.textContent = "Preparing a signed Spark renderer session…";
-    elements.retry.hidden = true;
-    setComparisonSideStatus(side, "Preparing", "");
-  }
-}
-
-function resetComparisonPresentation(): void {
-  resetComparisonFrames();
-  byId("comparisonLoading").hidden = true;
-  byId("comparisonGrid").removeAttribute("aria-busy");
-  byId("compareLeftTitle").textContent = "Select a version";
-  byId("compareRightTitle").textContent = "Select a version";
-  byId("compareLeftEvidence").replaceChildren();
-  byId("compareRightEvidence").replaceChildren();
-}
-
-function resetVersionComparison(): void {
-  comparisonGeneration += 1;
-  comparisonProjectId = null;
-  comparisonVersions = [];
-  state.comparison = null;
-  resetComparisonPresentation();
-  byId("comparisonError").textContent = "";
-}
-
 async function resolveReviewComment(project: ReviewProject, commentId: string, status: "resolved" | "dismissed"): Promise<void> {
   await api(`/api/projects/${project.id}/reviews/comments/${commentId}`, {
     method: "PATCH",
@@ -8072,65 +7520,13 @@ function renderSpatial(): void {
     }
     assurance.append(row);
   }
-  assurance.append(element("hr", "section-rule"));
-  assurance.append(
-    element("h4", "", "Authored geometry change evidence"),
-    element("p", "muted-copy", "Metric footprints and an XZ overlay are generated only when both versions are asserted to share a coordinate frame."),
-  );
-  if (!spatial.changeReports.length) {
-    assurance.append(element("p", "muted-copy", "No geometry comparison has been generated for this project."));
-  }
-  for (const report of spatial.changeReports) {
-    assurance.append(renderGeometryChangeReport(project.id, report));
-  }
-  if ((state.selected?.versions.length ?? 0) >= 2) {
-    const compare = element("button", "quiet-button wide", spatial.changeReports.length
-      ? "Generate another geometry comparison"
-      : "Compare authored geometry");
-    compare.addEventListener("click", openGeometryChangeDialog);
-    assurance.append(compare);
-  } else {
-    assurance.append(element("p", "field-note", "Two immutable versions are required before geometry can be compared."));
-  }
-  assurance.append(element("hr", "section-rule"));
-  assurance.append(
-    element("h4", "", "Registered raw-scene change evidence"),
-    element(
-      "p",
-      "muted-copy",
-      "A leased processor can estimate bounded yaw and translation, enforce overlap/RMSE/ambiguity gates, then compare verified PLY occupancy, centroid movement, and mean colour. Results remain human-reviewed evidence, not survey or causation claims.",
-    ),
-  );
-  const rawReports = spatial.rawChangeReports ?? [];
-  if (!rawReports.length) {
-    assurance.append(element("p", "muted-copy", "No registered raw-scene comparison has been queued for this project."));
-  }
-  for (const report of rawReports.slice(0, 8)) {
-    assurance.append(renderRawSceneChangeReport(report));
-  }
-  const comparableVersions = (state.selected?.versions ?? []).filter((version) =>
-    eligibleRawChangeAssets(version.id).length > 0
-  );
-  const compareRaw = element(
-    "button",
-    "quiet-button wide",
-    rawReports.length ? "Queue another registration + comparison" : "Register and compare PLY assets",
-  );
-  compareRaw.disabled = comparableVersions.length < 2;
-  compareRaw.title = comparableVersions.length < 2
-    ? "Two immutable versions with verified PLY assets are required."
-    : "";
-  compareRaw.addEventListener("click", openRawSceneChangeDialog);
-  assurance.append(
-    compareRaw,
-    element(
-      "small",
-      "field-note",
-      comparableVersions.length >= 2
-        ? `${comparableVersions.length} immutable versions have eligible verified PLY evidence.`
-        : "Upload and verify a source, master, or point-cloud PLY on two immutable versions first.",
-    ),
-  );
+  const comparisonEvidence = compareDomain.renderStage({
+    projectId: project.id,
+    versions: state.selected?.versions ?? [],
+    assets: state.selected?.assets ?? [],
+    geometryReports: spatial.changeReports,
+    rawReports: spatial.rawChangeReports ?? [],
+  });
 
   const delivery = element("article", "workspace-card-large");
   delivery.append(
@@ -8154,6 +7550,10 @@ function renderSpatial(): void {
     container.append(assurance);
     return;
   }
+  if (state.projectSection === "compare") {
+    container.append(comparisonEvidence);
+    return;
+  }
   if (state.projectSection === "structure") {
     container.append(renderFloorplanWorkflow(project, spatial));
     return;
@@ -8161,6 +7561,9 @@ function renderSpatial(): void {
   if (state.projectSection === "walk") {
     container.append(routes);
     return;
+  }
+  if (!comparisonWorkspaceAvailable(state.selected?.versions.length ?? 0)) {
+    container.append(comparisonEvidence);
   }
   container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
 }
@@ -9273,7 +8676,7 @@ async function loadSpatialWorkspace(projectId: string, requestedVersionId?: stri
   state.spatialVersionId = workspace.version?.id ?? null;
   if (
     state.view === "project" &&
-    ["structure", "privacy", "walk", "expert"].includes(state.projectSection)
+    ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)
   ) renderSpatial();
   if (state.view === "project" && state.projectSection === "publish") renderPublish();
 }
@@ -11163,485 +10566,6 @@ async function reviewCaptureCompletenessReport(form: FormData): Promise<void> {
   await loadSpatialWorkspace(project.id);
 }
 
-function openGeometryChangeDialog(): void {
-  const versions = state.selected?.versions ?? [];
-  if (versions.length < 2) return;
-  const from = byId<HTMLSelectElement>("geometryChangeFrom");
-  const to = byId<HTMLSelectElement>("geometryChangeTo");
-  from.replaceChildren();
-  to.replaceChildren();
-  for (const version of versions) {
-    const label = `Version ${version.version_number} · ${humanStatus(version.status)}`;
-    from.append(new Option(label, version.id));
-    to.append(new Option(label, version.id));
-  }
-  from.value = versions[1]?.id ?? versions[0]!.id;
-  to.value = versions[0]!.id;
-  const form = byId<HTMLFormElement>("geometryChangeForm");
-  const evidence = form.elements.namedItem("registrationEvidence");
-  if (evidence instanceof HTMLTextAreaElement) evidence.value = "";
-  byId("geometryChangeError").textContent = "";
-  geometryChangeOperation = null;
-  geometryChangeDialog.showModal();
-}
-
-async function generateChangeReport(form: FormData): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) return;
-  const body = {
-    fromVersionId: String(form.get("fromVersionId") ?? ""),
-    toVersionId: String(form.get("toVersionId") ?? ""),
-    thresholdMm: Number(form.get("thresholdMm") ?? 50),
-    coordinateAssurance: String(form.get("coordinateAssurance") ?? "shared_local_frame"),
-    registrationEvidence: String(form.get("registrationEvidence") ?? "").trim(),
-  };
-  const requestKey = JSON.stringify(body);
-  if (!geometryChangeOperation || geometryChangeOperation.requestKey !== requestKey) {
-    geometryChangeOperation = { id: crypto.randomUUID(), requestKey };
-  }
-  await api(`/api/projects/${project.id}/spatial/change-reports`, {
-    method: "POST",
-    body: JSON.stringify({
-      clientOperationId: geometryChangeOperation.id,
-      ...body,
-    }),
-  });
-  geometryChangeDialog.close();
-  geometryChangeOperation = null;
-  showToast("Authored geometry evidence generated");
-  await loadSpatialWorkspace(project.id);
-}
-
-function openGeometryChangeReview(report: GeometryChangeReport, summary: GeometryChangeSummary): void {
-  const form = byId<HTMLFormElement>("geometryChangeReviewForm");
-  form.reset();
-  const reportId = form.elements.namedItem("reportId");
-  if (reportId instanceof HTMLInputElement) reportId.value = report.id;
-  const decision = form.elements.namedItem("decision");
-  if (decision instanceof HTMLSelectElement) {
-    decision.value = summary.result === "no_material_change" ? "accepted" : "needs_recapture";
-  }
-  const note = form.elements.namedItem("note");
-  if (note instanceof HTMLTextAreaElement) note.value = report.review_note ?? "";
-  byId("geometryChangeReviewContext").textContent =
-    `Version ${summary.versions.from.versionNumber} → ${summary.versions.to.versionNumber}: ` +
-    `${summary.summary.changed} changed, ${summary.summary.added} added, ${summary.summary.removed} removed; ` +
-    `maximum ${summary.summary.maxDeviationMm ?? "not available"} mm at a ${summary.thresholdMm} mm threshold.`;
-  byId("geometryChangeReviewError").textContent = "";
-  geometryChangeReviewDialog.showModal();
-}
-
-async function reviewGeometryChangeReport(form: FormData): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) return;
-  const reportId = String(form.get("reportId") ?? "");
-  await api(`/api/projects/${project.id}/spatial/change-reports/${encodeURIComponent(reportId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      decision: String(form.get("decision") ?? ""),
-      note: String(form.get("note") ?? "").trim(),
-    }),
-  });
-  geometryChangeReviewDialog.close();
-  showToast("Geometry evidence review recorded");
-  await loadSpatialWorkspace(project.id);
-}
-
-function renderGeometryChangeReport(projectId: string, report: GeometryChangeReport): HTMLElement {
-  const card = element("article", "geometry-change-card");
-  const summary = parseGeometryChangeSummary(report.summary_json);
-  if (!summary) {
-    card.append(
-      element("strong", "", "Unreadable geometry report"),
-      element("p", "form-error", "The stored evidence could not be parsed. Generate a fresh comparison."),
-    );
-    return card;
-  }
-  const header = element("div", "geometry-change-heading");
-  const title = element("div");
-  title.append(
-    element("strong", "", `Version ${summary.versions.from.versionNumber} → ${summary.versions.to.versionNumber}`),
-    element("small", "muted-copy", `${summary.thresholdMm} mm threshold · ${humanStatus(summary.coordinateAssurance)}`),
-  );
-  header.append(
-    title,
-    element("span", `status-pill ${statusClass(summary.result.toUpperCase())}`, humanStatus(summary.result)),
-  );
-  card.append(header);
-
-  const metrics = element("div", "geometry-change-metrics");
-  metrics.append(
-    compactMetric("Comparable", summary.summary.comparable),
-    compactMetric("Changed", summary.summary.changed),
-    compactMetric("Added / removed", `${summary.summary.added} / ${summary.summary.removed}`),
-    compactMetric("P95 deviation", summary.summary.p95DeviationMm === null ? "-" : `${summary.summary.p95DeviationMm} mm`),
-    compactMetric("Maximum", summary.summary.maxDeviationMm === null ? "-" : `${summary.summary.maxDeviationMm} mm`),
-  );
-  card.append(metrics, renderGeometryChangeOverlay(summary));
-
-  if (summary.blockers.length) {
-    const blockers = element("div", "notice-card geometry-change-blockers");
-    blockers.append(element("strong", "", "Metric conclusion blocked"));
-    const list = document.createElement("ul");
-    for (const blocker of summary.blockers) list.append(element("li", "", blocker));
-    blockers.append(list);
-    card.append(blockers);
-  }
-  if (summary.comparisons.length) {
-    const rows = element("div", "geometry-change-rows");
-    for (const comparison of summary.comparisons.slice(0, 8)) {
-      const row = element("div", "geometry-change-row");
-      row.append(
-        element("span", "", comparison.label),
-        element("span", "", `${comparison.maxDeviationMm} mm max`),
-        element("span", `status-pill ${statusClass(comparison.classification.toUpperCase())}`, humanStatus(comparison.classification)),
-      );
-      rows.append(row);
-    }
-    card.append(rows);
-  }
-  card.append(element("p", "field-note", summary.limitation));
-  if (report.status === "reviewed") {
-    card.append(element(
-      "div",
-      "notice-card",
-      `${humanStatus(report.review_decision ?? "reviewed")}: ${report.review_note ?? "Review recorded."}`,
-    ));
-  }
-  const actions = element("div", "release-actions");
-  const review = element("button", report.status === "reviewed" ? "quiet-button" : "primary-button", report.status === "reviewed"
-    ? "Review again"
-    : "Review evidence");
-  review.addEventListener("click", () => openGeometryChangeReview(report, summary));
-  const visual = element("button", "quiet-button", "Open rendered versions");
-  visual.addEventListener("click", () => {
-    const versions = state.selected?.versions ?? [];
-    const relevant = versions.filter((version) => (
-      version.id === report.from_version_id || version.id === report.to_version_id
-    ));
-    openVersionComparison(projectId, relevant.length === 2 ? relevant : versions);
-  });
-  actions.append(review, visual);
-  card.append(actions);
-  return card;
-}
-
-function eligibleRawChangeAssets(versionId: string): Asset[] {
-  return (state.selected?.assets ?? []).filter((asset) => (
-    asset.version_id === versionId &&
-    ["source", "master", "pointcloud"].includes(asset.kind) &&
-    asset.format.toLowerCase() === "ply" &&
-    asset.integrity_status === "verified"
-  ));
-}
-
-function openRawSceneChangeDialog(): void {
-  const versions = (state.selected?.versions ?? []).filter((version) =>
-    eligibleRawChangeAssets(version.id).length > 0
-  );
-  if (versions.length < 2) {
-    showNotice("Two immutable versions with verified source, master, or point-cloud PLY assets are required.", "error");
-    return;
-  }
-  const form = byId<HTMLFormElement>("rawSceneChangeForm");
-  form.reset();
-  const baselineVersion = byId<HTMLSelectElement>("rawChangeBaselineVersion");
-  const candidateVersion = byId<HTMLSelectElement>("rawChangeCandidateVersion");
-  baselineVersion.replaceChildren();
-  candidateVersion.replaceChildren();
-  for (const version of versions) {
-    const label = `Version ${version.version_number} · ${humanStatus(version.status)}`;
-    baselineVersion.append(new Option(label, version.id));
-    candidateVersion.append(new Option(label, version.id));
-  }
-  baselineVersion.value = versions[1]?.id ?? versions[0]!.id;
-  candidateVersion.value = versions[0]!.id;
-  const populateAssets = (versionSelect: HTMLSelectElement, assetSelectId: string): void => {
-    const assetSelect = byId<HTMLSelectElement>(assetSelectId);
-    assetSelect.replaceChildren();
-    for (const asset of eligibleRawChangeAssets(versionSelect.value)) {
-      assetSelect.append(new Option(
-        `${asset.file_name} · ${formatBytes(asset.size_bytes)} · ${humanStatus(asset.kind)}`,
-        asset.id,
-      ));
-    }
-  };
-  const refreshAssets = (): void => {
-    populateAssets(baselineVersion, "rawChangeBaselineAsset");
-    populateAssets(candidateVersion, "rawChangeCandidateAsset");
-  };
-  baselineVersion.onchange = refreshAssets;
-  candidateVersion.onchange = refreshAssets;
-  refreshAssets();
-  byId("rawSceneChangeError").textContent = "";
-  rawSceneChangeOperation = null;
-  rawSceneChangeDialog.showModal();
-}
-
-async function createRawSceneChangeReport(form: FormData): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) throw new Error("Open a project before comparing raw scenes.");
-  const body = {
-    baselineVersionId: String(form.get("baselineVersionId") ?? ""),
-    candidateVersionId: String(form.get("candidateVersionId") ?? ""),
-    baselineAssetId: String(form.get("baselineAssetId") ?? ""),
-    candidateAssetId: String(form.get("candidateAssetId") ?? ""),
-    registrationMode: String(form.get("registrationMode") ?? "automatic_rigid"),
-    coordinateAssurance: String(form.get("coordinateAssurance") ?? "shared_local_frame"),
-    registrationEvidence: String(form.get("registrationEvidence") ?? "").trim(),
-    registrationSearchRadiusM: Number(form.get("registrationSearchRadiusM") ?? 1),
-    registrationMaximumRmseMm: Number(form.get("registrationMaximumRmseMm") ?? 100),
-    registrationMinimumOverlapPercent: Number(form.get("registrationMinimumOverlapPercent") ?? 55),
-    voxelSizeM: Number(form.get("voxelSizeM") ?? 0.1),
-    structuralChangeThresholdPercent: Number(form.get("structuralChangeThresholdPercent") ?? 2),
-    photometricChangeThresholdPercent: Number(form.get("photometricChangeThresholdPercent") ?? 12),
-    centroidChangeThresholdMm: Number(form.get("centroidChangeThresholdMm") ?? 50),
-    maximumSamplePoints: Number(form.get("maximumSamplePoints") ?? 2_000_000),
-  };
-  const requestKey = JSON.stringify(body);
-  if (!rawSceneChangeOperation || rawSceneChangeOperation.requestKey !== requestKey) {
-    rawSceneChangeOperation = { id: crypto.randomUUID(), requestKey };
-  }
-  const result = await api<{ report: { id: string; status: string } }>(
-    `/api/projects/${project.id}/spatial/raw-change-reports`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        clientOperationId: rawSceneChangeOperation.id,
-        ...body,
-      }),
-    },
-  );
-  rawSceneChangeOperation = null;
-  rawSceneChangeDialog.close();
-  showToast(body.registrationMode === "automatic_rigid"
-    ? "Automatic registration and raw-scene comparison queued"
-    : "Declared-frame raw-scene comparison queued");
-  await loadSpatialWorkspace(project.id);
-  void pollRawSceneChange(project.id, result.report.id);
-}
-
-async function retryRawSceneChange(report: RegisteredSceneChangeReport): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) throw new Error("Open a project before retrying raw-scene evidence.");
-  await api(`/api/projects/${project.id}/spatial/raw-change-reports/${report.id}/retry`, {
-    method: "POST",
-  });
-  showToast("Raw-scene comparison retry queued");
-  await loadSpatialWorkspace(project.id);
-  void pollRawSceneChange(project.id, report.id);
-}
-
-async function pollRawSceneChange(projectId: string, reportId: string): Promise<void> {
-  const generation = ++rawSceneChangePollGeneration;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, attempt < 4 ? 1_500 : 5_000));
-    if (
-      generation !== rawSceneChangePollGeneration ||
-      !projectPollingContextIsActive(projectId, "privacy-evidence-poll")
-    ) return;
-    try {
-      await loadSpatialWorkspace(projectId);
-    } catch {
-      continue;
-    }
-    const report = state.spatial?.rawChangeReports.find((candidate) => candidate.id === reportId);
-    if (!report || !["QUEUED", "RUNNING"].includes(report.status)) return;
-  }
-  if (
-    generation === rawSceneChangePollGeneration &&
-    projectPollingContextIsActive(projectId, "privacy-evidence-poll")
-  ) {
-    showNotice("Raw-scene processing is still running. Refresh later; the queued evidence is retained.", "error");
-  }
-}
-
-function openRawSceneChangeReview(
-  report: RegisteredSceneChangeReport,
-  summary: RegisteredSceneChangeSummary,
-): void {
-  const form = byId<HTMLFormElement>("rawSceneChangeReviewForm");
-  form.reset();
-  const reportId = form.elements.namedItem("reportId");
-  if (reportId instanceof HTMLInputElement) reportId.value = report.id;
-  const decision = form.elements.namedItem("decision");
-  if (decision instanceof HTMLSelectElement) {
-    decision.value = report.review_decision ??
-      (summary.result === "no_material_change"
-        ? "accepted"
-        : summary.result === "registration_blocked"
-        ? "needs_recapture"
-        : "investigate");
-  }
-  const note = form.elements.namedItem("note");
-  if (note instanceof HTMLTextAreaElement) note.value = report.review_note ?? "";
-  byId("rawSceneChangeReviewContext").textContent = summary.result === "registration_blocked"
-    ? `Version ${report.baseline_version_number} → ${report.candidate_version_number}: ` +
-      "automatic registration did not pass the declared quality gates, so change analysis was not run."
-    : `Version ${report.baseline_version_number} → ${report.candidate_version_number}: ` +
-      `${summary.summary.addedVoxels} added and ${summary.summary.removedVoxels} removed voxels; ` +
-      `${summary.summary.structurallyChangedPercent}% occupancy delta.`;
-  byId("rawSceneChangeReviewError").textContent = "";
-  rawSceneChangeReviewDialog.showModal();
-}
-
-async function reviewRawSceneChangeReport(form: FormData): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) throw new Error("Open a project before reviewing raw-scene evidence.");
-  const reportId = String(form.get("reportId") ?? "");
-  await api(`/api/projects/${project.id}/spatial/raw-change-reports/${reportId}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      decision: String(form.get("decision") ?? ""),
-      note: String(form.get("note") ?? "").trim(),
-    }),
-  });
-  rawSceneChangeReviewDialog.close();
-  showToast("Raw-scene evidence review recorded");
-  await loadSpatialWorkspace(project.id);
-}
-
-function renderRawSceneChangeReport(report: RegisteredSceneChangeReport): HTMLElement {
-  const card = element("article", "geometry-change-card raw-scene-change-card");
-  const header = element("div", "geometry-change-heading");
-  const title = element("div");
-  title.append(
-    element("strong", "", `Version ${report.baseline_version_number} → ${report.candidate_version_number}`),
-    element("small", "muted-copy", `${report.baseline_file_name} → ${report.candidate_file_name}`),
-  );
-  header.append(
-    title,
-    element("span", `status-pill ${statusClass(report.status)}`, humanStatus(report.status)),
-  );
-  card.append(header);
-  if (report.status === "QUEUED" || report.status === "RUNNING") {
-    const progress = document.createElement("progress");
-    progress.max = 100;
-    progress.value = report.job_progress;
-    progress.setAttribute("aria-label", "Registered raw-scene processing progress");
-    card.append(
-      progress,
-      element("p", "inline-status", report.job_progress_message ?? "Waiting for a processing worker."),
-      element("small", "muted-copy", `Attempt ${report.attempt_count}/${report.max_attempts}`),
-    );
-    return card;
-  }
-  if (report.status === "FAILED" || report.status === "DEAD_LETTER") {
-    const retry = element("button", "primary-button", "Retry registered comparison");
-    retry.addEventListener("click", () => {
-      void runAction({
-        key: `retry-raw-scene-change:${report.id}`,
-        trigger: retry,
-        pendingLabel: "Queueing retry…",
-      }, () => retryRawSceneChange(report));
-    });
-    card.append(
-      element("p", "form-error", rawSceneChangeError(report)),
-      retry,
-    );
-    return card;
-  }
-  const summary = parseRegisteredSceneChangeSummary(report.summary_json);
-  if (!summary) {
-    card.append(element("p", "form-error", "The stored processor report is unreadable. Retry from the failed job if source evidence is available."));
-    return card;
-  }
-  if (summary.registration?.performedByProcessor && summary.registration.summary) {
-    const registrationMetrics = element("div", "geometry-change-metrics");
-    registrationMetrics.append(
-      compactMetric("Registration", humanStatus(summary.registration.status ?? "unknown")),
-      compactMetric("Overlap", `${summary.registration.summary.overlapPercent}%`),
-      compactMetric("RMSE", `${summary.registration.summary.rmseMm} mm`),
-      compactMetric("P95 residual", `${summary.registration.summary.p95ResidualMm} mm`),
-      compactMetric(
-        "Yaw / translation",
-        summary.registration.transform
-          ? `${summary.registration.transform.yawDegrees}° · ` +
-            `${summary.registration.transform.translationM.map((value) => value.toFixed(3)).join(", ")} m`
-          : "Unavailable",
-      ),
-    );
-    card.append(
-      element("p", "section-kicker", "AUTOMATIC REGISTRATION EVIDENCE"),
-      registrationMetrics,
-    );
-  }
-  if (summary.result !== "registration_blocked") {
-    const metrics = element("div", "geometry-change-metrics");
-    metrics.append(
-      compactMetric("Occupancy delta", `${summary.summary.structurallyChangedPercent}%`),
-      compactMetric("Added / removed", `${summary.summary.addedVoxels} / ${summary.summary.removedVoxels}`),
-      compactMetric("Common voxels", summary.summary.commonVoxels),
-      compactMetric("P95 centroid", summary.summary.p95CentroidDisplacementMm === null
-        ? "-"
-        : `${summary.summary.p95CentroidDisplacementMm} mm`),
-      compactMetric("P95 colour", summary.summary.p95PhotometricDeltaPercent === null
-        ? "-"
-        : `${summary.summary.p95PhotometricDeltaPercent}%`),
-    );
-    card.append(metrics);
-  }
-  if (summary.materialSignals.length) {
-    const signals = element("div", "notice-card");
-    signals.append(element("strong", "", "Material signals"));
-    const list = document.createElement("ul");
-    for (const signal of summary.materialSignals) list.append(element("li", "", signal));
-    signals.append(list);
-    card.append(signals);
-  }
-  card.append(
-    element("p", "field-note", report.registration_evidence),
-    element("p", "field-note", summary.limitation),
-  );
-  if (report.status === "REVIEWED") {
-    card.append(element(
-      "div",
-      "notice-card",
-      `${humanStatus(report.review_decision ?? "reviewed")}: ${report.review_note ?? "Review recorded."}`,
-    ));
-  }
-  const actions = element("div", "release-actions");
-  const review = element(
-    "button",
-    report.status === "REVIEWED" ? "quiet-button" : "primary-button",
-    report.status === "REVIEWED" ? "Review again" : "Review evidence",
-  );
-  review.addEventListener("click", () => openRawSceneChangeReview(report, summary));
-  const visual = element("button", "quiet-button", "Open rendered versions");
-  visual.addEventListener("click", () => {
-    const versions = state.selected?.versions.filter((version) =>
-      version.id === report.baseline_version_id || version.id === report.candidate_version_id
-    ) ?? [];
-    openVersionComparison(state.selected!.project.id, versions);
-  });
-  actions.append(review, visual);
-  card.append(actions);
-  return card;
-}
-
-function parseRegisteredSceneChangeSummary(value: string | null): RegisteredSceneChangeSummary | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value) as RegisteredSceneChangeSummary;
-    return parsed?.method === "registered-ply-voxel-change-v1" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function rawSceneChangeError(report: RegisteredSceneChangeReport): string {
-  for (const value of [report.job_error_json, report.error_json]) {
-    if (!value) continue;
-    try {
-      const parsed = JSON.parse(value) as { message?: unknown };
-      if (typeof parsed.message === "string") return parsed.message;
-    } catch {
-      // The fallback below remains actionable without exposing malformed state.
-    }
-  }
-  return "The processor could not complete this registered comparison.";
-}
-
 function compactMetric(label: string, value: string | number): HTMLElement {
   const item = element("span", "");
   item.append(element("small", "", label), element("strong", "", String(value)));
@@ -11878,65 +10802,6 @@ function renderCaptureCompletenessOverlay(summary: CaptureCompletenessSummary): 
     element("span", "recapture", "Recapture room"),
     element("span", "trajectory", "Pose path"),
     element("span", "blind", "Blind spot"),
-  );
-  stage.append(svg, legend);
-  return stage;
-}
-
-function parseGeometryChangeSummary(value: string): GeometryChangeSummary | null {
-  try {
-    const parsed = JSON.parse(value) as GeometryChangeSummary;
-    return parsed?.method === "authored-plan-geometry-diff-v1" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function renderGeometryChangeOverlay(summary: GeometryChangeSummary): HTMLElement {
-  const stage = element("div", "geometry-change-visual");
-  const bounds = summary.visual.bounds;
-  if (!bounds || !summary.visual.overlays.length) {
-    stage.append(element("p", "muted-copy", "No comparable footprints are available for an overlay."));
-    return stage;
-  }
-  const width = 480;
-  const height = 240;
-  const padding = 18;
-  const minZ = bounds.minZ ?? bounds.minY;
-  const maxZ = bounds.maxZ ?? bounds.maxY;
-  if (!Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
-    stage.append(element("p", "muted-copy", "The stored overlay bounds are invalid."));
-    return stage;
-  }
-  const spanX = Math.max(0.001, bounds.maxX - bounds.minX);
-  const spanZ = Math.max(0.001, maxZ! - minZ!);
-  const scale = Math.min((width - padding * 2) / spanX, (height - padding * 2) / spanZ);
-  const offsetX = (width - spanX * scale) / 2;
-  const offsetZ = (height - spanZ * scale) / 2;
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("role", "img");
-  svg.setAttribute("aria-label", "Plan overlay comparing from-version dashed footprints with to-version solid footprints");
-  for (const overlay of summary.visual.overlays) {
-    for (const [side, points] of [["from", overlay.fromPoints], ["to", overlay.toPoints]] as const) {
-      if (!points?.length) continue;
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      const projected = points.map<[number, number]>(([x, z]) => [
-        offsetX + (x - bounds.minX) * scale,
-        height - (offsetZ + (z - minZ!) * scale),
-      ]);
-      path.setAttribute("d", `${projected.map(([x, y], index) => `${index ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`).join(" ")} Z`);
-      path.setAttribute("class", `geometry-overlay ${side} ${overlay.classification}`);
-      const label = document.createElementNS("http://www.w3.org/2000/svg", "title");
-      label.textContent = `${overlay.label}: ${overlay.classification}, ${side} version`;
-      path.append(label);
-      svg.append(path);
-    }
-  }
-  const legend = element("div", "geometry-change-legend");
-  legend.append(
-    element("span", "from", "From · dashed"),
-    element("span", "to", "To · solid"),
   );
   stage.append(svg, legend);
   return stage;
@@ -12432,7 +11297,7 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
       (view === "spatial"
-        ? !["structure", "privacy", "walk", "expert", "publish"].includes(state.projectSection)
+        ? !["structure", "privacy", "compare", "walk", "expert", "publish"].includes(state.projectSection)
         : state.projectSection !== "measurement")
     ) return;
     const retry = element("button", "quiet-button", "Retry");
@@ -12847,10 +11712,17 @@ function renderProjectDetail(): void {
   if (!detail.versions.length) versions.append(element("p", "muted-copy", "No immutable scene version yet."));
   for (const version of detail.versions) {
     versions.append(element("div", "detail-line", `v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleString()}`));
+    if (version.workflow_policy_classification_status === "legacy_unknown") {
+      versions.append(element(
+        "p",
+        "notice-card",
+        `Version ${version.version_number} predates classified workflow-policy receipts. Existing releases remain historical evidence; create a new immutable version under an administrator-classified policy before publishing again.`,
+      ));
+    }
   }
   if (detail.versions.length >= 2) {
     const compareButton = element("button", "quiet-button wide", "Compare immutable versions");
-    compareButton.addEventListener("click", () => openVersionComparison(detail.project.id, detail.versions));
+    compareButton.addEventListener("click", () => compareDomain.openVersionComparison(detail.project.id, detail.versions));
     versions.append(compareButton);
   }
   const uploadButton = element("button", "primary-button", "Upload source asset");
@@ -14572,7 +13444,7 @@ function handleReleaseCameraRendererMessage(event: MessageEvent<unknown>): void 
   const type = Reflect.get(event.data, "type");
   if (type === "camera-update") {
     const pose = Reflect.get(event.data, "cameraPose");
-    if (!validComparisonCameraPose(pose)) return;
+    if (!validReleaseCameraPose(pose)) return;
     latestReleaseCameraPose = pose;
     byId<HTMLButtonElement>("releaseUseCurrentView").disabled = false;
     byId("releaseCameraStatus").textContent =
@@ -14588,6 +13460,22 @@ function handleReleaseCameraRendererMessage(event: MessageEvent<unknown>): void 
     byId("releaseCameraStatus").textContent =
       `Starting-view preview unavailable: ${String(Reflect.get(event.data, "message") ?? "renderer error")}.`;
   }
+}
+
+function validReleaseCameraPose(value: unknown): value is ReleaseCameraPose {
+  if (!value || typeof value !== "object") return false;
+  return (
+    validReleaseCameraTuple(Reflect.get(value, "position")) &&
+    validReleaseCameraTuple(Reflect.get(value, "target")) &&
+    validReleaseCameraTuple(Reflect.get(value, "up")) &&
+    Number.isFinite(Number(Reflect.get(value, "fovDegrees")))
+  );
+}
+
+function validReleaseCameraTuple(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => Number.isFinite(item));
 }
 
 function applyReleaseCurrentView(): void {

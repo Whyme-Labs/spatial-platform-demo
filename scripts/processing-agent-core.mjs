@@ -46,6 +46,22 @@ export function sparkPosterSceneDescriptor(format) {
   };
 }
 
+export function boundedHttpByteRange(header, sizeBytes) {
+  const match = header?.match(/^bytes=(\d+)-(\d*)$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : sizeBytes - 1;
+  if (
+    !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 ||
+    !Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) ||
+    start < 0 || requestedEnd < start || start >= sizeBytes
+  ) {
+    return { satisfiable: false };
+  }
+  const end = Math.min(requestedEnd, sizeBytes - 1);
+  return { satisfiable: true, start, end };
+}
+
 export function webScenePosterRenderer(format) {
   if (format === "rad") return "spark";
   return null;

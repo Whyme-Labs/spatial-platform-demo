@@ -6,6 +6,7 @@ declare global {
     OTP_PEPPER: string;
     REFRESH_TOKEN_PEPPER: string;
     TURNSTILE_SECRET_KEY: string;
+    STAGING_LIFECYCLE_CANARY_TOKEN?: string;
     CLOUDFLARE_SAAS_API_TOKEN?: string;
     STRIPE_SECRET_KEY?: string;
     STRIPE_WEBHOOK_SECRET?: string;

@@ -576,6 +576,14 @@ export const qaDecisionSchema = z.object({
   privacyStatus: z.literal("approved"),
   measurementGrade: z.enum(["visual-only", "indicative", "project-verified", "professional-certified"]),
   notes: z.string().trim().max(4000).optional(),
+}).superRefine((decision, context) => {
+  if (decision.visualGrade === "C" && !decision.notes) {
+    context.addIssue({
+      code: "custom",
+      path: ["notes"],
+      message: "Conditional visual quality requires an explicit acceptance note",
+    });
+  }
 });
 
 const cameraCoordinateSchema = z.number().finite().min(-1_000_000).max(1_000_000);

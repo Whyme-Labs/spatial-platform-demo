@@ -334,12 +334,14 @@ describe("project capture and policy governance", () => {
         id: string;
         workflow_policy_revision_id: string;
         workflow_policy_json: string;
+        workflow_policy_classification_status: string;
       }>;
     }>();
     expect(detail.project.workflowPolicy.publication).toBe("private-review");
     expect(JSON.parse(detail.versions[0]!.workflow_policy_json)).toMatchObject({
       publication: "public-after-approval",
     });
+    expect(detail.versions[0]!.workflow_policy_classification_status).toBe("classified");
     expect(detail.versions[0]!.workflow_policy_revision_id)
       .not.toBe(detail.project.workflowPolicyRevisionId);
 
@@ -369,11 +371,9 @@ describe("project capture and policy governance", () => {
         }),
       },
     );
-    expect(releaseWithMissingRevision.status).toBe(422);
+    expect(releaseWithMissingRevision.status).toBe(409);
     await expect(releaseWithMissingRevision.json()).resolves.toMatchObject({
-      details: {
-        accessPolicy: [expect.stringContaining("private review")],
-      },
+      error: expect.stringContaining("unclassified workflow policy"),
     });
   });
 

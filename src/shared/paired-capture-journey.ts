@@ -128,17 +128,49 @@ export function setPairedCaptureAutomaticQualification(
   return { ...journey, qualification };
 }
 
-export function pairedCaptureJourneyIsVerified(journey: PairedCaptureJourney): boolean {
-  return journey.schemaVersion === LEGACY_PAIRED_CAPTURE_JOURNEY_SCHEMA_VERSION ||
-    journey.qualification?.status === "verified";
+export type PairedCaptureRegistrationAssurance =
+  | "operator-attested"
+  | "processor-qualified"
+  | "independently-reviewed"
+  | "professionally-controlled";
+
+export function pairedCaptureJourneyRegistrationAssurance(
+  journey: PairedCaptureJourney,
+): PairedCaptureRegistrationAssurance | null {
+  if (journey.schemaVersion === LEGACY_PAIRED_CAPTURE_JOURNEY_SCHEMA_VERSION) {
+    return "operator-attested";
+  }
+  if (journey.qualification?.status !== "verified") return null;
+  return journey.qualification.method === AUTOMATIC_PAIRED_CAPTURE_METHOD
+    ? "processor-qualified"
+    : "operator-attested";
 }
 
-export function pairedCaptureJourneyHasProcessorQualification(
+export function pairedCaptureJourneyHasAcceptedRegistration(
   journey: PairedCaptureJourney,
 ): boolean {
+  return pairedCaptureJourneyRegistrationAssurance(journey) !== null;
+}
+
+export function pairedCaptureJourneyMeetsAssurance(
+  journey: PairedCaptureJourney,
+  required: PairedCaptureRegistrationAssurance,
+): boolean {
+  const actual = pairedCaptureJourneyRegistrationAssurance(journey);
+  if (!actual) return false;
+  const assuranceRank: Record<PairedCaptureRegistrationAssurance, number> = {
+    "operator-attested": 0,
+    "processor-qualified": 1,
+    "independently-reviewed": 2,
+    "professionally-controlled": 3,
+  };
+  if (assuranceRank[actual] < assuranceRank[required]) return false;
+  if (actual === "operator-attested") return required === "operator-attested";
   return journey.schemaVersion === PAIRED_CAPTURE_JOURNEY_SCHEMA_VERSION &&
-    journey.qualification?.method === AUTOMATIC_PAIRED_CAPTURE_METHOD &&
-    journey.qualification.status === "verified";
+    (
+      journey.qualification?.method === AUTOMATIC_PAIRED_CAPTURE_METHOD &&
+      journey.qualification.status === "verified"
+    );
 }
 
 export function parsePairedCaptureJourney(value: unknown): PairedCaptureJourney | null {
