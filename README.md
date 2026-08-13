@@ -234,7 +234,8 @@ Implemented:
   dead-letter state, with a compare-and-set lease guard committed before any
   completion side effect, `dispatched_at` re-enqueue de-duplication, an
   expired-lease reaper that dead-letters exhausted jobs, a dispatch budget that
-  dead-letters a job repeatedly enqueued without ever being leased
+  dead-letters a job whose dispatches stop producing a lease — never leased, or
+  never re-leased after its lease expired
   (`dispatch_exhausted`), and operator retries bounded by a persisted retry
   count
 - a pinned Spark 2.1 processing agent with byte-verified input, multipart output,

@@ -972,11 +972,11 @@ const maximumUploadParts = 9500;
 // digest degrades to client_declared and the processor re-verifies on download.
 const serverHashMaximumBytes = 2 * 1024 * 1024 * 1024;
 const jobDispatchBackoffMinutes = 10;
-// attempt_count only moves at lease grant, so a job whose dispatches never
-// reach a processor would otherwise be re-enqueued forever. Six undelivered
-// dispatches at the ten-minute reconciliation backoff, plus the final window,
-// give the dispatch path roughly an hour to deliver before the job
-// dead-letters as dispatch_exhausted.
+// attempt_count only moves at lease grant, so a job whose dispatches stop
+// producing leases (never leased, or never re-leased after its lease expired)
+// would otherwise be re-enqueued forever. Six undelivered dispatches at the
+// ten-minute reconciliation backoff, plus the final window, give the dispatch
+// path roughly an hour to deliver before the job dead-letters.
 const jobDispatchExhaustionLimit = 6;
 const maximumOperatorJobRetries = 5;
 const maximumPrivacyImageBytes = 10 * 1024 * 1024;
