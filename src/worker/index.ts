@@ -20625,36 +20625,43 @@ async function provisionAdministrator(env: Env, email: string): Promise<AuthCont
 // First OTP verification for an email with no user row provisions a personal
 // workspace. The caller must have already ruled out existing users: a fully
 // revoked account must stay locked out, so sign-up never re-attaches
-// memberships to a user an administrator removed. The insert-or-ignore plus
-// re-select tolerates two same-email verifications racing — both land on one
-// user row instead of the second one failing the UNIQUE(email) constraint.
+// memberships to a user an administrator removed. Two same-email
+// verifications racing (a resend leaves two live challenges) both converge on
+// one workspace: the insert-or-ignore plus re-select lands both on one user
+// row, and the org/membership batch guards on the user having no membership
+// yet — the loser's batch no-ops atomically and the final re-select returns
+// the winner's workspace.
 async function provisionSelfServeWorkspace(env: Env, email: string): Promise<AuthContext> {
   const displayName = email.split("@")[0] || "Member";
   await env.DB.prepare(
     "INSERT INTO users (id, email, display_name) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING",
   ).bind(crypto.randomUUID(), email, displayName).run();
   const user = await env.DB.prepare(
-    "SELECT id, display_name FROM users WHERE lower(email) = ? LIMIT 1",
-  ).bind(email).first<{ id: string; display_name: string }>();
+    "SELECT id FROM users WHERE lower(email) = ? LIMIT 1",
+  ).bind(email).first<{ id: string }>();
   if (!user) throw new Error("Self-serve user provisioning did not persist a user row");
   const organisationId = crypto.randomUUID();
   const workspaceName = `${displayName} workspace`;
   await env.DB.batch([
     env.DB.prepare(
-      "INSERT INTO organisations (id, name, slug) VALUES (?, ?, ?)",
-    ).bind(organisationId, workspaceName, `${slugify(workspaceName)}-${organisationId.slice(0, 8)}`),
+      `INSERT INTO organisations (id, name, slug)
+       SELECT ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)`,
+    ).bind(
+      organisationId,
+      workspaceName,
+      `${slugify(workspaceName)}-${organisationId.slice(0, 8)}`,
+      user.id,
+    ),
     env.DB.prepare(
       `INSERT INTO memberships (organisation_id, user_id, role, updated_at, revoked_at, status)
-       VALUES (?, ?, 'platform_admin', datetime('now'), NULL, 'active')`,
-    ).bind(organisationId, user.id),
+       SELECT ?, ?, 'platform_admin', datetime('now'), NULL, 'active'
+       WHERE EXISTS (SELECT 1 FROM organisations WHERE id = ?)`,
+    ).bind(organisationId, user.id, organisationId),
   ]);
-  return {
-    userId: user.id,
-    organisationId,
-    email,
-    displayName: user.display_name,
-    role: "platform_admin",
-  };
+  const auth = await memberForEmail(env.DB, email);
+  if (!auth) throw new Error("Self-serve workspace provisioning did not persist a membership");
+  return auth;
 }
 
 async function memberForEmail(database: D1Database, email: string): Promise<AuthContext | null> {

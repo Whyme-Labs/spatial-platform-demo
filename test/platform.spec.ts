@@ -1257,6 +1257,48 @@ describe("Spatial Studio Worker", () => {
     expect(memberships?.n).toBe(1);
   });
 
+  it("converges two racing first sign-ins onto a single workspace", async () => {
+    // A resend leaves two live challenges for one email; verifying both
+    // concurrently must not provision two workspaces.
+    const email = `race-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const code = "161803";
+    const challenges = await Promise.all([1, 2].map(async () => {
+      const challengeId = crypto.randomUUID();
+      await env.DB.prepare(`
+        INSERT INTO auth_otp_challenges (id, email, code_hash, expires_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(
+        challengeId,
+        email,
+        await otpHash(challengeId, email, code, env.OTP_PEPPER),
+        new Date(Date.now() + 60_000).toISOString(),
+      ).run();
+      return challengeId;
+    }));
+    const responses = await Promise.all(challenges.map((challengeId) =>
+      exports.default.fetch(`${origin}/api/auth/otp/verify`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "CF-Connecting-IP": nextTestClientAddress(),
+        },
+        body: JSON.stringify({ email, challengeId, code }),
+      })
+    ));
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const bodies = await Promise.all(responses.map((response) =>
+      response.json<{ user: { userId: string; organisationId: string } }>()
+    ));
+    expect(bodies[1].user.userId).toBe(bodies[0].user.userId);
+    expect(bodies[1].user.organisationId).toBe(bodies[0].user.organisationId);
+    const rows = await env.DB.prepare(`
+      SELECT COUNT(*) AS memberships,
+        (SELECT COUNT(*) FROM users WHERE lower(email) = ?) AS users
+      FROM memberships WHERE user_id = ?
+    `).bind(email, bodies[0].user.userId).first<{ memberships: number; users: number }>();
+    expect(rows).toEqual({ memberships: 1, users: 1 });
+  });
+
   it("accepts memberships in multiple organisations and rotates the session when switching", async () => {
     const administrator = await loginSession();
     const administratorUserId = "00000000-0000-4000-8000-000000000002";

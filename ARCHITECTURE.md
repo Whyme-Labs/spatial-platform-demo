@@ -746,8 +746,9 @@ processor-backed raw registration, signed asset retrieval, review, and cleanup.
 - auth refresh, OTP, OIDC, release-manifest, team-invitation, upload-session,
   telemetry, and health endpoints sit behind authoritative D1 rate limits whose
   429 responses carry the real window in `Retry-After`
-- OTP delivery and suppression writes run after the response in both the
-  authorised and unknown-email branches, so response timing does not enumerate
+- OTP delivery and suppression writes run after the response for every
+  requested email (sign-in is self-serve; unknown emails provision a workspace
+  at verification), so response timing does not distinguish new from existing
   accounts
 - denied requests (401/403/429) emit a bounded structured `request.denied` log
   event, and `/api/health` reports per-dependency D1/KV/R2 probe status
