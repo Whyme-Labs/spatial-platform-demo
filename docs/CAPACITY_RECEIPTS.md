@@ -1,6 +1,6 @@
 # Capacity receipts
 
-Last measured: 2026-08-02
+Last measured: 2026-08-13
 
 ## Staging lifecycle canary budgets
 
@@ -77,6 +77,167 @@ as ambiguous. The revised exact fixture adds a deterministic asymmetric marker
 to both versions and a second small marker only to the candidate; the local
 regression and this live receipt prove accepted automatic registration and a
 non-empty raw voxel change.
+
+## Processing dispatch exhaustion budget
+
+Last measured: 2026-08-13
+
+`jobDispatchExhaustionLimit=6` and `jobDispatchBackoffMinutes=10`
+(`src/worker/index.ts`) bound how long a queued processing job may be
+re-dispatched without ever being leased before it dead-letters as
+`dispatch_exhausted`. The minutely reconciliation cron (`"* * * * *"` in
+`wrangler.jsonc`) re-enqueues a dispatchable job at most once per ten-minute
+backoff window, so six dispatches span roughly fifty minutes, and the reaper
+additionally requires the final dispatch to be at least one full window old:
+a job whose dispatches never reach a processor dead-letters about one hour
+after its first dispatch and surfaces on the same failure dashboard as a
+`lease_expired` job.
+
+The hour is a tripwire sized against the measured healthy path, not a target.
+Staging run `2026-08-12T14-58-37-247Z-f864bc47-f6e0-489f-b52a-bde9de7074e8`
+(`verify:staging:lifecycle` against
+`https://spatial-studio-staging.swmengappdev.workers.dev`) moved both real
+processing jobs (`asset.validate`, `asset.evidence-validate`) from
+uploads-completed at `14:58:43.282Z` to `SUCCEEDED` at `14:59:17.880Z` —
+34.598 s including the canary's 5,000 ms poll cadence — so the exhaustion
+horizon is roughly 104 times a measured complete dispatch-lease-process round
+trip. The local FJD lane measured 38,161 ms of processing for a 536 MB input.
+A lease grant resets `dispatch_count` to zero, so a slow-but-working processor
+can never be dead-lettered by this budget; only a delivery path that fails six
+spaced windows in a row can.
+
+Reproduce the contracts from the repository root with:
+
+```sh
+npx vitest run test/platform.spec.ts --silent=passed-only -t "dispatch"
+```
+
+They measure exactly six dispatches before the dead-letter, the
+`JOB_DISPATCH_EXHAUSTED` failure reaching the hosting dashboard, a
+dispatch-exhausted canary staying out of the scene lifecycle, and a lease
+grant resetting the budget. Remeasure if the cron cadence, backoff window, or
+queue delivery path changes.
+
+## Public scene-asset R2 miss budget
+
+Last measured: 2026-08-13 (paging session measured 2026-08-03)
+
+`publicAssetMissLimitPerWindow=300` and `publicAssetMissWindowSeconds=60`
+(`src/worker/index.ts`) meter only `/public-asset` reads that miss the edge
+cache and fall through to R2, per client address. A warm viewer session
+consumes zero budget and zero D1 writes.
+
+The measured worst case is a fully cold page-in of the largest known web
+derivative: the 141,351,968-byte FJD P2 Horse RAD. Run
+`2026-08-03T05-42-10-918Z-4be9575a` paged the entire container through 45
+HTTP 206 range responses (mean 3,142,520 bytes, largest 3,334,568 bytes)
+during a 32,606 ms headless-Chrome render — about 45 misses in 33 seconds,
+or ~83 per minute if a viewer somehow stayed fully cold. The staging
+lifecycle canary's public release reached a ready Spark renderer in 7,938 ms
+with far fewer ranges. The budget is therefore 6.7 times the complete cold
+page-in of the largest known asset, and it caps anonymous R2 egress at about
+954 MiB per address per window (300 × the largest observed range).
+
+This remains judgment-sized against single-viewer measurements: many viewers
+behind one NAT share an address budget, and no production traffic
+distribution has been measured yet. Remeasure with real traffic analytics
+once the platform has anonymous production load, and whenever Spark's paging
+chunk size or the RAD LoD layout changes.
+
+Recount the stored paging receipt and rerun the contracts from the
+repository root with:
+
+```sh
+node -e 'const r = require("./.cache/fjd-sample-corpus/reports/local-platform-e2e-2026-08-03T05-42-10-918Z-4be9575a.json"); const sizes = r.privatePreview.sceneResponses.map((s) => { const [a, b] = s.contentRange.split(" ")[1].split("/")[0].split("-"); return Number(b) - Number(a) + 1; }); console.log({ responses: sizes.length, renderMs: r.privatePreview.elapsedMilliseconds, meanRangeBytes: Math.round(sizes.reduce((x, y) => x + y, 0) / sizes.length), maxRangeBytes: Math.max(...sizes), receipt: r.privatePreview.radRangeReceipt });'
+npx vitest run test/platform.spec.ts --silent=passed-only -t "R2 misses"
+```
+
+The contracts prove edge hits are never counted against the budget, a
+legitimate paging session is never throttled, and an exhausted budget answers
+429 with the real window in `Retry-After` while already-cached ranges keep
+serving.
+
+## Per-tier scene-asset download ceilings
+
+Last derived: 2026-08-13
+
+`MAX_SCENE_ASSET_BYTES` (`src/renderer/main.ts`) applies only to non-paged
+SPZ/SOG scenes, which download and decode whole before the first frame; paged
+RAD scenes stream bounded chunks against the splat budget and are exempt. The
+tiers are derived from two existing receipts rather than guessed:
+
+- the browser-side `collision_glb_bytes=268435456` cap (above), a 256 MiB
+  whole-buffer decode the browser demonstrably performs; and
+- the receipted default splat budgets served by the Worker render manifest
+  (0.75M mobile-lite, 1.25M mobile-standard, 2M desktop-standard).
+
+Desktop keeps twice the collision cap; the mobile tiers scale the collision
+cap by their splat-budget ratio against desktop-standard:
+
+| Tier | Derivation | Ceiling |
+| --- | --- | ---: |
+| `mobile-lite` | 256 MiB × (0.75 / 2) | 100,663,296 bytes (96 MiB) |
+| `mobile-standard` | 256 MiB × (1.25 / 2) | 167,772,160 bytes (160 MiB) |
+| `desktop-standard` / `desktop-high` | 256 MiB × 2 | 536,870,912 bytes (512 MiB) |
+
+These are OOM tripwires that convert a certain mobile tab-kill into an
+explicit, retryable `SCENE_ASSET_TOO_LARGE` error naming the ceiling — not
+delivery targets. The largest known web derivative, the 141,378,928-byte FJD
+RAD, is paged and even fully downloaded would use 26% of the desktop ceiling;
+a 2M-splat SH0 SPZ measures around 32 MiB, a fifth of the mobile-standard
+ceiling. A legitimate compact derivative that approaches these ceilings means
+the publish pipeline should have produced a paged RAD instead.
+
+Reproduce the derivation from the repository root with:
+
+```sh
+node - <<'NODE'
+const collisionCapBytes = 268435456;
+const budgets = { mobileLite: 0.75, mobileStandard: 1.25, desktopStandard: 2 };
+console.log({
+  mobileLiteBytes: collisionCapBytes * (budgets.mobileLite / budgets.desktopStandard),
+  mobileStandardBytes: collisionCapBytes * (budgets.mobileStandard / budgets.desktopStandard),
+  desktopBytes: collisionCapBytes * 2,
+});
+NODE
+```
+
+Rederive if the collision cap, the default splat budgets, or the set of
+non-paged formats changes.
+
+## Renderer heartbeat and viewer liveness watchdog
+
+Last measured: 2026-08-13
+
+`HEARTBEAT_INTERVAL_MS=5000` (`src/renderer/main.ts`) and
+`RENDERER_LIVENESS_TIMEOUT_MS=30000` (`src/client/viewer.ts`): a ready
+renderer posts a low-frequency heartbeat so a visible tab whose iframe
+process died silently (mobile OOM kill, GPU-process death — states that fire
+no `webglcontextlost`) is detected instead of leaving a frozen canvas behind
+a healthy-looking viewer.
+
+Measured on the built renderer with the movement-integrity walking fixture in
+headless Chromium: 13 heartbeats over 65 s post-ready with inter-arrival gaps
+of 4,999–5,001 ms (mean 5,000 ms), the first 4,999 ms after `ready`. The
+30,000 ms timeout therefore requires six consecutive missed beats and holds
+25 s of margin beyond the worst observed gap. The watchdog arms only on the
+first post-ready heartbeat (a renderer that never heartbeats is never misread
+as dead), any renderer message re-arms it, and a hidden tab gets a fresh
+window on resume because browsers throttle background timers to a crawl.
+
+Reproduce from the repository root with:
+
+```sh
+npm run build:e2e
+node scripts/measure-renderer-heartbeat.mjs --seconds 65
+npx playwright test e2e/published-viewer.spec.ts -g "heartbeat|suspended tab"
+```
+
+The Playwright contracts pin the stopped-heartbeat retryable error, the
+never-heartbeating renderer staying healthy, and the suspended-tab resume not
+being misread as death. Remeasure after renderer main-loop, Spark, or Chrome
+changes; five seconds of interval is a request-cadence control, and the 30 s
+timeout is the tripwire to resize if a known-good renderer ever approaches it.
 
 ## PLY coordinate-header preflight
 
@@ -504,7 +665,7 @@ test exercises the same 200-row page.
 
 ## Full software-gate receipt
 
-Last measured: 2026-08-03
+Last measured: 2026-08-13
 
 Command:
 
@@ -512,11 +673,14 @@ Command:
 npm run check
 ```
 
-The registered-scene walking-proof and automatic-journey tranche completed the
-entire local production gate with 216 Worker/domain tests across 42 files, 41
-navigation and migration contracts, and 63 Playwright scenarios. Instrumented
-coverage measured 69.24% statements, 56.72% branches, 83.64% functions, and
-75.95% lines. The same command also passed generated types, TypeScript,
-action/control/config audits, the production build, and a Cloudflare production
-deployment dry run. Remeasure this receipt whenever those reported counts or
-coverage values are changed in readiness documentation.
+The complete local production gate passed with 369 Worker/domain tests across
+64 vitest files, 92 navigation and migration contracts across 15 node-test
+files, and 93 Playwright scenarios. Instrumented coverage measured 72.01%
+statements, 62.13% branches, 85.65% functions, and 78.41% lines. The same
+command also passed generated types, TypeScript, the action-state audit for 2
+client entry points, the control-wiring audit (150 static and 128 dynamic
+buttons, 22 static and 10 dynamic links, 37 interactive forms, 246 governed
+lifecycle fields), the inventory, production-config, and migration audits, the
+production build, and a Cloudflare production deployment dry run. Remeasure
+this receipt whenever those reported counts or coverage values are changed in
+readiness documentation.
