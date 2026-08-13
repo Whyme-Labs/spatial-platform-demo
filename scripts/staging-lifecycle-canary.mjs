@@ -4,6 +4,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import {
+  metricPointCloudPly,
+  metricRoomPoints,
+} from "./staging-lifecycle-fixture.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 const canonicalStagingOrigin = "https://spatial-studio-staging.swmengappdev.workers.dev";
@@ -61,6 +65,8 @@ const report = {
     visualSplats: null,
     metricInputBytes: null,
     metricPoints: null,
+    candidateMetricInputBytes: null,
+    candidateMetricPoints: null,
     sessionRefreshes: 0,
   },
 };
@@ -164,9 +170,13 @@ try {
     captureJourney: candidateJourney,
   });
   versionId = candidateVisual.upload.versionId;
+  const candidateGeometryPoints = metricRoomPoints({ candidateChange: true });
+  const candidateGeometryBytes = metricPointCloudPly(candidateGeometryPoints);
+  report.measurements.candidateMetricInputBytes = candidateGeometryBytes.byteLength;
+  report.measurements.candidateMetricPoints = candidateGeometryPoints.length;
   const candidateGeometry = await uploadBytes({
     projectId,
-    bytes: metricPointCloudPly(metricRoomPoints()),
+    bytes: candidateGeometryBytes,
     fileName: "lifecycle-canary-candidate-geometry.ply",
     format: "ply",
     purpose: "metric_point_cloud",
@@ -632,44 +642,6 @@ function gaussianPly(points) {
     });
   });
   return new Uint8Array(Buffer.concat([header, vertexBytes]));
-}
-
-function metricRoomPoints() {
-  const points = [];
-  for (let xIndex = 0; xIndex <= 16; xIndex += 1) {
-    for (let zIndex = 0; zIndex <= 12; zIndex += 1) {
-      const x = xIndex * 0.25;
-      const z = zIndex * 0.25;
-      points.push([x, 0, z], [x, 2.5, z]);
-    }
-  }
-  for (let heightIndex = 0; heightIndex <= 25; heightIndex += 1) {
-    const y = heightIndex * 0.1;
-    for (let xIndex = 0; xIndex <= 16; xIndex += 1) {
-      const x = xIndex * 0.25;
-      points.push([x, y, 0], [x, y, 3]);
-    }
-    for (let zIndex = 1; zIndex < 12; zIndex += 1) {
-      const z = zIndex * 0.25;
-      points.push([0, y, z], [4, y, z]);
-    }
-  }
-  return points;
-}
-
-function metricPointCloudPly(points) {
-  return new TextEncoder().encode([
-    "ply",
-    "format ascii 1.0",
-    "comment deterministic staging lifecycle registered metric room fixture",
-    `element vertex ${points.length}`,
-    "property float x",
-    "property float y",
-    "property float z",
-    "end_header",
-    ...points.map((point) => point.join(" ")),
-    "",
-  ].join("\n"));
 }
 
 async function waitForJob(jobId) {
