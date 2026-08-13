@@ -547,7 +547,9 @@ separate licensed-professional sign-off record.
 
 ## Processing-agent contract
 
-1. `POST /api/worker/jobs/lease`
+1. `POST /api/worker/jobs/lease` with an immutable execution identity containing
+   the agent Git SHA, image digest, lease-protocol version, and supported
+   job-type/contract-version pairs
 2. download the immutable input through
    `GET /api/worker/jobs/{id}/input` with the lease token; registered-scene
    jobs additionally receive and download one exact candidate input
@@ -557,6 +559,28 @@ separate licensed-professional sign-off record.
    duration evidence, or the stricter registered-scene completion route with
    exact dual-input byte evidence and the declared comparison method
 6. on error, `POST /api/worker/jobs/{id}/fail` with a stable failure class
+
+Job contract and executor identity are separate dimensions. Every queued job
+stores the contract version its handler requires. Leasing intersects the
+agent's declared capabilities with the control plane's known contracts and
+atomically selects only a matching row. The canonical lease identity is stored
+with that job, and every completion receipt must repeat it exactly. A mixed
+fleet therefore cannot discover incompatibility after claiming work, and a
+completed job answers which exact Git revision and immutable image ran it.
+Human package labels remain descriptive metadata; they are never scheduling or
+provenance authority.
+
+The processor deployment first pushes a SHA-tagged container, resolves the
+registry digest, then deploys the Worker once with that digest and Git SHA in
+its runtime identity. Health, active deployment, canary receipt, stored job
+identity, and production attestation are required to agree. Production also
+creates Sigstore-signed GitHub provenance for the exact Wrangler Worker bundle
+and the immutable processor image before the deployment can be accepted.
+During a rollout, the expand migration and strict application Worker precede
+the processor. New identity-less leases stop at that application boundary;
+only an already-issued secret lease token can complete legacy in-flight work.
+This avoids both rejected completed work and new work whose executor identity
+the predecessor application would have discarded.
 
 Expired leases can be reclaimed. Attempts are bounded; terminal failures become
 `FAILED` or `DEAD_LETTER`. A `lease` failure class is always retryable — a
@@ -670,6 +694,16 @@ Approval decisions and comments come from immutable D1 history and are shown
 beside the corresponding scene. This visual renderer remains a human review
 aid; the separate authored-geometry report is the only automated comparison
 currently claimed.
+
+The stage itself is evidence-gated rather than count-gated. The project detail
+response derives per-version readiness for visual, authored-geometry, and raw
+scene comparison from revalidated R2 assets, approved navigation, reviewed
+structure/metric evidence, and qualified registration evidence. Compare is
+available only when at least one pair supports at least one mode. Each mode's
+selectors contain only its eligible versions and expose server-derived
+exclusion reasons for the others. The authenticated staging lifecycle creates
+two deterministic versions and exercises visual delivery, authored geometry,
+processor-backed raw registration, signed asset retrieval, review, and cleanup.
 
 ## Security properties
 

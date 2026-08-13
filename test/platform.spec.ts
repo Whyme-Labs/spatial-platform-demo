@@ -18,6 +18,8 @@ import { sha256Hex, signSceneToken } from "../src/worker/security";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
 import { publicationMeasurementDisclaimer } from "../src/shared/measurement-disclaimers";
 import { projectPolicyForDeliveryTemplate } from "../src/shared/project-policies";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
+import { processorContractVersionForJob } from "../src/shared/processor-identity";
 
 const origin = "https://spatial.test";
 const VISUAL_ONLY_MEASUREMENT_DISCLAIMER = publicationMeasurementDisclaimer("visual-only");
@@ -2473,6 +2475,28 @@ describe("Spatial Studio Worker", () => {
       env.DB.prepare("UPDATE scene_versions SET manifest_json = ? WHERE id = ?")
         .bind(JSON.stringify({ webAssetId: rightAssetId }), secondVersionId),
     ]);
+    const comparisonReadinessResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}`,
+      { headers: { cookie: operatorCookie } },
+    );
+    expect(comparisonReadinessResponse.status).toBe(200);
+    await expect(comparisonReadinessResponse.json()).resolves.toMatchObject({
+      comparisonReadiness: {
+        available: false,
+        eligiblePairs: [],
+        versions: expect.arrayContaining([
+          expect.objectContaining({
+            versionId,
+            modes: expect.objectContaining({
+              visual: {
+                eligible: false,
+                reasons: expect.arrayContaining(["verified_web_scene_missing"]),
+              },
+            }),
+          }),
+        ]),
+      },
+    });
     const previewResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/versions/${secondVersionId}/preview`,
       { headers: { cookie: reviewerCookie } },
@@ -5293,11 +5317,51 @@ describe("Spatial Studio Worker", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        workerId: "test-spark-worker",
-        jobId: crypto.randomUUID(),
+        ...processorLeaseRequest("test-spark-worker", crypto.randomUUID()),
       }),
     });
     expect(unrelatedLeaseResponse.status).toBe(204);
+
+    const identitylessLeaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: "legacy-worker",
+        jobId: completedUpload.job.id,
+      }),
+    });
+    expect(identitylessLeaseResponse.status).toBe(400);
+    await expect(identitylessLeaseResponse.json()).resolves.toMatchObject({
+      details: {
+        processorIdentity: [expect.stringContaining("immutable build SHA")],
+      },
+    });
+
+    const incompatibleIdentity = {
+      ...testProcessorIdentity,
+      capabilities: [{ jobType: "asset.validate", contractVersion: "open-import-v2" }],
+    };
+    const incompatibleLeaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        workerId: "future-spark-worker",
+        jobId: completedUpload.job.id,
+        processorIdentity: incompatibleIdentity,
+      }),
+    });
+    expect(incompatibleLeaseResponse.status).toBe(409);
+    await expect(incompatibleLeaseResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining(
+        "required contract open-import-v1; offered asset.validate@open-import-v2",
+      ),
+    });
 
     const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
       method: "POST",
@@ -5306,8 +5370,7 @@ describe("Spatial Studio Worker", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        workerId: "test-spark-worker",
-        jobId: completedUpload.job.id,
+        ...processorLeaseRequest("test-spark-worker", completedUpload.job.id),
       }),
     });
     expect(leaseResponse.status).toBe(200);
@@ -5316,6 +5379,7 @@ describe("Spatial Studio Worker", () => {
         id: string;
         projectId: string;
         versionId: string;
+        contractVersion: string;
         input: {
           id: string;
           fileName: string;
@@ -5328,6 +5392,7 @@ describe("Spatial Studio Worker", () => {
     }>();
     expect(leased.job.id).toBe(completedUpload.job.id);
     expect(leased.job.projectId).toBe(project.id);
+    expect(leased.job.contractVersion).toBe("open-import-v1");
     expect(leased.job.input).toMatchObject({
       fileName: "worker-source.ply",
       format: "ply",
@@ -5414,7 +5479,77 @@ describe("Spatial Studio Worker", () => {
       sizeBytes: derivativeBytes.byteLength,
     });
 
-    const completeResponse = await exports.default.fetch(
+    // A processor can fail after beginning a second derivative. Project
+    // archival owns that otherwise-unreachable multipart lifecycle.
+    const abandonedBytes = new TextEncoder().encode("abandoned-processor-output");
+    const createAbandonedResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/outputs`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          kind: "report",
+          fileName: "abandoned.json",
+          mimeType: "application/json",
+          sizeBytes: abandonedBytes.byteLength,
+        }),
+      },
+    );
+    expect(createAbandonedResponse.status).toBe(201);
+    const abandoned = await createAbandonedResponse.json<{ upload: { id: string } }>();
+    const abandonedPartResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/outputs/${abandoned.upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "x-job-lease": leased.leaseToken,
+          "content-length": String(abandonedBytes.byteLength),
+        },
+        body: abandonedBytes,
+      },
+    );
+    expect(abandonedPartResponse.status).toBe(200);
+
+    const completionBody = {
+      leaseToken: leased.leaseToken,
+      progressMessage: "Spark SPZ derivative generated",
+      outputs: [derivative.output],
+      report: { validation: "passed", renderer: "Spark 2.1.0" },
+      evidence: {
+        processorIdentity: testProcessorIdentity,
+        processorVersion: "spatial-processor/0.1.0",
+        computeDurationMs: 3210,
+        activeHumanDurationMs: 0,
+        inputBytes: sourceBytes.byteLength,
+        outputBytes: derivativeBytes.byteLength,
+        toolVersions: {
+          spark: "2.1.0",
+          processor: "0.1.0",
+        },
+      },
+    };
+    const { processorIdentity: _omittedIdentity, ...legacyEvidence } = completionBody.evidence;
+    const identitylessCompletionResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ...completionBody, evidence: legacyEvidence }),
+      },
+    );
+    expect(identitylessCompletionResponse.status).toBe(409);
+    await expect(identitylessCompletionResponse.json()).resolves.toMatchObject({
+      error: "Completion processor identity does not match the immutable lease identity",
+    });
+    const mismatchedCompletionResponse = await exports.default.fetch(
       `${origin}/api/worker/jobs/${leased.job.id}/complete`,
       {
         method: "POST",
@@ -5423,22 +5558,37 @@ describe("Spatial Studio Worker", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          leaseToken: leased.leaseToken,
-          progressMessage: "Spark SPZ derivative generated",
-          outputs: [derivative.output],
-          report: { validation: "passed", renderer: "Spark 2.1.0" },
+          ...completionBody,
           evidence: {
-            processorVersion: "spatial-processor/0.1.0",
-            computeDurationMs: 3210,
-            activeHumanDurationMs: 0,
-            inputBytes: sourceBytes.byteLength,
-            outputBytes: derivativeBytes.byteLength,
-            toolVersions: {
-              spark: "2.1.0",
-              processor: "0.1.0",
+            ...completionBody.evidence,
+            processorIdentity: {
+              ...testProcessorIdentity,
+              imageDigest: `sha256:${"c".repeat(64)}`,
             },
           },
         }),
+      },
+    );
+    expect(mismatchedCompletionResponse.status).toBe(409);
+    await expect(mismatchedCompletionResponse.json()).resolves.toMatchObject({
+      error: "Completion processor identity does not match the immutable lease identity",
+    });
+
+    // The one rolling upgrade from the identity-less protocol preserves work
+    // already leased by the old application. No new application lease can
+    // enter this state because lease identity is written atomically.
+    await env.DB.prepare(`
+      UPDATE processing_jobs SET leased_processor_identity_json = NULL WHERE id = ?
+    `).bind(leased.job.id).run();
+    const completeResponse = await exports.default.fetch(
+      `${origin}/api/worker/jobs/${leased.job.id}/complete`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ ...completionBody, evidence: legacyEvidence }),
       },
     );
     expect(completeResponse.status).toBe(200);
@@ -5468,6 +5618,34 @@ describe("Spatial Studio Worker", () => {
       input_bytes: sourceBytes.byteLength,
       output_bytes: derivativeBytes.byteLength,
     });
+    const storedExecutionIdentity = await env.DB.prepare(`
+      SELECT processor_version, contract_version, leased_processor_identity_json,
+        processor_identity_json
+      FROM processing_jobs WHERE id = ?
+    `).bind(leased.job.id).first<{
+      processor_version: string;
+      contract_version: string;
+      leased_processor_identity_json: string | null;
+      processor_identity_json: string | null;
+    }>();
+    expect(storedExecutionIdentity).toEqual({
+      processor_version: "open-import-v1",
+      contract_version: "open-import-v1",
+      leased_processor_identity_json: null,
+      processor_identity_json: null,
+    });
+    const archiveResponse = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/archive`,
+      { method: "POST", headers: { cookie, origin } },
+    );
+    expect(archiveResponse.status).toBe(200);
+    await expect(archiveResponse.json()).resolves.toMatchObject({
+      project: { id: project.id, status: "ARCHIVED" },
+    });
+    const retiredOutput = await env.DB.prepare(
+      "SELECT status, completed_at FROM job_output_uploads WHERE id = ?",
+    ).bind(abandoned.upload.id).first<{ status: string; completed_at: string | null }>();
+    expect(retiredOutput).toMatchObject({ status: "ABORTED", completed_at: expect.any(String) });
   });
 
   it("surfaces and safely discards expired recoverable uploads", async () => {
@@ -6521,6 +6699,34 @@ describe("Spatial Studio Worker", () => {
       coordinateAssurance: "registered_project_frame",
       registrationEvidence: "Independent project control confirms both authored versions use the same Y-up local origin.",
     };
+    const unreviewedResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(unreviewedResponse.status).toBe(409);
+    await expect(unreviewedResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("reviewed metric structure"),
+    });
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO version_review_decisions
+          (id, organisation_id, project_id, version_id, reviewer_user_id, decision, note)
+        VALUES (?, ?, ?, ?, ?, 'approved', 'Reviewed metric comparison fixture')
+      `).bind(
+        crypto.randomUUID(), member!.organisationId, projectId, fromVersionId, member!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO version_review_decisions
+          (id, organisation_id, project_id, version_id, reviewer_user_id, decision, note)
+        VALUES (?, ?, ?, ?, ?, 'approved', 'Reviewed metric comparison fixture')
+      `).bind(
+        crypto.randomUUID(), member!.organisationId, projectId, toVersionId, member!.userId,
+      ),
+    ]);
     const createdResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/spatial/change-reports`,
       {
@@ -7936,7 +8142,7 @@ describe("upload integrity and processing-job durability", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "progress-worker", jobId }),
+      body: JSON.stringify(processorLeaseRequest("progress-worker", jobId)),
     });
     expect(leaseResponse.status).toBe(200);
     const lease = await leaseResponse.json<{ leaseToken: string }>();
@@ -8090,7 +8296,7 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
           (id, organisation_id, project_id, version_id, input_asset_id, job_type,
             processor_version, idempotency_key, state, attempt_count, max_attempts,
             lease_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'spatial-processor/0.11.0', ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         jobId,
         owner.organisation_id,
@@ -8098,6 +8304,7 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
         versionId,
         assetId,
         options.jobType,
+        processorContractVersionForJob(options.jobType),
         `dispatch-fixture:${jobId}`,
         options.state ?? "QUEUED",
         options.attemptCount ?? 0,
@@ -8208,7 +8415,7 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "lease-reporter", jobId: seeded.jobId }),
+      body: JSON.stringify(processorLeaseRequest("lease-reporter", seeded.jobId)),
     });
     expect(leaseResponse.status).toBe(200);
     const lease = await leaseResponse.json<{ leaseToken: string }>();
@@ -8368,7 +8575,7 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "navigation-builder", jobId: seeded.jobId }),
+      body: JSON.stringify(processorLeaseRequest("navigation-builder", seeded.jobId)),
     });
     expect(leaseResponse.status).toBe(200);
     const lease = await leaseResponse.json<{ leaseToken: string }>();
@@ -8401,6 +8608,7 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
           ],
           report: navigationArtifact,
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.11.0",
             computeDurationMs: 100,
             activeHumanDurationMs: 0,

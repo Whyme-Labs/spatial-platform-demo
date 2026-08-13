@@ -4,6 +4,7 @@ import {
   processorEnvironment,
   type ProcessingDispatchMessage,
 } from "./dispatch";
+import { deploymentProcessorIdentity } from "../shared/processor-identity";
 
 type ProcessorCloudEnvironment = {
   PROCESSOR_CONTAINER: DurableObjectNamespace<SpatialProcessorContainer>;
@@ -14,6 +15,8 @@ type ProcessorCloudEnvironment = {
   PROCESSOR_MAX_POINTCLOUD_INPUT_MIB?: string;
   PROCESSOR_POLL_SECONDS?: string;
   PROCESSOR_HEARTBEAT_SECONDS?: string;
+  PROCESSOR_AGENT_BUILD_SHA: string;
+  PROCESSOR_IMAGE_DIGEST: string;
 };
 
 // Must exceed PROCESSOR_MAX_JOB_RUNTIME_MINUTES (180). This lane starts the
@@ -46,11 +49,15 @@ export class SpatialProcessorContainer extends Container {
 }
 
 const worker = {
-  async fetch(): Promise<Response> {
+  async fetch(_request: Request, env: ProcessorCloudEnvironment): Promise<Response> {
+    const identity = deploymentProcessorIdentity(
+      env.PROCESSOR_AGENT_BUILD_SHA,
+      env.PROCESSOR_IMAGE_DIGEST,
+    );
     return Response.json({
       service: "spatial-processor-cloud",
       status: "ok",
-      processor: "spatial-processor/0.14.0",
+      identity,
       renderer: "Spark 2.1.0",
       execution: "cloudflare-container",
     });
@@ -87,6 +94,10 @@ const worker = {
             maximumPointcloudInputMib: env.PROCESSOR_MAX_POINTCLOUD_INPUT_MIB,
             pollSeconds: env.PROCESSOR_POLL_SECONDS,
             heartbeatSeconds: env.PROCESSOR_HEARTBEAT_SECONDS,
+            processorIdentityJson: JSON.stringify(deploymentProcessorIdentity(
+              env.PROCESSOR_AGENT_BUILD_SHA,
+              env.PROCESSOR_IMAGE_DIGEST,
+            )),
           }, dispatch.jobId),
           enableInternet: true,
         });

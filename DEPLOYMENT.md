@@ -281,18 +281,30 @@ job appears in the failure dashboard instead of sitting invisible. When
 inspecting a stuck job, read `state`, `attempt_count`, `retry_count`,
 `dispatched_at`, and `lease_expires_at` together.
 
-Every processor deploy first writes `processor/.build-stamp` (git revision +
-timestamp), which the Dockerfile copies immediately before the pipeline
-scripts. Three production deploys once rebuilt a byte-identical image from a
-poisoned layer cache and silently skipped the push, so production kept
-validating with week-old pipeline code while local runs passed; the stamp makes
-every deploy's image provably fresh. Relatedly, each queue dispatch now carries
+Every processor deploy writes `processor/.build-stamp`, builds a linux/amd64
+image tagged with the exact Git SHA, pushes it, resolves the registry's
+immutable digest, and deploys the processor Worker once with both identities.
+Health must report the same build SHA and digest; every lease persists that
+identity and every completion receipt must repeat it exactly. A job also stores
+its required job-type/contract-version pair, so a worker can lease it only when
+that exact capability appears in its declared identity. This separates job
+contract versions from executor provenance and keeps rolling or heterogeneous
+fleets from claiming incompatible work. Relatedly, each queue dispatch carries
 a unique `dispatchId` that names the container instance: instances are
 addressed by name, and reusing the job id meant a retry after a deploy
 re-ran whatever image the failed attempt had used. Finally, extraction-run and
 navigation-build rows accept a successful completion over a previously recorded
 `FAILED` status, so a retried job's success is never orphaned by its own
 earlier failure.
+
+The release workflow applies the expand migration, deploys the strict
+identity-aware application Worker, and then deploys the processor. The strict
+application refuses every new identity-less lease. A processor that already
+held a lease before the application cutover may still finish through its
+secret lease token; that narrowly scoped bridge preserves completed work and
+cannot be used for a new lease. Reversing this order would let a new processor
+complete against the predecessor application, which cannot persist its
+identity and would permanently lose the provenance receipt.
 
 Build and validate the linux/amd64 image:
 
@@ -365,11 +377,13 @@ drone imagery, and open import.
   not prove scanner origin, vendor licence, calibration, export completeness,
   reconstruction quality, or survey accuracy.
 
-The processor health response must report `spatial-processor/0.5.0` or newer
-before accepting these evidence jobs. A production validation should inspect
-`processing_jobs.job_type`, `assets.kind`, `assets.integrity_status`,
-`assets.integrity_source`, and the immutable `qa_reports.report_json` limitation
-together.
+The processor health response must report a valid immutable build SHA, image
+digest, supported lease protocol, and capability list before accepting these
+evidence jobs. A production validation should inspect
+`processing_jobs.job_type`, `processing_jobs.contract_version`,
+`processing_jobs.processor_identity_json`, `assets.kind`,
+`assets.integrity_status`, `assets.integrity_source`, and the immutable
+`qa_reports.report_json` limitation together.
 
 `assets.integrity_source` records who established the digest:
 `server_verified` (the Worker streamed the finished R2 object through
@@ -466,21 +480,35 @@ npm run processor:setup
 Run one lease for a smoke test:
 
 ```bash
+PROCESSOR_IDENTITY_JSON="$(npm run -s processor:identity:development)" \
 SPATIAL_API_ORIGIN=https://spatial-studio-staging.swmengappdev.workers.dev \
   npm run processor:once
 ```
 
-Run continuously under the selected process supervisor only when exercising
-the provider-neutral external lane:
+Run continuously under the selected process supervisor only in staging. Invoke
+the helper directly so its non-production scope is explicit:
 
 ```bash
-SPATIAL_API_ORIGIN=https://spatial.whymelabs.com npm run processor:start
+PROCESSOR_IDENTITY_JSON="$(node scripts/development-processor-identity.mjs --scope staging)" \
+SPATIAL_API_ORIGIN=https://spatial-studio-staging.swmengappdev.workers.dev \
+  npm run processor:start
 ```
+
+Do not use the development identity helper in production. A production
+provider-neutral worker must be packaged as an immutable OCI image and must
+receive that registry-resolved `sha256:` digest plus the checked-out Git SHA in
+`PROCESSOR_IDENTITY_JSON` from its deployment system. This binds Spark, PDAL,
+Node, Chromium, `splat-transform`, shared libraries, and the agent package to
+one deployable runtime artifact.
 
 Required process environment:
 
 - `WORKER_API_TOKEN`
 - `SPATIAL_API_ORIGIN`
+- `PROCESSOR_IDENTITY_JSON` (immutable build SHA, OCI digest in production,
+  protocol, and supported job-contract capabilities). The development helper
+  refuses dirty processor inputs and any production scope; production
+  packaging must inject the registry-resolved immutable OCI digest.
 
 Optional controls include `PROCESSOR_WORKER_ID`, `PROCESSOR_JOB_ID`,
 `PROCESSOR_POLL_SECONDS`,
@@ -527,7 +555,10 @@ receipt before touching Cloudflare, rolls back automatically on partial
 failure, and uploads a SHA-bound attestation (Worker version IDs, immutable
 processor image digest, health, public-manifest verification, the migration
 compatibility report, the processor canary result, and the capture-agreement
-integrity scan). The job is bound to the GitHub `production` environment,
+integrity scan). Before acceptance it also uses GitHub's Sigstore-backed action
+to sign SLSA-style provenance for the exact Wrangler Worker bundle and the
+immutable processor image; both attestation URLs are recorded in the deployment
+evidence. The job is bound to the GitHub `production` environment,
 whose automatic deployment lifecycle is the single canonical deployment
 record. Both staging and production runs prove the processor end to end with
 a synthetic canary (`scripts/processor-canary.mjs`): a `canary.roundtrip-v1`
@@ -562,6 +593,16 @@ npm run processor:cloud:production
 npm run deploy:production
 curl --fail https://spatial.whymelabs.com/api/health
 ```
+
+Repository-administrator bypass is break-glass only. Before using it, open an
+issue titled `Break glass: <reason>` that identifies the intended commit,
+incident, operator, and rollback point. Immediately after the bypass, record
+the resulting commit and deployment run, restore the normal ruleset path, and
+complete a retrospective explaining why the Release Gate could not be used. An
+undocumented administrator bypass is not an accepted production release.
+Changing the provider ruleset to remove or narrow the administrator bypass is a
+repository-owner action because an incorrect change can lock out the sole
+maintainer; verify that external setting separately from this source runbook.
 
 `npm run deploy:production` applies production D1 migrations before it publishes
 the Worker. Do not replace it with a direct `wrangler deploy`: that would let

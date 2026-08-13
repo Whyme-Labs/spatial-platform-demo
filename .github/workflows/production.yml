@@ -32,6 +32,9 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 concurrency:
   group: spatial-production-deployment
@@ -122,14 +125,24 @@ jobs:
           }
           app=$(capture --env production)
           processor=$(capture -c wrangler.processor.jsonc --env production)
+          processor_health=$(curl -fsS --max-time 30 "$PRODUCTION_PROCESSOR_ORIGIN/")
           test -n "$app"
           test -n "$processor"
+          # The first identity-aware rollout must still be able to freeze and
+          # restore the currently healthy legacy processor. Its active Worker
+          # distribution is authoritative rollback evidence even though that
+          # revision predates immutable health identity.
+          processor_identity=$(printf '%s' "$processor_health" | jq -c '.identity // null')
           jq -n --argjson app "$app" --argjson processor "$processor" \
+            --argjson processorIdentity "$processor_identity" \
             '{schemaVersion: "production-rollback-receipt-v1",
-              application: $app, processor: $processor}' \
+              application: $app, processor: $processor,
+              processorIdentity: $processorIdentity}' \
             > "$EVIDENCE_DIR/rollback-receipt.json"
           echo "app_spec=$(echo "$app" | jq -r .spec)" >> "$GITHUB_OUTPUT"
           echo "processor_spec=$(echo "$processor" | jq -r .spec)" >> "$GITHUB_OUTPUT"
+          echo "processor_build_sha=$(printf '%s' "$processor_health" | jq -r '.identity.agentBuildSha // ""')" >> "$GITHUB_OUTPUT"
+          echo "processor_digest=$(printf '%s' "$processor_health" | jq -r '.identity.imageDigest // ""')" >> "$GITHUB_OUTPUT"
 
       # Raw rows stay in runner-temporary storage and are validated with the
       # EXACT runtime parser (bundled from src/worker/contracts) so scan
@@ -217,12 +230,22 @@ jobs:
             > "$EVIDENCE_DIR/migration-compatibility.json"
           cat "$EVIDENCE_DIR/migration-compatibility.json"
 
-      - name: Deploy the application Worker with production migrations
+      - name: Apply production migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npm run db:migrate:production
+
+      # The strict application moves first. It refuses new identity-less
+      # leases, while the token-scoped bridge still accepts an old processor's
+      # completion only for a lease created before this cutover.
+      - name: Deploy the application Worker
         id: app
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          npm run deploy:production -- \
+          npx wrangler deploy --env production \
+            --outdir "$EVIDENCE_DIR/application-worker-bundle" \
+            --metafile "$EVIDENCE_DIR/application-worker-bundle-meta.json" \
             --message "Verified GitHub revision ${DEPLOY_SHA}" \
             --tag "git-${DEPLOY_SHA:0:12}" | tee "$EVIDENCE_DIR/app-deploy.log"
           version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
@@ -241,15 +264,16 @@ jobs:
           npm run processor:cloud:production -- \
             --message "Verified GitHub revision ${DEPLOY_SHA}" \
             --tag "git-${DEPLOY_SHA:0:12}" | tee "$EVIDENCE_DIR/processor-deploy.log"
-          version=$(grep -o 'Current Version ID: [0-9a-f-]*' \
-            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | awk '{print $4}')
+          version=$(grep '^PROCESSOR_WORKER_VERSION=' \
+            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | cut -d= -f2)
+          image=$(grep '^PROCESSOR_IMAGE_NAME=' \
+            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | cut -d= -f2)
           test -n "$version"
+          printf '%s' "$image" | grep -qE '^registry\.cloudflare\.com/.+'
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          # The immutable container digest is mandatory evidence: an
-          # attestation that cannot prove which image runs is not an
-          # attestation, so the deployment fails closed without it.
-          digest=$(grep -oE 'digest: sha256:[0-9a-f]{64}' \
-            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | awk '{print $2}' || true)
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          digest=$(grep '^PROCESSOR_IMAGE_DIGEST=' \
+            "$EVIDENCE_DIR/processor-deploy.log" | tail -1 | cut -d= -f2 || true)
           if ! printf '%s' "$digest" | grep -qE '^sha256:[0-9a-f]{64}$'; then
             echo "::error::Could not prove the deployed processor image digest"
             exit 1
@@ -260,13 +284,24 @@ jobs:
       # processor must answer publicly AND the control plane must confirm the
       # ACTIVE deployment is exactly the just-published version at 100%.
       - name: Verify the processor answers and its published version is active
+        # assurance-route: GET /api/health is separately checked on the
+        # application below; processor health uses its own public origin.
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
+          PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
         run: |
           curl -fsS --max-time 30 "$PRODUCTION_PROCESSOR_ORIGIN/" \
             | tee "$EVIDENCE_DIR/processor-health.json"
-          grep -q '"status":"ok"' "$EVIDENCE_DIR/processor-health.json"
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const health = JSON.parse(readFileSync(process.argv[1], "utf8"));
+            if (health.status !== "ok" || health.identity?.agentBuildSha !== process.env.DEPLOY_SHA ||
+                health.identity?.imageDigest !== process.env.PROCESSOR_DIGEST) {
+              console.error(`Processor health identity mismatch: ${JSON.stringify(health.identity)}`);
+              process.exit(1);
+            }
+          ' "$EVIDENCE_DIR/processor-health.json"
           npx wrangler deployments list -c wrangler.processor.jsonc --env production --json | node -e '
             let d = "";
             process.stdin.on("data", (c) => d += c).on("end", () => {
@@ -321,13 +356,34 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           node scripts/processor-canary.mjs --env production \
+            --expected-build-sha "$DEPLOY_SHA" \
+            --expected-image-digest "${{ steps.processor.outputs.digest }}" \
             --report "$EVIDENCE_DIR/processor-canary.json"
+
+      # GitHub signs both subjects with an ephemeral Sigstore certificate and
+      # persists the SLSA-style provenance against this repository. The Worker
+      # subject is the exact bundle Wrangler uploaded; the processor subject is
+      # the immutable Cloudflare registry image proven by the live canary.
+      - name: Attest the deployed application Worker bundle
+        id: app_provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: .cache/production-attestation/application-worker-bundle/**
+
+      - name: Attest the deployed processor image
+        id: processor_provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.processor.outputs.image }}
+          subject-digest: ${{ steps.processor.outputs.digest }}
 
       - name: Assemble the SHA-bound attestation
         env:
           APP_VERSION: ${{ steps.app.outputs.version }}
           PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
           PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
+          APP_PROVENANCE_URL: ${{ steps.app_provenance.outputs.attestation-url }}
+          PROCESSOR_PROVENANCE_URL: ${{ steps.processor_provenance.outputs.attestation-url }}
         run: |
           node -e '
             const { readFileSync, writeFileSync } = require("node:fs");
@@ -352,6 +408,10 @@ jobs:
               processorHttpHealth: JSON.parse(evidence("processor-health.json")),
               processorActiveDeployment: JSON.parse(evidence("processor-active-deployment.json")),
               processorCanary: JSON.parse(evidence("processor-canary.json")),
+              signedProvenance: {
+                applicationWorkerBundle: process.env.APP_PROVENANCE_URL,
+                processorImage: process.env.PROCESSOR_PROVENANCE_URL,
+              },
               rollbackReceipt: JSON.parse(evidence("rollback-receipt.json")),
               health: JSON.parse(evidence("health.json")),
               legacyCaptureAgreementIntegrityScan: JSON.parse(evidence("integrity-scan.json")),
@@ -387,12 +447,14 @@ jobs:
       # deployment. A partial deployment must not be left serving mixed
       # revisions, and a partial ROLLBACK must not pass silently either.
       - name: Roll back to the frozen distribution on failure
-        if: ${{ (failure() || cancelled()) && steps.rollback.outputs.app_spec != '' && steps.app.outcome != 'skipped' }}
+        if: ${{ (failure() || cancelled()) && steps.rollback.outputs.app_spec != '' && (steps.processor.outcome != 'skipped' || steps.app.outcome != 'skipped') }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           APP_SPEC: ${{ steps.rollback.outputs.app_spec }}
           PROCESSOR_SPEC: ${{ steps.rollback.outputs.processor_spec }}
           PROCESSOR_ATTEMPTED: ${{ steps.processor.outcome != 'skipped' }}
+          ROLLBACK_PROCESSOR_BUILD_SHA: ${{ steps.rollback.outputs.processor_build_sha }}
+          ROLLBACK_PROCESSOR_DIGEST: ${{ steps.rollback.outputs.processor_digest }}
         run: |
           set +e
           npx wrangler versions deploy $APP_SPEC --env production -y \
@@ -476,7 +538,13 @@ jobs:
           canary_state=not-required
           if [ "$PROCESSOR_ATTEMPTED" = "true" ]; then
             canary_state=failed
+            identity_args=(--allow-legacy-identity)
+            if [ -n "$ROLLBACK_PROCESSOR_BUILD_SHA" ] && [ -n "$ROLLBACK_PROCESSOR_DIGEST" ]; then
+              identity_args=(--expected-build-sha "$ROLLBACK_PROCESSOR_BUILD_SHA" \
+                --expected-image-digest "$ROLLBACK_PROCESSOR_DIGEST")
+            fi
             if node scripts/processor-canary.mjs --env production \
+              "${identity_args[@]}" \
               --report "$EVIDENCE_DIR/rollback-processor-canary.json"; then
               canary_state=verified
             fi

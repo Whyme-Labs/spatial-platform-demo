@@ -13,6 +13,10 @@ import {
   verifySceneToken,
 } from "../security";
 import { parseWorldUnit } from "../../shared/world-units";
+import {
+  type ComparisonMode,
+  type ComparisonReadiness,
+} from "../../shared/comparison-readiness";
 
 type ComparisonRouteEnvironment = {
   Bindings: Env;
@@ -115,6 +119,13 @@ export type ComparisonRouteDependencies = {
     projectId: string,
     versionId: string,
   ) => Promise<NavigationPreview | null>;
+  projectComparisonReadiness: (
+    env: Env,
+    organisationId: string,
+    projectId: string,
+    versionRows: readonly unknown[],
+    assetRows: readonly unknown[],
+  ) => Promise<ComparisonReadiness>;
   audit: (
     context: ComparisonContext,
     auth: AuthContext,
@@ -320,6 +331,27 @@ export function registerComparisonRoutes(
       version_number: number;
     }>();
     if (versions.results.length !== 2) return notFound(context, "One or both scene versions were not found");
+    const authoredReadiness = await dependencies.projectComparisonReadiness(
+      context.env,
+      auth.organisationId,
+      project.id,
+      versions.results,
+      await comparisonProjectAssets(context.env.DB, auth.organisationId, project.id, [
+        parsed.data.fromVersionId,
+        parsed.data.toVersionId,
+      ]),
+    );
+    if (!pairSupportsMode(
+      authoredReadiness,
+      parsed.data.fromVersionId,
+      parsed.data.toVersionId,
+      "authored_geometry",
+    )) {
+      return conflict(
+        context,
+        "Authored geometry comparison requires two versions with reviewed metric structure",
+      );
+    }
     const versionUnits = await Promise.all([
       dependencies.spatialVersionWorldUnit(
         context.env.DB,
@@ -509,18 +541,39 @@ export function registerComparisonRoutes(
       return context.json({ report: registeredSceneChangeApi(prior), idempotent: true });
     }
     const versions = await context.env.DB.prepare(`
-      SELECT id FROM scene_versions
+      SELECT id, version_number FROM scene_versions
       WHERE project_id = ? AND id IN (?, ?)
     `).bind(
       project.id,
       parsed.data.baselineVersionId,
       parsed.data.candidateVersionId,
-    ).all<{ id: string }>();
+    ).all<{ id: string; version_number: number }>();
     if (versions.results.length !== 2) {
       return notFound(context, "One or both immutable scene versions were not found");
     }
+    const rawReadiness = await dependencies.projectComparisonReadiness(
+      context.env,
+      auth.organisationId,
+      project.id,
+      versions.results,
+      await comparisonProjectAssets(context.env.DB, auth.organisationId, project.id, [
+        parsed.data.baselineVersionId,
+        parsed.data.candidateVersionId,
+      ]),
+    );
+    if (!pairSupportsMode(
+      rawReadiness,
+      parsed.data.baselineVersionId,
+      parsed.data.candidateVersionId,
+      "raw",
+    )) {
+      return conflict(
+        context,
+        "Raw scene comparison requires two verified source PLY versions with qualified registration evidence",
+      );
+    }
     const assets = await context.env.DB.prepare(`
-      SELECT id, version_id, kind, format, integrity_status
+      SELECT id, version_id, kind, format, object_key, sha256, integrity_status
       FROM assets
       WHERE project_id = ? AND organisation_id = ? AND id IN (?, ?)
         AND deleted_at IS NULL
@@ -534,6 +587,8 @@ export function registerComparisonRoutes(
       version_id: string;
       kind: string;
       format: string;
+      object_key: string;
+      sha256: string | null;
       integrity_status: string;
     }>();
     const baselineAsset = assets.results.find((asset) => asset.id === parsed.data.baselineAssetId);
@@ -554,6 +609,12 @@ export function registerComparisonRoutes(
       if (asset.integrity_status !== "verified") {
         return conflict(context, `${label} asset has not passed immutable integrity verification`);
       }
+      if (!asset.sha256 || !/^[a-f0-9]{64}$/i.test(asset.sha256)) {
+        return conflict(context, `${label} asset has no immutable SHA-256 identity`);
+      }
+      if (!(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
+        return conflict(context, `${label} asset object is missing from immutable storage`);
+      }
     }
     const reportId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
@@ -561,10 +622,10 @@ export function registerComparisonRoutes(
       context.env.DB.prepare(`
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
-          processor_version, idempotency_key, state, priority, max_attempts,
+          processor_version, contract_version, idempotency_key, state, priority, max_attempts,
           progress_message
         ) VALUES (?, ?, ?, ?, ?, 'registered-scene-change-v1',
-          'spatial-processor/0.4.0', ?, 'QUEUED', 80, 3,
+          'spatial-processor/0.4.0', 'spatial-processor/0.4.0', ?, 'QUEUED', 80, 3,
           'Waiting for a registered-scene change worker')
       `).bind(
         jobId,
@@ -740,6 +801,34 @@ export function registerComparisonRoutes(
     }
     return dependencies.serveR2Object(context, asset.object_key);
   });
+}
+
+async function comparisonProjectAssets(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionIds: readonly [string, string],
+): Promise<unknown[]> {
+  const result = await database.prepare(`
+    SELECT id, version_id, kind, format, object_key, sha256, integrity_status
+    FROM assets
+    WHERE organisation_id = ? AND project_id = ? AND version_id IN (?, ?)
+      AND deleted_at IS NULL
+  `).bind(organisationId, projectId, ...versionIds).all();
+  return result.results;
+}
+
+function pairSupportsMode(
+  readiness: ComparisonReadiness,
+  leftVersionId: string,
+  rightVersionId: string,
+  mode: ComparisonMode,
+): boolean {
+  return readiness.eligiblePairs.some((pair) =>
+    pair.modes.includes(mode) &&
+    ((pair.leftVersionId === leftVersionId && pair.rightVersionId === rightVersionId) ||
+      (pair.leftVersionId === rightVersionId && pair.rightVersionId === leftVersionId))
+  );
 }
 
 function comparisonAssetTokenScope(projectId: string, versionId: string, assetId: string): string {

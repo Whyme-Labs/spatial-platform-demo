@@ -368,11 +368,12 @@ commit, Node 22, and Chromium. Build it locally with:
 npm run processor:container:build
 ```
 
-For development or a provider-neutral external worker, install the same pinned
-Spark executable once and run the agent against the intended environment:
+For local development, install the same pinned Spark executable once and run
+the agent against the local environment:
 
 ```bash
 npm run processor:setup
+PROCESSOR_IDENTITY_JSON="$(npm run -s processor:identity:development)" \
 SPATIAL_API_ORIGIN=http://localhost:8787 \
 PROCESSOR_MAX_CHANGE_INPUT_MIB=1024 \
 npm run processor:start
@@ -411,7 +412,12 @@ used by Unreal. The unresolved upstream work is preserving FJD structural
 classification and scan/pose evidence well enough to accept unambiguous
 collision automatically; a raw splat is never treated as physics.
 
-The processor reads `WORKER_API_TOKEN` from the environment. Use
+The processor reads `WORKER_API_TOKEN` and `PROCESSOR_IDENTITY_JSON` from the
+environment. The non-production helper above refuses dirty processor inputs,
+accepts only a development or staging scope, and hashes the checked-out package.
+Production workers, including provider-neutral external workers, must receive
+the Git SHA and immutable OCI digest from their deployment system; a host source
+hash cannot attest native binaries, shared libraries, or Chromium. Use
 `npm run processor:once` for a single lease attempt or deployment smoke. It does
 not receive R2 credentials: source downloads and multipart derivative uploads
 are scoped by a short-lived job lease. `PROCESSOR_JOB_ID` optionally pins a

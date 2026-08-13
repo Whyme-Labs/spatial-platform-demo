@@ -238,6 +238,17 @@ import {
 } from "./turnstile";
 import { registerStagingLifecycleCanaryRoutes } from "./routes/staging-lifecycle-canary";
 import { registerComparisonRoutes } from "./routes/comparison";
+import {
+  comparisonReadiness,
+  type ComparisonReadiness,
+} from "../shared/comparison-readiness";
+import {
+  PROCESSOR_CAPABILITIES,
+  parseProcessorIdentity,
+  processorCanRun,
+  processorIdentityEquals,
+  type ProcessorIdentity,
+} from "../shared/processor-identity";
 
 type AppEnvironment = {
   Bindings: Env;
@@ -625,7 +636,7 @@ type JobLeaseRow = {
   version_id: string;
   input_asset_id: string;
   job_type: string;
-  processor_version: string;
+  contract_version: string;
   attempt_count: number;
   lease_expires_at: string;
   input_file_name: string;
@@ -1127,6 +1138,7 @@ registerComparisonRoutes(app, {
   readJson,
   spatialVersionWorldUnit,
   approvedNavigationPreview,
+  projectComparisonReadiness,
   audit,
   dispatchProcessingJob,
   serveR2Object,
@@ -5003,6 +5015,13 @@ app.get("/api/projects/:projectId", async (context) => {
     )
     ? [previewCandidateVersionId]
     : [];
+  const comparison = await projectComparisonReadiness(
+    context.env,
+    auth.organisationId,
+    projectId,
+    versions.results,
+    assets.results,
+  );
   const customFields = await projectCustomFieldValues(
     context.env.DB,
     auth.organisationId,
@@ -5019,6 +5038,7 @@ app.get("/api/projects/:projectId", async (context) => {
     jobs: jobs.results,
     releases: releases.results,
     captureBundles: captureBundles.results,
+    comparisonReadiness: comparison,
     previewReadyVersionIds,
     walkTestReadyVersionIds: walkTestVersions.results.flatMap((row) => {
       const versionId = row && typeof row === "object"
@@ -9118,10 +9138,10 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
     context.env.DB.prepare(`
       INSERT INTO processing_jobs (
         id, organisation_id, project_id, version_id, input_asset_id, job_type,
-        processor_version, idempotency_key, state, priority, max_attempts,
+        processor_version, contract_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-        'spatial-processor/0.11.0', ?, 'QUEUED', 65, 3,
+        'spatial-processor/0.11.0', 'spatial-processor/0.11.0', ?, 'QUEUED', 65, 3,
         'Waiting for an offline Recast navigation worker')
     `).bind(
       jobId,
@@ -9794,10 +9814,10 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context
     context.env.DB.prepare(`
       INSERT INTO processing_jobs (
         id, organisation_id, project_id, version_id, input_asset_id, job_type,
-        processor_version, idempotency_key, state, priority, max_attempts,
+        processor_version, contract_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'semantic.extract-v1',
-        'spatial-processor/0.11.0', ?, 'QUEUED', 75, 3,
+        'spatial-processor/0.11.0', 'spatial-processor/0.11.0', ?, 'QUEUED', 75, 3,
         'Waiting for a point-cloud semantic worker')
     `).bind(
       jobId,
@@ -10260,10 +10280,10 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
     context.env.DB.prepare(`
       INSERT INTO processing_jobs (
         id, organisation_id, project_id, version_id, input_asset_id, job_type,
-        processor_version, idempotency_key, state, priority, max_attempts,
+        processor_version, contract_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.11.0', ?, 'QUEUED', 78, 3,
+        'spatial-processor/0.11.0', 'spatial-processor/0.11.0', ?, 'QUEUED', 78, 3,
         'Waiting for a vendor-neutral floor-plan worker')
     `).bind(
       jobId,
@@ -10384,9 +10404,10 @@ app.post(
       context.env.DB.prepare(`
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
-          processor_version, idempotency_key, state, progress, progress_message,
+          processor_version, contract_version, idempotency_key, state, progress, progress_message,
           completed_at
         ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
+          'spatial-studio/render-native-correction-v1',
           'spatial-studio/render-native-correction-v1', ?, 'SUCCEEDED', 100,
           'Approved plan opened for render-native correction', datetime('now'))
       `).bind(
@@ -11037,11 +11058,11 @@ app.post(
           context.env.DB.prepare(`
             INSERT INTO processing_jobs (
               id, organisation_id, project_id, version_id, input_asset_id, job_type,
-              processor_version, idempotency_key, state, priority, max_attempts,
+              processor_version, contract_version, idempotency_key, state, priority, max_attempts,
               progress_message
             )
             SELECT ?, ?, ?, ?, ?, 'navigation.build-v1', 'spatial-processor/0.11.0',
-              ?, 'QUEUED', 74, 3,
+              'spatial-processor/0.11.0', ?, 'QUEUED', 74, 3,
               'Waiting to verify navigation from the approved floor-plan revision'
             WHERE EXISTS (
               SELECT 1 FROM floorplan_extraction_runs
@@ -13123,8 +13144,9 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
     context.env.DB.prepare("UPDATE upload_sessions SET status = 'COMPLETED', completed_at = datetime('now') WHERE id = ? AND status = 'OPEN'").bind(upload.id),
     context.env.DB.prepare(`
       INSERT INTO processing_jobs
-        (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED')
+        (id, organisation_id, project_id, version_id, input_asset_id, job_type,
+          processor_version, contract_version, idempotency_key, state)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED')
     `).bind(
       jobId,
       organisationId,
@@ -13132,6 +13154,7 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
       upload.version_id,
       upload.asset_id,
       importPlan.jobType,
+      processorVersion,
       processorVersion,
       idempotencyKey,
     ),
@@ -13552,18 +13575,63 @@ app.post("/api/worker/jobs/lease", async (context) => {
   ) {
     return validationError(context, { jobId: ["jobId must be a UUID"] });
   }
+  const processorIdentity = parseProcessorIdentity(
+    input && typeof input === "object" ? Reflect.get(input, "processorIdentity") : null,
+  );
+  if (!processorIdentity) {
+    return validationError(context, {
+      processorIdentity: [
+        "processorIdentity must name an immutable build SHA, image digest, supported protocol, and at least one capability contract",
+      ],
+    });
+  }
+  // Only server-known contracts participate in SQL construction. The request
+  // body is already byte-bounded, but future agents may advertise capabilities
+  // this control plane has not learned yet; those must not expand the query or
+  // become accidentally schedulable.
+  const compatibleCapabilities = PROCESSOR_CAPABILITIES.filter((capability) =>
+    processorCanRun(processorIdentity, capability.jobType, capability.contractVersion)
+  );
+  if (compatibleCapabilities.length === 0) {
+    if (requestedJobId) {
+      const requested = await context.env.DB.prepare(`
+        SELECT job_type, COALESCE(contract_version, processor_version) AS contract_version
+        FROM processing_jobs WHERE id = ?
+      `).bind(requestedJobId).first<{ job_type: string; contract_version: string }>();
+      if (requested) {
+        return conflict(
+          context,
+          `Processor is incompatible with ${requested.job_type}: required contract ${requested.contract_version}; ` +
+            `offered ${processorIdentity.capabilities.map((capability) =>
+              `${capability.jobType}@${capability.contractVersion}`
+            ).join(", ")}`,
+        );
+      }
+    }
+    return context.body(null, 204);
+  }
+  const compatibilityPredicate = compatibleCapabilities
+    .map(() => "(job_type = ? AND COALESCE(contract_version, processor_version) = ?)")
+    .join(" OR ");
+  const compatibilityBindings = compatibleCapabilities.flatMap((capability) => [
+    capability.jobType,
+    capability.contractVersion,
+  ]);
+  const processorIdentityJson = JSON.stringify(processorIdentity);
   const rawLeaseToken = secureToken();
   const leaseTokenHash = await sha256Hex(`${rawLeaseToken}:${context.env.SESSION_PEPPER}`);
   const leaseExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   const claimed = await context.env.DB.prepare(`
     UPDATE processing_jobs
     SET state = 'LEASED', leased_by = ?, lease_token_hash = ?, lease_expires_at = ?,
+      leased_processor_identity_json = ?,
       attempt_count = attempt_count + 1, updated_at = datetime('now')
     WHERE id = (
       SELECT id FROM processing_jobs
       WHERE (state = 'QUEUED' OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?))
         AND attempt_count < max_attempts
         AND (? IS NULL OR id = ?)
+        AND (${compatibilityPredicate})
       ORDER BY priority ASC, created_at ASC
       LIMIT 1
     )
@@ -13572,14 +13640,38 @@ app.post("/api/worker/jobs/lease", async (context) => {
     workerId,
     leaseTokenHash,
     leaseExpiresAt,
+    processorIdentityJson,
     new Date().toISOString(),
     requestedJobId,
     requestedJobId,
+    ...compatibilityBindings,
   ).first<{ id: string }>();
-  if (!claimed) return context.body(null, 204);
+  if (!claimed) {
+    if (requestedJobId) {
+      const requested = await context.env.DB.prepare(`
+        SELECT job_type, COALESCE(contract_version, processor_version) AS contract_version
+        FROM processing_jobs WHERE id = ?
+      `).bind(requestedJobId).first<{ job_type: string; contract_version: string }>();
+      if (requested && !processorCanRun(
+        processorIdentity,
+        requested.job_type,
+        requested.contract_version,
+      )) {
+        return conflict(
+          context,
+          `Processor is incompatible with ${requested.job_type}: required contract ${requested.contract_version}; ` +
+            `offered ${processorIdentity.capabilities.map((capability) =>
+              `${capability.jobType}@${capability.contractVersion}`
+            ).join(", ")}`,
+        );
+      }
+    }
+    return context.body(null, 204);
+  }
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
-      j.job_type, j.processor_version, j.attempt_count, j.lease_expires_at,
+      j.job_type, COALESCE(j.contract_version, j.processor_version) AS contract_version,
+      j.attempt_count, j.lease_expires_at,
       a.file_name AS input_file_name, a.format AS input_format,
       a.mime_type AS input_mime_type, a.size_bytes AS input_size_bytes,
       a.sha256 AS input_sha256, a.object_key AS input_object_key,
@@ -13697,7 +13789,11 @@ app.post("/api/worker/jobs/lease", async (context) => {
       projectId: job.project_id,
       versionId: job.version_id,
       jobType: job.job_type,
-      processorVersion: job.processor_version,
+      contractVersion: job.contract_version,
+      // Preserve the old response key for processors running across the
+      // transition deployment. It now clearly aliases the job contract, not
+      // the executable identity.
+      processorVersion: job.contract_version,
       attemptCount: job.attempt_count,
       input: {
         id: job.input_asset_id,
@@ -14087,6 +14183,13 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     navigation_created_by: string | null;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
+  if (!(await completionIdentityMatchesLease(
+    context.env.DB,
+    job.id,
+    parsed.data.evidence.processorIdentity,
+  ))) {
+    return conflict(context, "Completion processor identity does not match the immutable lease identity");
+  }
   if (job.job_type === "registered-scene-change-v1") {
     return conflict(context, "Registered raw-scene jobs must use the evidence-specific completion contract");
   }
@@ -14407,7 +14510,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   const leaseClaim = await context.env.DB.prepare(`
     UPDATE processing_jobs
     SET state = 'SUCCEEDED', progress = 100, progress_message = ?, output_json = ?,
-      processor_version = ?, compute_duration_ms = ?, active_human_duration_ms = ?,
+      processor_identity_json = ?, compute_duration_ms = ?, active_human_duration_ms = ?,
       input_bytes = ?, output_bytes = ?, evidence_json = ?,
       completed_at = datetime('now'), lease_token_hash = NULL, lease_expires_at = NULL,
       dispatched_at = NULL, updated_at = datetime('now')
@@ -14415,7 +14518,9 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
   `).bind(
     parsed.data.progressMessage,
     JSON.stringify({ outputs: outputSummary, report: completionReport }),
-    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.processorIdentity
+      ? JSON.stringify(parsed.data.evidence.processorIdentity)
+      : null,
     parsed.data.evidence.computeDurationMs,
     parsed.data.evidence.activeHumanDurationMs,
     parsed.data.evidence.inputBytes,
@@ -14629,6 +14734,13 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
     registration_minimum_overlap_percent: number;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
+  if (!(await completionIdentityMatchesLease(
+    context.env.DB,
+    job.id,
+    parsed.data.evidence.processorIdentity,
+  ))) {
+    return conflict(context, "Completion processor identity does not match the immutable lease identity");
+  }
   const expectedInputBytes = job.baseline_size_bytes + job.candidate_size_bytes;
   if (
     parsed.data.evidence.baselineInputBytes !== job.baseline_size_bytes ||
@@ -14722,7 +14834,7 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
   const leaseClaim = await context.env.DB.prepare(`
     UPDATE processing_jobs
     SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      output_json = ?, processor_identity_json = ?, compute_duration_ms = ?,
       active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
       evidence_json = ?, completed_at = datetime('now'),
       lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
@@ -14731,7 +14843,9 @@ app.post("/api/worker/jobs/:jobId/scene-change-complete", async (context) => {
   `).bind(
     parsed.data.progressMessage,
     JSON.stringify({ outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }], report: parsed.data.report }),
-    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.processorIdentity
+      ? JSON.stringify(parsed.data.evidence.processorIdentity)
+      : null,
     parsed.data.evidence.computeDurationMs,
     parsed.data.evidence.activeHumanDurationMs,
     parsed.data.evidence.inputBytes,
@@ -14818,6 +14932,13 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
     parameters_json: string;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
+  if (!(await completionIdentityMatchesLease(
+    context.env.DB,
+    job.id,
+    parsed.data.evidence.processorIdentity,
+  ))) {
+    return conflict(context, "Completion processor identity does not match the immutable lease identity");
+  }
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
     return validationError(context, {
       evidence: ["Reported input bytes do not match the exact registered point-cloud asset"],
@@ -14940,7 +15061,7 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
   const leaseClaim = await context.env.DB.prepare(`
     UPDATE processing_jobs
     SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      output_json = ?, processor_identity_json = ?, compute_duration_ms = ?,
       active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
       evidence_json = ?, completed_at = datetime('now'),
       lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
@@ -14952,7 +15073,9 @@ app.post("/api/worker/jobs/:jobId/semantic-extraction-complete", async (context)
       outputs: [{ id: reportAssetId, kind: "report", format: "json", sizeBytes: stored.size }],
       report: parsed.data.report,
     }),
-    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.processorIdentity
+      ? JSON.stringify(parsed.data.evidence.processorIdentity)
+      : null,
     parsed.data.evidence.computeDurationMs,
     parsed.data.evidence.activeHumanDurationMs,
     parsed.data.evidence.inputBytes,
@@ -15043,6 +15166,13 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     created_by: string;
   }>();
   if (!job) return forbidden(context, "Lease is invalid or expired");
+  if (!(await completionIdentityMatchesLease(
+    context.env.DB,
+    job.id,
+    parsed.data.evidence.processorIdentity,
+  ))) {
+    return conflict(context, "Completion processor identity does not match the immutable lease identity");
+  }
   if (parsed.data.evidence.inputBytes !== job.input_size_bytes) {
     return validationError(context, {
       evidence: ["Reported input bytes do not match the exact registered point-cloud asset"],
@@ -15386,7 +15516,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
   const leaseClaim = await context.env.DB.prepare(`
     UPDATE processing_jobs
     SET state = 'SUCCEEDED', progress = 100, progress_message = ?,
-      output_json = ?, processor_version = ?, compute_duration_ms = ?,
+      output_json = ?, processor_identity_json = ?, compute_duration_ms = ?,
       active_human_duration_ms = ?, input_bytes = ?, output_bytes = ?,
       evidence_json = ?, completed_at = datetime('now'),
       lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
@@ -15403,7 +15533,9 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       ],
       proposalHash,
     }),
-    parsed.data.evidence.processorVersion,
+    parsed.data.evidence.processorIdentity
+      ? JSON.stringify(parsed.data.evidence.processorIdentity)
+      : null,
     parsed.data.evidence.computeDurationMs,
     parsed.data.evidence.activeHumanDurationMs,
     parsed.data.evidence.inputBytes,
@@ -15487,10 +15619,10 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
       context.env.DB.prepare(`
         INSERT INTO processing_jobs (
           id, organisation_id, project_id, version_id, input_asset_id, job_type,
-          processor_version, idempotency_key, state, priority, max_attempts,
+          processor_version, contract_version, idempotency_key, state, priority, max_attempts,
           progress_message
         ) VALUES (?, ?, ?, ?, ?, 'navigation.build-v1',
-          'spatial-processor/0.11.0', ?, 'QUEUED', 72, 3,
+          'spatial-processor/0.11.0', 'spatial-processor/0.11.0', ?, 'QUEUED', 72, 3,
           'Automatically queued from the generated floor-plan collision draft')
       `).bind(
         navigationJobId,
@@ -17572,6 +17704,60 @@ async function authenticateWorker(context: Context<AppEnvironment>): Promise<boo
   return timingSafeStringEqual(header.slice(7), context.env.WORKER_API_TOKEN);
 }
 
+async function completionIdentityMatchesLease(
+  database: D1Database,
+  jobId: string,
+  completedIdentity: ProcessorIdentity | undefined,
+): Promise<boolean> {
+  const row = await database.prepare(`
+    SELECT leased_processor_identity_json, job_type,
+      COALESCE(contract_version, processor_version) AS contract_version
+    FROM processing_jobs WHERE id = ?
+  `).bind(jobId).first<{
+    leased_processor_identity_json: string | null;
+    job_type: string;
+    contract_version: string;
+  }>();
+  if (!row) return false;
+  // Rolling-upgrade bridge: the strict application deploys first and refuses
+  // every new identity-less lease. A lease created before that cutover has no
+  // stored identity, so its already-running old processor may make one
+  // identity-less completion using the still-secret lease token. If a new
+  // processor completes such a pre-cutover lease instead, bind its compatible
+  // identity atomically. After the cutover all newly leased rows have identity,
+  // making this branch unreachable for new work.
+  if (!row.leased_processor_identity_json) {
+    if (!completedIdentity) return true;
+    if (!processorCanRun(completedIdentity, row.job_type, row.contract_version)) return false;
+    const bound = await database.prepare(`
+      UPDATE processing_jobs
+      SET leased_processor_identity_json = ?
+      WHERE id = ? AND leased_processor_identity_json IS NULL
+      RETURNING leased_processor_identity_json
+    `).bind(
+      JSON.stringify(completedIdentity),
+      jobId,
+    ).first<{ leased_processor_identity_json: string }>();
+    if (bound) return true;
+    const raced = await database.prepare(`
+      SELECT leased_processor_identity_json FROM processing_jobs WHERE id = ?
+    `).bind(jobId).first<{ leased_processor_identity_json: string | null }>();
+    if (!raced?.leased_processor_identity_json) return false;
+    row.leased_processor_identity_json = raced.leased_processor_identity_json;
+  }
+  if (!completedIdentity) return false;
+  let stored: unknown;
+  try {
+    stored = JSON.parse(row.leased_processor_identity_json);
+  } catch {
+    return false;
+  }
+  const leasedIdentity = parseProcessorIdentity(stored);
+  return Boolean(
+    leasedIdentity && processorIdentityEquals(leasedIdentity, completedIdentity),
+  );
+}
+
 function dispatchProcessingJob(context: Context<AppEnvironment>, jobId: string): void {
   context.executionCtx.waitUntil(
     context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId, dispatchId: crypto.randomUUID() })
@@ -17782,7 +17968,8 @@ async function requireWorkerLease(
   const tokenHash = await sha256Hex(`${rawLeaseToken}:${context.env.SESSION_PEPPER}`);
   const job = await context.env.DB.prepare(`
     SELECT j.id, j.organisation_id, j.project_id, j.version_id, j.input_asset_id,
-      j.job_type, j.processor_version, j.attempt_count, j.lease_expires_at,
+      j.job_type, COALESCE(j.contract_version, j.processor_version) AS contract_version,
+      j.attempt_count, j.lease_expires_at,
       a.file_name AS input_file_name, a.format AS input_format,
       a.mime_type AS input_mime_type, a.size_bytes AS input_size_bytes,
       a.sha256 AS input_sha256, a.object_key AS input_object_key
@@ -17883,10 +18070,10 @@ async function queueAutomaticFloorplanExtraction(
     context.env.DB.prepare(`
       INSERT INTO processing_jobs (
         id, organisation_id, project_id, version_id, input_asset_id, job_type,
-        processor_version, idempotency_key, state, priority, max_attempts,
+        processor_version, contract_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'floorplan.extract-v1',
-        'spatial-processor/0.11.0', ?, 'QUEUED', 70, 3,
+        'spatial-processor/0.11.0', 'spatial-processor/0.11.0', ?, 'QUEUED', 70, 3,
         'Automatically queued from verified capture geometry')
     `).bind(
       jobId,
@@ -18034,6 +18221,14 @@ async function applyProjectLifecycleAction(
   if (project.status === "ARCHIVED") return { project, outcome: "unchanged" };
   const blocker = await projectArchiveBlocker(context.env.DB, auth.organisationId, project.id);
   if (blocker) return { project, outcome: "blocked", message: blocker };
+  const outputCleanupError = await abortOpenProjectOutputUploads(
+    context.env,
+    auth.organisationId,
+    project.id,
+  );
+  if (outputCleanupError) {
+    return { project, outcome: "blocked", message: outputCleanupError };
+  }
 
   const update = await context.env.DB.prepare(`
     UPDATE projects
@@ -19758,6 +19953,38 @@ async function projectArchiveBlocker(
   }
   if (scalarCount(requiredBatchResult(blockers, 1)) > 0 || scalarCount(requiredBatchResult(blockers, 2)) > 0) {
     return "Finish or cancel active processing and uploads before archiving this project";
+  }
+  return null;
+}
+
+async function abortOpenProjectOutputUploads(
+  env: Env,
+  organisationId: string,
+  projectId: string,
+): Promise<string | null> {
+  const uploads = await env.DB.prepare(`
+    SELECT id, object_key, r2_upload_id
+    FROM job_output_uploads
+    WHERE organisation_id = ? AND project_id = ? AND status = 'OPEN'
+    ORDER BY created_at
+  `).bind(organisationId, projectId).all<{
+    id: string;
+    object_key: string;
+    r2_upload_id: string;
+  }>();
+  for (const upload of uploads.results) {
+    try {
+      await env.SPATIAL_ASSETS
+        .resumeMultipartUpload(upload.object_key, upload.r2_upload_id)
+        .abort();
+      await env.DB.prepare(`
+        UPDATE job_output_uploads
+        SET status = 'ABORTED', completed_at = datetime('now')
+        WHERE id = ? AND status = 'OPEN'
+      `).bind(upload.id).run();
+    } catch (error) {
+      return `output_upload_cleanup failed for ${upload.id}; finish or abort it before archiving: ${errorMessage(error).slice(0, 300)}`;
+    }
   }
   return null;
 }
@@ -24056,6 +24283,105 @@ async function approvedNavigationPreview(
     versionId,
   );
   return qualification.ready ? qualification.value : null;
+}
+
+async function projectComparisonReadiness(
+  env: Env,
+  organisationId: string,
+  projectId: string,
+  versionRows: readonly unknown[],
+  assetRows: readonly unknown[],
+): Promise<ComparisonReadiness> {
+  const versions = versionRows.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const versionId = readStringProperty(row, "id");
+    const versionNumber = Number(Reflect.get(row, "version_number"));
+    return versionId && Number.isSafeInteger(versionNumber)
+      ? [{ versionId, versionNumber }]
+      : [];
+  });
+  const reviewedStructure = await env.DB.prepare(`
+    SELECT DISTINCT version_id FROM floorplan_revisions
+    WHERE organisation_id = ? AND project_id = ? AND status = 'approved'
+    UNION
+    SELECT decision.version_id
+    FROM version_review_decisions decision
+    WHERE decision.organisation_id = ? AND decision.project_id = ?
+      AND decision.decision = 'approved'
+      AND decision.id = (
+        SELECT latest.id FROM version_review_decisions latest
+        WHERE latest.organisation_id = decision.organisation_id
+          AND latest.project_id = decision.project_id
+          AND latest.version_id = decision.version_id
+        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+      )
+      AND EXISTS (
+        SELECT 1 FROM scene_entities entity
+        WHERE entity.organisation_id = decision.organisation_id
+          AND entity.project_id = decision.project_id
+          AND entity.version_id = decision.version_id
+          AND entity.status = 'active' AND entity.world_unit = 'metres'
+          AND entity.kind IN ('floor', 'room', 'doorway')
+          AND entity.geometry_json IS NOT NULL
+      )
+  `).bind(
+    organisationId,
+    projectId,
+    organisationId,
+    projectId,
+  ).all<{ version_id: string }>();
+  const reviewedStructureIds = new Set(reviewedStructure.results.map((row) => row.version_id));
+  const assets = assetRows.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const id = readStringProperty(row, "id");
+    const versionId = readStringProperty(row, "version_id");
+    const kind = readStringProperty(row, "kind");
+    const format = readStringProperty(row, "format")?.toLowerCase();
+    const objectKey = readStringProperty(row, "object_key");
+    const sha256 = readStringProperty(row, "sha256")?.toLowerCase();
+    const integrityStatus = readStringProperty(row, "integrity_status");
+    return id && versionId && kind && format && objectKey
+      ? [{ id, versionId, kind, format, objectKey, sha256, integrityStatus }]
+      : [];
+  });
+  const evidence = await Promise.all(versions.map(async (version) => {
+    const versionAssets = assets.filter((asset) => asset.versionId === version.versionId);
+    const webCandidates = versionAssets.filter((asset) =>
+      asset.kind === "web" && allowedWebFormats.has(asset.format) &&
+      asset.integrityStatus === "verified" && Boolean(asset.sha256)
+    );
+    const pointCloudCandidates = versionAssets.filter((asset) =>
+      ["source", "master", "pointcloud"].includes(asset.kind) && asset.format === "ply" &&
+      asset.integrityStatus === "verified" && Boolean(asset.sha256)
+    );
+    const [navigation, verifiedWebScene, verifiedSourcePointCloud] = await Promise.all([
+      approvedNavigationPreview(env, organisationId, projectId, version.versionId),
+      r2HasAny(env.SPATIAL_ASSETS, webCandidates.map((asset) => asset.objectKey)),
+      r2HasAny(env.SPATIAL_ASSETS, pointCloudCandidates.map((asset) => asset.objectKey)),
+    ]);
+    const registration = navigation?.registration ?? await qualifiedSceneRegistration(
+      env.DB,
+      organisationId,
+      projectId,
+      version.versionId,
+    );
+    return {
+      ...version,
+      verifiedWebScene,
+      approvedNavigation: Boolean(navigation),
+      reviewedMetricStructure: reviewedStructureIds.has(version.versionId),
+      verifiedSourcePointCloud,
+      registrationEvidence: Boolean(registration),
+    };
+  }));
+  return comparisonReadiness(evidence);
+}
+
+async function r2HasAny(bucket: R2Bucket, objectKeys: readonly string[]): Promise<boolean> {
+  for (const objectKey of objectKeys) {
+    if (await bucket.head(objectKey)) return true;
+  }
+  return false;
 }
 
 async function verifiedPhysicalNavigation(

@@ -439,6 +439,7 @@ async function runProcessor(jobId, token) {
         WORKER_API_TOKEN: token,
         PROCESSOR_JOB_ID: jobId,
         PROCESSOR_WORKER_ID: `open-corpus-${runId}`,
+        PROCESSOR_IDENTITY_JSON: localProcessorIdentityJson(),
       },
     },
   );
@@ -457,6 +458,20 @@ async function runProcessor(jobId, token) {
     mode: 0o600,
   });
   return { events };
+}
+
+function localProcessorIdentityJson() {
+  return process.env.PROCESSOR_IDENTITY_JSON ?? JSON.stringify({
+    agentBuildSha: "0".repeat(40),
+    imageDigest: `sha256:${"0".repeat(64)}`,
+    protocolVersion: "spatial-processor-lease/1",
+    capabilities: [
+      { jobType: "asset.validate", contractVersion: "open-import-v1" },
+      { jobType: "asset.evidence-validate", contractVersion: "spatial-evidence/1.0.0" },
+      { jobType: "floorplan.extract-v1", contractVersion: "spatial-processor/0.11.0" },
+      { jobType: "navigation.build-v1", contractVersion: "spatial-processor/0.11.0" },
+    ],
+  });
 }
 
 async function waitForJob(jobId, expectedState, authCookie) {

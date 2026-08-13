@@ -221,6 +221,7 @@ try {
         WORKER_API_TOKEN: workerToken,
         PROCESSOR_JOB_ID: uploaded.job.id,
         PROCESSOR_WORKER_ID: `fjd-local-e2e-${runId}`,
+        PROCESSOR_IDENTITY_JSON: localProcessorIdentityJson(),
         PROCESSOR_POSTER_CAMERA_JSON: JSON.stringify({
           position: qualificationView.cameraPosition,
           target: qualificationView.cameraTarget,
@@ -374,6 +375,20 @@ try {
     failure: report.failure?.message ?? null,
   })}\n`);
   if (!report.passed) process.exitCode = 1;
+}
+
+function localProcessorIdentityJson() {
+  return process.env.PROCESSOR_IDENTITY_JSON ?? JSON.stringify({
+    agentBuildSha: "0".repeat(40),
+    imageDigest: `sha256:${"0".repeat(64)}`,
+    protocolVersion: "spatial-processor-lease/1",
+    capabilities: [
+      { jobType: "asset.validate", contractVersion: "open-import-v1" },
+      { jobType: "asset.evidence-validate", contractVersion: "spatial-evidence/1.0.0" },
+      { jobType: "floorplan.extract-v1", contractVersion: "spatial-processor/0.11.0" },
+      { jobType: "navigation.build-v1", contractVersion: "spatial-processor/0.11.0" },
+    ],
+  });
 }
 
 async function uploadFile({ projectId, sourcePath, fileName, sizeBytes, sha256, session }) {

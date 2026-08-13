@@ -27,6 +27,30 @@ browser or OS build creates a new row.
 | iOS target | | | | | | `VALIDATE` | | | | | | `VALIDATE` |
 | Android target | | | | | | `VALIDATE` | | | | | | `VALIDATE` |
 
+## Mobile browser interaction smoke
+
+These rows are release evidence, not emulation. Run them against the same
+immutable release named above, keep free roam available throughout, and verify
+that every alternate navigation method remains disabled on coarse-touch
+devices.
+
+| Target | Free-roam default | Pointer cancellation | Browser back/edge gesture | Address-bar resize | Safe-area controls | Rotation | Virtual keyboard recovery | Multi-touch arbitration | Recording SHA-256 | Decision |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Physical iPhone Safari | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | | `VALIDATE` |
+| Physical Android Chrome | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | `VALIDATE` | | `VALIDATE` |
+
+## Signed release decision
+
+| Field | Recorded value |
+| --- | --- |
+| Exact Git commit | |
+| Tester identity | |
+| Tested at (UTC) | |
+| Evidence bundle SHA-256 | |
+| Signature method and signer identity | |
+| iPhone Safari decision | `VALIDATE` |
+| Android Chrome decision | `VALIDATE` |
+
 The table records measurements; it does not invent universal pass thresholds.
 Any network, duration, memory, frame-pacing, or thermal limit used for a
 decision must cite the reproducible measurement and sizing rule in

@@ -6,8 +6,9 @@ import ts from "typescript";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = resolve(repositoryRoot, "docs/verification/user-facing-inventory.md");
 const writeMode = process.argv.includes("--write");
+const evidenceAstCache = new Map();
 
-const [studioHtml, landingHtml, studioSource, compareSource, viewerSource, workerSource, comparisonRouteSource, fieldRegistry, actionAudit] =
+const [studioHtml, landingHtml, studioSource, compareSource, viewerSource, workerSource, comparisonRouteSource, fieldRegistry, actionAudit, packageJson] =
   await Promise.all([
     projectFile("studio.html"),
     projectFile("index.html"),
@@ -18,7 +19,9 @@ const [studioHtml, landingHtml, studioSource, compareSource, viewerSource, worke
     projectFile("src/worker/routes/comparison.ts"),
     projectJson("config/studio-field-registry.json"),
     projectFile("docs/ACTION_STATE_AUDIT.md"),
+    projectJson("package.json"),
   ]);
+const assuranceSources = await loadAssuranceSources(packageJson);
 
 const htmlSurfaces = [
   extractHtmlSurfaces("studio.html", studioHtml),
@@ -46,7 +49,7 @@ const inventory = {
   states: await extractPersistedStates(),
   workflows: extractActionWorkflows(actionAudit),
 };
-const report = renderReport(inventory);
+const report = renderReport(inventory, assuranceSources);
 
 if (writeMode) {
   await writeFile(outputPath, report);
@@ -266,18 +269,126 @@ function extractActionWorkflows(source) {
   return workflows;
 }
 
-function renderReport(value) {
+async function loadAssuranceSources(packageJson) {
+  const allTests = (await readdir(resolve(repositoryRoot, "test")))
+    .filter((name) => name.endsWith(".spec.ts"))
+    .map((name) => `test/${name}`);
+  const integrationPaths = new Set([
+    ...(packageJson.scripts?.["test:integration"]?.match(/test\/[\w.-]+\.spec\.ts/g) ?? []),
+  ]);
+  const unitPaths = allTests.filter((path) => !integrationPaths.has(path));
+  const browserPaths = (await readdir(resolve(repositoryRoot, "e2e")))
+    .filter((name) => name.endsWith(".spec.ts"))
+    .map((name) => `e2e/${name}`);
+  return {
+    unit: await readEvidenceFiles(unitPaths),
+    integration: await readEvidenceFiles([...integrationPaths]),
+    browser: await readEvidenceFiles(browserPaths),
+    "deployed-staging": await readEvidenceFiles([
+      "scripts/staging-acceptance-core.mjs",
+      "scripts/staging-lifecycle-canary.mjs",
+      ".github/workflows/staging.yml",
+    ]),
+    "production-attested": await readEvidenceFiles([
+      "scripts/processor-canary.mjs",
+      ".github/workflows/production.yml",
+    ]),
+  };
+}
+
+async function readEvidenceFiles(paths) {
+  return Promise.all(paths.sort().map(async (path) => ({ path, source: await projectFile(path) })));
+}
+
+function assuranceFor(kind, item, staticSource, sources) {
+  const matcher = evidenceMatcher(kind, item);
+  if (matcher) {
+    for (const level of [
+      "production-attested",
+      "deployed-staging",
+      "browser",
+      "integration",
+      "unit",
+    ]) {
+      const evidence = sources[level].find((source) => matcher(source.source));
+      if (evidence) return { level, source: evidence.path };
+    }
+  }
+  return { level: "static", source: staticSource };
+}
+
+function evidenceMatcher(kind, item) {
+  if (kind === "route" && item.path !== "/") {
+    const segments = item.path.split("/").map((segment) =>
+      segment.startsWith(":")
+        ? String.raw`[^/\s"'\x60]+`
+        : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    );
+    const routePattern = new RegExp(`${segments.join("/")}(?=[?\\s"'\\x60)]|$)`);
+    return (source) => routeMethodIsExercised(source, item.method, item.path, routePattern);
+  }
+  if (!["control", "form", "dialog", "input"].includes(kind)) return null;
+  const tokens = [];
+  if (!item.id.includes(":")) tokens.push(item.id);
+  for (const match of String(item.label ?? "").matchAll(/["'\x60]([^"'\x60]{5,80})["'\x60]/g)) {
+    tokens.push(match[1]);
+  }
+  const useful = [...new Set(tokens.filter((token) => token.length >= 5))];
+  return useful.length ? (source) => useful.some((token) => source.includes(token)) : null;
+}
+
+function routeMethodIsExercised(source, expectedMethod, path, routePattern) {
+  if (source.includes(`assurance-route: ${expectedMethod} ${path}`)) return true;
+  let sourceFile = evidenceAstCache.get(source);
+  if (!sourceFile) {
+    sourceFile = ts.createSourceFile(
+      "assurance-source.ts",
+      source,
+      ts.ScriptTarget.ESNext,
+      true,
+      ts.ScriptKind.TS,
+    );
+    evidenceAstCache.set(source, sourceFile);
+  }
+  let exercised = false;
+  visit(sourceFile, (node) => {
+    if (exercised || !ts.isCallExpression(node)) return;
+    const callee = node.expression.getText(sourceFile);
+    if (!/(?:^|\.)(?:api|fetch|fetchBounded|fetchJson|fetchRaw|fetchWithRetry)$/.test(callee)) {
+      return;
+    }
+    const call = node.getText(sourceFile);
+    if (!routePattern.test(call)) return;
+    const declaredMethod = call.match(/\bmethod\s*:\s*["'`]([A-Z]+)["'`]/i)?.[1]
+      ?.toUpperCase();
+    const actualMethod = declaredMethod ?? "GET";
+    if (actualMethod === expectedMethod) exercised = true;
+  });
+  return exercised;
+}
+
+function withAssurance(kind, item, staticSource, sources, cells) {
+  const assurance = assuranceFor(kind, item, staticSource, sources);
+  return [...cells, assurance.level, assurance.source];
+}
+
+function renderReport(value, assuranceSources) {
   const forms = value.htmlSurfaces.flatMap((surface) => surface.forms);
   const dialogs = value.htmlSurfaces.flatMap((surface) => surface.dialogs);
   const buttons = value.htmlSurfaces.flatMap((surface) => surface.buttons);
   const links = value.htmlSurfaces.flatMap((surface) => surface.links);
   const loginInputs = value.htmlSurfaces.flatMap((surface) => surface.inputs).filter((input) => input.form === "loginForm");
   const controls = [...buttons.map((item) => ({ ...item, kind: "button" })), ...links.map((item) => ({ ...item, kind: "link" })), ...value.dynamicControls];
+  const routeAndControlAssurance = [
+    ...value.routes.map((route) => assuranceFor("route", route, route.source, assuranceSources).level),
+    ...controls.map((control) => assuranceFor("control", control, control.source, assuranceSources).level),
+  ].reduce((counts, level) => ({ ...counts, [level]: (counts[level] ?? 0) + 1 }), {});
   const lines = [
     "# User-facing acceptance inventory",
     "",
     "Generated by `npm run inventory:write`; verified by `npm run audit:inventory`. Do not edit by hand.",
     "Sources: HTML, browser entry points, Worker routes, Studio field metadata, migration state constraints, and the action-state audit.",
+    "Assurance records the strongest committed evidence source that explicitly references each exact route or control. `static` means enumeration only; a higher class proves that the item participates in that layer, not that every policy edge case is an independent end-to-end test. `manual-device` is reserved for a completed, signed physical-device receipt and is never inferred from emulation.",
     "",
     "## Acceptance and edge policies",
     "",
@@ -296,6 +407,18 @@ function renderReport(value) {
     "| STATE-A | Every legal state has a distinct label and valid actions; transitions persist through reload; unknown or stale states fail closed. | first/empty; active; terminal success; terminal failure; stale/unknown |",
     "| WORKFLOW-A | The row's exact pending, recovery, and retry/idempotency behavior is visible and authoritative after reload. | duplicate start; timeout; partial success; stale response; retry after reload |",
     "",
+    "## Assurance classes",
+    "",
+    "| Class | Meaning |",
+    "| --- | --- |",
+    "| static | Enumerated from source with a policy reference; no runtime exercise is claimed. |",
+    "| unit | Referenced by a focused deterministic test. |",
+    "| integration | Referenced by a Worker, persistence, or cross-module integration test. |",
+    "| browser | Referenced by a real browser-engine Playwright test. |",
+    "| deployed-staging | Exercised or explicitly asserted by the authenticated deployed staging acceptance path. |",
+    "| production-attested | Bound to the SHA-specific production health, canary, or release attestation path. |",
+    "| manual-device | Backed by a completed signed physical-device receipt; emulation never qualifies. |",
+    "",
     "## Measured inventory receipt",
     "",
     `- Roles: ${value.roles.length}`,
@@ -304,18 +427,19 @@ function renderReport(value) {
     `- Dialogs: ${dialogs.length}`,
     `- Governed fields: ${value.fields.length}`,
     `- Static and generated controls: ${controls.length}`,
+    `- Route and control assurance: ${Object.entries(routeAndControlAssurance).sort(([left], [right]) => left.localeCompare(right)).map(([level, count]) => `${level}=${count}`).join(", ")}`,
     `- Persisted state sets: ${value.states.length}`,
     `- Asynchronous workflows: ${value.workflows.length}`,
     "",
-    sectionTable("Roles", ["Role", "Label", "Scope", "Policy"], value.roles.map((role) => [role.id, role.label, role.scope, "ROLE-A"])),
-    sectionTable("Routes", ["Route", "Audience", "Source", "Policy"], value.routes.map((route) => [route.id, route.audience, route.source, route.method === "CLIENT" || !route.path.startsWith("/api/") ? "ROUTE-A" : "API-A"])),
-    sectionTable("Forms", ["Form", "Dialog", "Section", "Source", "Policy"], forms.map((form) => [form.id, form.dialog ?? "none", form.section ?? "global", form.source, "FORM-A"])),
-    sectionTable("Login inputs", ["Input", "Type", "Required", "Source", "Policy"], loginInputs.map((input) => [input.id, input.type, String(input.required), input.source, "FIELD-A"])),
-    sectionTable("Governed authenticated inputs", ["Field", "Form", "Stage / audience", "Required / unit", "Request → persistence → readback", "Policy"], value.fields.map((field) => [field.id, field.form, `${field.stage} / ${field.audience}`, `${field.required ? "required" : "optional"}${field.unit ? ` / ${field.unit}` : ""}`, `${field.requestPath} → ${field.persistencePath} → ${field.consumer} → ${field.readback}`, "FIELD-A"])),
-    sectionTable("Dialogs", ["Dialog", "Section", "Source", "Policy"], dialogs.map((dialog) => [dialog.id, dialog.section ?? "global", dialog.source, "DIALOG-A"])),
-    sectionTable("Buttons and links", ["Control", "Kind", "Label/expression", "Context", "Source", "Policy"], controls.map((control) => [control.id, control.kind, control.label, [control.section, control.dialog, control.form].filter(Boolean).join(" / ") || "generated/global", control.source, control.kind === "link" ? "LINK-A" : "CONTROL-A"])),
-    sectionTable("Persisted states", ["State set", "Field", "Values", "Source", "Policy"], value.states.map((state) => [state.id, state.field, state.values.join(", "), state.source, "STATE-A"])),
-    sectionTable("Asynchronous workflows", ["Surface / action", "Pending", "Failure", "Retry/idempotency", "Policy"], value.workflows.map((workflow) => [`${workflow.surface} / ${workflow.action}`, workflow.pending, workflow.failure, workflow.retry, "WORKFLOW-A"])),
+    sectionTable("Roles", ["Role", "Label", "Scope", "Policy", "Assurance", "Evidence"], value.roles.map((role) => withAssurance("role", role, "scripts/user-facing-inventory.mjs", assuranceSources, [role.id, role.label, role.scope, "ROLE-A"]))),
+    sectionTable("Routes", ["Route", "Audience", "Source", "Policy", "Assurance", "Evidence"], value.routes.map((route) => withAssurance("route", route, route.source, assuranceSources, [route.id, route.audience, route.source, route.method === "CLIENT" || !route.path.startsWith("/api/") ? "ROUTE-A" : "API-A"]))),
+    sectionTable("Forms", ["Form", "Dialog", "Section", "Source", "Policy", "Assurance", "Evidence"], forms.map((form) => withAssurance("form", form, form.source, assuranceSources, [form.id, form.dialog ?? "none", form.section ?? "global", form.source, "FORM-A"]))),
+    sectionTable("Login inputs", ["Input", "Type", "Required", "Source", "Policy", "Assurance", "Evidence"], loginInputs.map((input) => withAssurance("input", input, input.source, assuranceSources, [input.id, input.type, String(input.required), input.source, "FIELD-A"]))),
+    sectionTable("Governed authenticated inputs", ["Field", "Form", "Stage / audience", "Required / unit", "Request → persistence → readback", "Policy", "Assurance", "Evidence"], value.fields.map((field) => withAssurance("field", field, "config/studio-field-registry.json", assuranceSources, [field.id, field.form, `${field.stage} / ${field.audience}`, `${field.required ? "required" : "optional"}${field.unit ? ` / ${field.unit}` : ""}`, `${field.requestPath} → ${field.persistencePath} → ${field.consumer} → ${field.readback}`, "FIELD-A"]))),
+    sectionTable("Dialogs", ["Dialog", "Section", "Source", "Policy", "Assurance", "Evidence"], dialogs.map((dialog) => withAssurance("dialog", dialog, dialog.source, assuranceSources, [dialog.id, dialog.section ?? "global", dialog.source, "DIALOG-A"]))),
+    sectionTable("Buttons and links", ["Control", "Kind", "Label/expression", "Context", "Source", "Policy", "Assurance", "Evidence"], controls.map((control) => withAssurance("control", control, control.source, assuranceSources, [control.id, control.kind, control.label, [control.section, control.dialog, control.form].filter(Boolean).join(" / ") || "generated/global", control.source, control.kind === "link" ? "LINK-A" : "CONTROL-A"]))),
+    sectionTable("Persisted states", ["State set", "Field", "Values", "Source", "Policy", "Assurance", "Evidence"], value.states.map((state) => withAssurance("state", state, state.source, assuranceSources, [state.id, state.field, state.values.join(", "), state.source, "STATE-A"]))),
+    sectionTable("Asynchronous workflows", ["Surface / action", "Pending", "Failure", "Retry/idempotency", "Policy", "Assurance", "Evidence"], value.workflows.map((workflow) => withAssurance("workflow", workflow, "docs/ACTION_STATE_AUDIT.md", assuranceSources, [`${workflow.surface} / ${workflow.action}`, workflow.pending, workflow.failure, workflow.retry, "WORKFLOW-A"]))),
   ];
   return `${lines.join("\n").trimEnd()}\n`;
 }

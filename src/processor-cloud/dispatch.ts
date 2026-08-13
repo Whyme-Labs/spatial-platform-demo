@@ -15,6 +15,7 @@ export type ProcessorRuntimeConfiguration = {
   maximumPointcloudInputMib?: string;
   pollSeconds?: string;
   heartbeatSeconds?: string;
+  processorIdentityJson: string;
 };
 
 const jobIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +47,7 @@ export function processorEnvironment(
     WORKER_API_TOKEN: configuration.workerApiToken,
     PROCESSOR_WORKER_ID: `cloudflare-container:${jobId}`,
     PROCESSOR_JOB_ID: jobId,
+    PROCESSOR_IDENTITY_JSON: configuration.processorIdentityJson,
     PROCESSOR_MAX_CHANGE_INPUT_MIB: configuration.maximumChangeInputMib,
     PROCESSOR_MAX_JOB_RUNTIME_MINUTES: configuration.maximumJobRuntimeMinutes,
     ...(configuration.maximumPointcloudInputMib

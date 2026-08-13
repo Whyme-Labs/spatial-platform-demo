@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
 
 const origin = "https://spatial.test";
 
@@ -130,7 +131,7 @@ async function seedEvidenceJob(): Promise<Fixture> {
         processor_version, idempotency_key, state, priority, max_attempts,
         progress_message
       ) VALUES (?, ?, ?, ?, ?, 'asset.evidence-validate',
-        'spatial-processor/0.11.0', ?, 'QUEUED', 60, 3,
+        'spatial-evidence/1.0.0', ?, 'QUEUED', 60, 3,
         'Waiting for an evidence worker')
     `).bind(
       jobId,
@@ -160,7 +161,7 @@ async function leaseJob(jobId: string): Promise<string> {
       authorization: `Bearer ${env.WORKER_API_TOKEN}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ workerId: "e57-structure-reader", jobId }),
+    body: JSON.stringify(processorLeaseRequest("e57-structure-reader", jobId)),
   });
   expect(response.status).toBe(200);
   const lease = await response.json<{ leaseToken: string }>();
@@ -228,6 +229,7 @@ describe("public E57 container structure evidence", () => {
             reportSha256: report.sha256,
           },
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.11.0",
             computeDurationMs: 12,
             activeHumanDurationMs: 0,
@@ -319,6 +321,7 @@ describe("public E57 container structure evidence", () => {
             reportSha256: "b".repeat(64),
           },
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.11.0",
             computeDurationMs: 12,
             activeHumanDurationMs: 0,
@@ -369,6 +372,7 @@ describe("public E57 container structure evidence", () => {
             reason: "E57 page 1 CRC-32C mismatch",
           },
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.11.0",
             computeDurationMs: 12,
             activeHumanDurationMs: 0,
@@ -430,6 +434,7 @@ describe("public E57 container structure evidence", () => {
             reportSha256: report.sha256,
           },
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.11.0",
             computeDurationMs: 12,
             activeHumanDurationMs: 0,

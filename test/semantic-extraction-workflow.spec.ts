@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
 import { sha256Hex } from "../src/worker/security";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
 
 const origin = "https://spatial.test";
 let addressSequence = 7200;
@@ -159,7 +160,7 @@ describe("reviewed point-cloud semantic extraction", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "semantic-extraction-test" }),
+      body: JSON.stringify(processorLeaseRequest("semantic-extraction-test")),
     });
     expect(leaseResponse.status).toBe(200);
     const lease = await leaseResponse.json<{
@@ -269,6 +270,7 @@ describe("reviewed point-cloud semantic extraction", () => {
           output: output.output,
           report,
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.5.0",
             computeDurationMs: 38,
             activeHumanDurationMs: 0,

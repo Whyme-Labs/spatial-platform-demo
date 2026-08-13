@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
 
 const origin = "https://spatial.test";
 
@@ -157,7 +158,7 @@ describe("capture adapter evidence ingestion", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "collision-verifier", jobId: completed.job.id }),
+        body: JSON.stringify(processorLeaseRequest("collision-verifier", completed.job.id)),
     });
     const lease = await leaseResponse.json<{ leaseToken: string }>();
     const completionBody = (reportedSha256: string) => JSON.stringify({
@@ -166,6 +167,7 @@ describe("capture adapter evidence ingestion", () => {
       outputs: [],
       report: { source: { sha256: reportedSha256 } },
       evidence: {
+        processorIdentity: testProcessorIdentity,
         processorVersion: "spatial-evidence/1.0.0",
         computeDurationMs: 10,
         activeHumanDurationMs: 0,
@@ -555,8 +557,7 @@ describe("capture adapter evidence ingestion", () => {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          workerId: `automatic-floorplan-${crypto.randomUUID()}`,
-          jobId: input.jobId,
+          ...processorLeaseRequest(`automatic-floorplan-${crypto.randomUUID()}`, input.jobId),
         }),
       });
       expect(leaseResponse.status).toBe(200);
@@ -577,6 +578,7 @@ describe("capture adapter evidence ingestion", () => {
             outputs: [],
             report: { source: { sha256, coordinateEvidence: coordinateEvidence(input.bounds) } },
             evidence: {
+              processorIdentity: testProcessorIdentity,
               processorVersion: "spatial-evidence/1.0.0",
               computeDurationMs: 10,
               activeHumanDurationMs: 0,
@@ -686,8 +688,10 @@ describe("capture adapter evidence ingestion", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        workerId: `automatic-floorplan-failure-${crypto.randomUUID()}`,
-        jobId: failingVisual.completion.job.id,
+        ...processorLeaseRequest(
+          `automatic-floorplan-failure-${crypto.randomUUID()}`,
+          failingVisual.completion.job.id,
+        ),
       }),
     });
     expect(failingLeaseResponse.status).toBe(200);
@@ -826,8 +830,7 @@ describe("capture adapter evidence ingestion", () => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        workerId: `test-native-sog-${crypto.randomUUID()}`,
-        jobId: completed.job.id,
+        ...processorLeaseRequest(`test-native-sog-${crypto.randomUUID()}`, completed.job.id),
       }),
     });
     expect(leaseResponse.status).toBe(200);

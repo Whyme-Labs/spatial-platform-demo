@@ -71,6 +71,7 @@ let releaseSlug = null;
 let releaseAccessToken = null;
 let projectArchived = false;
 let cleanupMode = false;
+const openUploadIds = new Set();
 
 try {
   requireStagingOrigin(origin);
@@ -137,86 +138,60 @@ try {
     jobs: processedJobs.map((job) => ({ id: job.id, type: job.job_type, state: job.state })),
   });
 
-  let workspace = await waitForWorkspace(
-    "floor-plan proposal",
-    (candidate) => candidate.floorplanExtractions.find((item) =>
-      item.status === "READY_FOR_REVIEW" && item.proposal_json
-    ),
-  );
-  const extraction = workspace.floorplanExtractions.find((item) =>
-    item.status === "READY_FOR_REVIEW" && item.proposal_json
-  );
-  if (!extraction) throw new Error("The automatic floor-plan proposal disappeared");
-  const proposal = JSON.parse(extraction.proposal_json);
-  const review = await api(
-    `/api/projects/${projectId}/spatial/floorplan-extractions/${extraction.id}/review`,
-    {
-      method: "POST",
-      body: {
-        clientOperationId: randomUUID(),
-        decision: "approve",
-        note: "Staging service operator reviewed the deterministic synthetic capture fixture.",
-        plan: floorplanProposalToReviewPlan(proposal),
-        captureAgreementResolutions: captureAgreementResolutions(proposal.captureAgreement),
-      },
-    },
-  );
+  let { workspace, build, extraction, review } = await qualifyCurrentVersionNavigation();
   stage("structure-reviewed", {
     extractionId: extraction.id,
     revisionId: review.revision.id,
     navigationBuildId: review.automaticNavigation.id,
   });
-
-  workspace = await waitForWorkspace("navigation build", (candidate) => {
-    const build = candidate.navigationBuilds.find((item) =>
-      item.id === review.automaticNavigation.id
-    );
-    return build && ["APPROVED", "READY_FOR_REVIEW", "FAILED", "REJECTED"].includes(build.status)
-      ? build
-      : null;
-  });
-  let build = workspace.navigationBuilds.find((item) =>
-    item.id === review.automaticNavigation.id
-  );
-  if (!build || ["FAILED", "REJECTED"].includes(build.status)) {
-    throw new Error(`Navigation build ended ${build?.status ?? "missing"}`);
-  }
-  if (build.status === "READY_FOR_REVIEW") {
-    const artifact = JSON.parse(build.artifact_json ?? "{}");
-    await api(
-      `/api/projects/${projectId}/spatial/navigation-builds/${build.id}/review`,
-      {
-        method: "POST",
-        body: {
-          decision: "approve",
-          note: "Staging service operator reviewed the deterministic navigation receipt.",
-          finalCaptureAgreementResolutions: captureAgreementResolutions(
-            artifact.finalCaptureAgreement,
-          ),
-        },
-      },
-    );
-    workspace = await spatialWorkspace();
-    build = workspace.navigationBuilds.find((item) => item.id === build.id);
-  }
-  if (build?.status !== "APPROVED") {
-    throw new Error(`Navigation build was not approved: ${build?.status ?? "missing"}`);
-  }
-  await api(`/api/projects/${projectId}/spatial/navigation-builds/${build.id}/walk-tests`, {
-    method: "POST",
-    body: {
-      clientOperationId: randomUUID(),
-      versionId,
-      startPose: { position: [0.5, 1.6, 0.5], target: [1, 1.6, 0.5] },
-      endPose: { position: [1, 1.6, 0.5], target: [1.5, 1.6, 0.5] },
-      runtimeEvidence: {
-        movementObserved: true,
-        collisionFailureReported: false,
-        traversalBlockReported: false,
-      },
-    },
-  });
   stage("navigation-qualified", { buildId: build.id });
+
+  const oneVersionDetail = await projectDetail();
+  if (oneVersionDetail.comparisonReadiness?.available !== false) {
+    throw new Error("Compare became available before a second eligible immutable version existed");
+  }
+  stage("comparison-unavailable-with-one-version", { versionId });
+
+  const baselineVersionId = versionId;
+  const baselineGeometryAssetId = geometry.upload.assetId;
+  const candidateJourney = { id: randomUUID(), sameFrameConfirmed: true };
+  const candidateVisual = await uploadBytes({
+    projectId,
+    bytes: gaussianPly(visualRoomPoints()),
+    fileName: "lifecycle-canary-candidate.gaussian.ply",
+    format: "ply",
+    purpose: "gaussian_splat",
+    captureJourney: candidateJourney,
+  });
+  versionId = candidateVisual.upload.versionId;
+  const candidateGeometry = await uploadBytes({
+    projectId,
+    bytes: metricPointCloudPly(metricRoomPoints()),
+    fileName: "lifecycle-canary-candidate-geometry.ply",
+    format: "ply",
+    purpose: "metric_point_cloud",
+    targetVersionId: versionId,
+    captureJourney: candidateJourney,
+  });
+  await Promise.all([
+    waitForJob(candidateVisual.job.id),
+    waitForJob(candidateGeometry.job.id),
+  ]);
+  const candidateQualification = await qualifyCurrentVersionNavigation();
+  stage("comparison-candidate-qualified", {
+    versionId,
+    visualAssetId: candidateVisual.upload.assetId,
+    geometryAssetId: candidateGeometry.upload.assetId,
+    navigationBuildId: candidateQualification.build.id,
+  });
+  const candidateVersionId = versionId;
+  await verifyComparisonLifecycle({
+    baselineVersionId,
+    candidateVersionId,
+    baselineGeometryAssetId,
+    candidateGeometryAssetId: candidateGeometry.upload.assetId,
+  });
+  versionId = baselineVersionId;
 
   const preview = await api(`/api/projects/${projectId}/versions/${versionId}/preview`);
   const { response: previewScene, bytes: previewSceneBytes } = await fetchBytesWithBudget(
@@ -591,6 +566,7 @@ async function uploadBytes(input) {
       ...(input.captureJourney ? { captureJourney: input.captureJourney } : {}),
     },
   });
+  openUploadIds.add(created.upload.id);
   const uploaded = await api(`/api/uploads/${created.upload.id}/parts/1`, {
     method: "PUT",
     bytes: input.bytes,
@@ -599,6 +575,7 @@ async function uploadBytes(input) {
     method: "POST",
     body: { parts: [{ partNumber: 1, etag: uploaded.part.etag }] },
   });
+  openUploadIds.delete(created.upload.id);
   return { upload: created.upload, asset: completed.asset, job: completed.job };
 }
 
@@ -734,6 +711,207 @@ async function spatialWorkspace() {
   return api(`/api/projects/${projectId}/spatial?versionId=${versionId}`);
 }
 
+async function qualifyCurrentVersionNavigation() {
+  let workspace = await waitForWorkspace(
+    `floor-plan proposal for ${versionId}`,
+    (candidate) => candidate.floorplanExtractions.find((item) =>
+      item.status === "READY_FOR_REVIEW" && item.proposal_json
+    ),
+  );
+  const extraction = workspace.floorplanExtractions.find((item) =>
+    item.status === "READY_FOR_REVIEW" && item.proposal_json
+  );
+  if (!extraction) throw new Error("The automatic floor-plan proposal disappeared");
+  const proposal = JSON.parse(extraction.proposal_json);
+  const review = await api(
+    `/api/projects/${projectId}/spatial/floorplan-extractions/${extraction.id}/review`,
+    {
+      method: "POST",
+      body: {
+        clientOperationId: randomUUID(),
+        decision: "approve",
+        note: "Staging service operator reviewed the deterministic synthetic capture fixture.",
+        plan: floorplanProposalToReviewPlan(proposal),
+        captureAgreementResolutions: captureAgreementResolutions(proposal.captureAgreement),
+      },
+    },
+  );
+  workspace = await waitForWorkspace(`navigation build for ${versionId}`, (candidate) => {
+    const candidateBuild = candidate.navigationBuilds.find((item) =>
+      item.id === review.automaticNavigation.id
+    );
+    return candidateBuild &&
+        ["APPROVED", "READY_FOR_REVIEW", "FAILED", "REJECTED"].includes(candidateBuild.status)
+      ? candidateBuild
+      : null;
+  });
+  let build = workspace.navigationBuilds.find((item) =>
+    item.id === review.automaticNavigation.id
+  );
+  if (!build || ["FAILED", "REJECTED"].includes(build.status)) {
+    throw new Error(`Navigation build ended ${build?.status ?? "missing"}`);
+  }
+  if (build.status === "READY_FOR_REVIEW") {
+    const artifact = JSON.parse(build.artifact_json ?? "{}");
+    await api(
+      `/api/projects/${projectId}/spatial/navigation-builds/${build.id}/review`,
+      {
+        method: "POST",
+        body: {
+          decision: "approve",
+          note: "Staging service operator reviewed the deterministic navigation receipt.",
+          finalCaptureAgreementResolutions: captureAgreementResolutions(
+            artifact.finalCaptureAgreement,
+          ),
+        },
+      },
+    );
+    workspace = await spatialWorkspace();
+    build = workspace.navigationBuilds.find((item) => item.id === build.id);
+  }
+  if (build?.status !== "APPROVED") {
+    throw new Error(`Navigation build was not approved: ${build?.status ?? "missing"}`);
+  }
+  await api(`/api/projects/${projectId}/spatial/navigation-builds/${build.id}/walk-tests`, {
+    method: "POST",
+    body: {
+      clientOperationId: randomUUID(),
+      versionId,
+      startPose: { position: [0.5, 1.6, 0.5], target: [1, 1.6, 0.5] },
+      endPose: { position: [1, 1.6, 0.5], target: [1.5, 1.6, 0.5] },
+      runtimeEvidence: {
+        movementObserved: true,
+        collisionFailureReported: false,
+        traversalBlockReported: false,
+      },
+    },
+  });
+  return { workspace, build, extraction, review };
+}
+
+async function verifyComparisonLifecycle(input) {
+  const detail = await projectDetail();
+  const readiness = detail.comparisonReadiness;
+  const pair = readiness?.eligiblePairs?.find((candidate) =>
+    new Set([candidate.leftVersionId, candidate.rightVersionId]).size === 2 &&
+    [candidate.leftVersionId, candidate.rightVersionId].includes(input.baselineVersionId) &&
+    [candidate.leftVersionId, candidate.rightVersionId].includes(input.candidateVersionId)
+  );
+  for (const mode of ["visual", "authored_geometry", "raw"]) {
+    if (!readiness?.available || !pair?.modes?.includes(mode)) {
+      throw new Error(
+        `Comparison readiness did not qualify ${mode}: ${JSON.stringify(readiness)}`,
+      );
+    }
+  }
+  const comparison = await api(
+    `/api/projects/${projectId}/versions/compare?left=${input.baselineVersionId}` +
+      `&right=${input.candidateVersionId}`,
+  );
+  if (comparison.renderables?.length !== 2) {
+    throw new Error(`Visual comparison returned ${comparison.renderables?.length ?? 0} renderables`);
+  }
+  // Assurance inventory marker: GET /comparison-asset/:projectId/:versionId/:assetId/:fileName
+  // These signed URLs exercise the deployed comparison-asset boundary rather
+  // than reading the backing R2 objects directly.
+  const served = [];
+  for (const renderable of comparison.renderables) {
+    const source = comparison.assets.find((asset) => asset.id === renderable.assetId);
+    if (!source?.sha256 || source.sha256 !== renderable.sha256) {
+      throw new Error(`Comparison renderable ${renderable.assetId} lost its source asset identity`);
+    }
+    const { response, bytes } = await fetchBytesWithBudget(
+      new URL(renderable.contentUrl, origin),
+      { headers: { cookie } },
+      objectRequestBudget(`comparison_scene:${renderable.versionId}`),
+    );
+    const observedSha256 = createHash("sha256").update(bytes).digest("hex");
+    if (!response.ok || observedSha256 !== source.sha256) {
+      throw new Error(
+        `Signed comparison asset ${source.id} returned HTTP ${response.status} with SHA-256 ${observedSha256}; expected ${source.sha256}`,
+      );
+    }
+    served.push({
+      versionId: renderable.versionId,
+      assetId: source.id,
+      sha256: observedSha256,
+      bytes: bytes.byteLength,
+    });
+  }
+  const geometry = await api(`/api/projects/${projectId}/spatial/change-reports`, {
+    method: "POST",
+    body: {
+      clientOperationId: randomUUID(),
+      fromVersionId: input.baselineVersionId,
+      toVersionId: input.candidateVersionId,
+      thresholdMm: 50,
+      coordinateAssurance: "shared_local_frame",
+      registrationEvidence:
+        "Both synthetic versions use the same deterministic right-handed Y-up metre fixture.",
+    },
+  });
+  await api(`/api/projects/${projectId}/spatial/change-reports/${geometry.report.id}`, {
+    method: "PATCH",
+    body: {
+      decision: "accepted",
+      note: "Staging service operator reviewed the deterministic authored-geometry comparison.",
+    },
+  });
+  const raw = await api(`/api/projects/${projectId}/spatial/raw-change-reports`, {
+    method: "POST",
+    body: {
+      clientOperationId: randomUUID(),
+      baselineVersionId: input.baselineVersionId,
+      candidateVersionId: input.candidateVersionId,
+      baselineAssetId: input.baselineGeometryAssetId,
+      candidateAssetId: input.candidateGeometryAssetId,
+      registrationMode: "automatic_rigid",
+      coordinateAssurance: "shared_local_frame",
+      registrationEvidence:
+        "Deterministic staging sources preserve the same local capture frame.",
+      registrationSearchRadiusM: 1,
+      registrationMaximumRmseMm: 100,
+      registrationMinimumOverlapPercent: 55,
+      voxelSizeM: 0.1,
+      structuralChangeThresholdPercent: 2,
+      photometricChangeThresholdPercent: 12,
+      centroidChangeThresholdMm: 50,
+      maximumSamplePoints: 2_000_000,
+    },
+  });
+  await waitForJob(raw.report.jobId);
+  const rawWorkspace = await spatialWorkspace();
+  const rawReport = rawWorkspace.rawChangeReports.find((candidate) =>
+    candidate.id === raw.report.id
+  );
+  if (
+    rawReport?.status !== "COMPLETED" || rawReport.registration_status !== "accepted" ||
+    !rawReport.report_asset_id
+  ) {
+    throw new Error(`Raw comparison did not complete with accepted registration: ${JSON.stringify(rawReport)}`);
+  }
+  await api(`/api/projects/${projectId}/spatial/raw-change-reports/${raw.report.id}`, {
+    method: "PATCH",
+    body: {
+      decision: "accepted",
+      note: "Staging service operator reviewed the deterministic registered raw-scene comparison.",
+    },
+  });
+  stage("comparison-lifecycle-verified", {
+    pair: {
+      baselineVersionId: input.baselineVersionId,
+      candidateVersionId: input.candidateVersionId,
+      modes: pair.modes,
+    },
+    signedAssets: served,
+    authoredGeometryReportId: geometry.report.id,
+    rawReportId: raw.report.id,
+    rawReportAssetId: rawReport.report_asset_id,
+    rawSourceAssets: [input.baselineGeometryAssetId, input.candidateGeometryAssetId],
+    reviewDecisions: ["authored_geometry:accepted", "raw:accepted"],
+  });
+}
+
 function floorplanProposalToReviewPlan(proposal) {
   const point2 = (point) => [Number(point[0]), Number(point[2])];
   const room = (candidate) => ({
@@ -847,9 +1025,27 @@ async function verifyLifecycleInChrome(url) {
     await runWithBudget(chromeReadyBudget("authenticated_studio_workspace"),
       ({ limit }) => studio.locator("#projectWorkspaceHeader")
         .waitFor({ state: "visible", timeout: limit }));
+    await runWithBudget(chromeReadyBudget("comparison_stage_navigation"), async ({ limit }) => {
+      const compareTab = studio.locator("#projectCompareTab");
+      await compareTab.waitFor({ state: "visible", timeout: limit });
+      await compareTab.click({ timeout: limit });
+      await studio.locator(".comparison-evidence")
+        .filter({ hasText: "Compare immutable versions" })
+        .waitFor({ state: "visible", timeout: limit });
+      await studio.getByRole("button", { name: "Compare scenes side by side" })
+        .click({ timeout: limit });
+      await studio.locator("#versionComparisonDialog")
+        .waitFor({ state: "visible", timeout: limit });
+      await studio.locator("#compareLeftStatus")
+        .filter({ hasText: "Spark ready" })
+        .waitFor({ state: "visible", timeout: limit });
+      await studio.locator("#compareRightStatus")
+        .filter({ hasText: "Spark ready" })
+        .waitFor({ state: "visible", timeout: limit });
+    });
     report.measurements.authenticatedStudioRenderMilliseconds =
       Math.ceil(performance.now() - studioStartedAt);
-    stage("authenticated-studio-rendered", { projectId });
+    stage("authenticated-studio-and-comparison-rendered", { projectId });
     const page = await context.newPage();
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -887,6 +1083,21 @@ async function bestEffortCleanup() {
     }
   }
   if (projectId && cookie) {
+    for (const uploadId of [...openUploadIds]) {
+      try {
+        await api(`/api/uploads/${uploadId}`, { method: "DELETE" });
+        openUploadIds.delete(uploadId);
+        report.cleanup.push({ resource: "upload-session", id: uploadId, status: "aborted" });
+      } catch (error) {
+        report.cleanup.push({
+          resource: "upload-session",
+          id: uploadId,
+          status: "failed",
+          error: redact(String(error)),
+        });
+        process.exitCode = 1;
+      }
+    }
     try {
       const detail = await projectDetail();
       for (const job of detail.jobs.filter((candidate) =>
@@ -942,17 +1153,36 @@ async function confirmProjectArchived() {
 
 async function cleanArchivedProjectObjects(id) {
   if (report.cleanup.some((item) => item.resource === "project-objects" && item.id === id)) return;
-  const result = await d1(`SELECT object_key FROM assets WHERE project_id = '${id.replaceAll("'", "''")}' AND deleted_at IS NULL`);
-  const keys = result[0]?.results?.map((row) => row.object_key).filter(Boolean) ?? [];
+  const escapedId = id.replaceAll("'", "''");
+  const openOutputs = await d1(`SELECT id FROM job_output_uploads WHERE project_id = '${escapedId}' AND status = 'OPEN'`);
+  const openOutputIds = openOutputs[0]?.results?.map((row) => row.id).filter(Boolean) ?? [];
+  if (openOutputIds.length) {
+    throw new Error(
+      `job_output_upload_cleanup expected 0 OPEN rows after archive, observed ${openOutputIds.length}: ${openOutputIds.join(",")}`,
+    );
+  }
+  const result = await d1(`
+    SELECT object_key, 'asset' AS source
+    FROM assets
+    WHERE project_id = '${escapedId}' AND deleted_at IS NULL
+    UNION
+    SELECT object_key, 'job-output' AS source
+    FROM job_output_uploads
+    WHERE project_id = '${escapedId}' AND status = 'COMPLETED'
+  `);
+  const objects = result[0]?.results?.filter((row) => row.object_key) ?? [];
+  const keys = [...new Set(objects.map((row) => row.object_key))];
   for (const key of keys) {
     await wrangler(["r2", "object", "delete", `spatial-studio-assets-staging/${key}`, "--remote"]);
   }
-  await d1(`UPDATE assets SET deleted_at = COALESCE(deleted_at, datetime('now')) WHERE project_id = '${id.replaceAll("'", "''")}'`);
+  await d1(`UPDATE assets SET deleted_at = COALESCE(deleted_at, datetime('now')) WHERE project_id = '${escapedId}'`);
+  await d1(`UPDATE job_output_uploads SET status = 'ABORTED', completed_at = COALESCE(completed_at, datetime('now')) WHERE project_id = '${escapedId}' AND status = 'COMPLETED'`);
   report.cleanup.push({
     resource: "project-objects",
     id,
     status: "deleted",
     objectCount: keys.length,
+    jobOutputObjectCount: objects.filter((row) => row.source === "job-output").length,
     retainedD1Evidence: "archived immutable lifecycle receipt",
   });
 }

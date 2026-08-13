@@ -48,8 +48,17 @@ function argValue(flag, fallback = null) {
 }
 
 const environment = argValue("--env");
-if (!["staging", "production"].includes(environment ?? "")) {
-  console.error("Usage: processor-canary.mjs --env staging|production [--report <path>] [--timeout-seconds N] [--attempts N]");
+const expectedBuildSha = argValue("--expected-build-sha")?.toLowerCase();
+const expectedImageDigest = argValue("--expected-image-digest")?.toLowerCase();
+const allowLegacyIdentity = process.argv.includes("--allow-legacy-identity");
+if (
+  !["staging", "production"].includes(environment ?? "") ||
+  (!allowLegacyIdentity && (
+    !/^[a-f0-9]{40}$/.test(expectedBuildSha ?? "") ||
+    !/^sha256:[a-f0-9]{64}$/.test(expectedImageDigest ?? "")
+  ))
+) {
+  console.error("Usage: processor-canary.mjs --env staging|production (--expected-build-sha <40-hex> --expected-image-digest <sha256:64-hex> | --allow-legacy-identity) [--report <path>] [--timeout-seconds N] [--attempts N]");
   process.exit(1);
 }
 if (!process.env.CLOUDFLARE_ACCOUNT_ID || (process.env.CI === "true" && !process.env.CLOUDFLARE_API_TOKEN)) {
@@ -167,7 +176,7 @@ async function runCanaryAttempt(attemptNumber) {
         `INSERT OR IGNORE INTO projects (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by) VALUES ('${FIXTURES.projectId}', '${FIXTURES.organisationId}', 'Processor canary (synthetic)', 'processor-canary', 'DRAFT', 'open-import', 'Property showcase', '${FIXTURES.userId}')`,
         `INSERT OR IGNORE INTO scene_versions (id, project_id, version_number, status, created_by) VALUES ('${FIXTURES.versionId}', '${FIXTURES.projectId}', 1, 'INGESTED', '${FIXTURES.userId}')`,
         `INSERT INTO assets (id, organisation_id, project_id, version_id, kind, format, object_key, file_name, mime_type, size_bytes, sha256, integrity_status, integrity_source) VALUES ('${assetId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', 'source', 'json', '${inputObjectKey}', 'canary-input.json', 'application/json', ${inputBytes}, '${inputSha256}', 'verified', 'client_declared')`,
-        `INSERT INTO processing_jobs (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, idempotency_key, state, priority, max_attempts) VALUES ('${jobId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', '${assetId}', '${CANARY_JOB_TYPE}', 'spatial-processor/0.16.0', 'canary-${runId}', 'QUEUED', 1000, 2)`,
+        `INSERT INTO processing_jobs (id, organisation_id, project_id, version_id, input_asset_id, job_type, processor_version, contract_version, idempotency_key, state, priority, max_attempts) VALUES ('${jobId}', '${FIXTURES.organisationId}', '${FIXTURES.projectId}', '${FIXTURES.versionId}', '${assetId}', '${CANARY_JOB_TYPE}', 'spatial-processor/0.16.0', 'spatial-processor/0.16.0', 'canary-${runId}', 'QUEUED', 1000, 2)`,
       ].join("; "));
     } catch (setupError) {
       throw new CanaryFailure(`setup failed: ${setupError.message}`, { retryable: true });
@@ -178,7 +187,7 @@ async function runCanaryAttempt(attemptNumber) {
     let row = null;
     for (;;) {
       const result = await d1(
-        `SELECT state, leased_by, heartbeat_at, completed_at, output_json, error_json, evidence_json FROM processing_jobs WHERE id = '${jobId}'`,
+        `SELECT state, leased_by, heartbeat_at, completed_at, output_json, error_json, evidence_json, processor_identity_json FROM processing_jobs WHERE id = '${jobId}'`,
       );
       row = result[0]?.results?.[0] ?? null;
       if (!row) throw new CanaryFailure("canary job row disappeared while polling", { retryable: false });
@@ -221,6 +230,31 @@ async function runCanaryAttempt(attemptNumber) {
     if (outputRecord.report?.nonce !== nonce) failures.push("completion receipt does not echo the canary nonce");
     if (outputRecord.report?.inputSha256 !== inputSha256) failures.push("completion receipt reports a different input digest");
     if (!evidence.processorVersion) failures.push("execution receipt is missing processorVersion");
+    const expectedIdentity = allowLegacyIdentity ? null : {
+      agentBuildSha: expectedBuildSha,
+      imageDigest: expectedImageDigest,
+    };
+    if (!allowLegacyIdentity && (
+      evidence.processorIdentity?.agentBuildSha !== expectedBuildSha ||
+      evidence.processorIdentity?.imageDigest !== expectedImageDigest
+    )) {
+      failures.push(
+        `execution receipt identity ${JSON.stringify(evidence.processorIdentity ?? null)} ` +
+          `does not match ${JSON.stringify(expectedIdentity)}`,
+      );
+    }
+    let storedProcessorIdentity = null;
+    try {
+      storedProcessorIdentity = JSON.parse(row.processor_identity_json ?? "null");
+    } catch {
+      failures.push("stored processor identity is not valid JSON");
+    }
+    if (
+      (!allowLegacyIdentity || evidence.processorIdentity != null) &&
+      JSON.stringify(storedProcessorIdentity) !== JSON.stringify(evidence.processorIdentity)
+    ) {
+      failures.push("stored processor identity differs from the execution receipt identity");
+    }
     if (!evidence.completedAt) failures.push("execution receipt is missing completedAt");
     let storedOutputSha256 = null;
     let declaredOutputSha256 = null;
@@ -259,6 +293,7 @@ async function runCanaryAttempt(attemptNumber) {
       heartbeatAt: row.heartbeat_at,
       completedAt: row.completed_at,
       processorVersion: evidence.processorVersion ?? null,
+      processorIdentity: evidence.processorIdentity ?? null,
       outputAssetId: outputAssetId ?? null,
       outputObjectKey,
       declaredOutputSha256,
@@ -338,6 +373,9 @@ async function main() {
     schemaVersion: "processor-canary-run-v2",
     environment,
     jobType: CANARY_JOB_TYPE,
+    expectedIdentity: allowLegacyIdentity
+      ? { mode: "legacy-unidentified-rollback" }
+      : { agentBuildSha: expectedBuildSha, imageDigest: expectedImageDigest },
     attempts,
     cleanupOk,
     ok: last.ok && cleanupOk,

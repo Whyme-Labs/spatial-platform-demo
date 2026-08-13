@@ -1,5 +1,11 @@
 import { api } from "../../api";
 import { runAction } from "../../action-state";
+import {
+  comparisonModeAvailable,
+  comparisonVersionIdsForMode,
+  type ComparisonMode,
+  type ComparisonReadiness,
+} from "../../../shared/comparison-readiness";
 
 export type CompareVersion = {
   id: string;
@@ -270,6 +276,7 @@ type CompareProject = {
   id: string;
   versions: CompareVersion[];
   assets: CompareAsset[];
+  comparisonReadiness: ComparisonReadiness;
 };
 
 export type CompareDomainDependencies = {
@@ -291,6 +298,7 @@ export type CompareStageInput = {
   assets: readonly CompareAsset[];
   geometryReports: readonly GeometryChangeReport[];
   rawReports: readonly RegisteredSceneChangeReport[];
+  readiness: ComparisonReadiness;
 };
 
 export type CompareDomain = {
@@ -429,12 +437,21 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
   }
 
   function openVersionComparison(projectId: string, versions: CompareVersion[]): void {
-    if (versions.length < 2) {
-      dependencies.showNotice("At least two immutable versions are required for comparison.", "error");
+    const project = dependencies.currentProject();
+    const eligibleIds = project
+      ? comparisonVersionIdsForMode(project.comparisonReadiness, "visual")
+      : new Set<string>();
+    const eligibleVersions = versions.filter((version) => eligibleIds.has(version.id));
+    if (eligibleVersions.length < 2) {
+      dependencies.showNotice(
+        "Visual comparison needs two versions with verified web scenes, approved navigation, and capture registration.",
+        "error",
+      );
       return;
     }
     comparisonProjectId = projectId;
-    comparisonVersions = [...versions].sort((left, right) => right.version_number - left.version_number);
+    comparisonVersions = [...eligibleVersions]
+      .sort((left, right) => right.version_number - left.version_number);
     const left = byId<HTMLSelectElement>("comparisonLeftVersion");
     const right = byId<HTMLSelectElement>("comparisonRightVersion");
     const options = comparisonVersions.map((version) => {
@@ -448,7 +465,9 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
     left.value = comparisonVersions[1]!.id;
     right.value = comparisonVersions[0]!.id;
     resetComparisonPresentation();
-    byId("comparisonError").textContent = "";
+    byId("comparisonError").textContent = project
+      ? comparisonExclusionMessage(project.comparisonReadiness, "visual", versions)
+      : "";
     versionComparisonDialog().showModal();
     window.requestAnimationFrame(() => byId<HTMLButtonElement>("comparisonSubmit").click());
   }
@@ -767,7 +786,11 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
   }
 
   function openGeometryChangeDialog(): void {
-    const versions = dependencies.currentProject()?.versions ?? [];
+    const project = dependencies.currentProject();
+    const eligibleIds = project
+      ? comparisonVersionIdsForMode(project.comparisonReadiness, "authored_geometry")
+      : new Set<string>();
+    const versions = (project?.versions ?? []).filter((version) => eligibleIds.has(version.id));
     if (versions.length < 2) return;
     const from = byId<HTMLSelectElement>("geometryChangeFrom");
     const to = byId<HTMLSelectElement>("geometryChangeTo");
@@ -783,7 +806,9 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
     const form = byId<HTMLFormElement>("geometryChangeForm");
     const evidence = form.elements.namedItem("registrationEvidence");
     if (evidence instanceof HTMLTextAreaElement) evidence.value = "";
-    byId("geometryChangeError").textContent = "";
+    byId("geometryChangeError").textContent = project
+      ? comparisonExclusionMessage(project.comparisonReadiness, "authored_geometry", project.versions)
+      : "";
     geometryChangeOperation = null;
     byId<HTMLDialogElement>("geometryChangeDialog").showModal();
   }
@@ -937,7 +962,11 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
 
   function openRawSceneChangeDialog(): void {
     const project = dependencies.currentProject();
+    const eligibleIds = project
+      ? comparisonVersionIdsForMode(project.comparisonReadiness, "raw")
+      : new Set<string>();
     const versions = (project?.versions ?? []).filter((version) =>
+      eligibleIds.has(version.id) &&
       eligibleRawChangeAssets(version.id, project?.assets ?? []).length > 0
     );
     if (!project || versions.length < 2) {
@@ -974,9 +1003,29 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
     baselineVersion.onchange = refreshAssets;
     candidateVersion.onchange = refreshAssets;
     refreshAssets();
-    byId("rawSceneChangeError").textContent = "";
+    byId("rawSceneChangeError").textContent = comparisonExclusionMessage(
+      project.comparisonReadiness,
+      "raw",
+      project.versions,
+    );
     rawSceneChangeOperation = null;
     byId<HTMLDialogElement>("rawSceneChangeDialog").showModal();
+  }
+
+  function comparisonExclusionMessage(
+    readiness: ComparisonReadiness,
+    mode: ComparisonMode,
+    versions: readonly CompareVersion[],
+  ): string {
+    const eligibleIds = comparisonVersionIdsForMode(readiness, mode);
+    const excluded = versions.flatMap((version) => {
+      if (eligibleIds.has(version.id)) return [];
+      const reasons = readiness.versions.find((candidate) =>
+        candidate.versionId === version.id
+      )?.modes[mode].reasons ?? ["no eligible pair"];
+      return [`v${version.version_number}: ${reasons.map(dependencies.humanStatus).join(", ")}`];
+    });
+    return excluded.length ? `Excluded versions — ${excluded.join("; ")}.` : "";
   }
 
   async function createRawSceneChangeReport(form: FormData): Promise<void> {
@@ -1195,9 +1244,11 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
   }
 
   function renderStage(input: CompareStageInput): HTMLElement {
-    const eligibleRawVersionCount = input.versions.filter((version) =>
-      eligibleRawChangeAssets(version.id, input.assets).length > 0
-    ).length;
+    const eligibleVersionCount = (mode: ComparisonMode) =>
+      comparisonVersionIdsForMode(input.readiness, mode).size;
+    const visualAvailable = comparisonModeAvailable(input.readiness, "visual");
+    const geometryAvailable = comparisonModeAvailable(input.readiness, "authored_geometry");
+    const rawAvailable = comparisonModeAvailable(input.readiness, "raw");
     const card = createElement("article", "workspace-card-large comparison-evidence");
     card.append(
       createElement("span", "eyebrow", "CHANGE EVIDENCE"),
@@ -1207,8 +1258,10 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
       createElement("p", "muted-copy", "Open the immutable scenes side by side with their source and walking-package identities visible."),
     );
     const visual = createElement("button", "quiet-button wide", "Compare scenes side by side");
-    visual.toggleAttribute("disabled", input.versions.length < 2);
-    visual.title = input.versions.length < 2 ? "Two immutable versions are required." : "";
+    visual.toggleAttribute("disabled", !visualAvailable);
+    visual.title = visualAvailable
+      ? ""
+      : "Two versions need verified web scenes, approved navigation, and capture registration.";
     visual.addEventListener("click", () => openVersionComparison(input.projectId, [...input.versions]));
     card.append(visual, createElement("hr", "section-rule"));
     card.append(
@@ -1219,7 +1272,7 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
       card.append(createElement("p", "muted-copy", "No geometry comparison has been generated for this project."));
     }
     for (const report of input.geometryReports) card.append(renderGeometryChangeReport(input.projectId, report));
-    if (input.versions.length >= 2) {
+    if (geometryAvailable) {
       const compare = createElement(
         "button",
         "quiet-button wide",
@@ -1228,7 +1281,11 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
       compare.addEventListener("click", openGeometryChangeDialog);
       card.append(compare);
     } else {
-      card.append(createElement("p", "field-note", "Two immutable versions are required before geometry can be compared."));
+      card.append(createElement(
+        "p",
+        "field-note",
+        "Two versions need reviewed metric structure before authored geometry can be compared.",
+      ));
     }
     card.append(
       createElement("hr", "section-rule"),
@@ -1244,19 +1301,35 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
       "quiet-button wide",
       input.rawReports.length ? "Queue another registration + comparison" : "Register and compare PLY assets",
     );
-    compareRaw.toggleAttribute("disabled", eligibleRawVersionCount < 2);
-    compareRaw.title = eligibleRawVersionCount < 2 ? "Two immutable versions with verified PLY assets are required." : "";
+    compareRaw.toggleAttribute("disabled", !rawAvailable);
+    compareRaw.title = rawAvailable
+      ? ""
+      : "Two versions need verified source PLY assets and capture-registration evidence.";
     compareRaw.addEventListener("click", openRawSceneChangeDialog);
     card.append(
       compareRaw,
       createElement(
         "small",
         "field-note",
-        eligibleRawVersionCount >= 2
-          ? `${eligibleRawVersionCount} immutable versions have eligible verified PLY evidence.`
-          : "Upload and verify a source, master, or point-cloud PLY on two immutable versions first.",
+        rawAvailable
+          ? `${eligibleVersionCount("raw")} immutable versions have verified PLY and registration evidence.`
+          : "Upload and verify source PLY assets and registration evidence on two immutable versions first.",
       ),
     );
+    const excluded = input.readiness.versions.filter((version) =>
+      !Object.values(version.modes).some((mode) => mode.eligible)
+    );
+    if (excluded.length) {
+      card.append(createElement(
+        "p",
+        "field-note",
+        `Excluded until evidence is complete: ${excluded.map((version) =>
+          `v${version.versionNumber} (${[...new Set(
+            Object.values(version.modes).flatMap((mode) => mode.reasons),
+          )].join(", ")})`
+        ).join("; ")}.`,
+      ));
+    }
     return card;
   }
 

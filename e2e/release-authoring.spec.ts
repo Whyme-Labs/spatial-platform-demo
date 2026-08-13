@@ -283,8 +283,11 @@ test("QA recovery opens the visible privacy task", async ({ page }) => {
   await expect(page.locator("#privacyAssuranceCard")).toBeVisible();
 });
 
-test("comparison leaves Privacy and becomes its own stage only with two versions", async ({ page }) => {
-  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
+test("comparison leaves Privacy and becomes its own stage only with a comparison-ready pair", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, {
+    auxiliaryQaVersion: true,
+    comparisonReady: true,
+  });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
@@ -310,7 +313,10 @@ test("a one-version project keeps comparison in Expert and canonicalizes a Compa
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeHidden();
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compare scenes side by side", exact: true })).toBeDisabled();
-  await expect(page.getByText("Two immutable versions are required before geometry can be compared.", { exact: true })).toBeVisible();
+  await expect(page.getByText(
+    "Two versions need reviewed metric structure before authored geometry can be compared.",
+    { exact: true },
+  )).toBeVisible();
 });
 
 test("publication keeps technical overrides behind an expert disclosure", async ({ page }) => {
@@ -632,6 +638,7 @@ async function mockApprovedProject(
     authoredSpatial?: boolean;
     reviewedTransform?: boolean;
     auxiliaryQaVersion?: boolean;
+    comparisonReady?: boolean;
     navigationBuildHistory?: boolean;
     multiLevelFloorplan?: boolean;
     qualifiedTraversalEvidence?: boolean;
@@ -848,6 +855,7 @@ async function mockApprovedProject(
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
         project,
+        comparisonReadiness: comparisonReadinessFixture(Boolean(options.comparisonReady)),
         versions: [
           ...(options.auxiliaryQaVersion
             ? [{
@@ -1324,6 +1332,37 @@ async function mockApprovedProject(
     }
     return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
   });
+}
+
+function comparisonReadinessFixture(ready: boolean): Record<string, unknown> {
+  const mode = (eligible: boolean, reason: string) => ({
+    eligible,
+    reasons: eligible ? [] : [reason],
+  });
+  const version = (id: string, number: number, eligible: boolean) => ({
+    versionId: id,
+    versionNumber: number,
+    modes: {
+      visual: mode(eligible, "approved_navigation_missing"),
+      authored_geometry: mode(false, "reviewed_metric_structure_missing"),
+      raw: mode(false, "verified_source_point_cloud_missing"),
+    },
+  });
+  return ready
+    ? {
+      available: true,
+      eligiblePairs: [{
+        leftVersionId: auxiliaryQaVersionId,
+        rightVersionId: versionId,
+        modes: ["visual"],
+      }],
+      versions: [version(auxiliaryQaVersionId, 2, true), version(versionId, 1, true)],
+    }
+    : {
+      available: false,
+      eligiblePairs: [],
+      versions: [version(versionId, 1, false)],
+    };
 }
 
 function multiLevelFloorplanProposal(): Record<string, unknown> {

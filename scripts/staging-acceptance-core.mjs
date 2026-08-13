@@ -89,6 +89,7 @@ export async function runStagingHttpAcceptance({
   });
 
   await timedStep(steps, "anonymous-session", async () => {
+    // assurance-route: GET /api/auth/session
     const response = await fetchBounded(fetcher, `${app}/api/auth/session`, {
       timeoutMs,
       expectedStatus: 200,
@@ -209,8 +210,7 @@ export async function runStagingHttpAcceptance({
     if (
       payload.service !== "spatial-processor-cloud" ||
       payload.status !== "ok" ||
-      typeof payload.processor !== "string" ||
-      !payload.processor.startsWith("spatial-processor/") ||
+      !validProcessorIdentity(payload.identity) ||
       typeof payload.renderer !== "string" ||
       !payload.renderer.startsWith("Spark ") ||
       payload.execution !== "cloudflare-container"
@@ -218,7 +218,7 @@ export async function runStagingHttpAcceptance({
       throw new StagingAcceptanceError("Processor health payload is incomplete", payload);
     }
     return {
-      processor: payload.processor,
+      identity: payload.identity,
       renderer: payload.renderer,
       execution: payload.execution,
     };
@@ -234,6 +234,18 @@ export async function runStagingHttpAcceptance({
     processor: processorHealth,
     steps,
   };
+}
+
+function validProcessorIdentity(identity) {
+  return identity && typeof identity === "object" &&
+    /^[a-f0-9]{40}$/.test(identity.agentBuildSha) &&
+    /^sha256:[a-f0-9]{64}$/.test(identity.imageDigest) &&
+    identity.protocolVersion === "spatial-processor-lease/1" &&
+    Array.isArray(identity.capabilities) && identity.capabilities.length > 0 &&
+    identity.capabilities.every((capability) =>
+      capability && typeof capability.jobType === "string" &&
+      typeof capability.contractVersion === "string"
+    );
 }
 
 export function assertWorkerSecurityHeaders(response) {

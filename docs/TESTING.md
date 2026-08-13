@@ -12,7 +12,7 @@ only when the public behavior at its relevant seam is covered and the complete
 | Integration | Worker HTTP routes and Cloudflare bindings | `npm run test:integration` | D1, R2, KV, queues, email, authentication, tenancy, billing state, processing, review, release and lifecycle workflows, and the public E57 container-structure evidence lane |
 | Navigation contracts | Offline build, movement evidence, receipt migration, and the processor image | `npm run test:navigation` | Structural shell validation, Recast/Detour export, Walk/Fly collision sweeps, corner slides, dynamic doors, connectivity, deterministic physical-runtime probes, legacy receipt backfill/atomicity, the public ASTM E57 container reader, and the Container `Dockerfile` COPY graph |
 | End to end | Production browser bundle | `npm run test:e2e` | Landing and live-demo messaging, OTP pending/error/retry behavior, responsive sign-in and Turnstile, paired-capture intake, registered-render structure approval/correction controls, navigation authoring/review spacing, Spark renderer chrome, Walk/Fly input, floor plan, and the host-to-renderer navigation snapshot handoff |
-| Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor Container health and cleanup evidence |
+| Deployed staging | Cloudflare edge, deployed Workers and remote bindings | `npm run verify:staging` plus `npm run verify:staging:lifecycle` | Worker deployments, security/auth boundaries, D1 migration state, exact R2/KV canary round trips, processor identity and cleanup, and an authenticated two-version lifecycle through visual, authored-geometry, and processor-backed raw comparison |
 
 The Studio browser gate measures column starts and resolved grid tracks across
 every columnar Projects, Jobs, Releases, and Team row, including their headers
@@ -190,6 +190,15 @@ the remote D1 migration ledger, performs exact-byte R2 and KV canary
 round-trips, and removes both canaries in a `finally` block. A cleanup failure
 fails the run. The bounded, redacted report is written to
 `.cache/staging-acceptance/report.json`.
+
+The authenticated lifecycle runner then creates two deterministic immutable
+versions. It proves Compare is unavailable after the first qualified version,
+qualifies the second, verifies all three server-derived comparison modes, loads
+both signed visual assets and checks their source hashes, accepts an authored
+geometry report, completes and accepts a processor-backed registered raw-scene
+report, and drives the resulting Compare workspace through Chrome. Its final
+cleanup enumerates and removes every project object, including comparison
+reports, before archiving the temporary project and revoking the session.
 
 The `Deploy and accept staging` GitHub workflow deploys the exact `main`
 revision that passed `Release gate`, then uploads this report as immutable CI

@@ -4,16 +4,31 @@ import {
   resolveComparisonWorkspaceSection,
 } from "../src/client/project-stage-policy";
 
+const unavailable = {
+  available: false,
+  eligiblePairs: [],
+  versions: [],
+} as const;
+
+const visualPair = {
+  available: true,
+  eligiblePairs: [{
+    leftVersionId: "version-1",
+    rightVersionId: "version-2",
+    modes: ["visual" as const],
+  }],
+  versions: [],
+} as const;
+
 describe("conditional comparison workspace policy", () => {
   it("keeps comparison in Expert until two immutable versions exist", () => {
-    expect(comparisonWorkspaceAvailable(0)).toBe(false);
-    expect(comparisonWorkspaceAvailable(1)).toBe(false);
-    expect(resolveComparisonWorkspaceSection("compare", 1)).toBe("expert");
+    expect(comparisonWorkspaceAvailable(unavailable)).toBe(false);
+    expect(resolveComparisonWorkspaceSection("compare", unavailable)).toBe("expert");
   });
 
-  it("exposes the dedicated Compare stage once comparison is meaningful", () => {
-    expect(comparisonWorkspaceAvailable(2)).toBe(true);
-    expect(resolveComparisonWorkspaceSection("compare", 2)).toBe("compare");
-    expect(resolveComparisonWorkspaceSection("privacy", 2)).toBe("privacy");
+  it("exposes the dedicated Compare stage only for a server-qualified pair", () => {
+    expect(comparisonWorkspaceAvailable(visualPair)).toBe(true);
+    expect(resolveComparisonWorkspaceSection("compare", visualPair)).toBe("compare");
+    expect(resolveComparisonWorkspaceSection("privacy", visualPair)).toBe("privacy");
   });
 });

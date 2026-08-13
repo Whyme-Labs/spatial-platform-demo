@@ -4,6 +4,17 @@ import {
   processorEnvironment,
 } from "../src/processor-cloud/dispatch";
 import { PROCESSOR_CONTAINER_IDLE_TIMEOUT } from "../src/processor-cloud";
+import {
+  PROCESSOR_CAPABILITIES,
+  PROCESSOR_PROTOCOL_VERSION,
+} from "../src/shared/processor-identity";
+
+const processorIdentity = {
+  agentBuildSha: "a".repeat(40),
+  imageDigest: `sha256:${"b".repeat(64)}`,
+  protocolVersion: PROCESSOR_PROTOCOL_VERSION,
+  capabilities: PROCESSOR_CAPABILITIES,
+};
 
 describe("Cloud processor dispatch", () => {
   it("recycles a finished one-shot processor instead of hoarding an instance slot", () => {
@@ -31,6 +42,7 @@ describe("Cloud processor dispatch", () => {
       workerApiToken: "worker-secret",
       maximumChangeInputMib: "1024",
       maximumJobRuntimeMinutes: "180",
+      processorIdentityJson: JSON.stringify(processorIdentity),
     }, jobId);
     expect(environment).toMatchObject({
       SPATIAL_API_ORIGIN: "https://spatial.whymelabs.com",
@@ -38,6 +50,7 @@ describe("Cloud processor dispatch", () => {
       PROCESSOR_WORKER_ID: `cloudflare-container:${jobId}`,
       PROCESSOR_CHROME_PATH: "/usr/bin/chromium",
       SPARK_BUILD_LOD_BIN: "/usr/local/bin/spark-build-lod",
+      PROCESSOR_IDENTITY_JSON: JSON.stringify(processorIdentity),
     });
     expect(environment).not.toHaveProperty("R2_ACCESS_KEY_ID");
     expect(environment).not.toHaveProperty("R2_SECRET_ACCESS_KEY");
@@ -56,6 +69,7 @@ describe("Cloud processor dispatch", () => {
       maximumPointcloudInputMib: "2048",
       pollSeconds: "5",
       heartbeatSeconds: "30",
+      processorIdentityJson: JSON.stringify(processorIdentity),
     }, jobId);
     expect(environment).toMatchObject({
       PROCESSOR_MAX_POINTCLOUD_INPUT_MIB: "2048",

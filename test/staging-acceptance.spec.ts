@@ -87,7 +87,15 @@ describe("deployed staging acceptance contract", () => {
         return json({
           service: "spatial-processor-cloud",
           status: "ok",
-          processor: "spatial-processor/0.11.0",
+          identity: {
+            agentBuildSha: "a".repeat(40),
+            imageDigest: `sha256:${"b".repeat(64)}`,
+            protocolVersion: "spatial-processor-lease/1",
+            capabilities: [{
+              jobType: "canary.roundtrip-v1",
+              contractVersion: "spatial-processor/0.16.0",
+            }],
+          },
           renderer: "Spark 2.1.0",
           execution: "cloudflare-container",
         }, {}, 200, false);
@@ -106,7 +114,10 @@ describe("deployed staging acceptance contract", () => {
     expect(result.steps.every((step: { status: string }) => step.status === "passed")).toBe(true);
     expect(result.application).toMatchObject({ environment: "staging", requestId });
     expect(result.processor).toMatchObject({
-      processor: "spatial-processor/0.11.0",
+      identity: {
+        agentBuildSha: "a".repeat(40),
+        imageDigest: `sha256:${"b".repeat(64)}`,
+      },
       renderer: "Spark 2.1.0",
     });
   });

@@ -205,6 +205,9 @@
     },
     "0061_workflow_policy_revision_integrity.sql": {
       "phase": "expand"
+    },
+    "0062_processor_execution_identity.sql": {
+      "phase": "expand"
     }
   }
 }

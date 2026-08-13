@@ -3,6 +3,7 @@ import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { otpHash } from "../src/worker/auth";
 import { sha256Hex } from "../src/worker/security";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
 
 const origin = "https://spatial.test";
 let addressSequence = 5000;
@@ -50,6 +51,99 @@ function ply(rows: string[]): Uint8Array {
     ...rows,
     "",
   ].join("\n"));
+}
+
+async function seedAcceptedRegistration(input: {
+  organisationId: string;
+  projectId: string;
+  versionId: string;
+  versionNumber: number;
+  assetId: string;
+  assetSha256: string;
+  userId: string;
+}): Promise<void> {
+  const manifestId = crypto.randomUUID();
+  const manifestAssetId = crypto.randomUUID();
+  const registrationPayload = {
+    schemaVersion: "capture-to-scene-registration-v1",
+    sourceCoordinateFrameId: "registered-test-frame",
+    targetCoordinateFrameId: "scene-world-right-handed-y-up-metres",
+    evidenceAssetId: input.assetId,
+    evidenceSha256: input.assetSha256,
+    method: "Test fixture registration binds the exact PLY to the shared metric frame.",
+    sourceToWorld: {
+      sourceUpAxis: "Y",
+      worldUnit: "metres",
+      metresPerSourceUnit: 1,
+      yawDegrees: 0,
+      translationMetres: [0, 0, 0],
+    },
+  };
+  const transformSha256 = await sha256Hex(JSON.stringify(registrationPayload));
+  const canonicalManifest = JSON.stringify({
+    format: "whymelabs.spatial.capture-bundle",
+    schemaVersion: "1.0.0",
+    manifestId,
+    project: { id: input.projectId, captureAdapter: "open-import" },
+    version: { id: input.versionId, versionNumber: input.versionNumber },
+    coordinateFrame: {
+      id: "registered-test-frame",
+      units: "metres",
+      axisConvention: "right-handed-y-up",
+      epsg: null,
+      registrationMethod: registrationPayload.method,
+    },
+    sceneRegistration: { ...registrationPayload, transformSha256 },
+    assets: [{
+      id: input.assetId,
+      roles: ["traversal_evidence"],
+      sha256: input.assetSha256,
+    }],
+  });
+  const manifestSha256 = await sha256Hex(canonicalManifest);
+  const manifestKey = `reports-private/${input.organisationId}/${input.projectId}/${input.versionId}/${manifestAssetId}/capture-bundle-manifest.json`;
+  await env.SPATIAL_ASSETS.put(manifestKey, canonicalManifest);
+  await env.DB.batch([
+    env.DB.prepare(`
+      INSERT INTO assets (
+        id, organisation_id, project_id, version_id, kind, format, object_key,
+        file_name, mime_type, size_bytes, sha256, integrity_status
+      ) VALUES (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+        'capture-bundle-manifest.json', 'application/json', ?, ?, 'verified')
+    `).bind(
+      manifestAssetId,
+      input.organisationId,
+      input.projectId,
+      input.versionId,
+      manifestKey,
+      Buffer.byteLength(canonicalManifest),
+      manifestSha256,
+    ),
+    env.DB.prepare(`
+      INSERT INTO capture_bundle_manifests (
+        id, organisation_id, project_id, version_id, adapter, adapter_v2,
+        schema_version, status, result, client_operation_id, request_hash,
+        manifest_asset_id, manifest_hash, canonical_manifest_json,
+        validation_json, created_by, review_decision, review_note,
+        reviewed_by, reviewed_at, review_generation
+      ) VALUES (?, ?, ?, ?, 'open-import', 'open-import', '1.0.0',
+        'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+    `).bind(
+      manifestId,
+      input.organisationId,
+      input.projectId,
+      input.versionId,
+      crypto.randomUUID(),
+      "a".repeat(64),
+      manifestAssetId,
+      manifestSha256,
+      canonicalManifest,
+      JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+      input.userId,
+      "Accepted registration fixture.",
+      input.userId,
+    ),
+  ]);
 }
 
 describe("registered raw-scene change evidence", () => {
@@ -149,6 +243,106 @@ describe("registered raw-scene change evidence", () => {
       centroidChangeThresholdMm: 50,
       maximumSamplePoints: 100_000,
     };
+    const unregistered = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/spatial/raw-change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(requestBody),
+      },
+    );
+    expect(unregistered.status).toBe(409);
+    await expect(unregistered.json()).resolves.toMatchObject({
+      error: expect.stringContaining("qualified registration evidence"),
+    });
+    await Promise.all([
+      seedAcceptedRegistration({
+        organisationId: storedProject!.organisation_id,
+        projectId: project.project.id,
+        versionId: baselineVersionId,
+        versionNumber: 1,
+        assetId: baselineAssetId,
+        assetSha256: await sha256Hex(baselineBytes),
+        userId: storedProject!.created_by,
+      }),
+      seedAcceptedRegistration({
+        organisationId: storedProject!.organisation_id,
+        projectId: project.project.id,
+        versionId: candidateVersionId,
+        versionNumber: 2,
+        assetId: candidateAssetId,
+        assetSha256: await sha256Hex(candidateBytes),
+        userId: storedProject!.created_by,
+      }),
+    ]);
+    const noDigestAssetId = crypto.randomUUID();
+    const missingObjectAssetId = crypto.randomUUID();
+    const noDigestKey = `masters-private/${storedProject!.organisation_id}/${project.project.id}/${baselineVersionId}/no-digest.ply`;
+    const missingObjectKey = `masters-private/${storedProject!.organisation_id}/${project.project.id}/${candidateVersionId}/missing-object.ply`;
+    await env.SPATIAL_ASSETS.put(noDigestKey, baselineBytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'master', 'ply', ?, 'no-digest.ply',
+          'application/octet-stream', ?, NULL, 'verified')
+      `).bind(
+        noDigestAssetId,
+        storedProject!.organisation_id,
+        project.project.id,
+        baselineVersionId,
+        noDigestKey,
+        baselineBytes.byteLength,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'master', 'ply', ?, 'missing-object.ply',
+          'application/octet-stream', ?, ?, 'verified')
+      `).bind(
+        missingObjectAssetId,
+        storedProject!.organisation_id,
+        project.project.id,
+        candidateVersionId,
+        missingObjectKey,
+        candidateBytes.byteLength,
+        await sha256Hex(candidateBytes),
+      ),
+    ]);
+    const noDigestSelection = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/spatial/raw-change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...requestBody,
+          clientOperationId: crypto.randomUUID(),
+          baselineAssetId: noDigestAssetId,
+        }),
+      },
+    );
+    expect(noDigestSelection.status).toBe(409);
+    await expect(noDigestSelection.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Baseline asset has no immutable SHA-256 identity"),
+    });
+    const missingObjectSelection = await exports.default.fetch(
+      `${origin}/api/projects/${project.project.id}/spatial/raw-change-reports`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...requestBody,
+          clientOperationId: crypto.randomUUID(),
+          candidateAssetId: missingObjectAssetId,
+        }),
+      },
+    );
+    expect(missingObjectSelection.status).toBe(409);
+    await expect(missingObjectSelection.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Candidate asset object is missing"),
+    });
     const create = await exports.default.fetch(
       `${origin}/api/projects/${project.project.id}/spatial/raw-change-reports`,
       {
@@ -181,7 +375,7 @@ describe("registered raw-scene change evidence", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "registered-change-test" }),
+      body: JSON.stringify(processorLeaseRequest("registered-change-test")),
     });
     expect(lease.status).toBe(200);
     const leased = await lease.json<{
@@ -270,6 +464,7 @@ describe("registered raw-scene change evidence", () => {
           output: output.output,
           report,
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.2.0",
             computeDurationMs: 42,
             activeHumanDurationMs: 0,
@@ -353,7 +548,7 @@ describe("registered raw-scene change evidence", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "automatic-registration-test" }),
+      body: JSON.stringify(processorLeaseRequest("automatic-registration-test")),
     });
     expect(automaticLeaseResponse.status).toBe(200);
     const automaticLease = await automaticLeaseResponse.json<{
@@ -436,6 +631,7 @@ describe("registered raw-scene change evidence", () => {
           output: blockedOutput.output,
           report: blockedReport,
           evidence: {
+            processorIdentity: testProcessorIdentity,
             processorVersion: "spatial-processor/0.3.0",
             computeDurationMs: 51,
             activeHumanDurationMs: 0,

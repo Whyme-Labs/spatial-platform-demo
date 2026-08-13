@@ -109,6 +109,9 @@ const configuration = posterOnly ? null : {
   activeHumanDurationMs: nonnegativeInteger(process.env.PROCESSOR_ACTIVE_HUMAN_MS, 0),
   chromePath: process.env.PROCESSOR_CHROME_PATH?.trim() || undefined,
   posterCamera: parsePosterCameraJson(process.env.PROCESSOR_POSTER_CAMERA_JSON),
+  processorIdentity: parseProcessorIdentityEnvironment(
+    requiredEnvironment("PROCESSOR_IDENTITY_JSON"),
+  ),
 };
 
 if (posterOnly) {
@@ -167,6 +170,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 log("processor.started", {
   processorVersion,
+  processorIdentity: configuration.processorIdentity,
   sparkVersion,
   workerId: configuration.workerId,
   origin: configuration.origin,
@@ -189,6 +193,7 @@ async function processNextJob() {
     method: "POST",
     body: JSON.stringify({
       workerId: configuration.workerId,
+      processorIdentity: configuration.processorIdentity,
       ...(configuration.jobId ? { jobId: configuration.jobId } : {}),
     }),
   }, { allowNoContent: true });
@@ -285,6 +290,7 @@ async function processNextJob() {
           },
           evidence: {
             processorVersion,
+            processorIdentity: configuration.processorIdentity,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
@@ -426,6 +432,7 @@ async function processNextJob() {
           report,
           evidence: {
             processorVersion,
+            processorIdentity: configuration.processorIdentity,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
@@ -625,6 +632,7 @@ async function processNextJob() {
           report: artifact,
           evidence: {
             processorVersion,
+            processorIdentity: configuration.processorIdentity,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
@@ -720,6 +728,7 @@ async function processNextJob() {
           report,
           evidence: {
             processorVersion,
+            processorIdentity: configuration.processorIdentity,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
@@ -929,6 +938,7 @@ async function processNextJob() {
           ...(structureSummary ? { captureScanStructure: structureSummary } : {}),
           evidence: {
             processorVersion,
+            processorIdentity: configuration.processorIdentity,
             computeDurationMs,
             activeHumanDurationMs: configuration.activeHumanDurationMs,
             inputBytes: download.sizeBytes,
@@ -1105,6 +1115,7 @@ async function processNextJob() {
         report,
         evidence: {
           processorVersion,
+          processorIdentity: configuration.processorIdentity,
           computeDurationMs,
           activeHumanDurationMs: configuration.activeHumanDurationMs,
           inputBytes: download.sizeBytes,
@@ -1323,6 +1334,7 @@ async function processRegisteredSceneChange(job, leaseToken, workDirectory, hear
       report,
       evidence: {
         processorVersion,
+        processorIdentity: configuration.processorIdentity,
         computeDurationMs,
         activeHumanDurationMs: configuration.activeHumanDurationMs,
         baselineInputBytes: baselineDownload.sizeBytes,
@@ -2171,6 +2183,31 @@ function requiredEnvironment(name) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
   return value;
+}
+
+function parseProcessorIdentityEnvironment(serialized) {
+  let identity;
+  try {
+    identity = JSON.parse(serialized);
+  } catch {
+    throw new Error("PROCESSOR_IDENTITY_JSON must be valid JSON");
+  }
+  if (
+    !identity || typeof identity !== "object" ||
+    !/^[a-f0-9]{40}$/.test(identity.agentBuildSha) ||
+    !/^sha256:[a-f0-9]{64}$/.test(identity.imageDigest) ||
+    identity.protocolVersion !== "spatial-processor-lease/1" ||
+    !Array.isArray(identity.capabilities) || identity.capabilities.length < 1 ||
+    identity.capabilities.some((capability) =>
+      !capability || typeof capability.jobType !== "string" ||
+      typeof capability.contractVersion !== "string"
+    )
+  ) {
+    throw new Error(
+      "PROCESSOR_IDENTITY_JSON must contain the immutable build SHA, image digest, protocol, and capabilities",
+    );
+  }
+  return identity;
 }
 
 function positiveInteger(value, fallback) {

@@ -5,6 +5,7 @@ import { otpHash } from "../src/worker/auth";
 import { currentNavigationAuthoringState } from "../src/worker/index";
 import { sha256Hex } from "../src/worker/security";
 import { buildAuthoredStructuralCollisionGlb } from "../scripts/authored-collision.mjs";
+import { processorLeaseRequest, testProcessorIdentity } from "./helpers/processor-identity";
 
 const origin = "https://spatial.test";
 let addressSequence = 8800;
@@ -206,7 +207,7 @@ describe("vendor-neutral floor-plan workflow", () => {
         authorization: `Bearer ${env.WORKER_API_TOKEN}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ workerId: "floorplan-contract-test" }),
+      body: JSON.stringify(processorLeaseRequest("floorplan-contract-test")),
     });
     expect(leaseResponse.status).toBe(200);
     const lease = await leaseResponse.json<{
@@ -356,6 +357,7 @@ describe("vendor-neutral floor-plan workflow", () => {
       output: { ...output.output, sha256: await sha256Hex(reportBytes) },
       report,
       evidence: {
+        processorIdentity: testProcessorIdentity,
         processorVersion: "spatial-processor/0.9.0",
         computeDurationMs: 42,
         activeHumanDurationMs: 0,

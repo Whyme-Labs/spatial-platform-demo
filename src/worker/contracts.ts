@@ -22,6 +22,17 @@ import {
   AUTOMATIC_PAIRED_CAPTURE_METHOD,
   ATTESTED_PAIRED_CAPTURE_METHOD,
 } from "../shared/paired-capture-journey";
+import { PROCESSOR_PROTOCOL_VERSION } from "../shared/processor-identity";
+
+export const processorIdentitySchema = z.object({
+  agentBuildSha: z.string().regex(/^[a-f0-9]{40}$/),
+  imageDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  protocolVersion: z.literal(PROCESSOR_PROTOCOL_VERSION),
+  capabilities: z.array(z.object({
+    jobType: z.string().trim().regex(/^[a-z0-9][a-z0-9._/-]*$/),
+    contractVersion: z.string().trim().regex(/^[a-z0-9][a-z0-9._/-]*$/),
+  }).strict()).min(1),
+}).strict();
 
 const captureAdapterSchema = z.enum(captureAdapterIds);
 const captureOriginSchema = z.enum(captureOriginIds);
@@ -534,6 +545,7 @@ export const workerJobCompletionSchema = z.object({
   captureScanStructure: captureScanStructureSchema.optional(),
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
+    processorIdentity: processorIdentitySchema.optional(),
     computeDurationMs: z.number().int().nonnegative(),
     activeHumanDurationMs: z.number().int().nonnegative(),
     inputBytes: z.number().int().nonnegative(),
@@ -2037,6 +2049,7 @@ export const workerSemanticExtractionCompletionSchema = z.object({
   }),
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
+    processorIdentity: processorIdentitySchema.optional(),
     computeDurationMs: z.number().int().nonnegative(),
     activeHumanDurationMs: z.number().int().nonnegative(),
     inputBytes: z.number().int().positive(),
@@ -2329,6 +2342,7 @@ export const workerFloorplanExtractionCompletionSchema = z.object({
   report: floorplanProposalReportSchema,
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
+    processorIdentity: processorIdentitySchema.optional(),
     computeDurationMs: z.number().int().nonnegative(),
     activeHumanDurationMs: z.number().int().nonnegative(),
     inputBytes: z.number().int().positive(),
@@ -3070,6 +3084,7 @@ export const workerSceneChangeCompletionSchema = z.object({
   report: z.record(z.string(), z.unknown()),
   evidence: z.object({
     processorVersion: z.string().trim().min(1).max(120),
+    processorIdentity: processorIdentitySchema.optional(),
     computeDurationMs: z.number().int().nonnegative(),
     activeHumanDurationMs: z.number().int().nonnegative(),
     baselineInputBytes: z.number().int().positive(),

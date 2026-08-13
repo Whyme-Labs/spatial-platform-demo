@@ -20,6 +20,7 @@ import {
   comparisonWorkspaceAvailable,
   resolveComparisonWorkspaceSection,
 } from "./project-stage-policy";
+import type { ComparisonReadiness } from "../shared/comparison-readiness";
 import {
   createCompareDomain,
   type GeometryChangeReport,
@@ -363,8 +364,14 @@ type ProjectDetail = {
   jobs: Job[];
   releases: Release[];
   captureBundles: CaptureBundle[];
+  comparisonReadiness: ComparisonReadiness;
   previewReadyVersionIds: string[];
   walkTestReadyVersionIds?: string[];
+};
+const emptyComparisonReadiness: ComparisonReadiness = {
+  available: false,
+  eligiblePairs: [],
+  versions: [],
 };
 type ProjectTemplate = {
   id: string;
@@ -1529,6 +1536,7 @@ const compareDomain = createCompareDomain({
         id: state.selected.project.id,
         versions: state.selected.versions,
         assets: state.selected.assets,
+        comparisonReadiness: state.selected.comparisonReadiness,
       }
     : null,
   currentRawReports: () => state.spatial?.rawChangeReports ?? [],
@@ -3150,14 +3158,14 @@ function activateView(
   if (view === "project" && state.selected) {
     const resolvedSection = resolveComparisonWorkspaceSection(
       state.projectSection,
-      state.selected.versions.length,
+      state.selected.comparisonReadiness,
     ) as ProjectSection;
     comparisonSectionRedirected = resolvedSection !== state.projectSection;
     state.projectSection = resolvedSection;
   }
   state.view = view;
   byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonWorkspaceAvailable(
-    state.selected?.versions.length ?? 0,
+    state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   );
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
@@ -7526,6 +7534,7 @@ function renderSpatial(): void {
     assets: state.selected?.assets ?? [],
     geometryReports: spatial.changeReports,
     rawReports: spatial.rawChangeReports ?? [],
+    readiness: state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   });
 
   const delivery = element("article", "workspace-card-large");
@@ -7562,7 +7571,7 @@ function renderSpatial(): void {
     container.append(routes);
     return;
   }
-  if (!comparisonWorkspaceAvailable(state.selected?.versions.length ?? 0)) {
+  if (!comparisonWorkspaceAvailable(state.selected?.comparisonReadiness ?? emptyComparisonReadiness)) {
     container.append(comparisonEvidence);
   }
   container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
@@ -11720,7 +11729,7 @@ function renderProjectDetail(): void {
       ));
     }
   }
-  if (detail.versions.length >= 2) {
+  if (comparisonWorkspaceAvailable(detail.comparisonReadiness ?? emptyComparisonReadiness)) {
     const compareButton = element("button", "quiet-button wide", "Compare immutable versions");
     compareButton.addEventListener("click", () => compareDomain.openVersionComparison(detail.project.id, detail.versions));
     versions.append(compareButton);
@@ -13847,6 +13856,7 @@ function openReviewerDialog(projectId?: string): void {
       jobs: [],
       releases: [],
       captureBundles: [],
+      comparisonReadiness: emptyComparisonReadiness,
       previewReadyVersionIds: [],
     };
   }
