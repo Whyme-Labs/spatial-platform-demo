@@ -1212,7 +1212,49 @@ describe("Spatial Studio Worker", () => {
     await expect(lifecycle.json()).resolves.toMatchObject({
       summary: { invitationsExpired: 1 },
     });
+    // Self-serve signup only provisions emails the platform has never seen.
+    // Inviting created this user row, so the lapsed invitee stays locked out
+    // until re-invited — signup must not bypass administrator-managed access.
     expect((await verifyOtp(expiringEmail)).status).toBe(401);
+  });
+
+  it("provisions a personal workspace on first OTP sign-in and reuses it after", async () => {
+    const email = `signup-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const first = await verifyOtp(email);
+    expect(first.status).toBe(200);
+    const access = (first.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
+    expect(access).toBeTruthy();
+    const firstBody = await first.json<{
+      user: { userId: string; organisationId: string; role: string };
+    }>();
+    expect(firstBody.user.role).toBe("platform_admin");
+    const workspace = await env.DB.prepare(`
+      SELECT m.role, m.status, o.name FROM memberships m
+      JOIN organisations o ON o.id = m.organisation_id
+      WHERE m.organisation_id = ? AND m.user_id = ?
+    `).bind(firstBody.user.organisationId, firstBody.user.userId).first<{
+      role: string;
+      status: string;
+      name: string;
+    }>();
+    expect(workspace).toMatchObject({ role: "platform_admin", status: "active" });
+    const projects = await exports.default.fetch(`${origin}/api/projects`, {
+      headers: { cookie: `spatial_access=${access}` },
+    });
+    expect(projects.status).toBe(200);
+    // A second sign-in lands on the same account and workspace instead of
+    // provisioning again.
+    const second = await verifyOtp(email);
+    expect(second.status).toBe(200);
+    const secondBody = await second.json<{
+      user: { userId: string; organisationId: string };
+    }>();
+    expect(secondBody.user.userId).toBe(firstBody.user.userId);
+    expect(secondBody.user.organisationId).toBe(firstBody.user.organisationId);
+    const memberships = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM memberships WHERE user_id = ?",
+    ).bind(firstBody.user.userId).first<{ n: number }>();
+    expect(memberships?.n).toBe(1);
   });
 
   it("accepts memberships in multiple organisations and rotates the session when switching", async () => {

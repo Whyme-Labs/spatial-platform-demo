@@ -166,10 +166,12 @@ Implemented:
   storage, expiry, generation rotation, immediate revocation, last-use
   evidence, and an unattended local export-transfer agent that checkpoints
   exact-file SHA-256 plus committed multipart ETags before retry or restart
-- Turnstile-protected email OTP authentication, ES256/JWKS access tokens,
-  rotating refresh sessions, immediate D1 revocation, role checks, and
-  authoritative D1 rate limits with honest `Retry-After` windows across
-  refresh, manifest, invitation, upload-session, and health endpoints
+- Turnstile-protected email OTP authentication with self-serve signup (a
+  first verified sign-in provisions a personal workspace; revoked accounts
+  stay locked out), ES256/JWKS access tokens, rotating refresh sessions,
+  immediate D1 revocation, role checks, and authoritative D1 rate limits with
+  honest `Retry-After` windows across refresh, manifest, invitation,
+  upload-session, and health endpoints
 - typed request-body rejection (400 invalid JSON / 413 oversized with stable
   error codes), canonical-origin write protection, timing-safe OTP responses,
   denied-request logging, and per-dependency D1/KV/R2 health probes

@@ -13,11 +13,21 @@ two application token types:
 
 Cloudflare Email Sending delivers both text and HTML OTP messages from
 `login@whymelabs.com`. OTP challenges expire after ten minutes, allow at most
-five attempts, and are consumed atomically in D1. Responses are deliberately
-generic so the endpoint does not disclose which emails are authorised, and
-email delivery plus KV suppression writes run after the response via
-`waitUntil` so response timing is identical for authorised and unknown
-addresses.
+five attempts, and are consumed atomically in D1. Sign-in is self-serve: every
+syntactically valid email receives a code (Turnstile plus the D1 IP/email
+budgets bound abuse of the sender), and email delivery plus KV suppression
+writes still run after the response via `waitUntil` so response timing does
+not distinguish new from existing accounts.
+
+An email with no user row provisions a personal workspace at OTP
+verification: a new user, a new organisation named `<local-part> workspace`,
+and an active `platform_admin` membership in that workspace, recorded with an
+`auth.signup` audit event. Provisioning happens only after the code is
+verified, so unverified addresses never create rows. Signup applies only to
+emails the platform has never seen: any email an administrator has ever
+managed — invited (even if the invitation lapsed or was declined) or revoked —
+already has a user row and stays locked out until re-invited, so self-serve
+signup can never bypass administrator-managed access.
 
 Every OTP request and resend also requires a fresh Cloudflare Turnstile token.
 The browser widget uses action `otp_request`; the Worker validates the

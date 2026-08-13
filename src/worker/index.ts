@@ -1220,7 +1220,7 @@ app.post("/api/auth/otp/request", async (context) => {
     challengeId,
     expiresInSeconds: ttlSeconds,
     retryAfterSeconds,
-    message: "If this email can access Spatial Studio, a one-time code has been sent.",
+    message: "A one-time code has been sent to this email.",
   }, 202);
   const cooldownKey = `otp:cooldown:${emailSubject}`;
   const cooldownChallenge = await context.env.AUTH_CACHE.get(cooldownKey);
@@ -1244,47 +1244,29 @@ app.post("/api/auth/otp/request", async (context) => {
     context.req.header("User-Agent")?.slice(0, 512) ?? null,
   ).run();
 
-  const authorised = email === context.env.ADMIN_EMAIL.toLowerCase() ||
-    Boolean(await context.env.DB.prepare(`
-      SELECT u.id FROM users u
-      WHERE lower(u.email) = ? AND (
-        EXISTS (
-          SELECT 1 FROM memberships m
-          WHERE m.user_id = u.id AND m.revoked_at IS NULL AND m.status = 'active'
-        )
-        OR EXISTS (
-          SELECT 1 FROM organisation_invitations oi
-          WHERE lower(oi.email) = lower(u.email) AND oi.status = 'pending'
-            AND oi.expires_at > ?
-        )
-      ) LIMIT 1
-    `).bind(email, new Date().toISOString()).first<{ id: string }>());
-  // Delivery work runs after the response so authorised and unknown emails
-  // answer in indistinguishable time (no user-enumeration timing oracle).
-  if (authorised) {
-    context.executionCtx.waitUntil((async () => {
-      await context.env.AUTH_CACHE.put(cooldownKey, challengeId, { expirationTtl: retryAfterSeconds });
-      try {
-        await sendOtpEmail(context.env, email, code, ttlSeconds);
-        await authSecurityEvent(context, "otp.sent", emailSubject, null, null);
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "auth.otp_email_failed",
-          requestId: context.get("requestId"),
-          challengeId,
-          error: error instanceof Error ? error.message : String(error),
-        }));
-        await context.env.DB.prepare(
-          "UPDATE auth_otp_challenges SET consumed_at = datetime('now') WHERE id = ?",
-        ).bind(challengeId).run();
-        await authSecurityEvent(context, "otp.delivery_failed", emailSubject, null, null);
-      }
-    })());
-  } else {
-    context.executionCtx.waitUntil(
-      authSecurityEvent(context, "otp.unknown_email", emailSubject, null, null),
-    );
-  }
+  // Sign-in is self-serve: every syntactically valid email receives a code,
+  // and an email with no account provisions a personal workspace at
+  // verification. Turnstile plus the per-IP and per-email budgets bound abuse
+  // of the sender; delivery still runs after the response so no timing oracle
+  // distinguishes new from existing accounts.
+  context.executionCtx.waitUntil((async () => {
+    await context.env.AUTH_CACHE.put(cooldownKey, challengeId, { expirationTtl: retryAfterSeconds });
+    try {
+      await sendOtpEmail(context.env, email, code, ttlSeconds);
+      await authSecurityEvent(context, "otp.sent", emailSubject, null, null);
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "auth.otp_email_failed",
+        requestId: context.get("requestId"),
+        challengeId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+      await context.env.DB.prepare(
+        "UPDATE auth_otp_challenges SET consumed_at = datetime('now') WHERE id = ?",
+      ).bind(challengeId).run();
+      await authSecurityEvent(context, "otp.delivery_failed", emailSubject, null, null);
+    }
+  })());
   return genericResponse();
 });
 
@@ -1320,8 +1302,19 @@ app.post("/api/auth/otp/verify", async (context) => {
   await acceptPendingOrganisationInvitations(context.env.DB, email);
   auth ??= await memberForEmail(context.env.DB, email);
   if (!auth) {
-    await authSecurityEvent(context, "otp.no_membership", await sha256Hex(email), null, null);
-    return unauthorized(context, "This account is not authorised");
+    const existingUser = await context.env.DB.prepare(
+      "SELECT id FROM users WHERE lower(email) = ? LIMIT 1",
+    ).bind(email).first<{ id: string }>();
+    if (existingUser) {
+      // A user whose every membership was revoked stays locked out: sign-up
+      // provisions new accounts and must not undo an administrator's
+      // revocation.
+      await authSecurityEvent(context, "otp.no_membership", await sha256Hex(email), null, null);
+      return unauthorized(context, "This account is not authorised");
+    }
+    auth = await provisionSelfServeWorkspace(context.env, email);
+    await audit(context, auth, "auth.signup", "organisation", auth.organisationId);
+    await authSecurityEvent(context, "auth.signup", await sha256Hex(email), auth.userId, null);
   }
   await acceptPendingProjectInvitations(context.env.DB, auth);
   const tokens = await createAuthSession(context.env, auth, context.req.raw);
@@ -20627,6 +20620,41 @@ async function provisionAdministrator(env: Env, email: string): Promise<AuthCont
     ).bind(organisationId, userId),
   ]);
   return { userId, organisationId, email, displayName, role: "platform_admin" };
+}
+
+// First OTP verification for an email with no user row provisions a personal
+// workspace. The caller must have already ruled out existing users: a fully
+// revoked account must stay locked out, so sign-up never re-attaches
+// memberships to a user an administrator removed. The insert-or-ignore plus
+// re-select tolerates two same-email verifications racing — both land on one
+// user row instead of the second one failing the UNIQUE(email) constraint.
+async function provisionSelfServeWorkspace(env: Env, email: string): Promise<AuthContext> {
+  const displayName = email.split("@")[0] || "Member";
+  await env.DB.prepare(
+    "INSERT INTO users (id, email, display_name) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING",
+  ).bind(crypto.randomUUID(), email, displayName).run();
+  const user = await env.DB.prepare(
+    "SELECT id, display_name FROM users WHERE lower(email) = ? LIMIT 1",
+  ).bind(email).first<{ id: string; display_name: string }>();
+  if (!user) throw new Error("Self-serve user provisioning did not persist a user row");
+  const organisationId = crypto.randomUUID();
+  const workspaceName = `${displayName} workspace`;
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO organisations (id, name, slug) VALUES (?, ?, ?)",
+    ).bind(organisationId, workspaceName, `${slugify(workspaceName)}-${organisationId.slice(0, 8)}`),
+    env.DB.prepare(
+      `INSERT INTO memberships (organisation_id, user_id, role, updated_at, revoked_at, status)
+       VALUES (?, ?, 'platform_admin', datetime('now'), NULL, 'active')`,
+    ).bind(organisationId, user.id),
+  ]);
+  return {
+    userId: user.id,
+    organisationId,
+    email,
+    displayName: user.display_name,
+    role: "platform_admin",
+  };
 }
 
 async function memberForEmail(database: D1Database, email: string): Promise<AuthContext | null> {
