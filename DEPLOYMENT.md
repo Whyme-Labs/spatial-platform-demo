@@ -272,13 +272,21 @@ starts one deterministic Container identity for that job, passes the platform
 origin and independent worker bearer secret at runtime, and runs one exact
 lease attempt. A minute Cron reconciliation re-emits jobs still queued or whose
 lease expired, while D1's atomic lease prevents duplicate execution authority.
-That pass stamps `processing_jobs.dispatched_at` when it enqueues and skips rows
-dispatched inside a ten-minute backoff window, so a slow job is no longer
-re-enqueued every minute; project asset copies use the same stamp. The same pass
+That pass stamps `processing_jobs.dispatched_at` and increments
+`processing_jobs.dispatch_count` when it enqueues and skips rows dispatched
+inside a ten-minute backoff window, so a slow job is no longer re-enqueued
+every minute; project asset copies use the same stamp. The same pass
 dead-letters jobs still `LEASED`/`RUNNING` whose lease expired after
 `max_attempts` was exhausted, with failure class `lease_expired`, so a stalled
-job appears in the failure dashboard instead of sitting invisible. When
-inspecting a stuck job, read `state`, `attempt_count`, `retry_count`,
+job appears in the failure dashboard instead of sitting invisible. Dispatch
+attempts are budgeted independently of lease grants: a job dispatched six times
+without ever being leased — roughly an hour at the ten-minute backoff — is
+dead-lettered with failure class `dispatch_exhausted` instead of being
+re-enqueued forever, so a registry outage, broken image, or saturated Container
+`max_instances` also surfaces on the failure dashboard. A successful lease
+resets `dispatch_count`, so a slow-but-working fleet is never penalised, and an
+operator retry resets it alongside `attempt_count`. When inspecting a stuck
+job, read `state`, `attempt_count`, `dispatch_count`, `retry_count`,
 `dispatched_at`, and `lease_expires_at` together.
 
 Every processor deploy writes `processor/.build-stamp`, builds a linux/amd64

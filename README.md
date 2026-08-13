@@ -123,6 +123,9 @@ its prebuilt LoD tree directly through the range-capable R2 release endpoint.
 Public releases use stable immutable asset URLs backed by browser and
 Cloudflare edge caching. The browser cache remains bounded to 30 minutes while
 the Worker checks the live channel before using its long-lived per-edge copy;
+objects above the 128 MiB warm ceiling cache each requested byte window under a
+range-aware edge key, and anonymous public reads that miss the edge and fall
+through to R2 are rate limited per address with a real `Retry-After`;
 protected releases retain short-lived signed URLs and private caching.
 
 Re-approving the structure of a scene that already backs a live channel
@@ -228,8 +231,10 @@ Implemented:
 - worker bearer authentication, expiring leases, heartbeats, retries, and
   dead-letter state, with a compare-and-set lease guard committed before any
   completion side effect, `dispatched_at` re-enqueue de-duplication, an
-  expired-lease reaper that dead-letters exhausted jobs, and operator retries
-  bounded by a persisted retry count
+  expired-lease reaper that dead-letters exhausted jobs, a dispatch budget that
+  dead-letters a job repeatedly enqueued without ever being leased
+  (`dispatch_exhausted`), and operator retries bounded by a persisted retry
+  count
 - a pinned Spark 2.1 processing agent with byte-verified input, multipart output,
   processor evidence, classified failure, retry, and cancellation; it reports
   real per-stage heartbeat progress, treats a reclaimed lease as a retryable
@@ -242,20 +247,27 @@ Implemented:
   answered 409 rather than returning a release behind a URL that never activated
 - recoverable project archival that removes retired work from current Projects,
   Jobs, and Releases views while retaining its immutable project history
-- short-lived signed scene sessions that the viewer renews before they lapse and
-  reports as an expired session with a reload action when they cannot be
-  renewed, HTTP range delivery cached at the edge on asset identity alone,
-  revocation, and rollback
+- short-lived signed scene sessions that the viewer renews before they lapse
+  and hands to the running renderer over `refresh-scene-tokens`, so a paged
+  scene's later ranged tile fetches carry the renewed token; an unrecoverable
+  renewal reports as an expired session with a reload action; HTTP range
+  delivery cached at the edge on asset identity alone, revocation, and rollback
 - authenticated pre-publication version previews with short-lived exact-asset
   URLs, so operators can inspect a processed splat before optional authoring or
   release QA
 - Spark RAD, SPZ, and SOG browser delivery
 - bundled Spark 2.1 and Three.js runtime; no client-side CDN dependency
 - device-adaptive Spark budgets whenever a release records no explicit operator
-  budget, a release poster held over the viewport until the first frame, a
-  ninety-second no-progress loading watchdog, guided navigation, room/POI
-  semantics, and a responsive authored-geometry floor plan with live camera
-  position
+  budget, with WebKit's missing `navigator.deviceMemory` resolved to the
+  conservative mobile-lite tier instead of a standard budget a low-RAM iPhone
+  cannot hold, a device-profile size ceiling that fails an oversized non-paged
+  SPZ/SOG download closed before it starts, a release poster held over the
+  viewport until the first frame, a ninety-second no-progress loading watchdog,
+  a post-ready renderer heartbeat with a thirty-second liveness watchdog that
+  turns a silently killed iframe into a retryable error while forgiving the
+  hidden time of a backgrounded or suspended tab on resume, guided navigation,
+  room/POI semantics, and a responsive authored-geometry floor plan with live
+  camera position
 - desktop pointer-lock mouse look that falls back to drag-look when the browser
   denies or exits the lock, a render and physics loop paused entirely while the
   tab is hidden, a frame-delta timestep so a resumed tab does not integrate the

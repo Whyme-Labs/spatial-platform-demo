@@ -6,6 +6,7 @@ import {
 } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { runAction } from "../client/action-state";
+import type { DeviceProfile } from "../client/device-profile";
 import {
   MobileControlSurface,
   nearestWalkablePoint,
@@ -48,6 +49,23 @@ declare const __SPATIAL_E2E__: boolean;
 const SPARK_RUNTIME_VERSION = "2.1.0";
 const parentOrigin = location.origin;
 const startedAt = performance.now();
+// camera-update leaves the renderer only while the player moves, so an idle
+// scene is indistinguishable from a dead GPU process. A low-frequency
+// heartbeat gives the host a post-ready liveness signal to watch.
+const HEARTBEAT_INTERVAL_MS = 5_000;
+// A paged RAD scene streams bounded chunks against the splat budget, but a
+// non-paged SPZ/SOG downloads and decodes its whole asset before the first
+// frame. These ceilings turn the inevitable OOM tab-kill of an oversized
+// download into an explicit, retryable error. Desktop keeps twice the 256 MiB
+// collision-proxy cap; the mobile tiers scale it down by roughly their splat
+// budgets (0.75M/1.25M against the 2M desktop-standard budget).
+const MAX_SCENE_ASSET_BYTES: Record<DeviceProfile, number> = {
+  "mobile-lite": 96 * 1024 * 1024,
+  "mobile-standard": 160 * 1024 * 1024,
+  "desktop-standard": 512 * 1024 * 1024,
+  "desktop-high": 512 * 1024 * 1024,
+};
+const MAX_SCENE_ASSET_BYTES_DEFAULT = 512 * 1024 * 1024;
 
 if (window.parent !== window) {
   document.documentElement.classList.add("spark-embedded");
@@ -148,6 +166,10 @@ type RendererMessage =
     }
   | {
       source: "spatial-spark";
+      type: "heartbeat";
+    }
+  | {
+      source: "spatial-spark";
       type: "control-help";
       visible: boolean;
       height: number;
@@ -237,6 +259,8 @@ let resizeObserver: ResizeObserver | null = null;
 let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
 let readySent = false;
 let visualReadyHandled = false;
+let heartbeatHandle: number | null = null;
+let activeSceneAssetPath: string | null = null;
 let firstFrameMs: number | null = null;
 // A posted error is terminal for the ready protocol: the host treats "ready"
 // as permission to enable navigation, so a ready after a failure would hide
@@ -271,6 +295,7 @@ void start().catch((error: unknown) => {
 
 async function start(): Promise<void> {
   const config = readConfig();
+  activeSceneAssetPath = config.contentUrl.pathname;
   setProgress(4, "Validating the signed scene release");
 
   const context = canvas.getContext("webgl2", {
@@ -596,6 +621,16 @@ async function start(): Promise<void> {
       }
       return;
     }
+    if (Reflect.get(event.data, "type") === "refresh-scene-tokens") {
+      // Before ready the token minted with the manifest is still live for the
+      // whole initial load (the host renews at sixty percent of the session
+      // lifetime and replays the current token on ready); after a fatal
+      // failure no further fetches are issued. Both states ignore the refresh
+      // instead of mutating a runtime that is not streaming.
+      if (!readySent || fatalFailure) return;
+      applySceneTokenRefresh(Reflect.get(event.data, "contentUrl"));
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-dynamic-barrier-state") {
       const requestId = typeof Reflect.get(event.data, "requestId") === "string"
         ? String(Reflect.get(event.data, "requestId"))
@@ -784,6 +819,21 @@ async function start(): Promise<void> {
   });
 
   setProgress(9, config.format === "rad" ? "Opening the paged RAD scene" : "Loading the Spark scene");
+  if (config.format !== "rad") {
+    const declaredBytes = await declaredSceneAssetBytes(config.contentUrl);
+    const ceiling = config.deviceProfile
+      ? MAX_SCENE_ASSET_BYTES[config.deviceProfile]
+      : MAX_SCENE_ASSET_BYTES_DEFAULT;
+    if (declaredBytes !== null && declaredBytes > ceiling) {
+      fail(
+        "SCENE_ASSET_TOO_LARGE",
+        `This ${formatBytes(declaredBytes)} ${config.format.toUpperCase()} scene exceeds the ${
+          formatBytes(ceiling)
+        } ceiling for this device. Publish a smaller delivery derivative for this release.`,
+      );
+      return;
+    }
+  }
   const mesh = new SplatMesh({
     url: config.contentUrl.toString(),
     fileName: `scene.${config.format}`,
@@ -1021,6 +1071,7 @@ async function start(): Promise<void> {
         format: config.format,
         splatBudget: budgetSplats,
       });
+      startHeartbeat();
     }
   };
   renderer.setAnimationLoop(renderLoop);
@@ -1061,6 +1112,62 @@ async function start(): Promise<void> {
   window.addEventListener("pagehide", dispose, { once: true });
 }
 
+// A renewed scene token only matters to fetches issued after it arrives, and
+// the only renderer state that keeps fetching after the initial load is the
+// paged splat stream: Spark's pager reads its public rootUrl on every ranged
+// chunk fetch, so swapping that property is the supported way to point future
+// tile reads at the renewed token. Non-paged formats downloaded their whole
+// asset up front and hold no URL a refresh could repoint.
+function applySceneTokenRefresh(value: unknown): void {
+  if (typeof value !== "string" || !value) return;
+  let refreshed: URL;
+  try {
+    refreshed = new URL(value, location.origin);
+  } catch {
+    return;
+  }
+  if (
+    refreshed.origin !== location.origin ||
+    (!refreshed.pathname.startsWith("/asset/") &&
+      !refreshed.pathname.startsWith("/public-asset/") &&
+      !refreshed.pathname.startsWith("/comparison-asset/"))
+  ) return;
+  // A refresh renews credentials on the same asset; a different asset path is
+  // not a token refresh and must not repoint the stream.
+  if (activeSceneAssetPath === null || refreshed.pathname !== activeSceneAssetPath) return;
+  const paged = splatMesh?.paged;
+  if (paged) paged.rootUrl = refreshed.toString();
+  if (__SPATIAL_E2E__) {
+    const applied = Reflect.get(window, "__sceneTokenRefreshes");
+    if (Array.isArray(applied)) applied.push(refreshed.toString());
+    else Reflect.set(window, "__sceneTokenRefreshes", [refreshed.toString()]);
+  }
+}
+
+// Mirrors the collision proxy's Content-Length gate, but as a ranged preflight
+// so the decision costs one byte instead of the whole download. An asset route
+// that ignores Range answers 200 with a Content-Length; either shape yields
+// the full size. A failed or shapeless preflight resolves to null and the real
+// download surfaces its own network error.
+async function declaredSceneAssetBytes(contentUrl: URL): Promise<number | null> {
+  try {
+    const response = await fetch(contentUrl.toString(), {
+      credentials: "same-origin",
+      headers: { Range: "bytes=0-0" },
+    });
+    void response.body?.cancel();
+    if (!response.ok) return null;
+    const rangeTotal = response.headers.get("Content-Range")?.match(/\/(\d+)\s*$/);
+    if (rangeTotal) return Number(rangeTotal[1]);
+    const contentLength = Number(response.headers.get("Content-Length"));
+    return response.status === 200 && Number.isFinite(contentLength) && contentLength > 0
+      ? contentLength
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // Streamed navigation payloads are only ever read back from the platform's own
 // release asset routes, never from a URL that could point somewhere else.
 async function fetchNavigationMesh(url: string): Promise<{
@@ -1097,6 +1204,16 @@ async function fetchNavigationMesh(url: string): Promise<{
     indices: indices as number[],
     sourceEntityIds: Array.isArray(sourceEntityIds) ? sourceEntityIds.map(String) : [],
   };
+}
+
+function startHeartbeat(): void {
+  if (heartbeatHandle !== null) return;
+  heartbeatHandle = window.setInterval(() => {
+    // A fatal failure ends the ready protocol; the host must never read a
+    // heartbeat as a live scene behind its error panel.
+    if (fatalFailure) return;
+    post({ source: "spatial-spark", type: "heartbeat" });
+  }, HEARTBEAT_INTERVAL_MS);
 }
 
 function spatialRuntimeMessageSignature(message: object): string | null {
@@ -1214,6 +1331,7 @@ function readConfig(): {
   contentUrl: URL;
   format: SparkSceneFormat;
   splatBudget: number;
+  deviceProfile: DeviceProfile | null;
   sceneRotationDegrees: Vector3Tuple | null;
   sourceToWorld: SourceToWorldTransform | null;
   initialCamera: {
@@ -1245,6 +1363,14 @@ function readConfig(): {
   const splatBudget = Number.isFinite(rawBudget)
     ? Math.min(8, Math.max(0.25, rawBudget))
     : 2;
+  // A host that names no profile (authoring hosts, older embeds) keeps the
+  // generous desktop download ceiling rather than guessing a stricter one.
+  const rawProfile = params.get("profile");
+  const deviceProfile: DeviceProfile | null =
+    rawProfile === "mobile-lite" || rawProfile === "mobile-standard" ||
+      rawProfile === "desktop-standard" || rawProfile === "desktop-high"
+      ? rawProfile
+      : null;
   const sceneRotationDegrees = readVector(params.get("rotation"));
   const sourceToWorld = readSourceToWorld(params.get("sourceToWorld"));
   const cameraPosition = readVector(params.get("camera"));
@@ -1259,6 +1385,7 @@ function readConfig(): {
     contentUrl,
     format,
     splatBudget,
+    deviceProfile,
     sceneRotationDegrees,
     sourceToWorld,
     initialCamera,
@@ -1823,6 +1950,10 @@ function dispose(): void {
   }
   helpButton.removeEventListener("click", toggleHelp);
   fullscreenButton.removeEventListener("click", requestFullscreen);
+  if (heartbeatHandle !== null) {
+    window.clearInterval(heartbeatHandle);
+    heartbeatHandle = null;
+  }
   mobileControls.dispose();
   rendererControls?.dispose();
   detourNavigationRuntime?.destroy();

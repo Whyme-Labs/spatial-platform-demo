@@ -158,6 +158,41 @@ Three runtime invariants hold at this boundary:
   accepted change, the route planner and the collision world cannot disagree
   about a door's state.
 
+Two further host/renderer messages guard the renderer's lifetime after `ready`:
+
+- **`refresh-scene-tokens` (host to renderer).** The iframe `src` embeds the
+  scene token minted with the manifest, but a paged RAD scene keeps issuing
+  ranged tile fetches long after that. When the host renews its scene render
+  session it posts the renewed same-origin asset URLs
+  (`contentUrl`, `collisionUrl`, `detourUrl`, `navMeshUrl`) to the renderer,
+  which repoints the Spark pager's root URL so every later tile fetch carries
+  the live token. The message is untrusted input: the renderer ignores it
+  before `ready` (the original token still covers the whole initial load, and
+  the host replays the current token when `ready` arrives) and after a fatal
+  failure, and refuses any URL outside the trusted release-asset boundary or
+  naming a different asset path. Non-paged formats downloaded their whole
+  asset up front and hold no URL a refresh could repoint.
+- **`heartbeat` (renderer to host).** `camera-update` leaves the renderer only
+  while the player moves, so an idle scene is indistinguishable from a dead
+  GPU process or an OOM-killed iframe — states that never fire
+  `webglcontextlost`. After `ready` the renderer heartbeats every five
+  seconds; the host arms a thirty-second liveness watchdog on the first
+  heartbeat (a renderer that never heartbeats is never misread as dead),
+  re-arms it on any renderer message, pauses it while the tab is hidden, and
+  turns sustained silence in a visible tab into the retryable
+  scene-stopped-responding error. A suspended tab (iOS page freeze, Chrome
+  intensive throttling) runs no host ticks while hidden, so the
+  hidden-to-visible transition itself re-arms the watchdog before any expiry
+  is evaluated: only silence in a continuously visible tab counts against the
+  deadline, and returning to a frozen tab never fails a live renderer.
+
+Before constructing the splat for a non-paged SPZ/SOG scene, the renderer
+preflights the asset size with a one-byte ranged request and fails closed with
+`SCENE_ASSET_TOO_LARGE` when the declared size exceeds the device-profile
+ceiling (96 MiB mobile-lite, 160 MiB mobile-standard, 512 MiB desktop and for
+hosts that pass no `profile` parameter). Paged RAD scenes stream bounded
+chunks and are exempt.
+
 A stopped walker is told which reviewed geometry stopped them. The character
 controller's computed contacts resolve against the artifact's frozen barrier
 segments and blocking boxes (dynamic doors resolve by their own collider), so

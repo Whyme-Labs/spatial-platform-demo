@@ -8407,6 +8407,154 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
     expect(version?.status).toBe("PROCESSING_FAILED");
   });
 
+  it("dead-letters a job repeatedly dispatched without ever being leased", async () => {
+    const seeded = await seedLeasableJob({ jobType: "asset.validate" });
+    const processingSend = vi.fn(async () => undefined);
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: processingSend },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    // Six reconciliation windows pass and no dispatch ever produces a lease,
+    // so attempt_count never moves off zero.
+    for (let window = 0; window < 6; window += 1) {
+      const context = createExecutionContext();
+      await worker.scheduled!(
+        createScheduledController({ cron: "* * * * *" }),
+        scheduledEnv,
+        context,
+      );
+      await waitOnExecutionContext(context);
+      await env.DB.prepare(
+        "UPDATE processing_jobs SET dispatched_at = datetime('now', '-20 minutes') WHERE id = ?",
+      ).bind(seeded.jobId).run();
+    }
+    const dispatchesFor = () =>
+      processingSend.mock.calls.filter(([message]) =>
+        (message as { jobId?: string }).jobId === seeded.jobId
+      ).length;
+    expect(dispatchesFor()).toBe(6);
+    const context = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      context,
+    );
+    await waitOnExecutionContext(context);
+    // The exhausted job is dead-lettered instead of being re-enqueued again.
+    expect(dispatchesFor()).toBe(6);
+    const reaped = await env.DB.prepare(`
+      SELECT state, error_json, attempt_count, dispatch_count, lease_expires_at
+      FROM processing_jobs WHERE id = ?
+    `).bind(seeded.jobId).first<{
+      state: string;
+      error_json: string;
+      attempt_count: number;
+      dispatch_count: number;
+      lease_expires_at: string | null;
+    }>();
+    expect(reaped?.state).toBe("DEAD_LETTER");
+    expect(reaped?.attempt_count).toBe(0);
+    expect(reaped?.lease_expires_at).toBeNull();
+    expect(JSON.parse(reaped!.error_json)).toMatchObject({
+      code: "JOB_DISPATCH_EXHAUSTED",
+      failureClass: "dispatch_exhausted",
+    });
+    const version = await env.DB.prepare(
+      "SELECT status FROM scene_versions WHERE id = ?",
+    ).bind(seeded.versionId).first<{ status: string }>();
+    expect(version?.status).toBe("PROCESSING_FAILED");
+    // It reaches the same failure dashboard as a lease_expired dead letter.
+    const hostingResponse = await exports.default.fetch(`${origin}/api/hosting`, {
+      headers: { cookie: seeded.cookie },
+    });
+    expect(hostingResponse.status).toBe(200);
+    const hosting = await hostingResponse.json<{
+      alerts: Array<{ kind: string; id: string }>;
+    }>();
+    expect(hosting.alerts.some((alert) =>
+      alert.kind === "processing" && alert.id === seeded.jobId
+    )).toBe(true);
+  });
+
+  it("keeps a dispatch-exhausted canary out of the scene lifecycle", async () => {
+    const seeded = await seedLeasableJob({ jobType: "canary.roundtrip-v1" });
+    await env.DB.prepare(`
+      UPDATE processing_jobs
+      SET dispatch_count = 6, dispatched_at = datetime('now', '-20 minutes')
+      WHERE id = ?
+    `).bind(seeded.jobId).run();
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: vi.fn(async () => undefined) },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    const context = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      context,
+    );
+    await waitOnExecutionContext(context);
+    const reaped = await env.DB.prepare(
+      "SELECT state, error_json FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{ state: string; error_json: string }>();
+    expect(reaped?.state).toBe("DEAD_LETTER");
+    expect(JSON.parse(reaped!.error_json)).toMatchObject({
+      failureClass: "dispatch_exhausted",
+    });
+    // The canary proves the processing path itself; the synthetic scene and
+    // project must never flip to PROCESSING_FAILED.
+    const version = await env.DB.prepare(
+      "SELECT status FROM scene_versions WHERE id = ?",
+    ).bind(seeded.versionId).first<{ status: string }>();
+    expect(version?.status).toBe("PROCESSING");
+    const project = await env.DB.prepare(
+      "SELECT status FROM projects WHERE id = ?",
+    ).bind(seeded.projectId).first<{ status: string }>();
+    expect(project?.status).not.toBe("PROCESSING_FAILED");
+  });
+
+  it("resets the dispatch budget when a processor leases the job", async () => {
+    const seeded = await seedLeasableJob({ jobType: "asset.validate" });
+    await env.DB.prepare(`
+      UPDATE processing_jobs
+      SET dispatch_count = 5, dispatched_at = datetime('now', '-20 minutes')
+      WHERE id = ?
+    `).bind(seeded.jobId).run();
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(processorLeaseRequest("dispatch-reset-worker", seeded.jobId)),
+    });
+    expect(leaseResponse.status).toBe(200);
+    const leased = await env.DB.prepare(
+      "SELECT state, dispatch_count FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{ state: string; dispatch_count: number }>();
+    expect(leased).toEqual({ state: "LEASED", dispatch_count: 0 });
+    // A slow-but-working system is not penalised: the live lease is invisible
+    // to the exhaustion reaper.
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: vi.fn(async () => undefined) },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    const context = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      context,
+    );
+    await waitOnExecutionContext(context);
+    const unchanged = await env.DB.prepare(
+      "SELECT state FROM processing_jobs WHERE id = ?",
+    ).bind(seeded.jobId).first<{ state: string }>();
+    expect(unchanged?.state).toBe("LEASED");
+  });
+
   it("requeues a reclaimed-lease failure report instead of treating it as terminal", async () => {
     const seeded = await seedLeasableJob({ jobType: "asset.validate" });
     const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
@@ -8645,5 +8793,243 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
         detour: { format: "recast-navigation-js-export-v1", byteLength: 1024 },
       },
     });
+  });
+});
+
+describe("public-asset delivery protection", () => {
+  // The fixture stays tiny; lowering the warm ceiling below its size exercises
+  // the above-ceiling delivery path without allocating a >128 MiB object.
+  const smallCeilingEnv = {
+    ...env,
+    EDGE_ASSET_WARM_CEILING_BYTES: "1024",
+  } as unknown as Env;
+
+  async function seedPublicScene(): Promise<{
+    url: string;
+    bytes: Uint8Array;
+  }> {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Public delivery ${crypto.randomUUID().slice(0, 8)}`,
+        captureAdapter: "open-import",
+        deliveryTemplate: "property-tour",
+      }),
+    });
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const owner = (await env.DB.prepare(`
+      SELECT organisation_id, created_by, workflow_policy_revision_id
+      FROM projects WHERE id = ?
+    `).bind(project.id).first<{
+      organisation_id: string;
+      created_by: string;
+      workflow_policy_revision_id: string;
+    }>())!;
+    const versionId = crypto.randomUUID();
+    const assetId = crypto.randomUUID();
+    const releaseId = crypto.randomUUID();
+    const bytes = new Uint8Array(4096);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const objectKey =
+      `web-public/${owner.organisation_id}/${project.id}/${versionId}/scene.rad`;
+    await env.SPATIAL_ASSETS.put(objectKey, bytes);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO scene_versions
+          (id, project_id, version_number, status, source_provenance_json, created_by)
+        VALUES (?, ?, 1, 'PUBLISHED', '{}', ?)
+      `).bind(versionId, project.id, owner.created_by),
+      env.DB.prepare(`
+        INSERT INTO assets
+          (id, organisation_id, project_id, version_id, kind, format, object_key,
+            file_name, mime_type, size_bytes, sha256, integrity_status, integrity_source)
+        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'scene.rad', 'application/octet-stream',
+          ?, ?, 'verified', 'server_verified')
+      `).bind(
+        assetId,
+        owner.organisation_id,
+        project.id,
+        versionId,
+        objectKey,
+        bytes.byteLength,
+        await sha256Hex(bytes),
+      ),
+      env.DB.prepare(`
+        INSERT INTO releases (
+          id, organisation_id, project_id, version_id, web_asset_id, access_policy,
+          viewer_config_json, spatial_snapshot_json, published_at, created_by,
+          client_operation_id, release_number, workflow_policy_revision_id
+        ) VALUES (?, ?, ?, ?, ?, 'public', '{}', '{}', ?, ?, ?, 1, ?)
+      `).bind(
+        releaseId,
+        owner.organisation_id,
+        project.id,
+        versionId,
+        assetId,
+        new Date().toISOString(),
+        owner.created_by,
+        crypto.randomUUID(),
+        owner.workflow_policy_revision_id,
+      ),
+      env.DB.prepare(`
+        INSERT INTO release_channels (
+          id, organisation_id, project_id, slug, active_release_id
+        ) VALUES (?, ?, ?, ?, ?)
+      `).bind(
+        crypto.randomUUID(),
+        owner.organisation_id,
+        project.id,
+        `public-delivery-${project.id.slice(0, 8)}`,
+        releaseId,
+      ),
+    ]);
+    return { url: `/public-asset/${releaseId}/${assetId}/scene.rad`, bytes };
+  }
+
+  async function fetchPublicAsset(
+    path: string,
+    options: { range?: string; clientAddress?: string; envOverride?: Env } = {},
+  ): Promise<Response> {
+    const headers = new Headers({
+      "CF-Connecting-IP": options.clientAddress ?? nextTestClientAddress(),
+    });
+    if (options.range) headers.set("Range", options.range);
+    const context = createExecutionContext();
+    const response = await worker.fetch(
+      new Request(new URL(path, origin).toString(), { headers }),
+      options.envOverride ?? (env as unknown as Env),
+      context,
+    );
+    await waitOnExecutionContext(context);
+    return response;
+  }
+
+  it("edge-caches ranged reads on a public object above the warm ceiling", async () => {
+    const scene = await seedPublicScene();
+    const clientAddress = nextTestClientAddress();
+    const first = await fetchPublicAsset(scene.url, {
+      range: "bytes=100-199",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(first.status).toBe(206);
+    expect(first.headers.get("content-range")).toBe("bytes 100-199/4096");
+    expect(first.headers.get("x-spatial-asset-cache")).toBe("MISS");
+    expect(new Uint8Array(await first.arrayBuffer()))
+      .toEqual(scene.bytes.slice(100, 200));
+    const second = await fetchPublicAsset(scene.url, {
+      range: "bytes=100-199",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(second.status).toBe(206);
+    expect(second.headers.get("content-range")).toBe("bytes 100-199/4096");
+    expect(second.headers.get("x-spatial-asset-cache")).toBe("HIT");
+    expect(new Uint8Array(await second.arrayBuffer()))
+      .toEqual(scene.bytes.slice(100, 200));
+    // A suffix expression resolves to the same byte window as its explicit
+    // form, so both share one cached copy.
+    const suffix = await fetchPublicAsset(scene.url, {
+      range: "bytes=-96",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(suffix.status).toBe(206);
+    expect(suffix.headers.get("content-range")).toBe("bytes 4000-4095/4096");
+    expect(suffix.headers.get("x-spatial-asset-cache")).toBe("MISS");
+    expect(new Uint8Array(await suffix.arrayBuffer())).toEqual(scene.bytes.slice(4000));
+    const explicit = await fetchPublicAsset(scene.url, {
+      range: "bytes=4000-4095",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(explicit.status).toBe(206);
+    expect(explicit.headers.get("content-range")).toBe("bytes 4000-4095/4096");
+    expect(explicit.headers.get("x-spatial-asset-cache")).toBe("HIT");
+    expect(new Uint8Array(await explicit.arrayBuffer())).toEqual(scene.bytes.slice(4000));
+  });
+
+  it("meters only R2 misses, so a legitimate paging session is never throttled", async () => {
+    const scene = await seedPublicScene();
+    const clientAddress = nextTestClientAddress();
+    // A cold viewer pages tens of distinct byte windows...
+    for (let page = 0; page < 40; page += 1) {
+      const response = await fetchPublicAsset(scene.url, {
+        range: `bytes=${page * 100}-${page * 100 + 99}`,
+        clientAddress,
+        envOverride: smallCeilingEnv,
+      });
+      expect(response.status).toBe(206);
+    }
+    // ...and re-pages them from the edge without ever being counted again.
+    for (let page = 0; page < 40; page += 1) {
+      const response = await fetchPublicAsset(scene.url, {
+        range: `bytes=${page * 100}-${page * 100 + 99}`,
+        clientAddress,
+        envOverride: smallCeilingEnv,
+      });
+      expect(response.status).toBe(206);
+      expect(response.headers.get("x-spatial-asset-cache")).toBe("HIT");
+    }
+    const counted = await env.DB.prepare(`
+      SELECT SUM(request_count) AS total FROM rate_limits
+      WHERE bucket = 'public-asset-miss-ip' AND subject = ?
+    `).bind(clientAddress).first<{ total: number }>();
+    expect(counted?.total).toBe(40);
+  });
+
+  it("rate limits an anonymous scraper's R2 misses with 429 and Retry-After", async () => {
+    const scene = await seedPublicScene();
+    const clientAddress = nextTestClientAddress();
+    // Real misses accumulate against the budget...
+    for (let request = 0; request < 20; request += 1) {
+      const response = await fetchPublicAsset(scene.url, {
+        range: `bytes=${request}-${request}`,
+        clientAddress,
+        envOverride: smallCeilingEnv,
+      });
+      expect(response.status).toBe(206);
+    }
+    // ...so with the current and next windows already at the budget, the next
+    // uncached read is refused with the real window in Retry-After.
+    const windowStart = Math.floor(Date.now() / 1000 / 60) * 60;
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO rate_limits (bucket, subject, window_start, request_count)
+        VALUES ('public-asset-miss-ip', ?, ?, 300)
+        ON CONFLICT(bucket, subject, window_start)
+        DO UPDATE SET request_count = 300
+      `).bind(clientAddress, windowStart),
+      env.DB.prepare(`
+        INSERT INTO rate_limits (bucket, subject, window_start, request_count)
+        VALUES ('public-asset-miss-ip', ?, ?, 300)
+        ON CONFLICT(bucket, subject, window_start)
+        DO UPDATE SET request_count = 300
+      `).bind(clientAddress, windowStart + 60),
+    ]);
+    const throttled = await fetchPublicAsset(scene.url, {
+      range: "bytes=3000-3000",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get("retry-after")).toBe("60");
+    // Already-cached windows keep serving the throttled viewer from the edge.
+    const cached = await fetchPublicAsset(scene.url, {
+      range: "bytes=5-5",
+      clientAddress,
+      envOverride: smallCeilingEnv,
+    });
+    expect(cached.status).toBe(206);
+    expect(cached.headers.get("x-spatial-asset-cache")).toBe("HIT");
+    // Another viewer address is unaffected.
+    const other = await fetchPublicAsset(scene.url, {
+      range: "bytes=3001-3001",
+      envOverride: smallCeilingEnv,
+    });
+    expect(other.status).toBe(206);
   });
 });

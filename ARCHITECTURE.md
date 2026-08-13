@@ -298,7 +298,11 @@ browsers retain the same 30-minute ceiling as protected delivery, and the
 Worker verifies that the release is still the live channel before every edge
 cache lookup.
 Both paths support HTTP Range requests, allowing Spark to page LoD chunks
-without exposing an R2 credential or object key. Renderer progress is
+without exposing an R2 credential or object key. Anonymous public delivery is
+additionally budgeted: only requests that miss the edge and fall through to R2
+count against a generous per-address window, so a warm viewer session is never
+throttled and never writes to D1, while an anonymous scraper's R2 egress is
+capped with a real `Retry-After`. Renderer progress is
 open-ended: the viewer reports Spark progress and explicit errors but does not
 turn a slow download into a synthetic absolute-timeout failure.
 
@@ -607,7 +611,13 @@ the previous per-minute re-enqueue storm; project asset copies use the same
 stamp. The same pass reaps jobs still in `LEASED`/`RUNNING` whose lease expired
 after exhausting `max_attempts` and moves them to `DEAD_LETTER` with a
 `lease_expired` failure class, so they surface in the failure dashboard instead
-of sitting invisible.
+of sitting invisible. Because `attempt_count` only moves at lease grant, each
+enqueue also increments a separate `processing_jobs.dispatch_count`: a job
+dispatched six times — roughly an hour at the ten-minute backoff — without ever
+being leased is moved to `DEAD_LETTER` with a `dispatch_exhausted` failure
+class instead of being re-enqueued forever, so a dispatch path that never
+delivers work (registry outage, broken image, saturated Container instances)
+surfaces on the same dashboard. A granted lease resets the dispatch budget.
 
 Operators can cancel active work or retry terminal failures without creating
 duplicate assets. Operator retries reset `attempt_count` but increment a
@@ -761,7 +771,15 @@ processor-backed raw registration, signed asset retrieval, review, and cleanup.
   cache is consulted, and the browser-facing directive for a protected asset
   stays `private, max-age=1800, immutable` while only the edge copy is shared.
   A first ranged read of a paged scene warms the whole object into the edge once
-  (up to 128 MiB) so later page ranges are sliced from cache instead of R2
+  (up to the 128 MiB warm ceiling) so later page ranges are sliced from cache
+  instead of R2. An object above that ceiling caches each requested byte window
+  under its own range-aware key — stored as a 200 because the shared cache
+  refuses a 206, and rebuilt into a correct 206 with `Content-Range` on every
+  hit — so large public Gaussian scenes no longer pay an R2 read per page.
+  `/public-asset/` also meters exactly these R2 fall-throughs per anonymous
+  address (300 misses per 60 s window) and answers excess with 429 plus
+  `Retry-After`; edge hits are never counted, so the D1-backed limiter costs
+  nothing on a warm session
 - CSP, permissions policy, frame policy, MIME sniffing protection, and
   structured audit events are enabled
 
