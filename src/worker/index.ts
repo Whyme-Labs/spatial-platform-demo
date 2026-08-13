@@ -18058,15 +18058,20 @@ async function reapExpiredJobLeases(env: Env): Promise<void> {
   }
 }
 
-// Jobs whose dispatches never produce a lease keep attempt_count at zero, so
-// the lease reaper above can never see them. Once the dispatch budget is spent
-// and the final backoff window has elapsed without a lease grant (which resets
-// dispatch_count), the job dead-letters so it reaches the failure dashboard
-// exactly like a lease_expired job.
+// The lease reaper above only sees jobs that spent their attempt budget, and
+// attempt_count only moves at lease grant — so a job whose dispatches stop
+// producing leases (never leased at all, or leased once and never re-leased
+// after that lease expired) would otherwise be re-enqueued forever. Once the
+// dispatch budget is spent and the final backoff window has elapsed without a
+// lease grant (which resets dispatch_count), the job dead-letters so it
+// reaches the failure dashboard exactly like a lease_expired job. Delivery
+// exhaustion deliberately ignores any remaining attempt budget: attempts
+// measure processor executions, not deliveries, and an operator retry resets
+// both counters.
 async function reapDispatchExhaustedJobs(env: Env): Promise<void> {
   const exhausted = await env.DB.prepare(`
     SELECT id, organisation_id, project_id, version_id, job_type,
-      dispatch_count, dispatched_at
+      dispatch_count, dispatched_at, attempt_count
     FROM processing_jobs
     WHERE (
       state = 'QUEUED'
@@ -18088,16 +18093,20 @@ async function reapDispatchExhaustedJobs(env: Env): Promise<void> {
     job_type: string;
     dispatch_count: number;
     dispatched_at: string;
+    attempt_count: number;
   }>();
   for (const job of exhausted.results) {
+    const previouslyLeased = job.attempt_count > 0;
     const error = JSON.stringify({
       code: "JOB_DISPATCH_EXHAUSTED",
-      message:
-        `The job was dispatched ${job.dispatch_count} times without ever being leased by a processor; the container dispatch path is not delivering work`,
+      message: previouslyLeased
+        ? `The job was dispatched ${job.dispatch_count} times without being leased again after its previous lease expired; the container dispatch path is not delivering work`
+        : `The job was dispatched ${job.dispatch_count} times without ever being leased by a processor; the container dispatch path is not delivering work`,
       failureClass: "dispatch_exhausted",
       details: {
         dispatchCount: job.dispatch_count,
         lastDispatchedAt: job.dispatched_at,
+        attemptCount: job.attempt_count,
       },
       failedAt: new Date().toISOString(),
     });
@@ -18106,14 +18115,21 @@ async function reapDispatchExhaustedJobs(env: Env): Promise<void> {
       // dispatch_count, so the guard makes the dead-letter a no-op.
       env.DB.prepare(`
         UPDATE processing_jobs
-        SET state = 'DEAD_LETTER', error_json = ?,
-          progress_message = 'Queue dispatch never produced a processor lease',
+        SET state = 'DEAD_LETTER', error_json = ?, progress_message = ?,
           lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
           dispatched_at = NULL, completed_at = datetime('now'),
           updated_at = datetime('now')
         WHERE id = ? AND dispatch_count >= ?
           AND (state = 'QUEUED' OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?))
-      `).bind(error, job.id, jobDispatchExhaustionLimit, new Date().toISOString()),
+      `).bind(
+        error,
+        previouslyLeased
+          ? "Queue re-dispatch never produced a fresh processor lease"
+          : "Queue dispatch never produced a processor lease",
+        job.id,
+        jobDispatchExhaustionLimit,
+        new Date().toISOString(),
+      ),
       env.DB.prepare(`
         UPDATE registered_scene_change_reports
         SET status = 'DEAD_LETTER', error_json = ?, completed_at = datetime('now'),
@@ -18136,7 +18152,7 @@ async function reapDispatchExhaustedJobs(env: Env): Promise<void> {
       failReleaseRepublishIntentForJobStatement(
         env.DB,
         job.id,
-        "Automatic republish stopped because the walking-map job was never picked up by a processor",
+        "Automatic republish stopped because the walking-map job could not be delivered to a processor",
       ),
     ];
     if (

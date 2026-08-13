@@ -8555,6 +8555,89 @@ describe("processing-job dispatch, lease reaping, and output size", () => {
     expect(unchanged?.state).toBe("LEASED");
   });
 
+  it("dead-letters a once-leased job whose re-dispatches never produce a fresh lease", async () => {
+    const seeded = await seedLeasableJob({ jobType: "asset.validate" });
+    // A processor leases the job once and dies without reporting, so the
+    // lease expires with the attempt budget still open.
+    const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.WORKER_API_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(processorLeaseRequest("dispatch-exhaust-worker", seeded.jobId)),
+    });
+    expect(leaseResponse.status).toBe(200);
+    await env.DB.prepare(
+      "UPDATE processing_jobs SET lease_expires_at = datetime('now', '-1 hour') WHERE id = ?",
+    ).bind(seeded.jobId).run();
+    const processingSend = vi.fn(async () => undefined);
+    const scheduledEnv = {
+      ...env,
+      PROCESSING_DISPATCH_QUEUE: { send: processingSend },
+      PORTFOLIO_COPY_QUEUE: { send: vi.fn(async () => undefined) },
+    } as unknown as Env;
+    // Six reconciliation windows re-dispatch the expired-lease job and no
+    // dispatch produces a fresh lease; attempt_count stays at one throughout,
+    // so the lease reaper never sees it.
+    for (let window = 0; window < 6; window += 1) {
+      const context = createExecutionContext();
+      await worker.scheduled!(
+        createScheduledController({ cron: "* * * * *" }),
+        scheduledEnv,
+        context,
+      );
+      await waitOnExecutionContext(context);
+      await env.DB.prepare(
+        "UPDATE processing_jobs SET dispatched_at = datetime('now', '-20 minutes') WHERE id = ?",
+      ).bind(seeded.jobId).run();
+    }
+    const dispatchesFor = () =>
+      processingSend.mock.calls.filter(([message]) =>
+        (message as { jobId?: string }).jobId === seeded.jobId
+      ).length;
+    expect(dispatchesFor()).toBe(6);
+    const context = createExecutionContext();
+    await worker.scheduled!(
+      createScheduledController({ cron: "* * * * *" }),
+      scheduledEnv,
+      context,
+    );
+    await waitOnExecutionContext(context);
+    expect(dispatchesFor()).toBe(6);
+    // Delivery exhaustion dead-letters the job even though the attempt budget
+    // is not spent — attempts measure executions, not deliveries — and the
+    // error names the re-lease path rather than claiming it was never leased.
+    const reaped = await env.DB.prepare(`
+      SELECT state, error_json, attempt_count, max_attempts
+      FROM processing_jobs WHERE id = ?
+    `).bind(seeded.jobId).first<{
+      state: string;
+      error_json: string;
+      attempt_count: number;
+      max_attempts: number;
+    }>();
+    expect(reaped?.state).toBe("DEAD_LETTER");
+    expect(reaped?.attempt_count).toBe(1);
+    expect(reaped!.attempt_count).toBeLessThan(reaped!.max_attempts);
+    const parsedError = JSON.parse(reaped!.error_json) as {
+      code: string;
+      message: string;
+      failureClass: string;
+      details: { dispatchCount: number; attemptCount: number };
+    };
+    expect(parsedError).toMatchObject({
+      code: "JOB_DISPATCH_EXHAUSTED",
+      failureClass: "dispatch_exhausted",
+      details: { dispatchCount: 6, attemptCount: 1 },
+    });
+    expect(parsedError.message).toContain("without being leased again after its previous lease expired");
+    const version = await env.DB.prepare(
+      "SELECT status FROM scene_versions WHERE id = ?",
+    ).bind(seeded.versionId).first<{ status: string }>();
+    expect(version?.status).toBe("PROCESSING_FAILED");
+  });
+
   it("requeues a reclaimed-lease failure report instead of treating it as terminal", async () => {
     const seeded = await seedLeasableJob({ jobType: "asset.validate" });
     const leaseResponse = await exports.default.fetch(`${origin}/api/worker/jobs/lease`, {
