@@ -930,15 +930,132 @@ test("the viewer renews its scene session and reports an unrecoverable expiry", 
   await sendRendererReady(page);
   await expect(page.locator("#viewerHud")).toBeVisible();
 
+  // Ready replays the current token to the renderer so a renewal that fired
+  // during loading is never stranded in the parent's manifest.
+  await expect.poll(async () => (await frameHostMessages(page))
+    .filter((message) => message.type === "refresh-scene-tokens")
+    .map((message) => message.contentUrl)
+  ).toEqual(["/asset/release/asset/scene.rad?token=first-scene-token"]);
+
   // Renewal runs at roughly sixty percent of the remaining session lifetime and
   // carries the token minted with the manifest, never the release slug.
   await expect.poll(() => renewals, { timeout: 20_000 }).toEqual(["first-scene-token"]);
+  // The renewed token reaches the running renderer, not just the manifest: the
+  // paged tile stream must issue every later ranged fetch with it.
+  await expect.poll(async () => (await frameHostMessages(page))
+    .filter((message) => message.type === "refresh-scene-tokens")
+    .map((message) => message.contentUrl), { timeout: 20_000 }
+  ).toEqual([
+    "/asset/release/asset/scene.rad?token=first-scene-token",
+    "/asset/release/asset/scene.rad?token=renewed-scene-token",
+  ]);
   await expect.poll(() => renewals, { timeout: 20_000 }).toEqual([
     "first-scene-token",
     "renewed-scene-token",
   ]);
   await expect(page.locator("#errorPanel")).toBeVisible();
   await expect(page.locator("#errorTitle")).toHaveText("This viewing session expired.");
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+});
+
+test("a renderer that stops heartbeating after ready surfaces a retryable error", async ({ page }) => {
+  await page.clock.install();
+  await page.route(
+    "**/api/releases/dead-renderer/manifest",
+    (route) => json(route, posterManifest("dead-renderer", null)),
+  );
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer(),
+  }));
+
+  await page.goto("/s/dead-renderer", { waitUntil: "commit" });
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+
+  // One heartbeat arms the liveness watchdog; a mobile OOM tab-kill or GPU
+  // process death then goes silent without ever firing webglcontextlost.
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({ source: "spatial-spark", type: "heartbeat" }, location.origin);
+  });
+  await page.clock.fastForward(35_000);
+  await expect(page.locator("#errorPanel")).toBeVisible();
+  await expect(page.locator("#errorTitle")).toHaveText("This scene stopped responding.");
+  await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+});
+
+test("a quiet renderer that never heartbeats is not misread as dead", async ({ page }) => {
+  await page.clock.install();
+  await page.route(
+    "**/api/releases/quiet-renderer/manifest",
+    (route) => json(route, posterManifest("quiet-renderer", null)),
+  );
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer(),
+  }));
+
+  await page.goto("/s/quiet-renderer", { waitUntil: "commit" });
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+
+  // The watchdog arms only on a real heartbeat, so a renderer build (or an
+  // embedding fixture) that never heartbeats keeps its healthy viewer.
+  await page.clock.fastForward(120_000);
+  await expect(page.locator("#errorPanel")).toBeHidden();
+  await expect(page.locator("#viewerHud")).toBeVisible();
+});
+
+test("resuming a suspended tab does not misread a live renderer as dead", async ({ page }) => {
+  await page.clock.install();
+  await page.route(
+    "**/api/releases/suspended-tab/manifest",
+    (route) => json(route, posterManifest("suspended-tab", null)),
+  );
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer(),
+  }));
+
+  await page.goto("/s/suspended-tab", { waitUntil: "commit" });
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    parent.postMessage({ source: "spatial-spark", type: "heartbeat" }, location.origin);
+  });
+
+  // iOS Safari freezes a hidden page outright: visibilitychange fires, then
+  // not a single timer callback runs until the user returns.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const frozenAtMs = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(frozenAtMs + 1_000);
+  // Five background minutes pass with zero timer callbacks — the deterministic
+  // model of a frozen page: setSystemTime moves the clock but fires nothing.
+  await page.clock.setSystemTime(frozenAtMs + 301_000);
+
+  // The resume visibilitychange runs its viewer tick synchronously, before any
+  // queued heartbeat from the still-live renderer can be processed, so the
+  // stale deadline must be forgiven by the transition itself.
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.locator("#errorPanel")).toBeHidden();
+  await expect(page.locator("#viewerHud")).toBeVisible();
+
+  // Resume grants a fresh grace period, not immunity: a renderer that really
+  // died during the suspension still fails visibly one deadline later.
+  await page.clock.fastForward(35_000);
+  await expect(page.locator("#errorPanel")).toBeVisible();
+  await expect(page.locator("#errorTitle")).toHaveText("This scene stopped responding.");
   await expect(page.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 });
 
@@ -1027,8 +1144,23 @@ function readyOnDemandRenderer(): string {
     <html>
       <body>
         <div role="status">Loading spatial scene</div>
+        <script>
+          window.__hostMessages = [];
+          window.addEventListener("message", (event) => {
+            if (event.data && event.data.source === "spatial-host") {
+              window.__hostMessages.push(event.data);
+            }
+          });
+        </script>
       </body>
     </html>`;
+}
+
+function frameHostMessages(page: Page): Promise<Array<Record<string, unknown>>> {
+  return page.frameLocator("#rendererFrame").locator("html").evaluate(() =>
+    (window as unknown as { __hostMessages?: Array<Record<string, unknown>> })
+      .__hostMessages ?? []
+  );
 }
 
 function sendRendererReady(page: Page): Promise<void> {

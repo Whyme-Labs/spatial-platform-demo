@@ -3,6 +3,7 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import { api, ApiError } from "./api";
 import { runAction, SingleFlight } from "./action-state";
+import { resolveDeviceProfile } from "./device-profile";
 import {
   buildFloorPlans,
   cameraPoseForPlanRoom,
@@ -233,6 +234,10 @@ type SparkRendererMessage =
     }
   | {
       source: "spatial-spark";
+      type: "heartbeat";
+    }
+  | {
+      source: "spatial-spark";
       type: "camera-set";
       requestId: string;
       accepted: boolean;
@@ -313,6 +318,11 @@ const SESSION_RENEWAL_FRACTION = 0.6;
 const SESSION_RENEWAL_RETRY_MS = 15_000;
 const SESSION_RENEWAL_MAX_FAILURES = 3;
 const POSTER_FADE_MS = 400;
+// A ready renderer heartbeats every few seconds, so thirty silent seconds in a
+// visible tab means the iframe's process is gone (mobile OOM kill, GPU-process
+// death) — states that fire no webglcontextlost and would otherwise leave a
+// frozen canvas behind a healthy-looking viewer.
+const RENDERER_LIVENESS_TIMEOUT_MS = 30_000;
 
 const frame = byId<HTMLIFrameElement>("rendererFrame");
 const loading = byId<HTMLElement>("loadingOverlay");
@@ -337,6 +347,8 @@ let sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
 let sceneSessionFailures = 0;
 let sceneSessionExpiryShown = false;
 let loadingWatchdogAtMs: number | null = null;
+let rendererLivenessAtMs: number | null = null;
+let viewerWasHidden = document.hidden;
 let viewerTickHandle: number | null = null;
 const planRoomsById = new Map<string, PlanRoom>();
 const cameraRequests = new Map<string, {
@@ -406,6 +418,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   activeDynamicBarriers.clear();
   setLoading(true, activePrivatePreview ? "Authorising private walkable preview…" : "Authorising scene release…");
   rendererReady = false;
+  rendererLivenessAtMs = null;
   sceneSession = null;
   sceneSessionRenewAtMs = Number.POSITIVE_INFINITY;
   sceneSessionFailures = 0;
@@ -467,6 +480,13 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   if (event.origin !== location.origin || event.source !== frame.contentWindow) return;
   if (!isSpatialRendererMessage(event.data)) return;
   const message = event.data;
+  // The liveness watchdog arms on the first post-ready heartbeat — a renderer
+  // that never heartbeats is never misread as dead — and any later message
+  // proves the frame is still alive.
+  if (rendererReady && (rendererLivenessAtMs !== null || message.type === "heartbeat")) {
+    rendererLivenessAtMs = Date.now() + RENDERER_LIVENESS_TIMEOUT_MS;
+  }
+  if (message.type === "heartbeat") return;
   if (message.type === "camera") {
     const pending = cameraRequests.get(message.requestId);
     if (!pending) return;
@@ -561,6 +581,9 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
   byId("reviewPanel").hidden = !reviewMode;
   setNavigatorReady(true);
   byId("rendererStatus").textContent = "Scene ready";
+  // A session renewed while the renderer was still loading never reached it, so
+  // ready replays the current token; the renderer applies it idempotently.
+  if (sceneSession) sendSceneTokenRefresh();
   // The runtime payload is sent once, on iframe load: the renderer cannot even
   // reach "ready" before it has rebuilt physics and navigation from that
   // payload, so re-sending here only forces a redundant collision download.
@@ -582,13 +605,19 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
-      type === "control-help" ||
+      type === "control-help" || type === "heartbeat" ||
       type === "authored-traversal-state" || type === "dynamic-barrier-state");
 }
 
 function bindViewerLifecycle(): void {
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) return;
+    if (document.hidden) {
+      // iOS Safari can freeze a hidden page before a single interval tick
+      // observes the hidden state, so the transition itself must record it —
+      // the resume tick depends on it to forgive the frozen silence.
+      viewerWasHidden = true;
+      return;
+    }
     viewerTick();
   });
   if (viewerTickHandle === null) {
@@ -598,11 +627,26 @@ function bindViewerLifecycle(): void {
 
 function viewerTick(): void {
   const now = Date.now();
+  // A suspended tab (iOS page freeze, Chrome intensive throttling) runs no
+  // ticks while hidden, so the first visible tick after resume can observe a
+  // deadline that went stale during legitimately silent background time —
+  // before any queued heartbeat from the live renderer is processed. The
+  // hidden→visible transition therefore re-arms both watchdogs before any
+  // expiry is evaluated: silence only counts against a deadline armed while
+  // the tab was continuously visible.
+  const resumed = viewerWasHidden && !document.hidden;
+  viewerWasHidden = document.hidden;
   if (loadingWatchdogAtMs !== null) {
     // A hidden tab pauses the renderer's frame loop, so the scene cannot report
     // progress or reach its first frame. That silence is not a stall.
-    if (document.hidden) armLoadingWatchdog();
+    if (document.hidden || resumed) armLoadingWatchdog();
     else if (now >= loadingWatchdogAtMs) failStalledLoading();
+  }
+  if (rendererReady && rendererLivenessAtMs !== null) {
+    // A hidden tab throttles the renderer's heartbeat timer to a crawl, so
+    // silence while hidden is expected, exactly like the loading watchdog.
+    if (document.hidden || resumed) rendererLivenessAtMs = now + RENDERER_LIVENESS_TIMEOUT_MS;
+    else if (now >= rendererLivenessAtMs) failDeadRenderer();
   }
   if (document.hidden || !sceneSession || sceneSessionExpiryShown) return;
   if (viewerActions.isPending("renew-scene-session")) return;
@@ -625,6 +669,15 @@ function failStalledLoading(): void {
     "The renderer reported no progress for 90 seconds. Retry to reload the scene, or reopen it on a faster connection.",
   );
   void recordTelemetry("renderer_error", undefined, { reason: "loading_watchdog" });
+}
+
+function failDeadRenderer(): void {
+  rendererLivenessAtMs = null;
+  showError(
+    "This scene stopped responding.",
+    "The renderer went silent for 30 seconds while the tab was visible. Retry to reload the scene.",
+  );
+  void recordTelemetry("renderer_error", undefined, { reason: "renderer_liveness_watchdog" });
 }
 
 // The scene token embedded in every asset URL expires with its render session.
@@ -715,6 +768,25 @@ function applyRenewedSceneToken(token: string): void {
   scene.collisionUrl = withSceneToken(scene.collisionUrl, token);
   scene.detourUrl = withSceneToken(scene.detourUrl, token);
   scene.navMeshUrl = withSceneToken(scene.navMeshUrl, token);
+  sendSceneTokenRefresh();
+}
+
+// The iframe src embeds the token minted with the manifest, and a paged scene
+// keeps issuing ranged tile fetches long after that. A renewed token must
+// therefore reach the running renderer or its streaming fetches start failing
+// the moment the original token expires. Pre-ready renewals are replayed when
+// ready arrives; the renderer ignores the message until then.
+function sendSceneTokenRefresh(): void {
+  const scene = activeManifest?.scene;
+  if (!scene || !rendererReady) return;
+  frame.contentWindow?.postMessage({
+    source: "spatial-host",
+    type: "refresh-scene-tokens",
+    contentUrl: scene.contentUrl,
+    collisionUrl: scene.collisionUrl ?? null,
+    detourUrl: scene.detourUrl ?? null,
+    navMeshUrl: scene.navMeshUrl ?? null,
+  }, location.origin);
 }
 
 function withSceneToken<T extends string | null | undefined>(url: T, token: string): T {
@@ -788,6 +860,9 @@ function publishedRendererUrl(manifest: ReleaseManifest): URL {
   rendererUrl.searchParams.set("content", manifest.scene.contentUrl);
   rendererUrl.searchParams.set("format", manifest.scene.format);
   rendererUrl.searchParams.set("budget", String(budget));
+  // An operator budget can raise splat density, but the non-paged download
+  // ceiling stays a device decision, so the profile travels separately.
+  rendererUrl.searchParams.set("profile", deviceProfile);
   if (manifest.viewer.sceneRotationDegrees) {
     rendererUrl.searchParams.set("rotation", manifest.viewer.sceneRotationDegrees.join(","));
   }
@@ -1534,6 +1609,7 @@ function setLoading(visible: boolean, detail = "", progress?: number): void {
 function showError(title: string, message: string): void {
   rendererReady = false;
   loadingWatchdogAtMs = null;
+  rendererLivenessAtMs = null;
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("renderer-help-open");
@@ -1667,10 +1743,7 @@ async function currentTraversalTelemetrySession(
 function detectDeviceProfile(): string {
   const memory = "deviceMemory" in navigator && typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
   const mobile = matchMedia("(pointer: coarse)").matches || innerWidth < 760;
-  if (mobile && memory !== null && memory <= 4) return "mobile-lite";
-  if (mobile) return "mobile-standard";
-  if (memory !== null && memory >= 8) return "desktop-high";
-  return "desktop-standard";
+  return resolveDeviceProfile({ mobile, deviceMemoryGb: memory });
 }
 
 function deviceBudget(profile: string): number {

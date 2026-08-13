@@ -972,6 +972,12 @@ const maximumUploadParts = 9500;
 // digest degrades to client_declared and the processor re-verifies on download.
 const serverHashMaximumBytes = 2 * 1024 * 1024 * 1024;
 const jobDispatchBackoffMinutes = 10;
+// attempt_count only moves at lease grant, so a job whose dispatches never
+// reach a processor would otherwise be re-enqueued forever. Six undelivered
+// dispatches at the ten-minute reconciliation backoff, plus the final window,
+// give the dispatch path roughly an hour to deliver before the job
+// dead-letters as dispatch_exhausted.
+const jobDispatchExhaustionLimit = 6;
 const maximumOperatorJobRetries = 5;
 const maximumPrivacyImageBytes = 10 * 1024 * 1024;
 const privacyDetector = "@cf/moondream/moondream3.1-9B-A2B";
@@ -13369,7 +13375,7 @@ app.post("/api/jobs/:jobId/retry", async (context) => {
   const retryStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
       UPDATE processing_jobs
-      SET state = 'QUEUED', attempt_count = 0, progress = 0,
+      SET state = 'QUEUED', attempt_count = 0, dispatch_count = 0, progress = 0,
         retry_count = retry_count + 1,
         progress_message = 'Operator retry queued', error_json = NULL,
         lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
@@ -13625,7 +13631,8 @@ app.post("/api/worker/jobs/lease", async (context) => {
     UPDATE processing_jobs
     SET state = 'LEASED', leased_by = ?, lease_token_hash = ?, lease_expires_at = ?,
       leased_processor_identity_json = ?,
-      attempt_count = attempt_count + 1, updated_at = datetime('now')
+      attempt_count = attempt_count + 1, dispatch_count = 0,
+      updated_at = datetime('now')
     WHERE id = (
       SELECT id FROM processing_jobs
       WHERE (state = 'QUEUED' OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?))
@@ -17027,6 +17034,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
 });
 
 app.get("/public-asset/:releaseId/:assetId/:fileName", async (context) => {
+  const clientAddress = context.req.header("CF-Connecting-IP") ?? "unknown";
   const asset = await context.env.DB.prepare(`
     SELECT a.* FROM assets a
     JOIN releases r ON r.web_asset_id = a.id
@@ -17046,6 +17054,16 @@ app.get("/public-asset/:releaseId/:assetId/:fileName", async (context) => {
   return serveR2Object(context, asset.object_key, {
     cacheControl: "public, max-age=1800, s-maxage=31536000, immutable",
     edgeCacheKey: `${asset.id}:${asset.etag ?? asset.sha256 ?? asset.size_bytes}`,
+    // Anonymous ranged paging is edge-cache-dominated for a legitimate viewer,
+    // so only reads that fall through to R2 consume the budget: a warm session
+    // costs zero D1 writes and an abuser is capped at the miss budget of R2
+    // reads per address per window.
+    missRateLimit: {
+      bucket: "public-asset-miss-ip",
+      subject: clientAddress,
+      limit: publicAssetMissLimitPerWindow,
+      windowSeconds: publicAssetMissWindowSeconds,
+    },
   });
 });
 
@@ -17095,6 +17113,12 @@ async function serveR2Object(
     cacheControl?: string;
     edgeCacheKey?: string;
     edgeCacheControl?: string;
+    missRateLimit?: {
+      bucket: string;
+      subject: string;
+      limit: number;
+      windowSeconds: number;
+    };
   } = {},
 ): Promise<Response> {
   const metadata = await context.env.SPATIAL_ASSETS.head(objectKey);
@@ -17112,6 +17136,20 @@ async function serveR2Object(
         `/__spatial-asset-cache/${encodeURIComponent(options.edgeCacheKey)}`,
         context.env.APP_ORIGIN,
       ).toString()
+    : null;
+  // Resolving the range up front lets a suffix expression and the explicit
+  // expression of the same byte window share one cached copy.
+  const resolvedRange = range
+    ? ("offset" in range && typeof range.offset === "number"
+      ? { offset: range.offset, length: typeof range.length === "number" ? range.length : metadata.size - range.offset }
+      : { offset: metadata.size - ("suffix" in range && typeof range.suffix === "number" ? range.suffix : 0), length: "suffix" in range && typeof range.suffix === "number" ? range.suffix : 0 })
+    : null;
+  // An object above the warm ceiling never gets a whole-object edge copy, so
+  // each requested byte window is cached under its own range-aware key instead
+  // of paying an R2 read on every page.
+  const oversized = metadata.size > edgeAssetWarmCeilingBytes(context.env);
+  const rangeCacheUrl = edgeCacheUrl && oversized && resolvedRange
+    ? `${edgeCacheUrl}/range/${resolvedRange.offset}-${resolvedRange.offset + resolvedRange.length - 1}`
     : null;
   if (edgeCacheUrl) {
     const cacheHeaders = new Headers();
@@ -17133,6 +17171,29 @@ async function serveR2Object(
       });
     }
   }
+  if (rangeCacheUrl) {
+    const cached = await caches.default.match(new Request(rangeCacheUrl));
+    if (cached && resolvedRange) {
+      const headers = new Headers(cached.headers);
+      headers.set("Cache-Control", options.cacheControl ?? "private, max-age=1800, immutable");
+      headers.set("Content-Range", `bytes ${resolvedRange.offset}-${resolvedRange.offset + resolvedRange.length - 1}/${metadata.size}`);
+      headers.set("Content-Length", String(resolvedRange.length));
+      headers.set("X-Spatial-Asset-Cache", "HIT");
+      return new Response(cached.body, { status: 206, headers });
+    }
+  }
+  // The budget is only consumed here, once every edge lookup has missed and the
+  // read is about to fall through to R2: a warm viewer session costs zero D1
+  // writes and R2 egress stays bounded per subject and window.
+  if (options.missRateLimit && !(await allowRate(
+    context.env.DB,
+    options.missRateLimit.bucket,
+    options.missRateLimit.subject,
+    options.missRateLimit.limit,
+    options.missRateLimit.windowSeconds,
+  ))) {
+    return tooManyRequests(context, options.missRateLimit.windowSeconds);
+  }
   const object = await context.env.SPATIAL_ASSETS.get(objectKey, {
     onlyIf: context.req.raw.headers,
     ...(range ? { range } : {}),
@@ -17146,20 +17207,42 @@ async function serveR2Object(
   headers.set("Cache-Control", options.cacheControl ?? "private, max-age=1800, immutable");
   if (edgeCacheUrl) headers.set("X-Spatial-Asset-Cache", "MISS");
   if (!("body" in object)) return new Response(null, { status: 304, headers });
-  if (range) {
-    const offset = range && "offset" in range && typeof range.offset === "number"
-      ? range.offset
-      : metadata.size - (range && "suffix" in range && typeof range.suffix === "number" ? range.suffix : object.size);
-    const length = range && "length" in range && typeof range.length === "number" ? range.length : object.size;
+  if (range && resolvedRange) {
+    const { offset, length } = resolvedRange;
     headers.set("Content-Range", `bytes ${offset}-${offset + length - 1}/${metadata.size}`);
     headers.set("Content-Length", String(length));
     // A 206 cannot be stored, so a paged scene would otherwise never populate
     // the edge: the first page range pulls the whole object into cache once and
     // every later range is sliced out of it instead of re-reading R2.
-    if (edgeCacheUrl && metadata.size <= edgeAssetWarmCeilingBytes) {
+    if (edgeCacheUrl && !oversized) {
       warmAssetAtEdge(context, objectKey, edgeCacheUrl, options);
     }
-    return new Response(object.body, { status: 206, headers });
+    const response = new Response(object.body, { status: 206, headers });
+    if (rangeCacheUrl) {
+      // The shared cache refuses a 206, so the byte window is stored as a 200
+      // under its range-aware key and rebuilt into a 206 on every later hit.
+      const cacheHeaders = new Headers(headers);
+      cacheHeaders.delete("Content-Range");
+      cacheHeaders.delete("X-Spatial-Asset-Cache");
+      cacheHeaders.set(
+        "Cache-Control",
+        options.edgeCacheControl ?? options.cacheControl ??
+          "public, max-age=1800, s-maxage=31536000, immutable",
+      );
+      context.executionCtx.waitUntil(
+        caches.default.put(
+          new Request(rangeCacheUrl),
+          new Response(response.clone().body, { headers: cacheHeaders }),
+        ).catch((error) => {
+          console.warn(JSON.stringify({
+            event: "asset.edge_cache_write_failed",
+            cacheKey: options.edgeCacheKey,
+            error: errorMessage(error),
+          }));
+        }),
+      );
+    }
+    return response;
   }
   headers.set("Content-Length", String(object.size));
   const response = new Response(object.body, { headers });
@@ -17184,7 +17267,21 @@ async function serveR2Object(
   return response;
 }
 
-const edgeAssetWarmCeilingBytes = 134_217_728;
+// Spark pages a public scene through many small range reads per session, and a
+// warm edge answers nearly all of them, so the budget is sized for the cold
+// tail: hundreds of distinct byte windows per minute is far above a real
+// viewer's paging rate while still capping anonymous R2 egress per address.
+const publicAssetMissLimitPerWindow = 300;
+const publicAssetMissWindowSeconds = 60;
+
+const defaultEdgeAssetWarmCeilingBytes = 134_217_728;
+
+function edgeAssetWarmCeilingBytes(env: Env): number {
+  const configured = Number(env.EDGE_ASSET_WARM_CEILING_BYTES);
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : defaultEdgeAssetWarmCeilingBytes;
+}
 const edgeAssetWarmsInFlight = new Set<string>();
 
 function warmAssetAtEdge(
@@ -17763,7 +17860,7 @@ function dispatchProcessingJob(context: Context<AppEnvironment>, jobId: string):
     context.env.PROCESSING_DISPATCH_QUEUE.send({ jobId, dispatchId: crypto.randomUUID() })
       .then(() =>
         context.env.DB.prepare(
-          "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
+          "UPDATE processing_jobs SET dispatched_at = datetime('now'), dispatch_count = dispatch_count + 1 WHERE id = ?",
         ).bind(jobId).run()
       )
       .then(() => undefined)
@@ -17789,6 +17886,7 @@ async function enqueueDispatchableProcessingJobs(env: Env): Promise<void> {
       OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?)
     )
       AND attempt_count < max_attempts
+      AND dispatch_count < ?
       AND (
         dispatched_at IS NULL
         OR dispatched_at <= datetime('now', ?)
@@ -17797,13 +17895,14 @@ async function enqueueDispatchableProcessingJobs(env: Env): Promise<void> {
     LIMIT 100
   `).bind(
     new Date().toISOString(),
+    jobDispatchExhaustionLimit,
     `-${jobDispatchBackoffMinutes} minutes`,
   ).all<{ id: string }>();
   await Promise.all(result.results.map(async ({ id }) => {
     try {
       await env.PROCESSING_DISPATCH_QUEUE.send({ jobId: id, dispatchId: crypto.randomUUID() });
       await env.DB.prepare(
-        "UPDATE processing_jobs SET dispatched_at = datetime('now') WHERE id = ?",
+        "UPDATE processing_jobs SET dispatched_at = datetime('now'), dispatch_count = dispatch_count + 1 WHERE id = ?",
       ).bind(id).run();
     } catch (error) {
       console.error(JSON.stringify({
@@ -17955,6 +18054,115 @@ async function reapExpiredJobLeases(env: Env): Promise<void> {
     console.log(JSON.stringify({
       event: "processing.expired_leases_reaped",
       jobs: expired.results.length,
+    }));
+  }
+}
+
+// Jobs whose dispatches never produce a lease keep attempt_count at zero, so
+// the lease reaper above can never see them. Once the dispatch budget is spent
+// and the final backoff window has elapsed without a lease grant (which resets
+// dispatch_count), the job dead-letters so it reaches the failure dashboard
+// exactly like a lease_expired job.
+async function reapDispatchExhaustedJobs(env: Env): Promise<void> {
+  const exhausted = await env.DB.prepare(`
+    SELECT id, organisation_id, project_id, version_id, job_type,
+      dispatch_count, dispatched_at
+    FROM processing_jobs
+    WHERE (
+      state = 'QUEUED'
+      OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?)
+    )
+      AND dispatch_count >= ?
+      AND dispatched_at <= datetime('now', ?)
+    ORDER BY dispatched_at
+    LIMIT 100
+  `).bind(
+    new Date().toISOString(),
+    jobDispatchExhaustionLimit,
+    `-${jobDispatchBackoffMinutes} minutes`,
+  ).all<{
+    id: string;
+    organisation_id: string;
+    project_id: string;
+    version_id: string;
+    job_type: string;
+    dispatch_count: number;
+    dispatched_at: string;
+  }>();
+  for (const job of exhausted.results) {
+    const error = JSON.stringify({
+      code: "JOB_DISPATCH_EXHAUSTED",
+      message:
+        `The job was dispatched ${job.dispatch_count} times without ever being leased by a processor; the container dispatch path is not delivering work`,
+      failureClass: "dispatch_exhausted",
+      details: {
+        dispatchCount: job.dispatch_count,
+        lastDispatchedAt: job.dispatched_at,
+      },
+      failedAt: new Date().toISOString(),
+    });
+    const statements: D1PreparedStatement[] = [
+      // A lease granted between the select and this write resets
+      // dispatch_count, so the guard makes the dead-letter a no-op.
+      env.DB.prepare(`
+        UPDATE processing_jobs
+        SET state = 'DEAD_LETTER', error_json = ?,
+          progress_message = 'Queue dispatch never produced a processor lease',
+          lease_token_hash = NULL, leased_by = NULL, lease_expires_at = NULL,
+          dispatched_at = NULL, completed_at = datetime('now'),
+          updated_at = datetime('now')
+        WHERE id = ? AND dispatch_count >= ?
+          AND (state = 'QUEUED' OR (state IN ('LEASED', 'RUNNING') AND lease_expires_at < ?))
+      `).bind(error, job.id, jobDispatchExhaustionLimit, new Date().toISOString()),
+      env.DB.prepare(`
+        UPDATE registered_scene_change_reports
+        SET status = 'DEAD_LETTER', error_json = ?, completed_at = datetime('now'),
+          updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(error, job.id),
+      env.DB.prepare(`
+        UPDATE semantic_extraction_runs SET status = 'FAILED', updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(job.id),
+      env.DB.prepare(`
+        UPDATE floorplan_extraction_runs
+        SET status = 'FAILED', error_json = ?, updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(error, job.id),
+      env.DB.prepare(`
+        UPDATE scene_navigation_builds SET status = 'FAILED', updated_at = datetime('now')
+        WHERE job_id = ?
+      `).bind(job.id),
+      failReleaseRepublishIntentForJobStatement(
+        env.DB,
+        job.id,
+        "Automatic republish stopped because the walking-map job was never picked up by a processor",
+      ),
+    ];
+    if (
+      ![
+        "registered-scene-change-v1",
+        "semantic.extract-v1",
+        "floorplan.extract-v1",
+        "navigation.build-v1",
+        "canary.roundtrip-v1",
+      ].includes(job.job_type)
+    ) {
+      statements.push(
+        env.DB.prepare(
+          "UPDATE scene_versions SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ?",
+        ).bind(job.version_id),
+        env.DB.prepare(
+          "UPDATE projects SET status = 'PROCESSING_FAILED', updated_at = datetime('now') WHERE id = ? AND organisation_id = ?",
+        ).bind(job.project_id, job.organisation_id),
+      );
+    }
+    await env.DB.batch(statements);
+  }
+  if (exhausted.results.length) {
+    console.log(JSON.stringify({
+      event: "processing.dispatch_exhausted_jobs_reaped",
+      jobs: exhausted.results.length,
     }));
   }
 }
@@ -25993,6 +26201,7 @@ const worker = {
       executionContext.waitUntil(runLifecycleEnforcement(env, "scheduled"));
     }
     executionContext.waitUntil(reapExpiredJobLeases(env));
+    executionContext.waitUntil(reapDispatchExhaustedJobs(env));
     executionContext.waitUntil(enqueueDispatchableProcessingJobs(env));
     executionContext.waitUntil(enqueueDispatchableProjectAssetCopies(env));
   },
