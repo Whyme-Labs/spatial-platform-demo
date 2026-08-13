@@ -280,10 +280,14 @@ dead-letters jobs still `LEASED`/`RUNNING` whose lease expired after
 `max_attempts` was exhausted, with failure class `lease_expired`, so a stalled
 job appears in the failure dashboard instead of sitting invisible. Dispatch
 attempts are budgeted independently of lease grants: a job dispatched six times
-without ever being leased — roughly an hour at the ten-minute backoff — is
-dead-lettered with failure class `dispatch_exhausted` instead of being
-re-enqueued forever, so a registry outage, broken image, or saturated Container
-`max_instances` also surfaces on the failure dashboard. A successful lease
+without producing a lease — roughly an hour at the ten-minute backoff, whether
+the job was never leased at all or was leased once and never re-leased after
+that lease expired — is dead-lettered with failure class `dispatch_exhausted`
+instead of being re-enqueued forever, so a registry outage, broken image, or
+saturated Container `max_instances` also surfaces on the failure dashboard.
+Delivery exhaustion deliberately ignores any remaining `attempt_count` budget
+(attempts measure processor executions, not deliveries); the dead-letter error
+message and its `attemptCount` detail record which of the two paths fired. A successful lease
 resets `dispatch_count`, so a slow-but-working fleet is never penalised, and an
 operator retry resets it alongside `attempt_count`. When inspecting a stuck
 job, read `state`, `attempt_count`, `dispatch_count`, `retry_count`,

@@ -613,11 +613,13 @@ after exhausting `max_attempts` and moves them to `DEAD_LETTER` with a
 `lease_expired` failure class, so they surface in the failure dashboard instead
 of sitting invisible. Because `attempt_count` only moves at lease grant, each
 enqueue also increments a separate `processing_jobs.dispatch_count`: a job
-dispatched six times — roughly an hour at the ten-minute backoff — without ever
-being leased is moved to `DEAD_LETTER` with a `dispatch_exhausted` failure
-class instead of being re-enqueued forever, so a dispatch path that never
-delivers work (registry outage, broken image, saturated Container instances)
-surfaces on the same dashboard. A granted lease resets the dispatch budget.
+dispatched six times — roughly an hour at the ten-minute backoff — without
+producing a lease (never leased at all, or leased once and never re-leased
+after that lease expired) is moved to `DEAD_LETTER` with a `dispatch_exhausted`
+failure class instead of being re-enqueued forever, so a dispatch path that
+stops delivering work (registry outage, broken image, saturated Container
+instances) surfaces on the same dashboard regardless of remaining attempt
+budget. A granted lease resets the dispatch budget.
 
 Operators can cancel active work or retry terminal failures without creating
 duplicate assets. Operator retries reset `attempt_count` but increment a
