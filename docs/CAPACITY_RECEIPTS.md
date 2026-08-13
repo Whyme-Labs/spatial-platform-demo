@@ -4,14 +4,19 @@ Last measured: 2026-08-02
 
 ## Staging lifecycle canary budgets
 
-Last measured: 2026-08-12
+Last measured: 2026-08-13
 
-The first complete synthetic lifecycle ran against Cloudflare staging
-application version `1491168a-0129-4c17-b905-0cc05022a3c` and processor Worker
-version `ae1426bd-c415-4e07-9b96-ba6669520a0a`. The processor used container
-image digest
-`sha256:8c3794befb4d7251f994258c177b5804dd503bd292bb1fcf475304100b8c06da`.
-Rerun it from the repository root with a staging-only canary credential:
+The expanded two-version lifecycle ran against exact repository revision
+`87b72e21ee1dabcb09ea407de840d8aa245e4ade`, Cloudflare staging application
+version `f9fd9d6f-bdfb-427c-bc02-27fada1ff1f1`, and processor Worker version
+`4eb93f61-e3f1-49ed-84be-56a188bda7cf`. The processor reported that exact Git
+SHA and used immutable container image digest
+`sha256:1e86416ebdc1054d99baab89864a173e1bd3dc8b6da2d5624e6638d27872ebfd`.
+GitHub Actions run
+[`31672823087`](https://github.com/Whyme-Labs/spatial-platform-demo/actions/runs/31672823087)
+preserves the application acceptance, processor round-trip, lifecycle JSON,
+and Chrome screenshot. Rerun the lifecycle from the repository root with a
+staging-only canary credential:
 
 ```bash
 STAGING_LIFECYCLE_CANARY_TOKEN='<staging secret>' \
@@ -21,27 +26,37 @@ npm run verify:staging:lifecycle -- \
   --screenshot .cache/staging-acceptance/lifecycle-canary.png
 ```
 
-Hardened run `2026-08-12T14-58-37-247Z-f864bc47-f6e0-489f-b52a-bde9de7074e8`
-completed in 117,265 ms. It authenticated the fixed service identity, created a
+Run `2026-08-13T06-16-00-382Z-9762c7d1-7013-4f15-8c3b-7c32789bc7d7`
+completed in 329,629 ms. It authenticated the fixed service identity, created a
 project, uploaded a deterministic 688,551-byte/12,288-splat Gaussian PLY and a
-26,756-byte/1,898-point registered metric PLY, passed the real processor,
-reviewed the automatic floor plan and Recast navigation, recorded a walk test,
-completed privacy and QA, rendered authenticated Studio and the token release
-in mobile/touch Chrome, revoked the release, archived the project, deleted 13
-R2 objects, and revoked the session. Immutable archived D1 evidence was
-retained deliberately.
+34,610-byte/2,234-point registered metric PLY, and passed the real processor.
+It then reviewed the automatic floor plan and Recast navigation, recorded a
+walk test, and proved comparison remained unavailable with only one eligible
+immutable version. A second version used a 35,138-byte/2,266-point metric PLY
+with a small asymmetric change. Both versions passed processing and navigation
+qualification before visual, authored-geometry, and raw registered comparison
+were exercised. The raw automatic registration was unambiguous and accepted;
+both authored and raw evidence received explicit service-operator review.
+
+The same run completed privacy and QA, rendered authenticated Studio plus its
+two-version comparison in mobile/touch Chrome, published and rendered the
+token release through `/s/lifecycle-canary-789bc7d7`, revoked the release,
+archived the project, deleted 27 R2 objects including 21 processor job-output
+objects, and revoked the session. Immutable archived D1 evidence was retained
+deliberately. One access-token refresh completed during the run.
 
 | Named budget | Observed maximum | Tripwire |
 | --- | ---: | ---: |
-| `lifecycle_canary_window_seconds` | 117.265 s complete lifecycle | 1,800 s |
-| `api_request_milliseconds` | 1,727 ms | 60,000 ms |
-| `object_request_milliseconds` | 460 ms | 30,000 ms |
-| `chrome_navigation_milliseconds` | 650 ms | 30,000 ms |
-| `chrome_ready_milliseconds` | 1,861 ms | 120,000 ms |
-| global-deadline-bounded Wrangler subprocess | 4,828 ms | remaining lifecycle window |
+| `lifecycle_canary_window_seconds` | 329.629 s complete lifecycle | 1,800 s |
+| `api_request_milliseconds` | 4,853 ms | 60,000 ms |
+| `object_request_milliseconds` | 934 ms | 30,000 ms |
+| `chrome_navigation_milliseconds` | 777 ms | 30,000 ms |
+| `chrome_ready_milliseconds` | 8,542 ms | 120,000 ms |
+| global-deadline-bounded Wrangler subprocess | 1,715 ms | remaining lifecycle window |
 
-Authenticated Studio reached its visible project workspace in 2,037 ms. The
-public release reached a ready Spark renderer in 2,002 ms. The canary polls
+Authenticated Studio reached its visible project workspace and rendered the
+comparison in 16,352 ms. The public release reached a ready Spark renderer in
+7,938 ms. The canary polls
 asynchronous state every 5,000 ms; this is a request-cadence control rather than
 a developer-facing capacity ceiling. Every network, Chrome, D1, and R2 action
 is bounded by the remaining global lifecycle window. Wrangler is terminated if
@@ -50,13 +65,18 @@ Every timeout failure names its budget, limit, requested duration, and
 operation. Remeasure after processor, fixture, region, or Chrome changes;
 resize a tripwire if a known-good run approaches it.
 
-The successful served release contained 45,280 bytes. Its downloaded SHA-256,
-`d5beabb1ebfe5c2bad59e1a587b32e038cfeee01eb19ec18c6e0dc9122592917`,
-matched both the immutable asset record and public manifest. The earlier exact
-fixture exposed a poster-server range bug: Spark requested beyond EOF and the
-server returned 416. Clamping a valid range end to the 45,280-byte asset's final
-byte produced the poster locally and passed the live processor on its first
-attempt.
+The two comparison assets each contained 45,280 bytes. Their downloaded
+SHA-256 values,
+`bfeef504543e7253dad87aaa7e682d50788b517a7b8043008f844e75c0a2ede3`
+and `e146aa60d78f88a79319e4c422757eca3ad44e285f2f11e8631f857fae9342d0`,
+matched the immutable source records. The published baseline artifact also
+matched its public manifest. The immediately preceding deployed run
+[`31669287764`](https://github.com/Whyme-Labs/spatial-platform-demo/actions/runs/31669287764)
+correctly blocked the old byte-identical, rotationally symmetric geometry pair
+as ambiguous. The revised exact fixture adds a deterministic asymmetric marker
+to both versions and a second small marker only to the candidate; the local
+regression and this live receipt prove accepted automatic registration and a
+non-empty raw voxel change.
 
 ## PLY coordinate-header preflight
 
