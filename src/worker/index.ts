@@ -1299,16 +1299,25 @@ app.post("/api/auth/otp/verify", async (context) => {
   let auth = email === context.env.ADMIN_EMAIL.toLowerCase()
     ? await provisionAdministrator(context.env, email)
     : null;
-  await acceptPendingOrganisationInvitations(context.env.DB, email);
   auth ??= await memberForEmail(context.env.DB, email);
   if (!auth) {
-    const existingUser = await context.env.DB.prepare(
-      "SELECT id FROM users WHERE lower(email) = ? LIMIT 1",
-    ).bind(email).first<{ id: string }>();
-    if (existingUser) {
-      // A user whose every membership was revoked stays locked out: sign-up
-      // provisions new accounts and must not undo an administrator's
-      // revocation.
+    // Organisation invitations are never accepted silently: under self-serve
+    // signup any workspace admin can invite an arbitrary email, so a silent
+    // first-login join would let an attacker capture a new account into their
+    // organisation. Every sign-in without an active membership provisions the
+    // account's OWN workspace; invitations stay pending and are answered
+    // through the explicit accept/decline endpoints.
+    const managed = await context.env.DB.prepare(`
+      SELECT 1 AS locked FROM users u
+      JOIN memberships m ON m.user_id = u.id
+      WHERE lower(u.email) = ? AND (m.revoked_at IS NOT NULL OR m.status != 'invited')
+      LIMIT 1
+    `).bind(email).first<{ locked: number }>();
+    if (managed) {
+      // A user whose membership was revoked, declined, or lapsed stays locked
+      // out: sign-up provisions new accounts and must not undo an
+      // administrator's revocation. A purely pending invitee is not locked —
+      // they get their own workspace and answer the invitation explicitly.
       await authSecurityEvent(context, "otp.no_membership", await sha256Hex(email), null, null);
       return unauthorized(context, "This account is not authorised");
     }
@@ -20623,14 +20632,14 @@ async function provisionAdministrator(env: Env, email: string): Promise<AuthCont
 }
 
 // First OTP verification for an email with no user row provisions a personal
-// workspace. The caller must have already ruled out existing users: a fully
-// revoked account must stay locked out, so sign-up never re-attaches
-// memberships to a user an administrator removed. Two same-email
-// verifications racing (a resend leaves two live challenges) both converge on
-// one workspace: the insert-or-ignore plus re-select lands both on one user
-// row, and the org/membership batch guards on the user having no membership
-// yet — the loser's batch no-ops atomically and the final re-select returns
-// the winner's workspace.
+// workspace. The caller must have already ruled out revoked/declined/lapsed
+// users: sign-up never re-attaches memberships an administrator removed. A
+// purely invited user reaches here too — their pending invitation stays
+// pending. Two same-email verifications racing (a resend leaves two live
+// challenges) both converge on one workspace: the insert-or-ignore plus
+// re-select lands both on one user row, and the org/membership batch guards
+// on the user having no ACTIVE membership yet — the loser's batch no-ops
+// atomically and the final re-select returns the winner's workspace.
 async function provisionSelfServeWorkspace(env: Env, email: string): Promise<AuthContext> {
   const displayName = email.split("@")[0] || "Member";
   await env.DB.prepare(
@@ -20646,7 +20655,7 @@ async function provisionSelfServeWorkspace(env: Env, email: string): Promise<Aut
     env.DB.prepare(
       `INSERT INTO organisations (id, name, slug)
        SELECT ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ?)`,
+       WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND status = 'active')`,
     ).bind(
       organisationId,
       workspaceName,
@@ -20809,47 +20818,6 @@ async function deliverTeamInvitation(
   return { status, error: deliveryError };
 }
 
-async function acceptPendingOrganisationInvitation(
-  database: D1Database,
-  email: string,
-): Promise<AuthContext | null> {
-  const now = new Date().toISOString();
-  await database.prepare(`
-    UPDATE organisation_invitations SET status = 'expired'
-    WHERE lower(email) = lower(?) AND status = 'pending' AND expires_at <= ?
-  `).bind(email, now).run();
-  const invitation = await database.prepare(`
-    SELECT oi.id, oi.organisation_id AS organisationId, u.id AS userId,
-      u.email, u.display_name AS displayName, m.role
-    FROM organisation_invitations oi
-    JOIN users u ON lower(u.email) = lower(oi.email)
-    JOIN memberships m ON m.organisation_id = oi.organisation_id AND m.user_id = u.id
-    WHERE lower(oi.email) = lower(?) AND oi.status = 'pending'
-      AND oi.expires_at > ? AND m.status = 'invited' AND m.revoked_at IS NULL
-    ORDER BY oi.invited_at DESC LIMIT 1
-  `).bind(email, now).first<AuthContext & { id: string }>();
-  if (!invitation) return null;
-  await database.batch([
-    database.prepare(`
-      UPDATE memberships
-      SET status = 'active', updated_at = datetime('now'), revoked_at = NULL
-      WHERE organisation_id = ? AND user_id = ? AND status = 'invited'
-    `).bind(invitation.organisationId, invitation.userId),
-    database.prepare(`
-      UPDATE organisation_invitations
-      SET status = 'accepted', accepted_by = ?, accepted_at = datetime('now')
-      WHERE id = ? AND status = 'pending' AND expires_at > ?
-    `).bind(invitation.userId, invitation.id, now),
-  ]);
-  return {
-    userId: invitation.userId,
-    organisationId: invitation.organisationId,
-    email: invitation.email,
-    displayName: invitation.displayName,
-    role: invitation.role,
-  };
-}
-
 async function acceptPendingOrganisationInvitationForOrganisation(
   database: D1Database,
   organisationId: string,
@@ -20889,38 +20857,6 @@ async function acceptPendingOrganisationInvitationForOrganisation(
       WHERE id = ? AND status = 'pending' AND expires_at > ?
     `).bind(invitation.userId, invitation.id, now),
   ]);
-}
-
-// One sign-in can only ever onboard a bounded number of invitations, so a
-// mis-seeded invitation set cannot spin this loop forever.
-const maximumAutomaticInvitationAcceptances = 20;
-
-async function hasActiveOrganisationMembership(
-  database: D1Database,
-  email: string,
-): Promise<boolean> {
-  const membership = await database.prepare(`
-    SELECT 1 AS present FROM memberships m
-    JOIN users u ON u.id = m.user_id
-    WHERE lower(u.email) = lower(?) AND m.status = 'active' AND m.revoked_at IS NULL
-    LIMIT 1
-  `).bind(email).first<{ present: number }>();
-  return Boolean(membership);
-}
-
-async function acceptPendingOrganisationInvitations(
-  database: D1Database,
-  email: string,
-): Promise<void> {
-  // Silent acceptance is only defensible as first-time onboarding. Once an
-  // account holds an active membership anywhere, any platform administrator
-  // could otherwise pre-create an invited membership for an arbitrary email and
-  // capture that account's default workspace on its next sign-in, so those
-  // invitations stay pending until the invitee accepts or declines explicitly.
-  if (await hasActiveOrganisationMembership(database, email)) return;
-  for (let accepted = 0; accepted < maximumAutomaticInvitationAcceptances; accepted += 1) {
-    if (!(await acceptPendingOrganisationInvitation(database, email))) return;
-  }
 }
 
 async function pendingOrganisationInvitations(

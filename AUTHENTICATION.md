@@ -23,11 +23,12 @@ An email with no user row provisions a personal workspace at OTP
 verification: a new user, a new organisation named `<local-part> workspace`,
 and an active `platform_admin` membership in that workspace, recorded with an
 `auth.signup` audit event. Provisioning happens only after the code is
-verified, so unverified addresses never create rows. Signup applies only to
-emails the platform has never seen: any email an administrator has ever
-managed — invited (even if the invitation lapsed or was declined) or revoked —
-already has a user row and stays locked out until re-invited, so self-serve
-signup can never bypass administrator-managed access.
+verified, so unverified addresses never create rows. Every sign-in without an
+active membership provisions the account's own workspace — including an email
+that only holds a pending invitation, whose invitation stays pending. An email
+whose membership was revoked, declined, or lapsed stays locked out until
+re-invited: signup creates accounts, it never undoes an administrator's
+revocation.
 
 Every OTP request and resend also requires a fresh Cloudflare Turnstile token.
 The browser widget uses action `otp_request`; the Worker validates the
@@ -42,18 +43,22 @@ only as a Worker secret.
 Organisation team invitations use the same verified email identity boundary,
 but do not make membership active when an administrator merely types an email.
 The D1 membership remains `invited` until a valid, unexpired invitation is
-accepted. A successful OTP verification accepts pending invitations silently
-only for an account that holds no active membership in any organisation — an
-unambiguous first-time onboarding, capped at a bounded number of invitations per
-sign-in. An account that already belongs to an organisation is never enrolled
-silently: its invitations stay `pending`, are returned as `pendingInvitations`
-on the login and `/api/auth/session` responses, and are answered explicitly
-through `POST /api/team/invitations/:invitationId/accept` or `/decline`. Both
-are authenticated, membership-state guarded, rate limited, and audited. This
-closes the path where a platform administrator could pre-create an invited
-membership for an arbitrary email and capture that account's default workspace
-on its next sign-in. Expired invitations are revoked by the scheduled lifecycle
-Worker.
+accepted. Invitations are never accepted silently, for anyone: under
+self-serve signup any workspace administrator can invite an arbitrary email,
+so a silent first-login join would let an attacker capture a brand-new account
+into their organisation. Instead every account's invitations stay `pending`,
+are returned as `pendingInvitations` on the login and `/api/auth/session`
+responses, and are answered explicitly through
+`POST /api/team/invitations/:invitationId/accept` or `/decline`. Both are
+authenticated, membership-state guarded, rate limited, and audited. A
+first-time invitee therefore lands in their own freshly provisioned workspace
+and joins the inviting organisation only by explicit consent (the enterprise
+OIDC callback remains the one exception: it activates the invitation for its
+own provider-bound organisation, which requires that organisation's registered
+identity provider and Worker-secret client credential). This closes the path
+where any administrator could pre-create an invited membership for an
+arbitrary email and capture that account's default workspace on its next
+sign-in. Expired invitations are revoked by the scheduled lifecycle Worker.
 
 Studio surfaces those pending invitations directly after sign-in and on every
 workspace screen, in the `#pendingInvitationsPanel` section above the workspace

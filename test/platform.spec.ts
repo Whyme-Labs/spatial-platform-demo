@@ -1091,9 +1091,50 @@ describe("Spatial Studio Worker", () => {
       status: "pending",
     });
 
+    // First sign-in provisions the invitee's own workspace; the organisation
+    // invitation is never accepted silently and must be answered explicitly.
     const teammate = await loginSession(teammateEmail);
-    const operatorTeamAttempt = await exports.default.fetch(`${origin}/api/team`, {
+    const ownWorkspaceTeam = await exports.default.fetch(`${origin}/api/team`, {
       headers: { cookie: teammate.accessCookie },
+    });
+    expect(ownWorkspaceTeam.status).toBe(200);
+    const ownTeam = await ownWorkspaceTeam.json<{ members: Array<Record<string, unknown>> }>();
+    expect(ownTeam.members).toHaveLength(1);
+    expect(ownTeam.members[0]).toMatchObject({ email: teammateEmail, role: "platform_admin" });
+    const beforeAcceptTeam = await exports.default.fetch(`${origin}/api/team`, {
+      headers: { cookie: administrator.accessCookie },
+    });
+    const beforeAccept = await beforeAcceptTeam.json<{
+      members: Array<Record<string, unknown>>;
+    }>();
+    expect(beforeAccept.members.find((member) => member.userId === invitation.invitation.userId)).toMatchObject({
+      status: "invited",
+    });
+
+    const acceptResponse = await exports.default.fetch(
+      `${origin}/api/team/invitations/${invitation.invitation.id}/accept`,
+      {
+        method: "POST",
+        headers: { cookie: teammate.accessCookie, origin },
+      },
+    );
+    expect(acceptResponse.status).toBe(200);
+
+    // Working inside the inviting organisation requires an explicit switch.
+    const memberSwitch = await exports.default.fetch(`${origin}/api/auth/organisations/switch`, {
+      method: "POST",
+      headers: {
+        cookie: teammate.accessCookie,
+        "content-type": "application/json",
+        origin,
+      },
+      body: JSON.stringify({ organisationId: "00000000-0000-4000-8000-000000000001" }),
+    });
+    expect(memberSwitch.status).toBe(200);
+    const memberAccess = (memberSwitch.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
+    const memberCookie = `spatial_access=${memberAccess}`;
+    const operatorTeamAttempt = await exports.default.fetch(`${origin}/api/team`, {
+      headers: { cookie: memberCookie },
     });
     expect(operatorTeamAttempt.status).toBe(403);
 
@@ -1128,10 +1169,22 @@ describe("Spatial Studio Worker", () => {
     });
 
     const staleAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
-      headers: { cookie: teammate.accessCookie },
+      headers: { cookie: memberCookie },
     });
     expect(staleAccess.status).toBe(401);
     const promoted = await loginSession(teammateEmail);
+    const promotedSwitch = await exports.default.fetch(`${origin}/api/auth/organisations/switch`, {
+      method: "POST",
+      headers: {
+        cookie: promoted.accessCookie,
+        "content-type": "application/json",
+        origin,
+      },
+      body: JSON.stringify({ organisationId: "00000000-0000-4000-8000-000000000001" }),
+    });
+    expect(promotedSwitch.status).toBe(200);
+    const promotedAdminAccess = (promotedSwitch.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
+    const promotedAdminCookie = `spatial_access=${promotedAdminAccess}`;
 
     const selfDemotion = await exports.default.fetch(
       `${origin}/api/team/members/${invitation.invitation.userId}`,
@@ -1155,10 +1208,15 @@ describe("Spatial Studio Worker", () => {
     );
     expect(revokeResponse.status).toBe(204);
     const revokedAccess = await exports.default.fetch(`${origin}/api/dashboard`, {
-      headers: { cookie: promoted.accessCookie },
+      headers: { cookie: promotedAdminCookie },
     });
     expect(revokedAccess.status).toBe(401);
-    expect((await verifyOtp(teammateEmail)).status).toBe(401);
+    // Organisation revocation removes that membership, not the platform
+    // account: the teammate keeps their personal workspace.
+    const revokedSignin = await verifyOtp(teammateEmail);
+    expect(revokedSignin.status).toBe(200);
+    const revokedBody = await revokedSignin.json<{ user: { organisationId: string } }>();
+    expect(revokedBody.user.organisationId).not.toBe("00000000-0000-4000-8000-000000000001");
 
     const reinvite = await exports.default.fetch(`${origin}/api/team/invitations`, {
       method: "POST",
@@ -1297,6 +1355,47 @@ describe("Spatial Studio Worker", () => {
       FROM memberships WHERE user_id = ?
     `).bind(email, bodies[0].user.userId).first<{ memberships: number; users: number }>();
     expect(rows).toEqual({ memberships: 1, users: 1 });
+  });
+
+  it("gives an invited never-seen email its own workspace instead of the inviter's", async () => {
+    // Workspace-capture regression: under self-serve signup anyone can become
+    // a workspace admin and invite an arbitrary email. The invitee's first
+    // sign-in must land in their OWN workspace with the invitation left
+    // pending, never silently inside the inviter's organisation.
+    const inviterResponse = await verifyOtp(`inviter-${crypto.randomUUID().slice(0, 8)}@example.com`);
+    expect(inviterResponse.status).toBe(200);
+    const inviterAccess = (inviterResponse.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
+    const inviter = await inviterResponse.json<{ user: { organisationId: string } }>();
+    const victimEmail = `victim-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const invitationResponse = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: {
+        cookie: `spatial_access=${inviterAccess}`,
+        "content-type": "application/json",
+        origin,
+      },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email: victimEmail,
+        role: "platform_admin",
+        expiresInDays: 7,
+      }),
+    });
+    expect(invitationResponse.status).toBe(201);
+    const victimResponse = await verifyOtp(victimEmail);
+    expect(victimResponse.status).toBe(200);
+    const victim = await victimResponse.json<{
+      user: { userId: string; organisationId: string };
+      pendingInvitations: Array<{ organisationId: string }>;
+    }>();
+    expect(victim.user.organisationId).not.toBe(inviter.user.organisationId);
+    expect(victim.pendingInvitations).toEqual([
+      expect.objectContaining({ organisationId: inviter.user.organisationId }),
+    ]);
+    const captiveMembership = await env.DB.prepare(
+      "SELECT status FROM memberships WHERE organisation_id = ? AND user_id = ?",
+    ).bind(inviter.user.organisationId, victim.user.userId).first<{ status: string }>();
+    expect(captiveMembership?.status).toBe("invited");
   });
 
   it("accepts memberships in multiple organisations and rotates the session when switching", async () => {

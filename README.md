@@ -182,10 +182,11 @@ Implemented:
   OTP acceptance, role changes, resend/reinvite, last-admin protection enforced
   by the mutation itself rather than a preceding read, and immediate
   target-session invalidation
-- explicit invitation consent: silent acceptance is limited to a first-time
-  account holding no active membership anywhere, while an account that already
-  belongs to an organisation sees its pending invitations on sign-in and answers
-  each one through an authenticated, rate-limited, audited accept or decline
+- explicit invitation consent for everyone: no invitation is ever accepted
+  silently — a first-time invitee lands in their own provisioned workspace,
+  every account sees its pending invitations on sign-in, and each one is
+  answered through an authenticated, rate-limited, audited accept or decline
+  (blocking the capture of new accounts into an inviter's organisation)
 - explicit multi-organisation membership inventory and session-rotating
   workspace switching with tenant-state clearing and mobile access
 - organisation project templates, personal saved portfolio views, deterministic
