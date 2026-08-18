@@ -2800,6 +2800,17 @@ body.studio-page .wide-dialog {
   width: min(760px, calc(100vw - 32px));
 }
 
+body.studio-page .floorplan-review-dialog {
+  width: min(1180px, calc(100vw - 32px));
+}
+
+body.studio-page .floorplan-review-dialog .dialog-close {
+  position: sticky;
+  top: 0;
+  margin-left: auto;
+  margin-bottom: -40px;
+}
+
 body.studio-page .dialog-card form,
 body.studio-page .portfolio-dialog-shell,
 body.studio-page .comparison-shell {
