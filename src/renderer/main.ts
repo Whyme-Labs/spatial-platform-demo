@@ -589,6 +589,18 @@ async function start(): Promise<void> {
             movementModeToggle.hidden = !collisionDrivenMovement;
             updateMovementModeChrome();
             lastWalkablePosition = camera.position.clone();
+            // A walk release opens standing: the runtime placement above chose
+            // the feet and eye height, and the authored QA framing contributes
+            // only its heading. The framing itself is an elevated review pose —
+            // steeply pitched, often carrying a non-vertical authored up — and
+            // a standing walker must open level, with world-vertical up, so
+            // that yaw turns about gravity and verticals render upright. A
+            // structural fly opening keeps the authored framing: that is the
+            // reviewed way to present a flythrough release, and Reset view in
+            // fly mode restores it.
+            if (physicalRuntime.mode === "walk") {
+              levelCameraForWalking(camera);
+            }
             controls.align(camera);
             initialView = {
               position: camera.position.clone(),
@@ -1021,6 +1033,13 @@ async function start(): Promise<void> {
         lastWalkablePosition = camera.position.clone();
       } else if (lastWalkablePosition) {
         camera.position.copy(lastWalkablePosition);
+      } else {
+        // No anchored position means the body was never established here —
+        // an earlier placement failed and left walking dead. Re-place from
+        // wherever the camera is now: placement runs the same navmesh
+        // projection and collision validation as every other placement, so
+        // recovery can never skip a reviewed wall.
+        anchorCameraToWalkable(camera);
       }
     } else if (detourNavigationRuntime) {
       const detourResolved = detourNavigationRuntime.moveCamera(origin, desired);
@@ -1032,6 +1051,8 @@ async function start(): Promise<void> {
         lastWalkablePosition = camera.position.clone();
       } else if (lastWalkablePosition) {
         camera.position.copy(lastWalkablePosition);
+      } else {
+        anchorCameraToWalkable(camera);
       }
     } else if (navigationRuntime) {
       const resolved = resolveNavigationMovement(origin, desired, navigationRuntime);
@@ -1496,6 +1517,28 @@ function navigationMeshBounds(
   return { min: minimum, max: maximum };
 }
 
+// Levels the camera for standing movement: world-vertical up, level gaze, and
+// the heading preserved from whatever orientation the camera held. The
+// approved floor-plan frame is Y-up and the walking runtime's gravity is -Y,
+// so an authored camera up that leans away from world Y is a review-framing
+// artifact, never a walking frame.
+function levelCameraForWalking(camera: THREE.PerspectiveCamera): void {
+  const heading = camera.getWorldDirection(new THREE.Vector3());
+  heading.y = 0;
+  if (heading.lengthSq() < 1e-8) {
+    // Looking along the pole: for a roll-free camera the screen-up vector
+    // lies in the vertical plane of the heading — toward it looking down,
+    // away from it looking up.
+    const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    heading.set(screenUp.x, 0, screenUp.z);
+    if (camera.getWorldDirection(new THREE.Vector3()).y > 0) heading.negate();
+  }
+  if (heading.lengthSq() < 1e-8) heading.set(0, 0, -1);
+  heading.normalize();
+  camera.up.set(0, 1, 0);
+  camera.lookAt(camera.position.clone().add(heading));
+}
+
 function anchorCameraToWalkable(camera: THREE.PerspectiveCamera): boolean {
   if (
     collisionDrivenMovement &&
@@ -1704,6 +1747,14 @@ function toggleMovementMode(): void {
   authoredTraversalOverlay?.update(null);
   stopMobileVerticalMovement();
   rendererControls?.setMovementMode(nextMode);
+  if (nextMode === "walk") {
+    // Landing means standing: gravity owns the vertical, so the walking frame
+    // is world Y even when the release opened on an authored fly framing with
+    // its own up vector. Re-aligning here levels any authored roll away while
+    // keeping the direction the pilot was looking.
+    camera.up.set(0, 1, 0);
+  }
+  rendererControls?.align(camera);
   lastWalkablePosition = camera.position.clone();
   updateMovementModeChrome();
   setControlStatus(movementStatusText(), "ready");
@@ -1871,6 +1922,11 @@ function resetView(): void {
     lastWalkablePosition = camera.position.clone();
   }
   setControlStatus("Opening view restored");
+  // The click leaves focus on the Reset button, and movement keys targeted at
+  // a button are deliberately ignored so keyboard button activation still
+  // works. Walking must resume immediately after a reset, so hand focus back
+  // to the canvas the same way the movement-mode toggle does.
+  canvas.focus({ preventScroll: true });
 }
 
 function toggleHelp(): void {

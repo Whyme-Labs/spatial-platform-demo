@@ -362,6 +362,20 @@ routes. Room moves use a request/acknowledgement message so rejected cameras
 leave the host control recoverable. The Gaussian asset remains a visual layer;
 the platform does not infer collision or measurement accuracy from it.
 
+A walk release opens standing, not at the authored QA framing: once the
+physical runtime places the body (projecting the authored camera onto the
+navmesh, or falling back to the artifact's reviewed spawn), the camera is
+levelled — eye height from the placement, gaze level, up world-vertical — and
+only the framing's heading survives. The levelled pose becomes the release's
+"Reset view" target; a structural fly opening keeps the authored framing, which
+is the reviewed way to present a flythrough. Look is a yaw/pitch state machine:
+each drag rebuilds the orientation from two clamped scalars over a roll-free
+base frame, so the camera cannot roll or pitch past the clamp from any starting
+orientation, including an authored pose that carried roll. If walk movement
+ever finds itself with no anchored body position, the render loop re-places the
+body through the same validated placement path instead of leaving movement
+dead.
+
 Movement integrates the measured frame delta rather than a fixed step, so
 physics does not depend on the display refresh rate. A stationary primary click
 upgrades desktop look to pointer lock; a drag keeps the existing capture-based

@@ -55,6 +55,33 @@ test.describe("spatial navigation direction", () => {
     expect(Math.abs(dot(pitchDelta, afterTurn.right))).toBeLessThan(0.02);
   });
 
+  test("sustained vertical dragging can never pitch past the clamp or flip the camera", async ({
+    page,
+  }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up");
+    const initial = await readCameraState(page);
+    const maximumPitchSine = Math.sin((85.5 * Math.PI) / 180);
+
+    // Far more vertical drag than the clamp allows, in both directions, with
+    // yaw mixed in: the camera must stay inside the pitch clamp, keep its up
+    // vector on the aligned hemisphere, and hold its right axis level — a
+    // flipped or rolled camera fails all three.
+    for (let index = 0; index < 6; index += 1) {
+      await drag(page, { x: 500, y: 420 }, { x: 480, y: 60 });
+      const state = await readCameraState(page);
+      expect(dot(state.direction, initial.up)).toBeLessThan(maximumPitchSine);
+      expect(dot(state.up, initial.up)).toBeGreaterThan(0.05);
+      expect(Math.abs(dot(state.right, initial.up))).toBeLessThan(0.001);
+    }
+    for (let index = 0; index < 6; index += 1) {
+      await drag(page, { x: 500, y: 60 }, { x: 520, y: 420 });
+      const state = await readCameraState(page);
+      expect(dot(state.direction, initial.up)).toBeGreaterThan(-maximumPitchSine);
+      expect(dot(state.up, initial.up)).toBeGreaterThan(0.05);
+      expect(Math.abs(dot(state.right, initial.up))).toBeLessThan(0.001);
+    }
+  });
+
   test("arrow keys move on the floor plane in the viewed direction", async ({ page }) => {
     await page.goto("/e2e/fixtures/pointer-controls.html");
     const initial = await readCameraState(page);
