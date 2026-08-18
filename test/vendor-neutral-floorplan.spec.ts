@@ -92,6 +92,47 @@ function twoLevelStairFixture(): Uint8Array {
   return asciiPly(points);
 }
 
+function furnishedFloorBelowBroadCeilingFixture(): Uint8Array {
+  const points: Array<[number, number, number]> = [];
+  const add = (point: [number, number, number]) => points.push(point);
+
+  // A real 8 m x 4 m floor beneath a ceiling whose captured footprint is
+  // broader. This is the shape produced by the FJD sample: the widest
+  // horizontal surface is not the surface a visitor stands on.
+  for (let x = 0.125; x < 8; x += 0.25) {
+    for (let z = 0.125; z < 4; z += 0.25) add([x, 0, z]);
+  }
+  for (let x = -1; x < 9; x += 0.25) {
+    for (let z = -0.5; z < 4.5; z += 0.25) add([x, 3.75, z]);
+  }
+
+  for (let y = 0.25; y <= 2.5; y += 0.25) {
+    for (let x = 0; x <= 8; x += 0.25) {
+      add([x, y, 0]);
+      add([x, y, 4]);
+    }
+    for (let z = 0; z <= 4; z += 0.25) {
+      add([0, y, z]);
+      add([8, y, z]);
+    }
+  }
+
+  // Dense furnishings persist through height over five-eighths of the observed
+  // floor, but the remaining three-eighths form one contiguous clear area. A
+  // global blocked-column ratio must not delete usable ground merely because a
+  // furnished capture is dense; actual contiguous clearance is what matters.
+  for (let i = 0; i < 32; i += 1) {
+    for (let j = 0; j < 16; j += 1) {
+      if (i >= 20) continue;
+      for (const y of [0.45, 0.75, 1.05]) {
+        add([0.125 + i * 0.25, y, 0.125 + j * 0.25]);
+      }
+    }
+  }
+
+  return asciiPly(points);
+}
+
 describe("vendor-neutral metric floor-plan extraction", () => {
   it("turns a registered metric PLY into reviewable rooms, walls, and an opening", () => {
     const signature = parsePlySceneSignature(rectangularTwoRoomFixture(), {
@@ -248,6 +289,121 @@ describe("vendor-neutral metric floor-plan extraction", () => {
 
     expect(report.summary.inferredFloorElevationM).toBe(0);
     expect(report.rooms.reduce((area, room) => area + room.areaM2, 0)).toBeGreaterThan(60);
+  });
+
+  it("keeps the lowest structurally supported floor in a densely furnished capture", () => {
+    const signature = parsePlySceneSignature(furnishedFloorBelowBroadCeilingFixture(), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    const report = extractMetricFloorPlan(signature, {
+      gridSizeM: 0.25,
+      floorBandM: 0.15,
+      minimumWallHeightCoverage: 0.6,
+      minimumRoomAreaM2: 4,
+    });
+
+    expect(report.summary.inferredFloorElevationM).toBe(0);
+    expect(report.summary.wallCellCount).toBe(96);
+    expect(report.rooms.reduce((area, room) => area + room.areaM2, 0)).toBeGreaterThan(25);
+    const floorSelection = report.parameters.floorSelection as {
+      method: string;
+      screenedElevationsM: number[];
+      selectedElevationsM: number[];
+      candidates: Array<{
+        elevationM: number;
+        screeningStatus: string;
+        screeningReasons: string[];
+        persistentHeadroomBlockedRatio: number;
+        largestClearHeadroomComponentCellCount: number;
+        requiredClearHeadroomCellCount: number;
+        extractionStatus: string;
+        selected: boolean;
+      }>;
+    };
+    expect(floorSelection).toMatchObject({
+      method: "metric-floor-candidate-score-v1",
+      screenedElevationsM: [0],
+      selectedElevationsM: [0],
+      candidates: [
+        {
+          elevationM: 0,
+          screeningStatus: "accepted",
+          screeningReasons: ["contiguous_headroom_clearance"],
+          extractionStatus: "selected",
+          selected: true,
+        },
+        {
+          elevationM: 3.75,
+          screeningStatus: "rejected",
+          screeningReasons: ["wall_support_below_ratio"],
+          extractionStatus: "not_attempted",
+          selected: false,
+        },
+      ],
+    });
+    expect(floorSelection.candidates[0]).toMatchObject({
+      persistentHeadroomBlockedRatio: 0.648438,
+      largestClearHeadroomComponentCellCount: 180,
+      requiredClearHeadroomCellCount: 64,
+    });
+  });
+
+  it("reports rejected floor hypotheses instead of retrying the widest ceiling", () => {
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0.125; x < 8; x += 0.25) {
+      for (let z = 0.125; z < 4; z += 0.25) points.push([x, 0, z]);
+    }
+    for (let x = -1; x < 9; x += 0.25) {
+      for (let z = -0.5; z < 4.5; z += 0.25) points.push([x, 3.75, z]);
+    }
+    // Three short posts pass candidate screening's minimum persistence but do
+    // not span enough height to become walls in the stricter extraction pass.
+    // The assessment must retain that downstream rejection. The broader
+    // ceiling must not be retried as an unhinted floor afterwards.
+    for (const [x, z] of [[1, 1], [4, 2], [7, 3]] as const) {
+      for (const y of [0.3, 0.45, 0.6]) points.push([x, y, z]);
+    }
+
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    let failure: unknown;
+    try {
+      extractMetricFloorPlan(signature, {
+        gridSizeM: 0.25,
+        floorBandM: 0.15,
+        minimumWallHeightCoverage: 0.6,
+        minimumRoomAreaM2: 4,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "FLOOR_LEVEL_CANDIDATES_REJECTED",
+      details: {
+        floorSelection: {
+          screenedElevationsM: [0],
+          selectedElevationsM: [],
+        },
+        candidateFailures: [{
+          elevationM: 0,
+          code: "INSUFFICIENT_WALL_SUPPORT",
+        }],
+      },
+    });
+    expect((failure as { details: { floorSelection: { candidates: unknown[] } } })
+      .details.floorSelection.candidates).toEqual(expect.arrayContaining([expect.objectContaining({
+      elevationM: 0,
+      screeningStatus: "accepted",
+      extractionStatus: "rejected",
+      selected: false,
+      extractionFailure: expect.objectContaining({
+        code: "INSUFFICIENT_WALL_SUPPORT",
+      }),
+    })]));
   });
 
   it("leaves the wall line open where it recorded an opening", () => {
@@ -424,6 +580,79 @@ describe("vendor-neutral metric floor-plan extraction", () => {
     expect(report.levels.map((level) => level.elevationM)).toEqual([0]);
   });
 
+  it("rejects a cropped capture containing only a loaded racking deck", () => {
+    const points: Array<[number, number, number]> = [];
+    for (let x = 0.125; x < 8; x += 0.25) {
+      for (let z = 0.125; z < 5; z += 0.25) points.push([x, 3, z]);
+    }
+    for (let y = 3.25; y <= 5.5; y += 0.25) {
+      for (let x = 0; x <= 8; x += 0.25) {
+        points.push([x, y, 0]);
+        points.push([x, y, 5]);
+      }
+      for (let z = 0; z <= 5; z += 0.25) {
+        points.push([0, y, z]);
+        points.push([8, y, z]);
+      }
+    }
+    for (let i = 0; i < 32; i += 1) {
+      for (let j = 0; j < 20; j += 1) {
+        if (i % 5 === 4) continue;
+        const x = 0.125 + i * 0.25;
+        const z = 0.125 + j * 0.25;
+        points.push([x, 3.4, z]);
+        points.push([x, 3.7, z]);
+        points.push([x, 4.0, z]);
+      }
+    }
+    const signature = parsePlySceneSignature(asciiPly(points), {
+      voxelSizeM: 0.125,
+      maximumSamplePoints: 1_000_000,
+    });
+    for (const floorBandM of [0.05, 0.15, 0.5]) {
+      let failure: unknown;
+      try {
+        extractMetricFloorPlan(signature, {
+          gridSizeM: 0.25,
+          floorBandM,
+          minimumWallHeightCoverage: 0.6,
+          minimumRoomAreaM2: 4,
+        });
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure, `floorBandM=${floorBandM}`).toMatchObject({
+        code: "FLOOR_LEVEL_CANDIDATES_REJECTED",
+        details: {
+          floorSelection: {
+            screenedElevationsM: [],
+            selectedElevationsM: [],
+            thresholds: {
+              verticalPersistenceResolutionM: Math.min(0.125, floorBandM),
+            },
+          },
+        },
+      });
+      const candidates = (failure as {
+        details: { floorSelection: { candidates: Array<Record<string, unknown>> } };
+      }).details.floorSelection.candidates;
+      expect(candidates).toEqual(expect.arrayContaining([expect.objectContaining({
+        elevationM: 3,
+        screeningStatus: "rejected",
+        screeningReasons: ["insufficient_contiguous_headroom_clearance"],
+        extractionStatus: "not_attempted",
+        selected: false,
+      })]));
+      expect(candidates.find((candidate) => candidate.elevationM === 3)).toMatchObject({
+        persistentHeadroomBlockedCellCount: 526,
+        persistentHeadroomBlockedRatio: 0.821875,
+        largestClearHeadroomComponentCellCount: 19,
+        requiredClearHeadroomCellCount: 64,
+      });
+    }
+  });
+
   it("traces a simple ring where an interior void meets a notch at one corner", () => {
     // When a void inside the room and a notch in its outer edge share a single
     // cell corner, two boundary passes meet at that vertex and an arbitrary
@@ -566,11 +795,33 @@ describe("vendor-neutral metric floor-plan extraction", () => {
       maximumSamplePoints: 100_000,
     });
 
-    expect(() => extractMetricFloorPlan(signature, {
-      gridSizeM: 0.25,
-      floorBandM: 0.15,
-      minimumRoomAreaM2: 2,
-    })).toThrowError(/wall/i);
+    let failure: unknown;
+    try {
+      extractMetricFloorPlan(signature, {
+        gridSizeM: 0.25,
+        floorBandM: 0.15,
+        minimumRoomAreaM2: 2,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: "FLOOR_LEVEL_CANDIDATES_REJECTED",
+      details: {
+        floorSelection: {
+          screenedElevationsM: [],
+          selectedElevationsM: [],
+          candidates: [{
+            elevationM: 0,
+            wallSupportScore: 0,
+            screeningStatus: "rejected",
+            screeningReasons: ["wall_support_below_ratio"],
+            extractionStatus: "not_attempted",
+            selected: false,
+          }],
+        },
+      },
+    });
   });
 
   it("extracts distinct levels and a continuous stair connector", () => {
