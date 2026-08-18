@@ -291,17 +291,33 @@ jobs:
           PROCESSOR_VERSION: ${{ steps.processor.outputs.version }}
           PROCESSOR_DIGEST: ${{ steps.processor.outputs.digest }}
         run: |
-          curl -fsS --max-time 30 "$PRODUCTION_PROCESSOR_ORIGIN/" \
-            | tee "$EVIDENCE_DIR/processor-health.json"
-          node -e '
-            const { readFileSync } = require("node:fs");
-            const health = JSON.parse(readFileSync(process.argv[1], "utf8"));
-            if (health.status !== "ok" || health.identity?.agentBuildSha !== process.env.DEPLOY_SHA ||
-                health.identity?.imageDigest !== process.env.PROCESSOR_DIGEST) {
-              console.error(`Processor health identity mismatch: ${JSON.stringify(health.identity)}`);
-              process.exit(1);
-            }
-          ' "$EVIDENCE_DIR/processor-health.json"
+          # A freshly published container version keeps serving from the warm
+          # previous instance until Cloudflare cycles it in, so the identity is
+          # polled over a bounded window instead of sampled once seconds after
+          # publish. The acceptance itself is unchanged: the exact build SHA
+          # and image digest must answer, or the deployment fails and rolls
+          # back exactly as before.
+          verified=""
+          for attempt in $(seq 1 15); do
+            if curl -fsS --max-time 30 "$PRODUCTION_PROCESSOR_ORIGIN/" \
+                > "$EVIDENCE_DIR/processor-health.json" \
+              && node -e '
+                const { readFileSync } = require("node:fs");
+                const health = JSON.parse(readFileSync(process.argv[1], "utf8"));
+                if (health.status !== "ok" || health.identity?.agentBuildSha !== process.env.DEPLOY_SHA ||
+                    health.identity?.imageDigest !== process.env.PROCESSOR_DIGEST) {
+                  console.error(`Processor health identity mismatch: ${JSON.stringify(health.identity)}`);
+                  process.exit(1);
+                }
+              ' "$EVIDENCE_DIR/processor-health.json"; then
+            verified="yes"
+            break
+            fi
+            echo "Attempt ${attempt}: the published processor identity is not serving yet; retrying in 20s"
+            sleep 20
+          done
+          test -n "$verified"
+          cat "$EVIDENCE_DIR/processor-health.json"
           npx wrangler deployments list -c wrangler.processor.jsonc --env production --json | node -e '
             let d = "";
             process.stdin.on("data", (c) => d += c).on("end", () => {
