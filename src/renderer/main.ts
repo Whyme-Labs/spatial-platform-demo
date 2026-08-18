@@ -325,9 +325,16 @@ async function start(): Promise<void> {
   renderer.setPixelRatio(pixelRatioFor(config.splatBudget));
 
   const budgetSplats = Math.round(config.splatBudget * 1_000_000);
+  // Spark otherwise allocates paged-splat texture backing (packed + SH) for a
+  // fixed 16.78M-splat capacity on CPU and GPU regardless of scene size. The
+  // budget already bounds simultaneously rendered splats; 1.5x headroom keeps
+  // LRU page eviction comfortable. Must be a multiple of the 65,536 page size.
+  const splatPageSize = 65_536;
+  const maxPagedSplats = Math.ceil((budgetSplats * 1.5) / splatPageSize) * splatPageSize;
   const spark = new SparkRenderer({
     renderer,
     lodSplatCount: budgetSplats,
+    maxPagedSplats,
     lodRenderScale: 1.2,
     minPixelRadius: 0.15,
     maxPixelRadius: 384,
