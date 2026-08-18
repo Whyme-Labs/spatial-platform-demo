@@ -663,6 +663,40 @@ authenticated project load also measured that the 200-row parent query caused
 passes its project IDs through one `json_each` parameter, and the regression
 test exercises the same 200-row page.
 
+## Automatic floor head-room persistence
+
+Last measured: 2026-08-18
+
+Command:
+
+```bash
+npx vitest run test/vendor-neutral-floorplan.spec.ts
+```
+
+The extractor reuses its existing three-vertical-bin persistence requirement
+to distinguish isolated furniture returns from structure occupying standing
+height. Vertical bins use the bounded physical voxel resolution, not the
+independently configurable horizontal-surface band. It does not apply a new
+global occupancy percentage. A candidate must instead contain a
+four-neighbour-connected head-room-clear component at least as large as the
+configured minimum room support.
+
+The deterministic furnished-floor fixture measured 332 persistently occupied
+cells out of 512 (0.648438), but its remaining clear region contains one
+180-cell component against 64 required and is accepted. The cropped loaded-rack
+fixture measured 526 occupied cells out of 640 (0.821875); its largest clear
+component is only 19 cells against 64 required and is rejected. The test also
+repeats that rack receipt at valid floor bands of 0.05, 0.15, and 0.5 m. The
+corresponding measured vertical resolutions are 0.05, 0.125, and 0.125 m. The
+test also proves zero wall support is rejected during screening and that
+downstream extraction failures are reconciled into the same candidate
+assessment.
+
+The immutable FJD LAS replay receipt is recorded in
+[`docs/research/fjd-sample-floorplan-failure-2026-08-18.md`](research/fjd-sample-floorplan-failure-2026-08-18.md):
+its selected floor has an 85-cell clear component against the production
+32-cell requirement, while the ceiling is rejected for zero wall support.
+
 ## Full software-gate receipt
 
 Last measured: 2026-08-13

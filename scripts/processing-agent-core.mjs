@@ -1117,11 +1117,24 @@ export function normalizeSourceToWorldSignature(signature, sourceToWorld) {
 
 export function extractMetricFloorPlan(signature, options = {}) {
   const explicitElevation = options.elevationHintM ?? null;
-  const candidateElevations = explicitElevation === null
+  const floorSelection = explicitElevation === null
     ? metricFloorLevelCandidates(signature, options)
-    : [explicitElevation];
+    : {
+      screenedElevations: [explicitElevation],
+      evidence: {
+        method: "explicit-floor-elevation-v1",
+        screenedElevationsM: [explicitElevation],
+        selectedElevationsM: [],
+        candidates: [],
+      },
+    };
+  const candidateElevations = floorSelection.screenedElevations;
   const levelReports = [];
+  const candidateFailures = [];
   for (const elevationHintM of candidateElevations) {
+    const candidateAssessment = floorSelection.evidence.candidates.find(
+      (candidate) => candidate.elevationM === elevationHintM,
+    );
     try {
       const report = extractSingleLevelMetricFloorPlan(signature, {
         ...options,
@@ -1129,23 +1142,69 @@ export function extractMetricFloorPlan(signature, options = {}) {
       });
       if (levelReports.some((candidate) =>
         Math.abs(candidate.summary.inferredFloorElevationM -
-          report.summary.inferredFloorElevationM) <= 0.5)) continue;
+          report.summary.inferredFloorElevationM) <= 0.5)) {
+        if (candidateAssessment) candidateAssessment.extractionStatus = "duplicate";
+        continue;
+      }
       levelReports.push(report);
+      if (candidateAssessment) {
+        candidateAssessment.extractionStatus = "selected";
+        candidateAssessment.selected = true;
+      }
     } catch (error) {
       if (explicitElevation !== null || !isRejectedFloorLevelCandidate(error)) throw error;
+      const extractionFailure = {
+        elevationM: elevationHintM,
+        code: error.code,
+        message: error.message,
+        details: error.details ?? {},
+      };
+      candidateFailures.push(extractionFailure);
+      if (candidateAssessment) {
+        candidateAssessment.extractionStatus = "rejected";
+        candidateAssessment.extractionFailure = {
+          code: extractionFailure.code,
+          message: extractionFailure.message,
+          details: extractionFailure.details,
+        };
+      }
     }
   }
+  floorSelection.evidence.selectedElevationsM = levelReports
+    .map((report) => report.summary.inferredFloorElevationM)
+    .sort((left, right) => left - right);
   if (!levelReports.length) {
-    return withProposalCaptureAgreement(
-      signature,
-      extractSingleLevelMetricFloorPlan(signature, options),
+    const rejectionSummary = candidateFailures
+      .slice(0, 3)
+      .map((failure) => `${semanticRound(failure.elevationM)} m: ${failure.message}`)
+      .join("; ");
+    const omittedFailureCount = Math.max(0, candidateFailures.length - 3);
+    throw new ProcessingAgentError(
+      "FLOOR_LEVEL_CANDIDATES_REJECTED",
+      candidateFailures.length
+        ? `Every automatic floor hypothesis failed structural validation (${rejectionSummary}` +
+          `${omittedFailureCount ? `; ${omittedFailureCount} more` : ""})`
+        : "Automatic floor selection found no hypothesis that passed structural and headroom screening",
+      {
+        failureClass: "input_validation",
+        retryable: false,
+        details: {
+          floorSelection: floorSelection.evidence,
+          candidateFailures,
+        },
+      },
     );
   }
   levelReports.sort((left, right) =>
     left.summary.inferredFloorElevationM - right.summary.inferredFloorElevationM);
+  const report = combineMetricFloorPlanLevels(signature, levelReports, options);
+  report.parameters.floorSelection = {
+    ...floorSelection.evidence,
+    candidateFailures,
+  };
   return withProposalCaptureAgreement(
     signature,
-    combineMetricFloorPlanLevels(signature, levelReports, options),
+    report,
   );
 }
 
@@ -1467,10 +1526,7 @@ function extractSingleLevelMetricFloorPlan(signature, {
     floorBandM,
   );
 
-  const verticalResolutionM = Math.max(
-    0.025,
-    Math.min(Number(signature.voxelSizeM) || floorBandM, floorBandM),
-  );
+  const verticalResolutionM = metricVerticalResolutionM(signature, floorBandM);
   const expectedVerticalBins = Math.max(
     1,
     Math.floor((wallMaxHeightM - wallMinHeightM) / verticalResolutionM) + 1,
@@ -1487,7 +1543,7 @@ function extractSingleLevelMetricFloorPlan(signature, {
   const wallCells = new Set(
     [...wallHeightBins.entries()]
       .filter(([, bins]) => {
-        if (bins.size < 3) return false;
+        if (bins.size < MINIMUM_VERTICAL_PERSISTENCE_BINS) return false;
         const sorted = [...bins].sort((left, right) => left - right);
         const verticalSpanCoverage =
           (sorted.at(-1) - sorted[0] + 1) / expectedVerticalBins;
@@ -1713,14 +1769,21 @@ const MINIMUM_STOREY_SEPARATION_M = 2;
 // footprint — so the ratio must sit below that, with the head-room gate (below)
 // rejecting the deck tops and shelf planes that footprint alone cannot.
 const FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO = 0.5;
-// Head-room over a candidate floor: capture between 0.25 m (floor-thickness
-// fuzz) and standing height above it marks a column a person cannot occupy.
-// Measured floors run 40-54% blocked (furnished flat 54, workshop 50, CAB
-// storeys 40-54) while the top of loaded racking runs 88%, so the line sits at
-// 0.6 — comfortably above any real floor seen, well below a shelf plane.
+// Head-room over a candidate floor: capture that persists through at least
+// three vertical bins between the floor-thickness fuzz and standing height
+// marks a column a person cannot occupy. A single return can be a chair, table,
+// or noisy surface; three bins are the extractor's existing minimum evidence
+// that structure persists through height.
 const FLOOR_LEVEL_HEADROOM_MINIMUM_M = 0.25;
 const FLOOR_LEVEL_HEADROOM_REQUIRED_M = 1.8;
-const FLOOR_LEVEL_MAXIMUM_HEADROOM_BLOCKED_RATIO = 0.6;
+const MINIMUM_VERTICAL_PERSISTENCE_BINS = 3;
+
+function metricVerticalResolutionM(signature, floorBandM) {
+  return Math.max(
+    0.025,
+    Math.min(Number(signature?.voxelSizeM) || floorBandM, floorBandM),
+  );
+}
 
 function metricFloorLevelCandidates(signature, {
   gridSizeM = 0.25,
@@ -1729,7 +1792,31 @@ function metricFloorLevelCandidates(signature, {
   wallMaxHeightM = 2.5,
   minimumRoomAreaM2 = 2,
 } = {}) {
-  if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) return [];
+  const verticalPersistenceResolutionM = metricVerticalResolutionM(signature, floorBandM);
+  const buildCandidateAssessment = (
+    candidates,
+    screenedElevationsM,
+    lowestElevationM = null,
+  ) => ({
+    screenedElevations: screenedElevationsM,
+    evidence: {
+      method: "metric-floor-candidate-score-v1",
+      thresholds: {
+        minimumWallSupportRatio: FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO,
+        minimumFootprintRatio: FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO,
+        minimumStoreySeparationM: MINIMUM_STOREY_SEPARATION_M,
+        minimumVerticalPersistenceBins: MINIMUM_VERTICAL_PERSISTENCE_BINS,
+        verticalPersistenceResolutionM,
+      },
+      lowestStructurallySupportedElevationM: lowestElevationM,
+      screenedElevationsM,
+      selectedElevationsM: [],
+      candidates,
+    },
+  });
+  if (!signature || !(signature.voxels instanceof Map) || !signature.voxels.size) {
+    return buildCandidateAssessment([], []);
+  }
   const minimumCells = Math.ceil(minimumRoomAreaM2 / (gridSizeM * gridSizeM));
   const layers = new Map();
   const points = [];
@@ -1753,7 +1840,7 @@ function metricFloorLevelCandidates(signature, {
       elevationM: semanticRound(index * floorBandM),
       cells,
     }));
-  if (!observed.length) return [];
+  if (!observed.length) return buildCandidateAssessment([], []);
   // Storeys of an occupied building are contiguous in elevation — floor, its
   // contents, its ceiling, then the next floor, with no empty band anywhere
   // between. Grouping layers into clusters separated by empty space therefore
@@ -1794,9 +1881,9 @@ function metricFloorLevelCandidates(signature, {
   // within standing height above most of its area; a storey floor is clear. A
   // footprint gate cannot make this distinction — on CAB the real top storey and
   // a raised plane held near-identical footprints.
-  const blockedColumns = new Map();
+  const headroomBinsByColumn = new Map();
   for (const layer of scored) {
-    blockedColumns.set(layer, new Set());
+    headroomBinsByColumn.set(layer, new Map());
   }
   for (const [x, y, z] of points) {
     const cellKey = `${Math.floor(x / gridSizeM)},${Math.floor(z / gridSizeM)}`;
@@ -1804,18 +1891,81 @@ function metricFloorLevelCandidates(signature, {
       const clearance = y - layer.elevationM;
       if (clearance < FLOOR_LEVEL_HEADROOM_MINIMUM_M ||
         clearance >= FLOOR_LEVEL_HEADROOM_REQUIRED_M) continue;
-      if (layer.cells.has(cellKey)) blockedColumns.get(layer).add(cellKey);
+      if (!layer.cells.has(cellKey)) continue;
+      const binsByColumn = headroomBinsByColumn.get(layer);
+      const bins = binsByColumn.get(cellKey) ?? new Set();
+      bins.add(Math.round(clearance / verticalPersistenceResolutionM));
+      binsByColumn.set(cellKey, bins);
     }
   }
 
-  return scored
-    .filter((layer) =>
-      layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO &&
-      layer.cells.size >= widestFootprint * FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO &&
-      blockedColumns.get(layer).size <=
-        layer.cells.size * FLOOR_LEVEL_MAXIMUM_HEADROOM_BLOCKED_RATIO)
-    .sort((left, right) => left.elevationM - right.elevationM)
-    .map((layer) => layer.elevationM);
+  const hasWallSupport = (layer) => bestSupport > 0 &&
+    layer.wallSupport >= bestSupport * FLOOR_LEVEL_MINIMUM_WALL_SUPPORT_RATIO;
+  const hasFloorFootprint = (layer) =>
+    layer.cells.size >= widestFootprint * FLOOR_LEVEL_MINIMUM_FOOTPRINT_RATIO;
+  const structurallySupported = scored.filter((layer) =>
+    hasWallSupport(layer) && hasFloorFootprint(layer));
+  const lowestStructurallySupportedElevation = structurallySupported.length
+    ? Math.min(...structurallySupported.map((layer) => layer.elevationM))
+    : null;
+  const candidates = scored.map((layer) => {
+    const wallSupportRatio = bestSupport
+      ? layer.wallSupport / bestSupport
+      : 0;
+    const footprintRatio = widestFootprint
+      ? layer.cells.size / widestFootprint
+      : 0;
+    const persistentHeadroomBlockedCells = new Set(
+      [...headroomBinsByColumn.get(layer).entries()]
+        .filter(([, bins]) => bins.size >= MINIMUM_VERTICAL_PERSISTENCE_BINS)
+        .map(([cell]) => cell),
+    );
+    const persistentHeadroomBlockedCellCount = persistentHeadroomBlockedCells.size;
+    const persistentHeadroomBlockedRatio = layer.cells.size
+      ? persistentHeadroomBlockedCellCount / layer.cells.size
+      : 1;
+    const clearHeadroomCells = new Set(
+      [...layer.cells].filter((cell) => !persistentHeadroomBlockedCells.has(cell)),
+    );
+    const largestClearHeadroomComponentCellCount = semanticCellComponents(clearHeadroomCells)
+      .reduce((largest, component) => Math.max(largest, component.length), 0);
+    const wallSupportPasses = hasWallSupport(layer);
+    const footprintPasses = hasFloorFootprint(layer);
+    const headroomPasses =
+      largestClearHeadroomComponentCellCount >= minimumCells;
+    const passesScreening = wallSupportPasses && footprintPasses && headroomPasses;
+    const screeningReasons = [];
+    if (!wallSupportPasses) screeningReasons.push("wall_support_below_ratio");
+    if (!footprintPasses) screeningReasons.push("footprint_below_ratio");
+    if (wallSupportPasses && footprintPasses && !headroomPasses) {
+      screeningReasons.push("insufficient_contiguous_headroom_clearance");
+    }
+    if (passesScreening) screeningReasons.push("contiguous_headroom_clearance");
+    return {
+      elevationM: layer.elevationM,
+      horizontalCellCount: layer.cells.size,
+      wallSupportScore: layer.wallSupport,
+      wallSupportRatio: semanticRound(wallSupportRatio),
+      footprintRatio: semanticRound(footprintRatio),
+      persistentHeadroomBlockedCellCount,
+      persistentHeadroomBlockedRatio: semanticRound(persistentHeadroomBlockedRatio),
+      clearHeadroomCellCount: clearHeadroomCells.size,
+      largestClearHeadroomComponentCellCount,
+      requiredClearHeadroomCellCount: minimumCells,
+      screeningStatus: passesScreening ? "accepted" : "rejected",
+      screeningReasons,
+      extractionStatus: "not_attempted",
+      selected: false,
+    };
+  }).sort((left, right) => left.elevationM - right.elevationM);
+  const screenedElevations = candidates
+    .filter((candidate) => candidate.screeningStatus === "accepted")
+    .map((candidate) => candidate.elevationM);
+  return buildCandidateAssessment(
+    candidates,
+    screenedElevations,
+    lowestStructurallySupportedElevation,
+  );
 }
 
 // A real ceiling is rarely one clean flat band over the whole floor: beams,
@@ -1885,7 +2035,7 @@ function metricWallSupportScore(
     binsByCell.set(key, bins);
   }
   return [...binsByCell.values()]
-    .filter((bins) => bins.size >= 3)
+    .filter((bins) => bins.size >= MINIMUM_VERTICAL_PERSISTENCE_BINS)
     .reduce((score, bins) => score + bins.size, 0);
 }
 
