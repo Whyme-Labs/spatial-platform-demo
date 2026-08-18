@@ -758,7 +758,10 @@ export function createCompareDomain(dependencies: CompareDomainDependencies): Co
       comparisonFrameReady[side] = false;
       const elements = comparisonSideElements(side);
       elements.frame.onload = null;
-      elements.frame.removeAttribute("src");
+      // Removing the src attribute does not navigate an iframe, so the loaded
+      // renderer document (splat buffers, physics world, frame loop) would stay
+      // alive hidden; an about:blank navigation actually unloads it.
+      elements.frame.src = "about:blank";
       elements.frame.hidden = true;
       elements.empty.hidden = false;
       elements.empty.textContent = "Preparing a signed Spark renderer session…";
