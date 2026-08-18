@@ -66,6 +66,46 @@ test("a fatal walking-map error is never followed by ready", async ({ page }) =>
   expect(await messagesOfType(page, "ready")).toHaveLength(0);
 });
 
+test("a walk release opens standing and level, not at the authored review framing", async ({
+  page,
+}) => {
+  const fixture = await buildFixture();
+  // The authored QA framing: elevated above the room, pitched steeply down,
+  // with a tilted authored up vector. A walk-enabled release must open
+  // standing on the walkable floor at eye height, gaze level, world-vertical
+  // up — only the heading survives from the framing.
+  await mountFixture(page, fixture, {
+    sendRuntime: true,
+    cameraQuery: "camera=1,5,2&target=3,0.2,2.6&up=0.2,0.9,0.3",
+  });
+
+  const opened = await captureCamera(page);
+  const eye = opened.position[1];
+  expect(eye).toBeGreaterThan(1.4);
+  expect(eye).toBeLessThan(1.8);
+  // Standing inside the 8x4 room, on the walkable surface.
+  expect(opened.position[0]).toBeGreaterThan(0);
+  expect(opened.position[0]).toBeLessThan(8);
+  expect(opened.position[2]).toBeGreaterThan(0);
+  expect(opened.position[2]).toBeLessThan(4);
+  // Level gaze, world-vertical up (no roll), heading kept from the framing.
+  const direction = subtractTuple(opened.target, opened.position);
+  const length = Math.hypot(...direction);
+  expect(Math.abs(direction[1]! / length)).toBeLessThan(0.01);
+  expect(opened.up[0]).toBeCloseTo(0, 5);
+  expect(opened.up[1]).toBeCloseTo(1, 5);
+  expect(opened.up[2]).toBeCloseTo(0, 5);
+  expect(direction[0]! / length).toBeGreaterThan(0.5);
+
+  // And walking works immediately from the opening pose.
+  await page.frameLocator("#renderer").locator("#sparkCanvas").focus();
+  await page.keyboard.down("ArrowUp");
+  await page.waitForTimeout(700);
+  await page.keyboard.up("ArrowUp");
+  const walked = await captureCamera(page);
+  expect(walked.position[0]).toBeGreaterThan(opened.position[0] + 0.3);
+});
+
 test("a synced camera cannot drag the player through a closed door", async ({ page }) => {
   const fixture = await buildFixture();
   await mountFixture(page, fixture, { sendRuntime: true });
@@ -206,8 +246,9 @@ async function buildFixture(): Promise<{
 async function mountFixture(
   page: import("@playwright/test").Page,
   fixture: Awaited<ReturnType<typeof buildFixture>>,
-  options: { sendRuntime: boolean },
+  options: { sendRuntime: boolean; cameraQuery?: string },
 ): Promise<void> {
+  const cameraQuery = options.cameraQuery ?? "camera=1,1.6,2&target=7,1.6,2";
   await page.route("**/asset/fixture-movement-integrity.glb", (route) => route.fulfill({
     status: 200,
     contentType: "model/gltf-binary",
@@ -232,7 +273,7 @@ async function mountFixture(
         }
       });
     </script><iframe id="renderer" title="Movement integrity proof"
-      src="/renderer/index.html?content=/asset/test-scene.spz&format=spz&camera=1,1.6,2&target=7,1.6,2"></iframe>`,
+      src="/renderer/index.html?content=/asset/test-scene.spz&format=spz&${cameraQuery}"></iframe>`,
   }));
   await page.goto("/e2e/movement-integrity-host.html");
   await expect(page.locator("#renderer")).toBeVisible();
@@ -387,6 +428,13 @@ async function setCamera(
       },
     }, location.origin);
   }), position) as Promise<{ accepted: boolean; message?: string }>;
+}
+
+function subtractTuple(
+  left: [number, number, number],
+  right: [number, number, number],
+): [number, number, number] {
+  return [left[0] - right[0], left[1] - right[1], left[2] - right[2]];
 }
 
 async function minimalSpz(): Promise<Uint8Array> {

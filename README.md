@@ -291,6 +291,11 @@ Implemented:
   replay, controlled non-teleport viewer movement, and an evidence-linked
   runtime overlay/event; legacy v8 artifacts remain readable, while registered
   device evidence and coordinate-registration proof remain production gates
+- walk releases open standing on the walkable surface at the runtime's eye
+  height with a levelled, world-vertical camera (the authored QA framing keeps
+  only its heading, and remains the opening for structural fly releases);
+  look is clamped yaw/pitch that can never roll or flip, and walk movement
+  re-places the body through validated placement if it ever loses its anchor
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset

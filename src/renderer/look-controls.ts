@@ -61,6 +61,17 @@ export class SpatialNavigationControls {
   private readonly motorVelocity = new THREE.Vector3();
   private translationEnabled = true;
   private lookEnabled = true;
+  // Look is a yaw/pitch state machine, not an incremental quaternion edit.
+  // Every applied look rebuilds the camera orientation from these two scalars
+  // and the aligned base frame, so roll can never enter the camera — not from
+  // an authored framing that carried roll, not from floating-point drift, and
+  // not from composing yaw and pitch across the pitch pole. The pitch clamp
+  // is exact because pitch is the stored number itself, not a value recovered
+  // from a possibly-rolled orientation.
+  private lookYaw = 0;
+  private lookPitch = 0;
+  private readonly lookBaseRight = new THREE.Vector3(1, 0, 0);
+  private readonly lookBaseQuaternion = new THREE.Quaternion();
   private lookPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
@@ -91,6 +102,64 @@ export class SpatialNavigationControls {
     // Alignment follows teleports and authored pose changes; momentum must
     // never carry through a teleport.
     this.motorVelocity.set(0, 0, 0);
+    // Rebuild the yaw/pitch frame from the camera's current orientation. The
+    // stored pitch is measured against the authored horizon and clamped here,
+    // so a framing authored beyond the clamp can never start the camera past
+    // the pole, and any roll the incoming pose carried is levelled away —
+    // yaw/pitch look has no axis that could ever reintroduce it.
+    const up = this.navigationUp;
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const sine = THREE.MathUtils.clamp(forward.dot(up), -1, 1);
+    this.lookPitch = THREE.MathUtils.clamp(
+      Math.asin(sine),
+      -MAX_PITCH_RADIANS,
+      MAX_PITCH_RADIANS,
+    );
+    this.lookYaw = 0;
+    const heading = forward.clone().addScaledVector(up, -sine);
+    if (heading.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
+      // Looking along the pole leaves no horizontal forward. For a roll-free
+      // camera the screen-up vector lies in the vertical plane of the heading:
+      // looking down it points at the heading, looking up away from it.
+      const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+      heading.copy(screenUp).addScaledVector(up, -screenUp.dot(up));
+      if (sine > 0) heading.negate();
+    }
+    if (heading.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
+      const screenRight = LOCAL_RIGHT.clone().applyQuaternion(camera.quaternion);
+      heading.crossVectors(up, screenRight);
+    }
+    if (heading.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
+      heading.set(0, 0, -1).addScaledVector(up, up.z);
+      if (heading.lengthSq() < MOVEMENT_EPSILON * MOVEMENT_EPSILON) {
+        heading.set(1, 0, 0).addScaledVector(up, -up.x);
+      }
+    }
+    heading.normalize();
+    this.lookBaseRight.crossVectors(heading, up).normalize();
+    const baseUp = new THREE.Vector3()
+      .crossVectors(this.lookBaseRight, heading)
+      .normalize();
+    this.lookBaseQuaternion.setFromRotationMatrix(
+      new THREE.Matrix4().makeBasis(
+        this.lookBaseRight,
+        baseUp,
+        heading.clone().negate(),
+      ),
+    );
+    this.applyLookOrientation(camera);
+  }
+
+  // Camera orientation is always exactly yaw about the aligned up, then pitch
+  // about the yawed right axis, applied to the roll-free base frame.
+  private applyLookOrientation(camera: THREE.PerspectiveCamera): void {
+    camera.quaternion
+      .setFromAxisAngle(this.lookBaseRight, this.lookPitch)
+      .premultiply(
+        new THREE.Quaternion().setFromAxisAngle(this.navigationUp, this.lookYaw),
+      )
+      .multiply(this.lookBaseQuaternion)
+      .normalize();
   }
 
   setNavigationBounds(bounds: NavigationBounds[]): void {
@@ -402,36 +471,13 @@ export class SpatialNavigationControls {
       return false;
     }
 
-    const yaw = -deltaX * LOOK_RADIANS_PER_PIXEL;
-    if (Math.abs(yaw) >= MOVEMENT_EPSILON) {
-      camera.quaternion.premultiply(
-        new THREE.Quaternion().setFromAxisAngle(this.navigationUp, yaw),
-      );
-    }
-
-    const direction = camera.getWorldDirection(new THREE.Vector3());
-    const currentPitch = Math.asin(THREE.MathUtils.clamp(
-      direction.dot(this.navigationUp),
-      -1,
-      1,
-    ));
-    const requestedPitch = -deltaY * LOOK_RADIANS_PER_PIXEL;
-    const targetPitch = THREE.MathUtils.clamp(
-      currentPitch + requestedPitch,
+    this.lookYaw -= deltaX * LOOK_RADIANS_PER_PIXEL;
+    this.lookPitch = THREE.MathUtils.clamp(
+      this.lookPitch - deltaY * LOOK_RADIANS_PER_PIXEL,
       -MAX_PITCH_RADIANS,
       MAX_PITCH_RADIANS,
     );
-    const pitch = targetPitch - currentPitch;
-    if (Math.abs(pitch) >= MOVEMENT_EPSILON) {
-      const screenRight = LOCAL_RIGHT.clone()
-        .applyQuaternion(camera.quaternion)
-        .normalize();
-      camera.quaternion.premultiply(
-        new THREE.Quaternion().setFromAxisAngle(screenRight, pitch),
-      );
-    }
-
-    camera.quaternion.normalize();
+    this.applyLookOrientation(camera);
     return true;
   }
 
