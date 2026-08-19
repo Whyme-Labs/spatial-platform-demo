@@ -268,6 +268,24 @@
           <span class="eyebrow">SCENE UNAVAILABLE</span>
           <h2 id="errorTitle">This spatial experience could not be loaded.</h2>
           <p id="errorMessage">The release may have expired, been revoked, or require an access token.</p>
+          <form id="accessCodeForm" class="access-code-form" hidden>
+            <label>
+              <span>Access code</span>
+              <input
+                name="accessCode"
+                type="text"
+                inputmode="text"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                required
+                placeholder="Paste the access code from your invitation"
+              />
+            </label>
+            <button id="accessCodeSubmit" class="primary-button wide" type="submit">Unlock scene</button>
+            <p id="accessCodeError" class="form-error" role="alert"></p>
+          </form>
+          <a id="accessSignInLink" class="primary-button" href="/studio.html" hidden>Sign in</a>
           <button id="retryButton" class="primary-button" type="button">Retry</button>
         </div>
 

@@ -37,13 +37,13 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 
 - Roles: 4
 - Worker and client routes: 191
-- Forms: 37
+- Forms: 38
 - Dialogs: 37
 - Governed fields: 246
-- Static and generated controls: 318
-- Route and control assurance: browser=6, deployed-staging=31, integration=110, production-attested=1, static=360, unit=1
+- Static and generated controls: 320
+- Route and control assurance: browser=9, deployed-staging=31, integration=110, production-attested=1, static=359, unit=1
 - Persisted state sets: 68
-- Asynchronous workflows: 59
+- Asynchronous workflows: 60
 
 ## Roles
 
@@ -290,7 +290,8 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | captureCompletenessForm | captureCompletenessDialog | global | studio.html:1199 | FORM-A | static | studio.html:1199 |
 | captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1226 | FORM-A | static | studio.html:1226 |
 | versionComparisonForm | versionComparisonDialog | global | studio.html:1256 | FORM-A | static | studio.html:1256 |
-| sceneReviewForm | none | global | index.html:279 | FORM-A | static | index.html:279 |
+| accessCodeForm | none | global | index.html:271 | FORM-A | browser | e2e/release-access-code.spec.ts |
+| sceneReviewForm | none | global | index.html:297 | FORM-A | static | index.html:297 |
 
 ## Login inputs
 
@@ -739,13 +740,14 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | index.html:button:148 | button | Structure | generated/global | index.html:148 | CONTROL-A | static | index.html:148 |
 | index.html:button:149 | button | Publish | generated/global | index.html:149 | CONTROL-A | static | index.html:149 |
 | shareButton | button | Share | generated/global | index.html:242 | CONTROL-A | static | index.html:242 |
-| retryButton | button | Retry | generated/global | index.html:271 | CONTROL-A | static | index.html:271 |
-| index.html:button:282 | button | Attach feedback to this view | sceneReviewForm | index.html:282 | CONTROL-A | static | index.html:282 |
-| approveReviewButton | button | Approve version | generated/global | index.html:286 | CONTROL-A | static | index.html:286 |
-| requestChangesButton | button | Request changes | generated/global | index.html:287 | CONTROL-A | static | index.html:287 |
-| toggleReleaseInfo | button | PUBLISHED RELEASE Preparing scene ⌄ | generated/global | index.html:294 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
-| openNavigator | button | Explore rooms ⌄ | generated/global | index.html:311 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
-| closeNavigator | button | Close | generated/global | index.html:336 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| accessCodeSubmit | button | Unlock scene | accessCodeForm | index.html:285 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
+| retryButton | button | Retry | generated/global | index.html:289 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
+| index.html:button:300 | button | Attach feedback to this view | sceneReviewForm | index.html:300 | CONTROL-A | static | index.html:300 |
+| approveReviewButton | button | Approve version | generated/global | index.html:304 | CONTROL-A | static | index.html:304 |
+| requestChangesButton | button | Request changes | generated/global | index.html:305 | CONTROL-A | static | index.html:305 |
+| toggleReleaseInfo | button | PUBLISHED RELEASE Preparing scene ⌄ | generated/global | index.html:312 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| openNavigator | button | Explore rooms ⌄ | generated/global | index.html:329 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| closeNavigator | button | Close | generated/global | index.html:354 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
 | studio.html:a:14 | link | Spatial Studio Production operations | generated/global | studio.html:14 | LINK-A | static | studio.html:14 |
 | studio.html:a:44 | link | Open public site | generated/global | studio.html:44 | LINK-A | static | studio.html:44 |
 | index.html:a:19 | link | Spatial Studio by Whyme Labs | generated/global | index.html:19 | LINK-A | static | index.html:19 |
@@ -767,7 +769,8 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | index.html:a:231 | link | Spatial Studio Reality, made explorable | generated/global | index.html:231 | LINK-A | static | index.html:231 |
 | index.html:a:241 | link | Open studio | generated/global | index.html:241 | LINK-A | static | index.html:241 |
 | index.html:a:243 | link | About Spatial Studio | generated/global | index.html:243 | LINK-A | static | index.html:243 |
-| index.html:a:277 | link | Review inbox | generated/global | index.html:277 | LINK-A | static | index.html:277 |
+| accessSignInLink | link | Sign in | generated/global | index.html:288 | LINK-A | browser | e2e/release-access-code.spec.ts |
+| index.html:a:295 | link | Review inbox | generated/global | index.html:295 | LINK-A | static | index.html:295 |
 | src/client/studio.ts:button:3012 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3012 | CONTROL-A | static | src/client/studio.ts:3012 |
 | src/client/studio.ts:edit:4059 | button | edit | generated/global | src/client/studio.ts:4059 | CONTROL-A | static | src/client/studio.ts:4059 |
 | src/client/studio.ts:remove:4061 | button | remove | generated/global | src/client/studio.ts:4061 | CONTROL-A | static | src/client/studio.ts:4061 |
@@ -911,9 +914,9 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | src/client/studio/stages/compare.ts:visual:1263 | button | visualAvailable ? "" : "Two versions need verified web scenes, approved navigation, and capture registration." | generated/global | src/client/studio/stages/compare.ts:1263 | CONTROL-A | static | src/client/studio/stages/compare.ts:1263 |
 | src/client/studio/stages/compare.ts:compare:1279 | button | compare | generated/global | src/client/studio/stages/compare.ts:1279 | CONTROL-A | static | src/client/studio/stages/compare.ts:1279 |
 | src/client/studio/stages/compare.ts:compareRaw:1302 | button | rawAvailable ? "" : "Two versions need verified source PLY assets and capture-registration evidence." | generated/global | src/client/studio/stages/compare.ts:1302 | CONTROL-A | static | src/client/studio/stages/compare.ts:1302 |
-| src/client/viewer.ts:button:1037 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1037 | CONTROL-A | static | src/client/viewer.ts:1037 |
-| src/client/viewer.ts:button:1068 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1068 | CONTROL-A | static | src/client/viewer.ts:1068 |
-| src/client/viewer.ts:button:1147 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1147 | CONTROL-A | static | src/client/viewer.ts:1147 |
+| src/client/viewer.ts:button:1077 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1077 | CONTROL-A | static | src/client/viewer.ts:1077 |
+| src/client/viewer.ts:button:1108 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1108 | CONTROL-A | static | src/client/viewer.ts:1108 |
+| src/client/viewer.ts:button:1187 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1187 | CONTROL-A | static | src/client/viewer.ts:1187 |
 
 ## Persisted states
 
@@ -1049,5 +1052,6 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | Studio / Lifecycle enforcement/restore drill | Control pending | Global error; lifecycle history remains intact | Single-flight; each run records its terminal outcome | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |
 | Viewer / Load release/private preview | Full viewport loading state and progress remains until Spark, Detour, and Rapier are ready | Dedicated blocking error panel; no camera-only controls or ready event | Manifest GET retries up to three times; explicit Retry action; Worker refuses missing or legacy walking-map snapshots | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |
 | Viewer / Retry release | Retry button pending | Error panel remains actionable | Single-flight with the load action | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |
+| Viewer / Unlock token release with an access code | Access-code form disables and the submit shows `Unlocking…` with `aria-busy` | Inline form error re-prompts on a rejected code; the panel never dead-ends; a lapsed stored token is cleared before re-prompting | Single-flight with the load/retry action; the accepted code persists in per-slug sessionStorage for the browsing session | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |
 | Viewer / Share | Share button pending | Clipboard fallback, then explicit guidance | Manual retry | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |
 | Viewer / Room/floor-plan navigation | Room control pending until the Spark camera acknowledgement; other moves are single-flight | Inline navigator error; control and keyboard target restored | Explicit retry sends a new request ID; cameras outside collision are rejected | WORKFLOW-A | static | docs/ACTION_STATE_AUDIT.md |

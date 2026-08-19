@@ -1,6 +1,6 @@
 # Action-state audit
 
-Last reviewed: 2026-08-02
+Last reviewed: 2026-08-19
 
 ## Contract
 
@@ -85,6 +85,7 @@ resort.
 | Studio | Lifecycle enforcement/restore drill | Control pending | Global error; lifecycle history remains intact | Single-flight; each run records its terminal outcome |
 | Viewer | Load release/private preview | Full viewport loading state and progress remains until Spark, Detour, and Rapier are ready | Dedicated blocking error panel; no camera-only controls or ready event | Manifest GET retries up to three times; explicit Retry action; Worker refuses missing or legacy walking-map snapshots |
 | Viewer | Retry release | Retry button pending | Error panel remains actionable | Single-flight with the load action |
+| Viewer | Unlock token release with an access code | Access-code form disables and the submit shows `Unlocking…` with `aria-busy` | Inline form error re-prompts on a rejected code; the panel never dead-ends; a lapsed stored token is cleared before re-prompting | Single-flight with the load/retry action; the accepted code persists in per-slug sessionStorage for the browsing session |
 | Viewer | Share | Share button pending | Clipboard fallback, then explicit guidance | Manual retry |
 | Viewer | Room/floor-plan navigation | Room control pending until the Spark camera acknowledgement; other moves are single-flight | Inline navigator error; control and keyboard target restored | Explicit retry sends a new request ID; cameras outside collision are rejected |
 | Renderer | Enter/exit fullscreen | Fullscreen button pending | Non-blocking inline control status | Manual retry |

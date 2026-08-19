@@ -313,6 +313,11 @@ form[aria-busy="true"] .dialog-close {
 .landing-proof div { display:grid; gap:5px; }.landing-proof dt { color:var(--muted); font-size:10px; }.landing-proof dd { margin:0; font-size:11px; }
 .viewer-error { position:absolute; z-index:12; left:50%; top:50%; transform:translate(-50%,-50%); width:min(500px,calc(100% - 32px)); border-radius:24px; padding:30px; }
 .viewer-error h2 { font:400 30px/1.05 Georgia,serif; margin:11px 0; }.viewer-error p { color:var(--muted); line-height:1.55; }
+.access-code-form { display:grid; gap:10px; margin:16px 0 6px; text-align:left; }
+.access-code-form label { display:grid; gap:6px; color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
+.access-code-form input { width:100%; border:1px solid var(--line); border-radius:11px; background:rgba(9,11,9,.82); color:var(--text); padding:10px 12px; font:inherit; font-size:13px; letter-spacing:.01em; text-transform:none; outline:0; }
+.access-code-form input:focus-visible { border-color:var(--line-strong); }
+.access-code-form .form-error { margin:0; }
 .viewer-hud { position:absolute; z-index:9; right:18px; bottom:110px; width:min(360px,calc(100% - 36px)); pointer-events:none; transition:bottom .2s ease,opacity .16s ease; }
 .viewer-hud > * { pointer-events:auto; }
 .viewport.renderer-help-open .viewer-hud { bottom:calc(126px + var(--renderer-help-height,0px)); }
