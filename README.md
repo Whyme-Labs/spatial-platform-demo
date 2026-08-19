@@ -249,6 +249,13 @@ Implemented:
   customer-authenticated policies; UUIDs remain internal identity keys. A
   publish that loses the global slug guard concurrently is compensated and
   answered 409 rather than returning a release behind a URL that never activated
+- recoverable access for gated releases: a denied manifest 401 names the
+  release's access policy, so the viewer's unavailable panel offers an inline
+  access-code form for token releases (wrong codes re-prompt, never dead-end)
+  and a sign-in route for customer-authenticated ones. An accepted code — from
+  the URL or typed — persists per release slug in `sessionStorage`, so a
+  reload of the token-stripped URL keeps access for the browsing session while
+  token verification stays a server-side peppered, timing-safe hash compare
 - recoverable project archival that removes retired work from current Projects,
   Jobs, and Releases views while retaining its immutable project history
 - short-lived signed scene sessions that the viewer renews before they lapse

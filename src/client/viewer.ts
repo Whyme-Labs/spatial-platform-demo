@@ -324,6 +324,12 @@ const POSTER_FADE_MS = 400;
 // frozen canvas behind a healthy-looking viewer.
 const RENDERER_LIVENESS_TIMEOUT_MS = 30_000;
 
+// A token release strips its `access_token` from the address bar after the
+// first authorised manifest load, so continuity across reloads lives in
+// sessionStorage — deliberately not localStorage: access ends with the tab
+// session instead of persisting on a shared machine.
+const RELEASE_ACCESS_STORAGE_PREFIX = "release-access:";
+
 const frame = byId<HTMLIFrameElement>("rendererFrame");
 const loading = byId<HTMLElement>("loadingOverlay");
 const errorPanel = byId<HTMLElement>("errorPanel");
@@ -348,6 +354,9 @@ let sceneSessionFailures = 0;
 let sceneSessionExpiryShown = false;
 let loadingWatchdogAtMs: number | null = null;
 let rendererLivenessAtMs: number | null = null;
+// An access code typed into the unavailable panel; consumed by the next
+// manifest load and kept out of the URL, telemetry, and logs.
+let pendingAccessCode: string | null = null;
 let viewerWasHidden = document.hidden;
 let viewerTickHandle: number | null = null;
 const planRoomsById = new Map<string, PlanRoom>();
@@ -387,6 +396,21 @@ if (activeReleaseSlug || activePrivatePreview) {
       key: "retry-release",
       trigger: retryButton,
       pendingLabel: "Retrying…",
+    }, loadPublishedRelease);
+  });
+  const accessCodeForm = byId<HTMLFormElement>("accessCodeForm");
+  accessCodeForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const submitted = new FormData(accessCodeForm).get("accessCode");
+    const accessCode = typeof submitted === "string" ? submitted.trim() : "";
+    if (!accessCode) return;
+    pendingAccessCode = accessCode;
+    void runAction({
+      key: "retry-release",
+      trigger: byId<HTMLButtonElement>("accessCodeSubmit"),
+      pendingLabel: "Unlocking…",
+      form: accessCodeForm,
+      errorTarget: byId<HTMLElement>("accessCodeError"),
     }, loadPublishedRelease);
   });
   window.addEventListener("message", handleRendererMessage);
@@ -436,8 +460,12 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   byId("reviewPanel").hidden = true;
   frame.classList.add("is-loading");
   frame.hidden = true;
+  const urlToken = new URL(location.href).searchParams.get("access_token");
+  const typedCode = pendingAccessCode;
+  pendingAccessCode = null;
+  const storedToken = !urlToken && !typedCode && slug ? storedAccessToken(slug) : null;
+  const accessToken = urlToken ?? typedCode ?? storedToken;
   try {
-    const accessToken = new URL(location.href).searchParams.get("access_token");
     const query = accessToken
       ? `?access_token=${encodeURIComponent(accessToken)}`
       : "";
@@ -447,11 +475,13 @@ async function loadPublishedReleaseOnce(): Promise<void> {
         )).manifest
       : await api<ReleaseManifest>(`/api/releases/${encodeURIComponent(slug!)}/manifest${query}`);
     activeManifest = manifest;
-    if (accessToken) {
+    if (accessToken && slug) storeAccessToken(slug, accessToken);
+    if (urlToken) {
       const cleanUrl = new URL(location.href);
       cleanUrl.searchParams.delete("access_token");
       history.replaceState({}, "", cleanUrl);
     }
+    byId<HTMLFormElement>("accessCodeForm").reset();
     adoptSceneRenderSession(manifest);
     applyManifest(manifest);
     if (reviewMode) await loadSceneReview();
@@ -460,6 +490,16 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     frame.src = rendererUrl.toString();
     frame.hidden = false;
   } catch (error) {
+    if (!activePrivatePreview && error instanceof ApiError && error.status === 401) {
+      // A stored token can lapse when the release is republished with a fresh
+      // token; drop it so the next attempt prompts instead of looping.
+      if (storedToken && slug) clearStoredAccessToken(slug);
+      showAccessRequired(
+        releaseAccessPolicy(error),
+        Boolean(urlToken ?? typedCode),
+      );
+      return;
+    }
     showError("This spatial release is unavailable.", error instanceof Error ? error.message : "The release could not be authorised.");
   }
 }
@@ -1621,7 +1661,76 @@ function showError(title: string, message: string): void {
   errorPanel.hidden = false;
   byId("errorTitle").textContent = title;
   byId("errorMessage").textContent = message;
+  // Non-auth failures keep the plain Retry affordance; the access-specific
+  // affordances only appear through showAccessRequired.
+  byId<HTMLFormElement>("accessCodeForm").hidden = true;
+  byId<HTMLAnchorElement>("accessSignInLink").hidden = true;
+  byId<HTMLButtonElement>("retryButton").hidden = false;
   byId("rendererStatus").textContent = "Scene unavailable";
+}
+
+// The unavailable panel for an access-denied manifest is recoverable: token
+// releases prompt for the access code inline, customer-authenticated releases
+// route to the existing sign-in. A wrong code re-prompts with an inline error
+// instead of dead-ending; the entered code itself is never logged or reported.
+function showAccessRequired(accessPolicy: string | null, rejectedCode: boolean): void {
+  showError(
+    "This scene requires access",
+    accessPolicy === "customer-authenticated"
+      ? "This release is limited to invited customers. Sign in, then retry this link."
+      : "Paste the access code from your invitation.",
+  );
+  const accessCodeForm = byId<HTMLFormElement>("accessCodeForm");
+  const signInLink = byId<HTMLAnchorElement>("accessSignInLink");
+  const retryButton = byId<HTMLButtonElement>("retryButton");
+  if (accessPolicy === "customer-authenticated") {
+    signInLink.hidden = false;
+    return;
+  }
+  accessCodeForm.hidden = false;
+  // The tokenless Retry would repeat the same denied request forever.
+  retryButton.hidden = true;
+  byId("accessCodeError").textContent = rejectedCode
+    ? "That access code was not accepted. Check it against your invitation and try again."
+    : "";
+  const codeInput = accessCodeForm.elements.namedItem("accessCode");
+  if (codeInput instanceof HTMLInputElement) codeInput.focus();
+}
+
+function releaseAccessPolicy(error: ApiError): string | null {
+  if (!error.details || typeof error.details !== "object") return null;
+  const policy = (error.details as Record<string, unknown>).accessPolicy;
+  return typeof policy === "string" ? policy : null;
+}
+
+function accessTokenStorageKey(slug: string): string {
+  return `${RELEASE_ACCESS_STORAGE_PREFIX}${slug}`;
+}
+
+// sessionStorage can throw (storage disabled, private-mode quirks); access
+// continuity then simply degrades to prompting again.
+function storedAccessToken(slug: string): string | null {
+  try {
+    return sessionStorage.getItem(accessTokenStorageKey(slug));
+  } catch {
+    return null;
+  }
+}
+
+function storeAccessToken(slug: string, token: string): void {
+  try {
+    sessionStorage.setItem(accessTokenStorageKey(slug), token);
+  } catch {
+    // Continuity is best-effort; the scene already loaded for this view.
+  }
+}
+
+function clearStoredAccessToken(slug: string): void {
+  try {
+    sessionStorage.removeItem(accessTokenStorageKey(slug));
+  } catch {
+    // Nothing to clear when storage is unavailable.
+  }
 }
 
 async function shareCurrentUrl(): Promise<void> {

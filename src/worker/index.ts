@@ -16925,7 +16925,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     }
   }
   if (release.revoked_at || (release.expires_at && Date.parse(release.expires_at) <= Date.now())) return context.json({ error: "This scene is no longer available" }, 410);
-  if (!(await canViewRelease(context, release))) return unauthorized(context, "This scene requires access");
+  if (!(await canViewRelease(context, release))) return releaseAccessRequired(context, release.access_policy);
   const webAsset = await context.env.DB.prepare(
     "SELECT * FROM assets WHERE id = ? AND organisation_id = ? AND deleted_at IS NULL",
   ).bind(release.web_asset_id, release.organisation_id).first<AssetRow>();
@@ -25795,6 +25795,22 @@ function unprocessable(
 function unauthorized(context: Context<AppEnvironment>, message: string): Response {
   context.header("Cache-Control", "private, no-store");
   return context.json({ error: message, requestId: context.get("requestId") }, 401);
+}
+
+// A denied release manifest tells the viewer which credential can unlock the
+// scene — an access-code prompt for token policy, the sign-in route for
+// customer-authenticated — so a cleaned or bare link is recoverable instead of
+// a dead end. The policy name is already implied by the sharing flow for
+// anyone holding the link; no token, hash, or timing material leaves the
+// worker, and token verification stays the peppered timing-safe compare in
+// canViewRelease.
+function releaseAccessRequired(context: Context<AppEnvironment>, accessPolicy: string): Response {
+  context.header("Cache-Control", "private, no-store");
+  return context.json({
+    error: "This scene requires access",
+    accessPolicy,
+    requestId: context.get("requestId"),
+  }, 401);
 }
 
 function forbidden(context: Context<AppEnvironment>, message: string): Response {

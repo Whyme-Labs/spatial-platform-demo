@@ -794,6 +794,19 @@ processor-backed raw registration, signed asset retrieval, review, and cleanup.
 - asset filenames are canonicalized and must match their declared Spark format
 - comparison tokens cannot be replayed against a different project, version,
   asset, or filename and never expose an R2 object key
+- release access policies gate `/api/releases/:slug/manifest`: `token`
+  releases verify `?access_token` against a peppered SHA-256 hash with a
+  timing-safe compare, `customer-authenticated` releases require a signed-in
+  member of the owning organisation with live project access. A denial answers
+  `401 { error: "This scene requires access", accessPolicy, requestId }` —
+  the policy name lets the viewer offer the matching recovery (inline
+  access-code form for `token`, sign-in for `customer-authenticated`) without
+  leaking token or hash material. The viewer strips `access_token` from the
+  address bar after the first authorised load and keeps the accepted token in
+  per-slug `sessionStorage` (never `localStorage`), so the cleaned URL reloads
+  within the browsing session while shared links stay tokenless; a stored
+  token that stops verifying (for example after a republish minted a new one)
+  is cleared and the code prompt returns instead of a retry loop
 - scene tokens are bound to a D1 `scene_render_sessions` row (soft expiry plus a
   24 h hard ceiling). `/asset/` verifies the HMAC and the session row, backed by
   a 60 s per-isolate cache so ranged reads do not hit D1 per request. The
