@@ -336,6 +336,109 @@ test("publication keeps technical overrides behind an expert disclosure", async 
   await expect(dialog.getByText("Expert settings", { exact: true })).toBeVisible();
 });
 
+const capturedStartingViewFrame = {
+  schemaVersion: "starting-view-quality-v1",
+  capturedAt: "2026-08-19T08:00:00.000Z",
+  frame: { width: 1280, height: 720, sampledPixels: 57_600 },
+};
+
+test("a captured starting view publishes with its measured quality receipt", async ({ page }) => {
+  let publishedBody: Record<string, unknown> | null = null;
+  const goodFrameQuality = {
+    ...capturedStartingViewFrame,
+    nearBlackFraction: 0.21,
+    meanLuminance: 0.3,
+    renderedCoverageFraction: 0.74,
+  };
+  await mockApprovedProject(page, (body) => {
+    publishedBody = body;
+  }, { startingViewFrameQuality: goodFrameQuality });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  const useCurrentView = dialog.getByRole("button", { name: "Use current view", exact: true });
+  await page.frameLocator("#releaseCameraPreview")
+    .getByRole("button", { name: "Stand at safe start", exact: true }).click();
+  await expect(useCurrentView).toBeEnabled();
+  await useCurrentView.click();
+  await expect(page.locator("#releaseCameraStatus")).toContainText("Starting view captured");
+  await expect(page.locator("#releaseError")).toHaveText("");
+
+  await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await expect.poll(() => publishedBody).not.toBeNull();
+  expect(publishedBody).toMatchObject({
+    startingViewQuality: {
+      ...goodFrameQuality,
+      cameraPose: {
+        position: [1, 1.6, 2],
+        target: [1, 1.6, 1],
+        up: [0, 1, 0],
+        fovDegrees: 58,
+      },
+    },
+    viewerConfig: {
+      initialCamera: {
+        position: [1, 1.6, 2],
+        target: [1, 1.6, 1],
+      },
+    },
+  });
+});
+
+test("a mostly-black captured starting view warns at capture and surfaces the publish block", async ({
+  page,
+}) => {
+  let publishedBody: Record<string, unknown> | null = null;
+  const blockedMessage =
+    "The starting view frames mostly unreconstructed space (97% near-black, limit 85%) — move to a view with visible content, then capture it again";
+  await mockApprovedProject(page, (body) => {
+    publishedBody = body;
+  }, {
+    startingViewFrameQuality: {
+      ...capturedStartingViewFrame,
+      nearBlackFraction: 0.97,
+      meanLuminance: 0.042,
+      renderedCoverageFraction: 0.02,
+    },
+    publishResult: {
+      status: 422,
+      body: {
+        error: "Request cannot be applied",
+        details: { startingViewQuality: [blockedMessage] },
+      },
+    },
+  });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  const useCurrentView = dialog.getByRole("button", { name: "Use current view", exact: true });
+  await page.frameLocator("#releaseCameraPreview")
+    .getByRole("button", { name: "Stand at safe start", exact: true }).click();
+  await expect(useCurrentView).toBeEnabled();
+  await useCurrentView.click();
+
+  // The dialog pre-empts the worker gate at capture time…
+  await expect(page.locator("#releaseError")).toContainText("mostly unreconstructed space");
+  await expect(page.locator("#releaseCameraStatus")).toContainText("mostly unreconstructed space");
+
+  // …and the worker rejection lands in the same error element on submit.
+  await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await expect.poll(() => publishedBody).not.toBeNull();
+  expect(publishedBody).toMatchObject({
+    startingViewQuality: { nearBlackFraction: 0.97 },
+  });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("#releaseError")).toContainText("mostly unreconstructed space");
+});
+
 test("release authoring resets project-specific fields and submits scene rotation", async ({ page }) => {
   let publishedBody: Record<string, unknown> | null = null;
   const pageErrors: Error[] = [];
@@ -647,6 +750,8 @@ async function mockApprovedProject(
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
     delayedPrivacyScan?: { spatialReads: number };
+    startingViewFrameQuality?: Record<string, unknown>;
+    publishResult?: { status: number; body: Record<string, unknown> };
   } = {},
 ): Promise<void> {
   let projectCreated = !options.captureIntake;
@@ -698,13 +803,28 @@ async function mockApprovedProject(
         <button id="start">Stand at safe start</button>
         <button id="destination">Walk to destination</button>
         <script>
-          const send = (position, target) => parent.postMessage({
-            source: "spatial-spark",
-            type: "camera-update",
-            cameraPose: { position, target },
-          }, location.origin);
+          let pose = null;
+          const send = (position, target) => {
+            pose = { position, target, up: [0, 1, 0], fovDegrees: 58 };
+            parent.postMessage({
+              source: "spatial-spark",
+              type: "camera-update",
+              cameraPose: pose,
+            }, location.origin);
+          };
           document.querySelector("#start").addEventListener("click", () => send([1, 1.6, 2], [1, 1.6, 1]));
           document.querySelector("#destination").addEventListener("click", () => send([2, 1.6, 2], [2, 1.6, 1]));
+          window.addEventListener("message", (event) => {
+            const data = event.data;
+            if (!data || data.source !== "spatial-host" || data.type !== "capture-camera") return;
+            parent.postMessage({
+              source: "spatial-spark",
+              type: "camera",
+              requestId: data.requestId,
+              cameraPose: pose ?? { position: [1, 1.6, 2], target: [1, 1.6, 1], up: [0, 1, 0], fovDegrees: 58 },
+              frameQuality: ${JSON.stringify(options.startingViewFrameQuality ?? null)},
+            }, location.origin);
+          });
         </script>
       </body></html>`,
     });
@@ -1298,6 +1418,9 @@ async function mockApprovedProject(
     }
     if (path === `/api/projects/${projectId}/releases` && method === "POST") {
       onPublish(request.postDataJSON() as Record<string, unknown>);
+      if (options.publishResult) {
+        return json(route, options.publishResult.status, options.publishResult.body);
+      }
       return json(route, 200, {
         release: {
           url: "https://spatial.example/s/corrected-spark-room",

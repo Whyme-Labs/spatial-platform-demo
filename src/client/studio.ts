@@ -28,6 +28,12 @@ import {
 } from "./studio/stages/compare";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
+  parseStartingViewQualityMetrics,
+  startingViewQualityViolations,
+  startingViewQualityWarnings,
+  type StartingViewQualityMetrics,
+} from "../shared/starting-view-quality";
+import {
   assetProducerIds,
   assetProducerForLegacyAdapter,
   captureAdapterDisplayLabel,
@@ -1529,6 +1535,15 @@ type ReleaseCameraPose = {
   fovDegrees: number;
 };
 let latestReleaseCameraPose: ReleaseCameraPose | null = null;
+// The pending "Use current view" capture request and the quality receipt of
+// the most recent capture. The receipt stays bound to the exact pose it
+// measured: if the operator edits the expert camera fields afterwards, the
+// receipt no longer describes the published pose and is dropped at submit.
+let releaseViewCaptureRequestId: string | null = null;
+let latestReleaseViewQuality: {
+  metrics: StartingViewQualityMetrics;
+  pose: ReleaseCameraPose;
+} | null = null;
 
 const compareDomain = createCompareDomain({
   currentProject: () => state.selected
@@ -13412,6 +13427,8 @@ async function openReleaseDialog(): Promise<void> {
   syncReleaseTransformModes(form);
   releaseOperationId = crypto.randomUUID();
   latestReleaseCameraPose = null;
+  latestReleaseViewQuality = null;
+  releaseViewCaptureRequestId = null;
   byId<HTMLButtonElement>("releaseUseCurrentView").disabled = true;
   byId("releaseCameraStatus").textContent = "Preparing the approved scene…";
   byId("releaseError").textContent = "";
@@ -13460,6 +13477,23 @@ function handleReleaseCameraRendererMessage(event: MessageEvent<unknown>): void 
       "Move to the view visitors should see first, then capture it.";
     return;
   }
+  if (type === "camera") {
+    // Reply to the "Use current view" capture request: the renderer measured
+    // the exact frame at this pose, so the pose and its quality receipt stay
+    // bound together.
+    const requestId = Reflect.get(event.data, "requestId");
+    if (typeof requestId !== "string" || requestId !== releaseViewCaptureRequestId) return;
+    releaseViewCaptureRequestId = null;
+    const pose = Reflect.get(event.data, "cameraPose");
+    if (!validReleaseCameraPose(pose)) return;
+    latestReleaseCameraPose = pose;
+    const metrics = parseStartingViewQualityMetrics(
+      Reflect.get(event.data, "frameQuality"),
+    );
+    latestReleaseViewQuality = metrics ? { metrics, pose } : null;
+    applyCapturedReleaseView(pose, metrics);
+    return;
+  }
   if (type === "ready") {
     byId("releaseCameraStatus").textContent =
       "Move in the approved scene to choose the visitor starting view.";
@@ -13489,14 +13523,50 @@ function validReleaseCameraTuple(value: unknown): value is [number, number, numb
 
 function applyReleaseCurrentView(): void {
   if (!latestReleaseCameraPose) return;
+  const frame = byId<HTMLIFrameElement>("releaseCameraPreview");
+  if (frame.dataset.previewReady === "true" && frame.contentWindow) {
+    // Ask the live renderer for the pose AND the first-frame quality of the
+    // exact frame being frozen; the reply lands in
+    // handleReleaseCameraRendererMessage and fills the form there.
+    releaseViewCaptureRequestId = crypto.randomUUID();
+    frame.contentWindow.postMessage({
+      source: "spatial-host",
+      type: "capture-camera",
+      requestId: releaseViewCaptureRequestId,
+    }, location.origin);
+    return;
+  }
+  // The preview renderer is gone (failed load mid-session): capture still
+  // works from the last broadcast pose, only without a quality receipt.
+  latestReleaseViewQuality = null;
+  applyCapturedReleaseView(latestReleaseCameraPose, null);
+}
+
+function applyCapturedReleaseView(
+  pose: ReleaseCameraPose,
+  metrics: StartingViewQualityMetrics | null,
+): void {
   const form = byId<HTMLFormElement>("releaseForm");
-  setFormValue(form, "initialCameraPosition", latestReleaseCameraPose.position.join(", "));
-  setFormValue(form, "initialCameraTarget", latestReleaseCameraPose.target.join(", "));
-  setFormValue(form, "initialCameraUp", latestReleaseCameraPose.up.join(", "));
-  setFormValue(form, "initialCameraFov", String(latestReleaseCameraPose.fovDegrees));
-  byId("releaseCameraStatus").textContent =
-    "Starting view captured. Move again and choose Use current view to replace it.";
-  showToast("Publication starting view captured");
+  setFormValue(form, "initialCameraPosition", pose.position.join(", "));
+  setFormValue(form, "initialCameraTarget", pose.target.join(", "));
+  setFormValue(form, "initialCameraUp", pose.up.join(", "));
+  setFormValue(form, "initialCameraFov", String(pose.fovDegrees));
+  const violations = metrics ? startingViewQualityViolations(metrics) : [];
+  const warnings = metrics ? startingViewQualityWarnings(metrics) : [];
+  // A hard violation is surfaced immediately in the same error element the
+  // publish rejection would use, so the operator can fix the view before
+  // submitting; the worker remains the enforcement authority.
+  byId("releaseError").textContent = violations[0] ?? "";
+  byId("releaseCameraStatus").textContent = violations.length
+    ? `${violations[0]}.`
+    : warnings.length
+      ? `${warnings[0]} Move again and choose Use current view to replace it.`
+      : "Starting view captured. Move again and choose Use current view to replace it.";
+  showToast(
+    violations.length
+      ? "Starting view captured, but it will be blocked at publish"
+      : "Publication starting view captured",
+  );
 }
 
 function releaseSceneRotationInputs(form: HTMLFormElement): [
@@ -13574,6 +13644,7 @@ async function publishRelease(form: FormData): Promise<void> {
   const expiresAtValue = optionalString(form.get("expiresAt"));
   try {
     const initialCamera = parseReleaseInitialCamera(form);
+    const startingViewQuality = releaseStartingViewQualityReceipt(initialCamera);
     const sceneRotationDegrees = parseSceneRotationDegrees([
       form.get("sceneRotationX"),
       form.get("sceneRotationY"),
@@ -13613,6 +13684,7 @@ async function publishRelease(form: FormData): Promise<void> {
           accessPolicy: String(form.get("accessPolicy") ?? "public"),
           expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
           ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
+          ...(startingViewQuality ? { startingViewQuality } : {}),
           viewerConfig: {
             title: String(form.get("title") ?? state.selected.project.name),
             subtitle: optionalString(form.get("subtitle")),
@@ -13772,6 +13844,29 @@ function parseReleaseSourceToWorld(form: FormData): {
     yawDegrees,
     translationMetres,
   };
+}
+
+// The receipt travels with the publish request only while it still measures
+// the pose actually being published: expert edits to the camera fields after a
+// capture orphan the receipt, and the release simply carries no receipt (the
+// worker gates only receipted starting views). The worker re-checks the same
+// binding server-side.
+function releaseStartingViewQualityReceipt(
+  initialCamera: {
+    position: [number, number, number];
+    target: [number, number, number];
+    up: [number, number, number];
+    fovDegrees: number;
+  } | null,
+): (StartingViewQualityMetrics & { cameraPose: ReleaseCameraPose }) | null {
+  if (!initialCamera || !latestReleaseViewQuality) return null;
+  const { metrics, pose } = latestReleaseViewQuality;
+  const matches = (["position", "target", "up"] as const).every((key) =>
+    pose[key].every((coordinate, axis) =>
+      Math.abs(coordinate - initialCamera[key][axis]!) <= 1e-6
+    )
+  ) && Math.abs(pose.fovDegrees - initialCamera.fovDegrees) <= 1e-6;
+  return matches ? { ...metrics, cameraPose: pose } : null;
 }
 
 function parseReleaseInitialCamera(form: FormData): {
