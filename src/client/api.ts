@@ -15,9 +15,16 @@ export class ApiError extends Error {
 export type ApiRequestInit = RequestInit & {
   timeoutMs?: number;
   retries?: number;
+  retryBudgetMs?: number;
 };
 
 export const AUTH_SESSION_EXPIRED_EVENT = "spatial-auth-session-expired";
+
+const GET_RETRY_BUDGET_MS = 25_000;
+const MUTATION_RETRY_BUDGET_MS = 45_000;
+const RETRY_BASE_DELAY_MS = 500;
+const RETRY_MAX_DELAY_MS = 4_000;
+const DEFAULT_RETRIES = 3;
 
 const AUTH_SESSION_STORAGE_KEY = "spatial.auth.session-state.v1";
 const AUTH_REFRESH_LOCK = "spatial.auth.refresh.v1";
@@ -89,7 +96,7 @@ async function apiRequest<T>(
   allowRefresh: boolean,
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
-  const retries = init.retries ?? (isSafeMethod(method) ? 2 : 0);
+  const plan = resolveRetryPlan(method, init);
   let attempt = 0;
 
   while (true) {
@@ -106,28 +113,27 @@ async function apiRequest<T>(
         }
         notifyAuthExpired();
       }
-      if (shouldRetryStatus(response.status) && attempt < retries) {
+      if (shouldRetryStatus(response.status) && canRetry(plan, attempt)) {
         await waitForRetry(response, attempt, init.signal);
         attempt += 1;
         continue;
       }
       return await readResponse<T>(response);
     } catch (error) {
+      if (init.signal?.aborted) throw cancelledError();
       if (error instanceof ApiError) {
-        if (error.retryable && attempt < retries) {
+        if (error.retryable && canRetry(plan, attempt)) {
           await retryDelay(attempt, init.signal);
           attempt += 1;
           continue;
         }
         throw error;
       }
-      const aborted = init.signal?.aborted;
-      if (!aborted && attempt < retries) {
+      if (canRetry(plan, attempt)) {
         await retryDelay(attempt, init.signal);
         attempt += 1;
         continue;
       }
-      if (aborted) throw new ApiError("Request cancelled", 0, undefined, undefined, undefined, false);
       throw new ApiError(
         "The network request did not complete. Check your connection and retry.",
         0,
@@ -146,7 +152,7 @@ async function apiFileRequest(
   allowRefresh: boolean,
 ): Promise<{ blob: Blob; fileName: string | null; sha256: string | null }> {
   const method = (init.method ?? "GET").toUpperCase();
-  const retries = init.retries ?? (isSafeMethod(method) ? 2 : 0);
+  const plan = resolveRetryPlan(method, init);
   let attempt = 0;
   while (true) {
     try {
@@ -162,7 +168,7 @@ async function apiFileRequest(
         }
         notifyAuthExpired();
       }
-      if (shouldRetryStatus(response.status) && attempt < retries) {
+      if (shouldRetryStatus(response.status) && canRetry(plan, attempt)) {
         await waitForRetry(response, attempt, init.signal);
         attempt += 1;
         continue;
@@ -174,21 +180,20 @@ async function apiFileRequest(
         sha256: response.headers.get("X-Spatial-SHA256"),
       };
     } catch (error) {
+      if (init.signal?.aborted) throw cancelledError();
       if (error instanceof ApiError) {
-        if (error.retryable && attempt < retries) {
+        if (error.retryable && canRetry(plan, attempt)) {
           await retryDelay(attempt, init.signal);
           attempt += 1;
           continue;
         }
         throw error;
       }
-      const aborted = init.signal?.aborted;
-      if (!aborted && attempt < retries) {
+      if (canRetry(plan, attempt)) {
         await retryDelay(attempt, init.signal);
         attempt += 1;
         continue;
       }
-      if (aborted) throw new ApiError("Request cancelled", 0, undefined, undefined, undefined, false);
       throw new ApiError(
         "The download did not complete. Check your connection and retry.",
         0,
@@ -212,7 +217,7 @@ async function timedFetch(
   }
   const controller = new AbortController();
   const timeoutMs = init.timeoutMs ?? (method === "GET" ? 15_000 : 30_000);
-  const timeout = window.setTimeout(() => controller.abort("timeout"), timeoutMs);
+  const timeout = setTimeout(() => controller.abort("timeout"), timeoutMs);
   const forwardAbort = () => controller.abort(init.signal?.reason);
   init.signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
@@ -235,7 +240,7 @@ async function timedFetch(
     }
     throw error;
   } finally {
-    window.clearTimeout(timeout);
+    clearTimeout(timeout);
     init.signal?.removeEventListener("abort", forwardAbort);
   }
 }
@@ -443,6 +448,47 @@ function isSafeMethod(method: string): boolean {
   return method === "GET" || method === "HEAD" || method === "OPTIONS";
 }
 
+type RetryPlan = {
+  retries: number;
+  budgetMs: number;
+  startedAt: number;
+};
+
+function resolveRetryPlan(method: string, init: ApiRequestInit): RetryPlan {
+  const safe = isSafeMethod(method);
+  const retries = init.retries ??
+    (safe || bodyCarriesOperationId(init.body) ? DEFAULT_RETRIES : 0);
+  return {
+    retries,
+    budgetMs: init.retryBudgetMs ??
+      (safe ? GET_RETRY_BUDGET_MS : MUTATION_RETRY_BUDGET_MS),
+    startedAt: Date.now(),
+  };
+}
+
+// Mutating endpoints dedupe replays on a client-supplied operation id, so only
+// bodies that carry one are safe to resend automatically.
+function bodyCarriesOperationId(body: BodyInit | null | undefined): boolean {
+  if (typeof body !== "string" || !body.includes('"clientOperationId"')) return false;
+  try {
+    const operationId = Reflect.get(
+      JSON.parse(body) as object,
+      "clientOperationId",
+    ) as unknown;
+    return typeof operationId === "string" && operationId.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+function canRetry(plan: RetryPlan, attempt: number): boolean {
+  return attempt < plan.retries && Date.now() - plan.startedAt < plan.budgetMs;
+}
+
+function cancelledError(): ApiError {
+  return new ApiError("Request cancelled", 0, undefined, undefined, undefined, false);
+}
+
 function shouldRetryStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 ||
     status === 502 || status === 503 || status === 504;
@@ -461,11 +507,19 @@ async function waitForRetry(
 }
 
 async function retryDelay(attempt: number, signal?: AbortSignal | null): Promise<void> {
-  await delay(backoff(attempt), signal);
+  try {
+    await delay(backoff(attempt), signal);
+  } catch {
+    throw cancelledError();
+  }
 }
 
+// Full jitter: sleep anywhere between zero and the doubling cap so concurrent
+// clients recovering from the same outage do not resend in lockstep.
 function backoff(attempt: number): number {
-  return Math.min(4_000, 350 * 2 ** attempt) + Math.floor(Math.random() * 180);
+  return Math.floor(
+    Math.random() * Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** attempt),
+  );
 }
 
 function delay(milliseconds: number, signal?: AbortSignal | null): Promise<void> {
@@ -475,10 +529,10 @@ function delay(milliseconds: number, signal?: AbortSignal | null): Promise<void>
       return;
     }
     const onAbort = () => {
-      window.clearTimeout(timer);
+      clearTimeout(timer);
       reject(signal?.reason);
     };
-    const timer = window.setTimeout(() => {
+    const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, milliseconds);
