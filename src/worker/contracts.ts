@@ -23,6 +23,10 @@ import {
   ATTESTED_PAIRED_CAPTURE_METHOD,
 } from "../shared/paired-capture-journey";
 import { PROCESSOR_PROTOCOL_VERSION } from "../shared/processor-identity";
+import {
+  STARTING_VIEW_MIN_SAMPLED_PIXELS,
+  STARTING_VIEW_QUALITY_SCHEMA_VERSION,
+} from "../shared/starting-view-quality";
 
 export const processorIdentitySchema = z.object({
   agentBuildSha: z.string().regex(/^[a-f0-9]{40}$/),
@@ -3256,12 +3260,42 @@ export const projectCostSchema = z.object({
   incurredAt: z.string().datetime().optional(),
 });
 
+const unitFractionSchema = z.number().finite().min(0).max(1);
+
+// Operator-session receipt for the frozen visitor starting view: the renderer
+// measured the exact frame captured by "Use current view" (WebGL readPixels on
+// the live canvas), and the receipt binds those measurements to the exact
+// camera pose being frozen. The Worker enforces the thresholds and freezes the
+// receipt into the release's viewer config — the same client-collected,
+// worker-enforced shape as walk-test receipts. Threshold receipts live in
+// src/shared/starting-view-quality.ts.
+export const startingViewQualitySchema = z.object({
+  schemaVersion: z.literal(STARTING_VIEW_QUALITY_SCHEMA_VERSION),
+  capturedAt: z.string().datetime(),
+  frame: z.object({
+    width: z.number().int().min(1).max(16_384),
+    height: z.number().int().min(1).max(16_384),
+    sampledPixels: z.number().int()
+      .min(STARTING_VIEW_MIN_SAMPLED_PIXELS)
+      .max(16_384 * 16_384),
+  }).strict(),
+  nearBlackFraction: unitFractionSchema,
+  meanLuminance: unitFractionSchema,
+  renderedCoverageFraction: unitFractionSchema,
+  cameraPose: cameraPoseSchema,
+}).strict();
+
+// The receipt measures a pose; the release freezes a pose. They must be the
+// same pose, or the receipt proves nothing about what visitors will see.
+const STARTING_VIEW_POSE_TOLERANCE = 1e-6;
+
 export const releaseInputSchema = z.object({
   clientOperationId: z.string().uuid().optional(),
   slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).min(3).max(80),
   accessPolicy: z.enum(["public", "unlisted", "token", "customer-authenticated"]),
   expiresAt: z.string().datetime().nullable().optional(),
   sourceToWorldEvidenceId: z.string().uuid().optional(),
+  startingViewQuality: startingViewQualitySchema.optional(),
   viewerConfig: z.object({
     title: z.string().trim().min(1).max(120),
     subtitle: z.string().trim().max(240).optional(),
@@ -3303,6 +3337,34 @@ export const releaseInputSchema = z.object({
       path: ["sourceToWorldEvidenceId"],
       message: "Source-to-world evidence cannot be attached without a release transform",
     });
+  }
+  if (value.startingViewQuality) {
+    const camera = value.viewerConfig.initialCamera;
+    if (!camera) {
+      context.addIssue({
+        code: "custom",
+        path: ["startingViewQuality"],
+        message:
+          "A starting-view quality receipt requires the starting camera it measured",
+      });
+    } else {
+      const receiptPose = value.startingViewQuality.cameraPose;
+      const posesMatch = (["position", "target"] as const).every((key) =>
+        receiptPose[key].every((coordinate, axis) =>
+          Math.abs(coordinate - camera[key][axis]!) <= STARTING_VIEW_POSE_TOLERANCE
+        )
+      ) &&
+        Math.abs(receiptPose.fovDegrees - camera.fovDegrees) <=
+          STARTING_VIEW_POSE_TOLERANCE;
+      if (!posesMatch) {
+        context.addIssue({
+          code: "custom",
+          path: ["startingViewQuality"],
+          message:
+            "The starting-view quality receipt must measure the exact starting camera being published",
+        });
+      }
+    }
   }
   if (
     value.viewerConfig.sourceToWorld?.worldUnit === "scene_units" &&

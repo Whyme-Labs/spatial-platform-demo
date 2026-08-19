@@ -697,6 +697,43 @@ The immutable FJD LAS replay receipt is recorded in
 its selected floor has an 85-cell clear component against the production
 32-cell requirement, while the ceiling is rejected for zero wall support.
 
+## Starting-view first-frame quality thresholds
+
+Last measured: 2026-08-19
+
+Command:
+
+```bash
+npx playwright test e2e/starting-view-quality.spec.ts
+```
+
+The spec drives the real Spark renderer against two deterministic fixtures and
+prints the measured metrics: a camera facing a 2x2 m wall of overlapping
+mid-grey splats from three metres, and the same camera turned 180 degrees into
+the unreconstructed void. Both frames were sampled at 102,480 pixels of a
+1280x720 buffer.
+
+| Named budget | Facing content | Facing void | Tripwire |
+| --- | ---: | ---: | ---: |
+| `starting_view_near_black_fraction` | 0.446 | 1.000 | > 0.85 rejects |
+| `starting_view_rendered_coverage_fraction` | 0.582 | 0.000 | < 0.10 rejects |
+| `starting_view_mean_luminance` | 0.324 | 0.041 | warn-only < 0.06 |
+
+Derivations: the renderer clears every uncovered pixel to `#080b0d`, whose
+Rec. 709 luminance measured exactly 0.0412 in the void capture, so the
+near-black luminance ceiling of 0.09 sits a little over twice the void level —
+everything the clear colour paints counts as near-black and no lit surface
+does. The two enforced tripwires (0.85 near-black, 0.10 coverage in
+`src/shared/starting-view-quality.ts`) separate the measured regimes with wide
+margin on both sides: the content capture deliberately leaves most of the
+frame as void and still measures 0.45/0.58. The soft advisory band (0.60
+near-black, 0.30 coverage, 0.06 mean luminance) warns in the publish dialog
+without blocking. A receipt must carry at least 1,024 sampled pixels; the
+renderer samples up to 65,536 on a stride, and even a minimal mobile canvas
+exceeds the floor by two orders of magnitude. Remeasure by rerunning the spec
+whenever the clear colour, tone mapping, or output colour space of the
+renderer changes.
+
 ## Full software-gate receipt
 
 Last measured: 2026-08-13

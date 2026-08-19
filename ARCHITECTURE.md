@@ -366,9 +366,33 @@ A walk release opens standing, not at the authored QA framing: once the
 physical runtime places the body (projecting the authored camera onto the
 navmesh, or falling back to the artifact's reviewed spawn), the camera is
 levelled — eye height from the placement, gaze level, up world-vertical — and
-only the framing's heading survives. The levelled pose becomes the release's
-"Reset view" target; a structural fly opening keeps the authored framing, which
-is the reviewed way to present a flythrough. Look is a yaw/pitch state machine:
+only the framing's heading survives. When the release carries no
+operator-captured starting view, even that heading is only a suggestion: the
+spawn turns to face the area-weighted centroid of the approved walkable
+region, unless the inherited heading already points within a quarter turn of
+it (stability: an authored framing that roughly faces the scene is kept). The
+same default runs in the publish dialog's starting-view scene, where the
+operator remains free to move before capturing. The levelled pose becomes the
+release's "Reset view" target; a structural fly opening keeps the authored
+framing, which is the reviewed way to present a flythrough.
+
+A frozen starting view is validated by what the visitor will actually see, not
+only by pose walkability. When the operator captures "Use current view", the
+publish dialog's renderer measures the presented frame at the end of its next
+render pass (WebGL `readPixels` on the live canvas): the fraction of
+near-black pixels, the mean luminance, and the fraction of pixels with any
+splat contribution. The Studio client attaches these measurements to the
+publish request as a `starting-view-quality-v1` operator-session receipt bound
+to the exact captured pose; the Worker verifies that binding, enforces the
+thresholds (`src/shared/starting-view-quality.ts`, with capacity receipts in
+`docs/CAPACITY_RECEIPTS.md`), rejects a view that frames mostly
+unreconstructed space with an actionable 422, and freezes the passing receipt
+into the release's immutable viewer config — the same client-collected,
+worker-enforced shape as walk-test receipts. The dialog surfaces a soft
+advisory band at capture time before submit. A release published without a
+captured starting view (the older flow, or expert-entered coordinates) carries
+no receipt and keeps working; the centroid-facing default above is what
+protects its opening frame. Look is a yaw/pitch state machine:
 each drag rebuilds the orientation from two clamped scalars over a roll-free
 base frame, so the camera cannot roll or pitch past the clamp from any starting
 orientation, including an authored pose that carried roll. If walk movement

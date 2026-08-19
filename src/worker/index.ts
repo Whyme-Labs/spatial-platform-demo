@@ -193,6 +193,7 @@ import {
   type PlyCoordinateEvidence,
 } from "../shared/paired-capture-journey";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
+import { startingViewQualityViolations } from "../shared/starting-view-quality";
 import {
   parseProjectWorkflowPolicy,
   legacyUnspecifiedProjectWorkflowPolicy,
@@ -15974,6 +15975,19 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
   const parsed = releaseInputSchema.safeParse(await readJson(context));
   if (!parsed.success) return validationError(context, parsed.error.flatten());
+  // First-frame gate: the schema already proved the receipt is well-formed and
+  // measures the exact starting camera being frozen; here the thresholds are
+  // enforced so a starting view that frames mostly unreconstructed space can
+  // never ship. A release without a captured starting view (the older flow,
+  // or expert-entered coordinates) carries no receipt and is not gated here.
+  if (parsed.data.startingViewQuality) {
+    const startingViewViolations = startingViewQualityViolations(
+      parsed.data.startingViewQuality,
+    );
+    if (startingViewViolations.length) {
+      return unprocessable(context, { startingViewQuality: startingViewViolations });
+    }
+  }
   const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
   if (!project) return notFound(context, "Project not found");
   if (parsed.data.clientOperationId) {
@@ -16239,6 +16253,12 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     ...parsed.data.viewerConfig,
     sourceToWorld: sceneRegistration.sourceToWorld,
     captureRegistration: sceneRegistration.receipt,
+    // Freeze the validated first-frame receipt with the release so the
+    // evidence that the frozen starting view passed the gate outlives the
+    // operator session, exactly like the registration receipt above.
+    ...(parsed.data.startingViewQuality
+      ? { startingViewQuality: parsed.data.startingViewQuality }
+      : {}),
   };
   const spatialSnapshot = await captureSpatialSnapshot(
     context.env.DB,

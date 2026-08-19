@@ -296,6 +296,18 @@ Implemented:
   only its heading, and remains the opening for structural fly releases);
   look is clamped yaw/pitch that can never roll or flip, and walk movement
   re-places the body through validated placement if it ever loses its anchor
+- a walk release without an operator-captured starting view opens facing the
+  centroid of the approved walkable region instead of wherever the QA framing
+  pointed (an authored heading already within a quarter turn of the centroid is
+  kept for stability); the same suggested default runs in the publish dialog's
+  starting-view scene, where the operator can still move before capturing
+- a publish-time first-frame gate on captured starting views: "Use current
+  view" measures the exact rendered frame (near-black fraction, mean luminance,
+  splat coverage), the publish request carries the measurements as an
+  operator-session receipt bound to the frozen pose, and the Worker rejects a
+  view framing mostly unreconstructed space with an actionable error while
+  freezing passing receipts into the immutable release; releases without a
+  captured starting view keep publishing unchanged
 - expiring reviewer invitations, camera-anchored comments/redactions,
   immutable-version decisions, and access revocation
 - tenant-scoped immutable-version comparison with short-lived exact-asset

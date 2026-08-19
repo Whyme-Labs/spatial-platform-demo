@@ -24,6 +24,11 @@ import {
   type Vector3Tuple,
 } from "../shared/navigation-runtime";
 import { parseWorldUnit } from "../shared/world-units";
+import {
+  STARTING_VIEW_NEAR_BLACK_LUMINANCE_CEILING,
+  STARTING_VIEW_QUALITY_SCHEMA_VERSION,
+  type StartingViewQualityMetrics,
+} from "../shared/starting-view-quality";
 import { captureAdapterDisplayLabel } from "../shared/capture-adapters";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import type { DetourNavigationRuntime } from "./detour-navigation";
@@ -106,6 +111,10 @@ type RendererMessage =
         up: Vector3Tuple;
         fovDegrees: number;
       };
+      // First-frame quality of the exact frame at this pose, measured from
+      // the live drawing buffer. Null when the buffer cannot be read; hosts
+      // that predate the field simply ignore it.
+      frameQuality: StartingViewQualityMetrics | null;
     }
   | {
       source: "spatial-spark";
@@ -283,6 +292,11 @@ let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
 let lastBroadcastDirection: THREE.Vector3 | null = null;
 let sceneAuthoringSession: SceneAuthoringSession | null = null;
+// Camera captures awaiting the end of the next rendered frame, so their
+// first-frame quality metrics read the exact pixels the captured pose
+// presents (see measureStartingViewQuality).
+let pendingCameraCaptureRequestIds: string[] = [];
+let renderLoopRunning = false;
 
 bindChrome();
 void start().catch((error: unknown) => {
@@ -600,6 +614,18 @@ async function start(): Promise<void> {
             // fly mode restores it.
             if (physicalRuntime.mode === "walk") {
               levelCameraForWalking(camera);
+              // Only the default heading is suggested: an operator-captured
+              // starting view (config.initialCamera) is authored content whose
+              // quality the publish gate already validated, so its heading is
+              // kept. Without one, the heading inherited from the QA framing
+              // may face anywhere — turn the spawn toward the centroid of the
+              // walkable region unless the framing already roughly faces it.
+              // This runs identically for a published walk release and for the
+              // publish dialog's starting-view scene; in the dialog the
+              // operator stays free to move before "Use current view".
+              if (!config.initialCamera) {
+                faceWalkableRegionCentroid(camera, authoredRuntime);
+              }
             }
             controls.align(camera);
             initialView = {
@@ -829,11 +855,22 @@ async function start(): Promise<void> {
       Reflect.get(event.data, "type") !== "capture-camera" ||
       typeof Reflect.get(event.data, "requestId") !== "string"
     ) return;
+    const captureRequestId = String(Reflect.get(event.data, "requestId"));
+    // Defer the reply to the end of the next rendered frame when the loop is
+    // running: the quality metrics must describe the exact pixels this pose
+    // presents, and only the render loop observes a complete frame. A paused
+    // loop (hidden tab, pre-load capture) answers immediately without
+    // metrics rather than stalling the host.
+    if (renderLoopRunning) {
+      pendingCameraCaptureRequestIds.push(captureRequestId);
+      return;
+    }
     post({
       source: "spatial-spark",
       type: "camera",
-      requestId: String(Reflect.get(event.data, "requestId")),
+      requestId: captureRequestId,
       cameraPose: cameraPose(camera),
+      frameQuality: null,
     });
   });
 
@@ -1067,6 +1104,21 @@ async function start(): Promise<void> {
     }
     broadcastCameraUpdate(camera);
     renderer.render(scene, camera);
+    if (pendingCameraCaptureRequestIds.length) {
+      // Same task as the render above: the default framebuffer still holds
+      // the complete presented frame this pose produced.
+      const frameQuality = measureStartingViewQuality(renderer);
+      for (const captureRequestId of pendingCameraCaptureRequestIds) {
+        post({
+          source: "spatial-spark",
+          type: "camera",
+          requestId: captureRequestId,
+          cameraPose: cameraPose(camera),
+          frameQuality,
+        });
+      }
+      pendingCameraCaptureRequestIds = [];
+    }
     // The loader clears once the visual is on screen: the authoring host
     // reviews the scene precisely before a walking runtime exists, and gating
     // the overlay on that runtime stranded it on a permanent "Finalising the
@@ -1102,6 +1154,7 @@ async function start(): Promise<void> {
       startHeartbeat();
     }
   };
+  renderLoopRunning = true;
   renderer.setAnimationLoop(renderLoop);
 
   // A lost WebGL context must halt rendering and physics and tell the host,
@@ -1111,6 +1164,7 @@ async function start(): Promise<void> {
   canvas.addEventListener("webglcontextlost", (event) => {
     event.preventDefault();
     contextLost = true;
+    renderLoopRunning = false;
     renderer.setAnimationLoop(null);
     fail(
       "WEBGL_CONTEXT_LOST",
@@ -1130,10 +1184,12 @@ async function start(): Promise<void> {
   document.addEventListener("visibilitychange", () => {
     if (contextLost) return;
     if (document.hidden) {
+      renderLoopRunning = false;
       renderer.setAnimationLoop(null);
       return;
     }
     lastFrameAt = performance.now();
+    renderLoopRunning = true;
     renderer.setAnimationLoop(renderLoop);
   });
 
@@ -1515,6 +1571,153 @@ function navigationMeshBounds(
   minimum.y -= 0.5;
   maximum.y += runtime.profile.agentHeight + 0.5;
   return { min: minimum, max: maximum };
+}
+
+// First-frame quality is measured from the drawing buffer that the operator is
+// actually looking at, not from scene metadata: a pose can be perfectly valid
+// on the walkable region while the frame it produces is the black void around
+// the capture. The read happens inside the render loop, in the same task and
+// immediately after the loop's own render call, because that is the only
+// moment the default framebuffer verifiably holds the complete presented
+// frame: Spark performs its splat passes inside the loop, and the buffer is
+// cleared after presentation.
+//
+// Receipt for 65,536 samples: a 1280x800 buffer holds ~1M pixels; reading them
+// all costs one 4 MiB copy, and sampling on a stride keeps the arithmetic
+// bounded at 64K samples regardless of canvas size while still touching every
+// region of the frame. The stride only widens on buffers larger than 64K
+// pixels, so small mobile canvases are measured exhaustively.
+const STARTING_VIEW_SAMPLE_TARGET = 65_536;
+// The scene clear color is #080b0d (see start()); a pixel within this byte
+// tolerance of it on every channel carries no visible splat contribution.
+const STARTING_VIEW_CLEAR_COLOR_BYTES: [number, number, number] = [8, 11, 13];
+const STARTING_VIEW_CLEAR_COLOR_BYTE_TOLERANCE = 4;
+
+function measureStartingViewQuality(
+  renderer: THREE.WebGLRenderer,
+): StartingViewQualityMetrics | null {
+  const gl = renderer.getContext();
+  const width = gl.drawingBufferWidth;
+  const height = gl.drawingBufferHeight;
+  if (!width || !height) return null;
+  const pixels = new Uint8Array(width * height * 4);
+  try {
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  } catch {
+    return null;
+  }
+  const stride = Math.max(
+    1,
+    Math.floor(Math.sqrt((width * height) / STARTING_VIEW_SAMPLE_TARGET)),
+  );
+  const [clearRed, clearGreen, clearBlue] = STARTING_VIEW_CLEAR_COLOR_BYTES;
+  let sampled = 0;
+  let nearBlack = 0;
+  let covered = 0;
+  let luminanceSum = 0;
+  for (let y = 0; y < height; y += stride) {
+    for (let x = 0; x < width; x += stride) {
+      const offset = (y * width + x) * 4;
+      const red = pixels[offset]!;
+      const green = pixels[offset + 1]!;
+      const blue = pixels[offset + 2]!;
+      const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+      sampled += 1;
+      luminanceSum += luminance;
+      if (luminance <= STARTING_VIEW_NEAR_BLACK_LUMINANCE_CEILING) nearBlack += 1;
+      if (
+        Math.abs(red - clearRed) > STARTING_VIEW_CLEAR_COLOR_BYTE_TOLERANCE ||
+        Math.abs(green - clearGreen) > STARTING_VIEW_CLEAR_COLOR_BYTE_TOLERANCE ||
+        Math.abs(blue - clearBlue) > STARTING_VIEW_CLEAR_COLOR_BYTE_TOLERANCE
+      ) covered += 1;
+    }
+  }
+  if (!sampled) return null;
+  return {
+    schemaVersion: STARTING_VIEW_QUALITY_SCHEMA_VERSION,
+    capturedAt: new Date().toISOString(),
+    frame: { width, height, sampledPixels: sampled },
+    nearBlackFraction: nearBlack / sampled,
+    meanLuminance: luminanceSum / sampled,
+    renderedCoverageFraction: covered / sampled,
+  };
+}
+
+// The area-weighted centroid of the approved walkable region: the one point
+// the navigation evidence itself nominates as "where the scene is". A plain
+// vertex average would let one densely triangulated corridor drag the
+// suggested view away from the rooms.
+function walkableRegionCentroid(runtime: NavigationRuntime): THREE.Vector3 | null {
+  const { vertices, indices } = runtime.navigationMesh;
+  if (!vertices.length) return null;
+  const centroid = new THREE.Vector3();
+  let weight = 0;
+  const cornerA = new THREE.Vector3();
+  const cornerB = new THREE.Vector3();
+  const cornerC = new THREE.Vector3();
+  const edgeAB = new THREE.Vector3();
+  const edgeAC = new THREE.Vector3();
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const a = vertices[indices[index]!];
+    const b = vertices[indices[index + 1]!];
+    const c = vertices[indices[index + 2]!];
+    if (!a || !b || !c) continue;
+    cornerA.fromArray(a);
+    cornerB.fromArray(b);
+    cornerC.fromArray(c);
+    const area = edgeAB.subVectors(cornerB, cornerA)
+      .cross(edgeAC.subVectors(cornerC, cornerA))
+      .length() / 2;
+    if (!(area > 0)) continue;
+    centroid.addScaledVector(cornerA, area / 3);
+    centroid.addScaledVector(cornerB, area / 3);
+    centroid.addScaledVector(cornerC, area / 3);
+    weight += area;
+  }
+  if (weight > 0) return centroid.divideScalar(weight);
+  // Degenerate mesh (collinear or duplicate triangles): fall back to the
+  // vertex average rather than suggesting nothing.
+  for (const vertex of vertices) centroid.add(cornerA.fromArray(vertex));
+  return centroid.divideScalar(vertices.length);
+}
+
+// Receipt for 45 degrees: the suggestion exists to stop a spawn from facing
+// away from the scene, not to fight an authored framing. Within a quarter
+// turn of the centroid the room is already in frame at a 58-degree default
+// FOV, so the authored heading is kept for stability; beyond it the visitor
+// would open facing mostly off-content and the centroid heading wins.
+const STARTING_HEADING_KEEP_AUTHORED_RADIANS = Math.PI / 4;
+// Standing within arm's reach of the centroid, every heading frames the room
+// equally and the bearing to the centroid is numerically meaningless.
+const STARTING_HEADING_MIN_CENTROID_DISTANCE_METRES = 0.75;
+
+// Suggests the default walk-spawn heading: from the placed standing position,
+// face the centroid of the approved walkable region so the first frame looks
+// into the scene rather than at the darkest unreconstructed corner. Heading
+// only — the placed position, eye height, ready gating, and body authority
+// are untouched. Callers apply this only when no operator-captured starting
+// view exists; a captured view is authored content and keeps its heading.
+function faceWalkableRegionCentroid(
+  camera: THREE.PerspectiveCamera,
+  runtime: NavigationRuntime,
+): void {
+  const centroid = walkableRegionCentroid(runtime);
+  if (!centroid) return;
+  const toCentroid = new THREE.Vector3(
+    centroid.x - camera.position.x,
+    0,
+    centroid.z - camera.position.z,
+  );
+  if (toCentroid.length() < STARTING_HEADING_MIN_CENTROID_DISTANCE_METRES) return;
+  toCentroid.normalize();
+  const heading = camera.getWorldDirection(new THREE.Vector3());
+  heading.y = 0;
+  if (
+    heading.lengthSq() >= 1e-8 &&
+    heading.normalize().angleTo(toCentroid) <= STARTING_HEADING_KEEP_AUTHORED_RADIANS
+  ) return;
+  camera.up.set(0, 1, 0);
+  camera.lookAt(camera.position.clone().add(toCentroid));
 }
 
 // Levels the camera for standing movement: world-vertical up, level gaze, and
@@ -2024,6 +2227,7 @@ function dispose(): void {
   physicalNavigationRuntime?.destroy();
   physicalNavigationRuntime = null;
   resizeObserver?.disconnect();
+  renderLoopRunning = false;
   webglRenderer?.setAnimationLoop(null);
   splatMesh?.dispose();
   sparkRenderer?.dispose();

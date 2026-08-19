@@ -4063,6 +4063,83 @@ describe("Spatial Studio Worker", () => {
       customMetadata: { sha256: navigationReportSha256 },
     });
 
+    // First-frame gate: a captured starting view whose measured frame is
+    // mostly unreconstructed space must never publish, and the rejection must
+    // tell the operator what to do.
+    const publishInitialCamera = {
+      position: [3.14, 0.18, -3.56],
+      target: [3.08, -0.31, -2.69],
+      up: [-0.01, -0.87, -0.49],
+      fovDegrees: 58,
+    };
+    const startingViewReceipt = (overrides: Record<string, unknown>) => ({
+      schemaVersion: "starting-view-quality-v1",
+      capturedAt: "2026-08-19T08:00:00.000Z",
+      frame: { width: 1280, height: 720, sampledPixels: 57_600 },
+      nearBlackFraction: 0.18,
+      meanLuminance: 0.32,
+      renderedCoverageFraction: 0.82,
+      cameraPose: publishInitialCamera,
+      ...overrides,
+    });
+    const darkStartingViewRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "dark-starting-view",
+          accessPolicy: "unlisted",
+          startingViewQuality: startingViewReceipt({
+            nearBlackFraction: 0.97,
+            meanLuminance: 0.042,
+            renderedCoverageFraction: 0.02,
+          }),
+          viewerConfig: {
+            title: "Dark starting view",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+            initialCamera: publishInitialCamera,
+          },
+        }),
+      },
+    );
+    expect(darkStartingViewRelease.status).toBe(422);
+    await expect(darkStartingViewRelease.json()).resolves.toMatchObject({
+      details: {
+        startingViewQuality: [
+          expect.stringContaining("mostly unreconstructed space"),
+          expect.stringContaining("almost no reconstructed content"),
+        ],
+      },
+    });
+    const mismatchedStartingViewRelease = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: "mismatched-starting-view",
+          accessPolicy: "unlisted",
+          startingViewQuality: startingViewReceipt({
+            cameraPose: { ...publishInitialCamera, position: [9, 0.18, -3.56] },
+          }),
+          viewerConfig: {
+            title: "Mismatched starting view",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+            initialCamera: publishInitialCamera,
+          },
+        }),
+      },
+    );
+    expect(mismatchedStartingViewRelease.status).toBe(400);
+    await expect(mismatchedStartingViewRelease.json()).resolves.toMatchObject({
+      details: {
+        fieldErrors: {
+          startingViewQuality: [expect.stringContaining("exact starting camera")],
+        },
+      },
+    });
+
     const releaseResponse = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {
@@ -4072,16 +4149,12 @@ describe("Spatial Studio Worker", () => {
           clientOperationId: "55555555-5555-4555-8555-555555555555",
           slug: "publishable-apartment",
           accessPolicy: "public",
+          startingViewQuality: startingViewReceipt({}),
           viewerConfig: {
             title: "Publishable apartment",
             measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             splatBudgetMillions: 1,
-            initialCamera: {
-              position: [3.14, 0.18, -3.56],
-              target: [3.08, -0.31, -2.69],
-              up: [-0.01, -0.87, -0.49],
-              fovDegrees: 58,
-            },
+            initialCamera: publishInitialCamera,
           },
         }),
       },
@@ -4091,6 +4164,20 @@ describe("Spatial Studio Worker", () => {
       release: { id: string; slug: string; releaseNumber: number; versionNumber: number };
     }>();
     expect(release.release).toMatchObject({ releaseNumber: 1, versionNumber: 1 });
+    // The validated first-frame receipt is frozen with the release, so the
+    // evidence that the frozen starting view passed the gate outlives the
+    // operator session.
+    const storedViewerConfig = await env.DB.prepare(`
+      SELECT viewer_config_json FROM releases WHERE id = ?
+    `).bind(release.release.id).first<{ viewer_config_json: string }>();
+    expect(JSON.parse(storedViewerConfig!.viewer_config_json)).toMatchObject({
+      startingViewQuality: {
+        schemaVersion: "starting-view-quality-v1",
+        nearBlackFraction: 0.18,
+        renderedCoverageFraction: 0.82,
+        cameraPose: { position: [3.14, 0.18, -3.56] },
+      },
+    });
     const storedSnapshot = await env.DB.prepare(`
       SELECT spatial_snapshot_json FROM releases WHERE id = ?
     `).bind(release.release.id).first<{ spatial_snapshot_json: string }>();
@@ -4856,16 +4943,12 @@ describe("Spatial Studio Worker", () => {
           clientOperationId: "55555555-5555-4555-8555-555555555556",
           slug: "publishable-apartment",
           accessPolicy: "public",
+          startingViewQuality: startingViewReceipt({}),
           viewerConfig: {
             title: "Publishable apartment",
             measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
             splatBudgetMillions: 1,
-            initialCamera: {
-              position: [3.14, 0.18, -3.56],
-              target: [3.08, -0.31, -2.69],
-              up: [-0.01, -0.87, -0.49],
-              fovDegrees: 58,
-            },
+            initialCamera: publishInitialCamera,
           },
         }),
       },
