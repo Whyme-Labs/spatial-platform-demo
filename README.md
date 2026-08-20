@@ -235,7 +235,9 @@ Implemented:
   revision; the collision cook opens exactly those openings (barrier split +
   threshold floor in lockstep) and the navigation authoring receipt carries a
   machine-attestation fragment reproducible from the frozen row, failing
-  closed on any unreadable blob
+  closed on any unreadable blob; machine-attested walking maps publish at the
+  credential-gated tier only — public/unlisted exposure requires operator
+  ratification through a structure correction draft
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1, optionally bound to one container structure

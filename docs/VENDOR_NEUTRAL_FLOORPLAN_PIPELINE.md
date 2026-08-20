@@ -114,7 +114,19 @@ hash remains reproducible from the stored revision row and an unreadable blob
 fails closed. No capture-agreement change is needed: an auto-opened span has
 its barrier split away, so it can never surface as a final crossing; the
 machine attestation lives in the authoring receipt and the frozen revision
-column, which is also what the exposure gate (issue #34) will key on.
+column, which is also what the exposure gate keys on.
+
+### Exposure gate (issue #34)
+
+Machine-attested walkability caps a release at the credential-gated tier.
+Publishing a version whose latest approved revision froze one or more
+qualified openings is refused for `public` and `unlisted` access policies
+with a message naming the count and the ratification path; `token` and
+`customer-authenticated` releases pass. An unreadable frozen blob fails
+closed for public exposure. Ratification needs no new mechanism: open a
+structure correction draft, classify the auto-opened openings as doorways,
+and re-approve — the recook is operator-attested, the new revision freezes
+no machine qualification, and the gate clears.
 
 ## Derivation and review boundary
 
