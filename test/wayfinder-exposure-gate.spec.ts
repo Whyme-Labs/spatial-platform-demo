@@ -206,7 +206,7 @@ describe("wayfinder exposure gate", () => {
       expect(refused.status).toBe(422);
       await expect(refused.json()).resolves.toMatchObject({
         details: {
-          accessPolicy: [expect.stringContaining("opened by machine trajectory evidence")],
+          accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
         },
       });
     }
@@ -217,6 +217,27 @@ describe("wayfinder exposure gate", () => {
     expect(token.status).not.toBe(201);
     const tokenBody = JSON.stringify(await token.json());
     expect(tokenBody).not.toContain("machine trajectory evidence");
+  }, 120_000);
+
+  it("refuses public exposure for demotion-only machine changes too", async () => {
+    const cookie = await login();
+    const blob = JSON.parse(frozenAutoOpenBlob());
+    blob.qualifiedOpenings = [];
+    blob.evidence.wallCrossings = [{ wallId: "wall-009", crossingCount: 3 }];
+    blob.demotedWalls = [{
+      levelId: "level-001",
+      wallId: "wall-009",
+      crossingCount: 3,
+      roomId: "room-001",
+    }];
+    const seeded = await seedApprovedVersion(cookie, JSON.stringify(blob));
+    const refused = await publish(cookie, seeded.projectId, "public");
+    expect(refused.status).toBe(422);
+    await expect(refused.json()).resolves.toMatchObject({
+      details: {
+        accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
+      },
+    });
   }, 120_000);
 
   it("fails closed on an unreadable frozen auto-open blob", async () => {

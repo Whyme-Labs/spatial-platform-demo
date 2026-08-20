@@ -207,7 +207,10 @@ import {
   trajectoryAutoOpenEnabled,
   type ProjectWorkflowPolicy,
 } from "../shared/project-policies";
-import { trajectoryQualifiedUnknownOpenings } from "../../scripts/trajectory-evidence-core.mjs";
+import {
+  trajectoryDemotableWalls,
+  trajectoryQualifiedUnknownOpenings,
+} from "../../scripts/trajectory-evidence-core.mjs";
 import {
   parseMeasurementGrade,
   publicationMeasurementDisclaimer,
@@ -10738,6 +10741,15 @@ app.post(
           : undefined;
         const evidence = trajectoryEvidenceSchema.safeParse(evidenceRaw);
         if (evidence.success) {
+          // A wall any frozen human classification touched is never the
+          // machine's to remove, whichever way the human ruled (#33).
+          const demotedWalls = trajectoryDemotableWalls({
+            plan: parsed.data.plan,
+            trajectoryEvidence: evidence.data,
+            resolutionCoveredWallIds: new Set(
+              frozenResolutions.map((resolution) => resolution.barrierId),
+            ),
+          });
           trajectoryAutoOpenJson = JSON.stringify({
             schemaVersion: "trajectory-auto-open-v1",
             evidence: evidence.data,
@@ -10745,6 +10757,7 @@ app.post(
               plan: parsed.data.plan,
               trajectoryEvidence: evidence.data,
             }),
+            ...(demotedWalls.length ? { demotedWalls } : {}),
           });
         }
       }
@@ -10848,6 +10861,10 @@ app.post(
             trajectoryOpenOpenings: new Set(
               (frozenTrajectory?.qualifiedOpenings ?? []).map((opening) =>
                 `${opening.levelId}/${opening.openingId}`),
+            ),
+            trajectoryDemotedWalls: new Set(
+              (frozenTrajectory?.demotedWalls ?? []).map((wall) =>
+                `${wall.levelId}/${wall.wallId}`),
             ),
           },
         );
@@ -16380,10 +16397,11 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       return unprocessable(context, {
         accessPolicy: [
           `Public exposure requires operator-ratified structure: ${machineOpened} ` +
-          `opening(s) in the approved walking map were opened by machine trajectory ` +
-          `evidence. Publish with token or customer-authenticated access, or open a ` +
-          `structure correction draft, classify the auto-opened openings as doorways, ` +
-          `and re-approve to make the walking map operator-attested.`,
+          `structural element(s) in the approved walking map were opened or removed ` +
+          `by machine trajectory evidence. Publish with token or ` +
+          `customer-authenticated access, or open a structure correction draft, ` +
+          `ratify the machine changes (mark doorways, remove clutter walls), and ` +
+          `re-approve to make the walking map operator-attested.`,
         ],
       });
     }
@@ -22700,7 +22718,7 @@ async function trajectoryAutoOpenedOpeningCount(
   const frozen = parseFrozenTrajectoryAutoOpen(revision?.trajectory_evidence_json ?? null);
   if (frozen === undefined) return 0;
   if (frozen === null) return null;
-  return frozen.qualifiedOpenings.length;
+  return frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0);
 }
 
 async function sceneVersionUsesOperatorAttestation(
@@ -25264,6 +25282,9 @@ export function trajectoryAutoOpenReceiptFragment(
       trajectoryAssetId: frozen.evidence.trajectory.assetId,
       visitedRoomCount: frozen.evidence.visitedRoomIds.length,
       qualifiedOpenings: frozen.qualifiedOpenings,
+      // Present only when walls were demoted (#33), so pre-#33 frozen blobs
+      // keep their exact receipt bytes and authoring hashes.
+      ...(frozen.demotedWalls?.length ? { demotedWalls: frozen.demotedWalls } : {}),
     },
   };
 }

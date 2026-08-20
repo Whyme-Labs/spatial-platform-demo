@@ -794,6 +794,34 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.equal(opened.barrierSegments.filter((barrier) => barrier.id.includes("shared")).length, 2);
   });
 
+  it("drops trajectory-demoted clutter walls from the cook (#33)", () => {
+    const plan = {
+      schemaVersion: "1.0.0",
+      units: "metres",
+      coordinateFrame: "registered_y_up_metric_frame",
+      levels: [{
+        id: "ground",
+        label: "Ground",
+        elevationM: 0,
+        ceilingElevationM: 2.8,
+        rooms: [{ id: "room", label: "Room", points: [[0, 0], [6, 0], [6, 6], [0, 6]] }],
+        walls: [
+          { id: "perimeter", label: "Perimeter", start: [0, 0], end: [6, 0], thicknessM: 0.2, heightM: 2.8 },
+          { id: "clutter", label: "Racking", start: [2, 2], end: [2, 4], thicknessM: 0.2, heightM: 2.8 },
+        ],
+        openings: [],
+      }],
+      connectors: [],
+    };
+    const kept = structuralCollisionConfigFromReviewPlan(plan);
+    assert.equal(kept.barrierSegments.filter((barrier) => barrier.id.includes("clutter")).length, 1);
+    const demoted = structuralCollisionConfigFromReviewPlan(plan, {
+      trajectoryDemotedWalls: new Set(["ground/clutter"]),
+    });
+    assert.equal(demoted.barrierSegments.filter((barrier) => barrier.id.includes("clutter")).length, 0);
+    assert.equal(demoted.barrierSegments.filter((barrier) => barrier.id.includes("perimeter")).length, 1);
+  });
+
   it("fails closed when a level has no captured ceiling support", () => {
     assert.throws(
       () => automaticStructuralCollisionConfig({

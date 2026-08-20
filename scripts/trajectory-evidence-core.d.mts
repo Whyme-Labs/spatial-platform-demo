@@ -96,3 +96,34 @@ export function trajectoryQualifiedUnknownOpenings(input: {
   trajectoryEvidence: unknown;
   maximumGapM?: number;
 }): Array<{ levelId: string; openingId: string; roomIds: string[] }>;
+
+export const MAXIMUM_DEMOTABLE_WALL_LENGTH_M: number;
+
+export function trajectoryWallCrossingEvidence(input: {
+  positions: ReadonlyArray<ReadonlyArray<number>>;
+  walls: ReadonlyArray<{
+    wallId?: unknown;
+    id?: unknown;
+    elevationM?: unknown;
+    heightM?: unknown;
+    span?: unknown;
+    geometry?: { points?: unknown };
+  }>;
+  carryHeightBandM?: { minimum: number; maximum: number };
+}): Array<{ wallId: string; crossingCount: number }>;
+
+export function trajectoryDemotableWalls(input: {
+  plan: TrajectoryPlanLike & {
+    levels?: ReadonlyArray<{
+      walls?: ReadonlyArray<{
+        id?: unknown;
+        wallKey?: unknown;
+        start?: ReadonlyArray<number>;
+        end?: ReadonlyArray<number>;
+      }>;
+    }>;
+  };
+  trajectoryEvidence: unknown;
+  resolutionCoveredWallIds?: ReadonlySet<string>;
+  maximumWallLengthM?: number;
+}): Array<{ levelId: string; wallId: string; crossingCount: number; roomId: string }>;

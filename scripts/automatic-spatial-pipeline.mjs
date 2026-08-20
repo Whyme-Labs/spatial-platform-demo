@@ -193,6 +193,12 @@ export function structuralCollisionConfigFromReviewPlan(plan, {
   // before. Widening happens at this single filter so barrier splitting AND
   // threshold floors stay in lockstep.
   trajectoryOpenOpenings = new Set(),
+  // Wayfinder (#33): frozen `${levelId}/${wallId}` identities of short
+  // clutter walls the trajectory passed straight through below their claimed
+  // height — physically impossible for a real wall — wholly inside a
+  // scanner-visited room. These cook as if the extractor had never proposed
+  // them; passing nothing keeps every wall.
+  trajectoryDemotedWalls = new Set(),
 } = {}) {
   const levels = plan.levels.map((level) => ({
     levelKey: level.id,
@@ -220,7 +226,9 @@ export function structuralCollisionConfigFromReviewPlan(plan, {
       },
       evidence: { levelKey: level.id },
     }))),
-    walls: plan.levels.flatMap((level) => level.walls.map((wall) => ({
+    walls: plan.levels.flatMap((level) => level.walls
+      .filter((wall) => !trajectoryDemotedWalls.has(`${level.id}/${wall.id}`))
+      .map((wall) => ({
       wallKey: wall.id,
       elevationM: level.elevationM,
       heightM: wall.heightM,

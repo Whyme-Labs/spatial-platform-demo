@@ -116,6 +116,20 @@ its barrier split away, so it can never surface as a final crossing; the
 machine attestation lives in the authoring receipt and the frozen revision
 column, which is also what the exposure gate keys on.
 
+### Clutter-wall demotion (issue #33, same opt-in)
+
+The same frozen blob may carry `demotedWalls`: short proposed walls
+(≤ 3 m) wholly inside one scanner-visited room — endpoints and midpoint,
+so envelope and partition walls on room outlines never qualify — that the
+pose path crossed BELOW the wall's own claimed height. Riding below the top
+means the scanner itself passed through claimed-solid space, which no real
+wall permits; walking past or over a low rack never counts because the
+per-wall carry band is capped at that wall's height at proposal time
+(`wallCrossings` on the trajectory evidence). A wall touched by any frozen
+human capture-agreement classification is never the machine's to remove,
+whichever way the human ruled. Demoted walls cook as if never proposed and
+count toward the exposure gate exactly like auto-opened openings.
+
 ### Exposure gate (issue #34)
 
 Machine-attested walkability caps a release at the credential-gated tier.
