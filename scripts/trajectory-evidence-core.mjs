@@ -481,3 +481,116 @@ export function trajectoryQualifiedUnknownOpenings({
     left.levelId.localeCompare(right.levelId) ||
     left.openingId.localeCompare(right.openingId));
 }
+
+// ————— Clutter-wall demotion (issue #33) —————
+
+// A proposed wall run is demotable only when it is short — the clutter the
+// extractor mistakes for walls (racking, shelving, furniture) forms short
+// runs; genuine partitions are long and live on room outlines.
+export const MAXIMUM_DEMOTABLE_WALL_LENGTH_M = 3.0;
+
+// Per-wall pass-through evidence, computed at proposal time when positions
+// are in hand. The carry band is capped at each wall's own top: a crossing
+// only counts when the rig rode BELOW the claimed wall height, so the
+// scanner itself passed through claimed-solid space — physically impossible
+// for a real wall. Walking past or over a low rack never counts.
+export function trajectoryWallCrossingEvidence({
+  positions,
+  walls,
+  carryHeightBandM = DEFAULT_CARRY_HEIGHT_BAND_M,
+}) {
+  const entries = [];
+  for (const wall of walls ?? []) {
+    const wallId = String(wall?.wallId ?? wall?.id ?? "");
+    const elevation = Number(wall?.elevationM);
+    const heightM = Number(wall?.heightM);
+    const span = wall?.span ?? wall?.geometry?.points ?? null;
+    const from = Array.isArray(span) ? span[0] : span?.start ?? span?.from;
+    const to = Array.isArray(span) ? span[span.length - 1] : span?.end ?? span?.to;
+    if (!wallId || !Number.isFinite(elevation) || !Number.isFinite(heightM) ||
+      !from || !to) continue;
+    const bandMaximum = Math.min(Number(carryHeightBandM?.maximum ?? 0), heightM);
+    if (bandMaximum <= Number(carryHeightBandM?.minimum ?? 0)) continue;
+    const crossingCount = trajectoryWallCrossingCount({
+      positions,
+      span: { from, to },
+      elevationM: elevation,
+      carryHeightBandM: {
+        minimum: Number(carryHeightBandM?.minimum ?? 0),
+        maximum: bandMaximum,
+      },
+    });
+    if (crossingCount > 0) entries.push({ wallId, crossingCount });
+  }
+  return entries.sort((left, right) => left.wallId.localeCompare(right.wallId));
+}
+
+function pointStrictlyInsideOutline(point, outline) {
+  return pointInPolygonXZ(point[0], point[1], outline);
+}
+
+// The reviewed-plan walls that pass-through evidence qualifies for demotion.
+// Deliberately narrow: the wall must be short, wholly inside ONE
+// scanner-visited room (endpoints and midpoint — freestanding clutter;
+// envelope and partition walls sit on outlines and never qualify), carry
+// pass-through evidence under its own id, and be untouched by any frozen
+// human classification. Anything else keeps its wall.
+export function trajectoryDemotableWalls({
+  plan,
+  trajectoryEvidence,
+  resolutionCoveredWallIds = new Set(),
+  maximumWallLengthM = MAXIMUM_DEMOTABLE_WALL_LENGTH_M,
+}) {
+  if (!trajectoryEvidence ||
+    trajectoryEvidence.schemaVersion !== TRAJECTORY_EVIDENCE_SCHEMA_VERSION ||
+    !Array.isArray(trajectoryEvidence.visitedRoomIds) ||
+    !Array.isArray(trajectoryEvidence.wallCrossings)) {
+    return [];
+  }
+  const crossingsByWallId = new Map(trajectoryEvidence.wallCrossings
+    .filter((entry) => entry && typeof entry.wallId === "string" &&
+      Number.isFinite(Number(entry.crossingCount)) && Number(entry.crossingCount) > 0)
+    .map((entry) => [entry.wallId, Number(entry.crossingCount)]));
+  if (!crossingsByWallId.size) return [];
+  const visited = new Set(trajectoryEvidence.visitedRoomIds
+    .filter((id) => typeof id === "string"));
+  const demoted = [];
+  for (const level of plan?.levels ?? []) {
+    const levelId = String(level.id ?? level.levelKey ?? "");
+    if (!levelId) continue;
+    const rooms = (level.rooms ?? [])
+      .map((room) => ({
+        roomId: String(room.id ?? room.roomKey ?? ""),
+        outline: (room.points ?? []).map(polygonPointXZ).filter(Boolean),
+      }))
+      .filter((room) => room.roomId && room.outline.length >= 3 &&
+        visited.has(`${levelId}/${room.roomId}`))
+      .sort((left, right) => left.roomId.localeCompare(right.roomId));
+    if (!rooms.length) continue;
+    for (const wall of level.walls ?? []) {
+      const wallId = String(wall?.id ?? wall?.wallKey ?? "");
+      if (!wallId || resolutionCoveredWallIds.has(wallId)) continue;
+      const crossingCount = crossingsByWallId.get(wallId);
+      if (!crossingCount) continue;
+      const from = polygonPointXZ(wall.start);
+      const to = polygonPointXZ(wall.end);
+      if (!from || !to) continue;
+      if (Math.hypot(to[0] - from[0], to[1] - from[1]) > maximumWallLengthM) continue;
+      const middle = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+      const containingRoom = rooms.find((room) =>
+        pointStrictlyInsideOutline(from, room.outline) &&
+        pointStrictlyInsideOutline(to, room.outline) &&
+        pointStrictlyInsideOutline(middle, room.outline));
+      if (!containingRoom) continue;
+      demoted.push({
+        levelId,
+        wallId,
+        crossingCount,
+        roomId: containingRoom.roomId,
+      });
+    }
+  }
+  return demoted.sort((left, right) =>
+    left.levelId.localeCompare(right.levelId) ||
+    left.wallId.localeCompare(right.wallId));
+}

@@ -56,6 +56,7 @@ const TWO_ROOM_PLAN = {
     ],
     walls: [
       { id: "wall-001", label: "Shared", start: [4.1, 0], end: [4.1, 4], thicknessM: 0.2, heightM: 2.8 },
+      { id: "wall-002", label: "Racking", start: [1, 1], end: [1, 3], thicknessM: 0.2, heightM: 2.8 },
     ],
     openings: [
       {
@@ -100,6 +101,7 @@ function trajectoryEvidenceFixture(): Record<string, unknown> {
       ],
     }],
     visitedRoomIds: ["level-001/room-001", "level-001/room-002"],
+    wallCrossings: [{ wallId: "wall-002", crossingCount: 2 }],
   };
 }
 
@@ -302,6 +304,12 @@ describe("wayfinder trajectory auto-open freeze", () => {
       }],
     });
     expect(frozen.evidence.trajectory.sha256).toBe("f".repeat(64));
+    expect(frozen.demotedWalls).toEqual([{
+      levelId: "level-001",
+      wallId: "wall-002",
+      crossingCount: 2,
+      roomId: "room-001",
+    }]);
 
     // The queued build's frozen authoring hash must be reproducible from the
     // stored revision row — the receipt fragment lives in both hash sites.

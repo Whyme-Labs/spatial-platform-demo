@@ -2276,6 +2276,13 @@ export const trajectoryEvidenceSchema = z.object({
     })).max(250),
   })).min(1).max(100),
   visitedRoomIds: z.array(z.string().min(1).max(250)).max(25_000),
+  // Wayfinder (#33): per-wall pass-through counts, present only for walls the
+  // pose path crossed below their claimed height. Optional so evidence frozen
+  // before this field parses unchanged.
+  wallCrossings: z.array(z.object({
+    wallId: z.string().min(1).max(120),
+    crossingCount: z.number().int().min(1).max(100_000),
+  }).strict()).max(5_000).optional(),
 }).superRefine((evidence, context) => {
   const derived = evidence.levels
     .flatMap((level) => level.rooms
@@ -2308,6 +2315,15 @@ export const frozenTrajectoryAutoOpenSchema = z.object({
     openingId: z.string().min(1).max(120),
     roomIds: z.array(z.string().min(1).max(120)).length(2),
   }).strict()).max(2_000),
+  // Wayfinder (#33): short clutter walls the trajectory passed straight
+  // through, wholly inside a visited room, untouched by any frozen human
+  // classification. Optional so pre-#33 frozen blobs parse unchanged.
+  demotedWalls: z.array(z.object({
+    levelId: z.string().min(1).max(120),
+    wallId: z.string().min(1).max(120),
+    crossingCount: z.number().int().min(1).max(100_000),
+    roomId: z.string().min(1).max(120),
+  }).strict()).max(2_000).optional(),
 }).strict().superRefine((frozen, context) => {
   const identities = frozen.qualifiedOpenings.map((opening) =>
     `${opening.levelId}/${opening.openingId}`);
@@ -2325,6 +2341,33 @@ export const frozenTrajectoryAutoOpenSchema = z.object({
         code: "custom",
         path: ["qualifiedOpenings", index],
         message: "A qualified opening must join two rooms the evidence marks visited",
+      });
+    }
+  }
+  const wallIdentities = (frozen.demotedWalls ?? []).map((wall) =>
+    `${wall.levelId}/${wall.wallId}`);
+  if (new Set(wallIdentities).size !== wallIdentities.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["demotedWalls"],
+      message: "Each demoted wall may appear at most once",
+    });
+  }
+  const crossingsByWallId = new Map((frozen.evidence.wallCrossings ?? [])
+    .map((entry) => [entry.wallId, entry.crossingCount]));
+  for (const [index, wall] of (frozen.demotedWalls ?? []).entries()) {
+    if (!visited.has(`${wall.levelId}/${wall.roomId}`)) {
+      context.addIssue({
+        code: "custom",
+        path: ["demotedWalls", index],
+        message: "A demoted wall must sit inside a room the evidence marks visited",
+      });
+    }
+    if (crossingsByWallId.get(wall.wallId) !== wall.crossingCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["demotedWalls", index],
+        message: "A demoted wall's crossing count must match the evidence's own record",
       });
     }
   }

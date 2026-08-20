@@ -39,6 +39,7 @@ import {
   parseTrajectoryPositions,
   proposalReportPlanLevels,
   trajectoryPlanEvidence,
+  trajectoryWallCrossingEvidence,
   trajectoryWithinCaptureBounds,
 } from "./trajectory-evidence-core.mjs";
 import {
@@ -422,11 +423,24 @@ async function processNextJob() {
             { failureClass: "input_validation", retryable: false },
           );
         }
+        // Per-wall pass-through evidence (#33): count crossings only below
+        // each proposed wall's own claimed height — the physical proof the
+        // wall cannot be solid where the rig went through.
+        const wallCrossings = trajectoryWallCrossingEvidence({
+          positions: parsedTrajectory.positions,
+          walls: (report.walls ?? []).map((wall) => ({
+            wallId: wall.wallKey,
+            elevationM: wall.elevationM,
+            heightM: wall.heightM,
+            span: wall.geometry?.points ?? null,
+          })),
+        });
         report.trajectoryEvidence = {
           ...trajectoryPlanEvidence({
             positions: parsedTrajectory.positions,
             plan: { levels: proposalReportPlanLevels(report) },
           }),
+          ...(wallCrossings.length ? { wallCrossings } : {}),
           trajectory: {
             assetId: String(job.floorplanTrajectory.assetId),
             sha256: trajectoryDownload.sha256,

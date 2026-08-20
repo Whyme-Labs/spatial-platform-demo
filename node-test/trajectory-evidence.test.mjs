@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_MINIMUM_VISITED_SAMPLES,
   openingAdjacentRoomIds,
+  trajectoryDemotableWalls,
+  trajectoryWallCrossingEvidence,
   spanTrajectoryQualification,
   trajectoryQualifiedUnknownOpenings,
   parseTrajectoryPositions,
@@ -399,5 +401,80 @@ describe("trajectoryQualifiedUnknownOpenings", () => {
     });
     assert.equal(verdict.qualified, false);
     assert.equal(verdict.reason, "envelope_or_unmodelled");
+  });
+});
+
+describe("trajectoryWallCrossingEvidence", () => {
+  const clutterWalls = [
+    // full-height wall the path crosses at eye height
+    { wallId: "wall-clutter", elevationM: 0, heightM: 2.5, span: { start: [2, 0], end: [2, 4] } },
+    // low rack: the rig rode above its top, so no pass-through is provable
+    { wallId: "wall-rack", elevationM: 0, heightM: 1.0, span: { start: [3, 0], end: [3, 4] } },
+    // never crossed
+    { wallId: "wall-far", elevationM: 0, heightM: 2.5, span: { start: [9, 0], end: [9, 4] } },
+  ];
+
+  it("counts pass-throughs only below each wall's claimed height", () => {
+    const walkThrough = [[1, 1.5, 2], [4, 1.5, 2]];
+    assert.deepEqual(trajectoryWallCrossingEvidence({
+      positions: walkThrough,
+      walls: clutterWalls,
+    }), [{ wallId: "wall-clutter", crossingCount: 1 }]);
+  });
+});
+
+describe("trajectoryDemotableWalls", () => {
+  const plan = {
+    levels: [{
+      id: "level-001",
+      elevationM: 0,
+      rooms: [
+        { id: "room-001", points: [[0, 0], [6, 0], [6, 6], [0, 6]] },
+      ],
+      walls: [
+        // freestanding clutter wholly inside the visited room
+        { id: "wall-clutter", start: [2, 2], end: [2, 4], thicknessM: 0.2, heightM: 2.5 },
+        // envelope wall on the room outline: never demotable
+        { id: "wall-envelope", start: [0, 0], end: [6, 0], thicknessM: 0.2, heightM: 2.5 },
+        // long interior run: too long to be clutter
+        { id: "wall-long", start: [1, 5], end: [5.5, 5], thicknessM: 0.2, heightM: 2.5 },
+      ],
+    }],
+  };
+  const evidence = {
+    schemaVersion: "trajectory-evidence-v1",
+    visitedRoomIds: ["level-001/room-001"],
+    wallCrossings: [
+      { wallId: "wall-clutter", crossingCount: 2 },
+      { wallId: "wall-envelope", crossingCount: 1 },
+      { wallId: "wall-long", crossingCount: 3 },
+    ],
+  };
+
+  it("demotes only short pass-through clutter wholly inside a visited room", () => {
+    assert.deepEqual(trajectoryDemotableWalls({ plan, trajectoryEvidence: evidence }), [{
+      levelId: "level-001",
+      wallId: "wall-clutter",
+      crossingCount: 2,
+      roomId: "room-001",
+    }]);
+  });
+
+  it("never demotes a wall a frozen human classification touched", () => {
+    assert.deepEqual(trajectoryDemotableWalls({
+      plan,
+      trajectoryEvidence: evidence,
+      resolutionCoveredWallIds: new Set(["wall-clutter"]),
+    }), []);
+  });
+
+  it("fails closed without crossing evidence", () => {
+    assert.deepEqual(trajectoryDemotableWalls({
+      plan,
+      trajectoryEvidence: {
+        schemaVersion: "trajectory-evidence-v1",
+        visitedRoomIds: ["level-001/room-001"],
+      },
+    }), []);
   });
 });
