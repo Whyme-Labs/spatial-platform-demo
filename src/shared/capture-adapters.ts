@@ -59,6 +59,11 @@ export const captureAssetPurposes = [
   "calibration",
   "imu_trajectory",
   "gnss_trajectory",
+  // The scanner's SLAM pose path as the vendor exports it (FJD Trion
+  // `.trajectory.las`). Distinct from imu_trajectory/gnss_trajectory (raw
+  // sensor streams, JSON/CSV) and from the capture-completeness JSON lane:
+  // this is registered metric pose evidence in the capture's own frame.
+  "scanner_trajectory",
   "metric_point_cloud",
   "collision_mesh",
   "vendor_semantic_mesh",
@@ -75,6 +80,7 @@ const existingVersionAttachmentPurposes = new Set<CaptureAssetPurpose>([
   "calibration",
   "imu_trajectory",
   "gnss_trajectory",
+  "scanner_trajectory",
   "metric_point_cloud",
   "collision_mesh",
   "vendor_semantic_mesh",
@@ -287,6 +293,7 @@ const formatsByPurpose: Record<CaptureAssetPurpose, readonly CaptureAssetFormat[
   calibration: ["json", "yaml", "yml"],
   imu_trajectory: ["json", "csv"],
   gnss_trajectory: ["json", "csv"],
+  scanner_trajectory: ["las", "laz"],
   metric_point_cloud: ["ply", "e57", "las", "laz", "pts"],
   collision_mesh: ["glb", "gltf", "obj", "ply"],
   vendor_semantic_mesh: ["obj", "ply", "glb", "gltf", "e57", "json", "csv", "zip"],
@@ -303,6 +310,7 @@ const assetKindByPurpose: Record<CaptureAssetPurpose, "source" | "master" | "web
   calibration: "source",
   imu_trajectory: "source",
   gnss_trajectory: "source",
+  scanner_trajectory: "source",
   metric_point_cloud: "pointcloud",
   collision_mesh: "collision",
   vendor_semantic_mesh: "source",

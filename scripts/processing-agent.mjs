@@ -36,6 +36,12 @@ import {
 } from "./physical-navigation-validation.mjs";
 import { buildAuthoredStructuralCollisionGlb } from "./authored-collision.mjs";
 import {
+  parseTrajectoryPositions,
+  proposalReportPlanLevels,
+  trajectoryPlanEvidence,
+  trajectoryWithinCaptureBounds,
+} from "./trajectory-evidence-core.mjs";
+import {
   E57_HEADER_BYTES,
   e57StructureSummary,
   e57XmlPhysicalSpan,
@@ -376,6 +382,61 @@ async function processNextJob() {
         coordinateAssurance: String(job.floorplanConfig.coordinateAssurance),
         registrationEvidence: String(job.floorplanConfig.registrationEvidence),
       };
+      if (job.floorplanTrajectory && typeof job.floorplanTrajectory === "object") {
+        await reportProgress(78, "Reading the scanner trajectory for traversal evidence");
+        const trajectoryPath = join(workDirectory, "scanner-trajectory-input");
+        const trajectoryDownload = await downloadLeasedFile(
+          `/api/worker/jobs/${job.id}/inputs/trajectory`,
+          lease.leaseToken,
+          trajectoryPath,
+        );
+        verifyDownloadedInput(
+          {
+            sizeBytes: Number(job.floorplanTrajectory.sizeBytes),
+            sha256: String(job.floorplanTrajectory.sha256 ?? ""),
+          },
+          trajectoryDownload,
+          "scanner trajectory",
+        );
+        const trajectoryFormat =
+          String(job.floorplanTrajectory.sourceFormat ?? "las").toLowerCase();
+        const normalizedTrajectory = await normalizeMetricPointCloud({
+          sourcePath: trajectoryPath,
+          sourceFormat: trajectoryFormat,
+          sourceUpAxis: String(job.floorplanConfig.sourceUpAxis ?? "y"),
+          workDirectory,
+          pdalBinary: configuration.pdalBinary,
+          timeoutMs: configuration.maxRuntimeMs,
+          outputFileName: "scanner-trajectory.normalized.ply",
+        });
+        const parsedTrajectory = parseTrajectoryPositions(
+          await readFile(normalizedTrajectory.path),
+        );
+        // A pose path outside the capture's own footprint is a wrong or
+        // mis-registered export; walking evidence must never be minted from
+        // it, and failing loudly beats a silently sealed (or opened) plan.
+        if (!trajectoryWithinCaptureBounds(parsedTrajectory.bounds, signature.bounds)) {
+          throw new ProcessingAgentError(
+            "TRAJECTORY_OUTSIDE_CAPTURE",
+            "The scanner trajectory does not lie within the capture's horizontal bounds; verify the export shares the point cloud's registered frame",
+            { failureClass: "input_validation", retryable: false },
+          );
+        }
+        report.trajectoryEvidence = {
+          ...trajectoryPlanEvidence({
+            positions: parsedTrajectory.positions,
+            plan: { levels: proposalReportPlanLevels(report) },
+          }),
+          trajectory: {
+            assetId: String(job.floorplanTrajectory.assetId),
+            sha256: trajectoryDownload.sha256,
+            sourceFormat: trajectoryFormat,
+            vertexCount: parsedTrajectory.vertexCount,
+            sampledPointCount: parsedTrajectory.sampledPointCount,
+            samplingStride: parsedTrajectory.samplingStride,
+          },
+        };
+      }
       const reportPath = join(
         workDirectory,
         `floorplan-proposal-${job.floorplanExtractionId}.json`,
@@ -1367,6 +1428,7 @@ async function normalizeMetricPointCloud({
   workDirectory,
   pdalBinary,
   timeoutMs,
+  outputFileName = "registered-pointcloud.normalized.ply",
 }) {
   if (sourceFormat === "ply" && sourceUpAxis === "y") {
     return {
@@ -1408,7 +1470,7 @@ async function normalizeMetricPointCloud({
       { failureClass: "configuration", retryable: false, cause: error },
     );
   });
-  const normalizedPath = join(workDirectory, "registered-pointcloud.normalized.ply");
+  const normalizedPath = join(workDirectory, outputFileName);
   const stages = [
     { type: reader, filename: sourcePath },
     ...(sourceUpAxis === "z"

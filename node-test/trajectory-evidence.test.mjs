@@ -4,6 +4,7 @@ import {
   DEFAULT_MINIMUM_VISITED_SAMPLES,
   openingAdjacentRoomIds,
   parseTrajectoryPositions,
+  proposalReportPlanLevels,
   trajectoryPlanEvidence,
   trajectoryWallCrossingCount,
   trajectoryWithinCaptureBounds,
@@ -255,6 +256,61 @@ describe("openingAdjacentRoomIds", () => {
       level: TWO_ROOM_PLAN.levels[0],
       opening: { start: [0, 1.5], end: [0, 2.5] },
     }), ["room-a"]);
+  });
+});
+
+describe("proposalReportPlanLevels", () => {
+  const roomProposal = (key, offsetX) => ({
+    roomKey: key,
+    elevationM: 0,
+    geometry: {
+      type: "polygon",
+      points: [
+        [offsetX, 0, 0], [offsetX + 4, 0, 0], [offsetX + 4, 0, 4], [offsetX, 0, 4],
+      ],
+    },
+  });
+
+  it("maps a v2 multi-level report through its level room keys", () => {
+    const levels = proposalReportPlanLevels({
+      rooms: [roomProposal("room-001", 0), roomProposal("room-002", 4)],
+      levels: [
+        { levelKey: "level-001", elevationM: 0, roomKeys: ["room-001"] },
+        { levelKey: "level-002", elevationM: 3.2, roomKeys: ["room-002"] },
+      ],
+    });
+    assert.deepEqual(levels.map((level) => [level.id, level.rooms.map((room) => room.id)]), [
+      ["level-001", ["room-001"]],
+      ["level-002", ["room-002"]],
+    ]);
+  });
+
+  it("falls back to a single level for a v1 report", () => {
+    const levels = proposalReportPlanLevels({
+      rooms: [roomProposal("room-001", 0)],
+      summary: { inferredFloorElevationM: 1.5 },
+    });
+    assert.equal(levels.length, 1);
+    assert.equal(levels[0].elevationM, 1.5);
+    assert.deepEqual(levels[0].rooms.map((room) => room.id), ["room-001"]);
+  });
+
+  it("round-trips into trajectoryPlanEvidence with 3D room points", () => {
+    const evidence = trajectoryPlanEvidence({
+      positions: walkAcrossBothRooms(),
+      plan: {
+        levels: proposalReportPlanLevels({
+          rooms: [roomProposal("room-001", 0), roomProposal("room-002", 4)],
+          levels: [
+            { levelKey: "level-001", elevationM: 0, roomKeys: ["room-001", "room-002"] },
+          ],
+        }),
+      },
+    });
+    assert.deepEqual(evidence.visitedRoomIds, [
+      "level-001/room-001",
+      "level-001/room-002",
+    ]);
   });
 });
 

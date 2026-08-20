@@ -57,6 +57,40 @@ readers during its Docker build. PDAL documents that its E57 reader supports
 Cartesian point records and merges multiple point clouds; spherical records
 are not supported. A scanner export should therefore use Cartesian E57.
 
+## Wayfinder scanner-trajectory evidence (optional)
+
+An extraction may pin one scanner pose trajectory — a registered LAS/LAZ
+export of the rig's SLAM path (`scanner_trajectory` upload role; the FJD
+Trion emits `*.trajectory.las`). The pin is held to the immutable bar of the
+point cloud itself: verified integrity, frozen SHA-256, the capture's own
+version, and a 512 MiB cap. It is frozen into the extraction run's
+`source_evidence_json`, travels with the job lease as `floorplanTrajectory`,
+and is served to the container under the same lease at
+`/api/worker/jobs/:jobId/inputs/trajectory`.
+
+The container normalises the trajectory through the same PDAL lane and
+up-axis as the capture, verifies the downloaded bytes against the pinned
+digest, refuses a pose path whose horizontal bounds leave the capture's
+(`TRAJECTORY_OUTSIDE_CAPTURE` — a wrong or mis-registered export), and emits
+deterministic `trajectoryEvidence` on the proposal report: ordered pose
+samples banded to the storey directly beneath the rig (carry band 0.2–3.0 m
+above a floor), point-in-polygon room visits, and a `visited` verdict per
+room at a minimum-sample threshold. Completion fails closed in both
+directions — a pinned trajectory without report evidence is rejected, as is
+evidence for a trajectory that was never pinned, or evidence whose asset id,
+digest, or format differ from the pin.
+
+Why the trajectory is trustworthy where point returns are not: the pose path
+is ego-motion, not returns. A mirror's phantom reflected room contains zero
+pose samples, and glass never admits the rig, so "the scanner was carried
+through this space" is machine-grade traversability evidence. Automatic
+queueing from capture intake pins a trajectory only when the version carries
+exactly one verified LAS/LAZ source asset whose file name contains
+`trajectory`; anything less certain is left for the operator to pin
+explicitly in the extraction dialog. Trajectory-qualified automatic doorway
+opening (crossings whose both adjacent rooms were visited) builds on this
+evidence and is tracked separately (Wayfinder issues #32–#35).
+
 ## Derivation and review boundary
 
 The first production extractor uses bounded metric occupancy:

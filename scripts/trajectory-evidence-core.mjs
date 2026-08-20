@@ -257,6 +257,34 @@ export function trajectoryPlanEvidence({
   };
 }
 
+// Adapts a floor-plan proposal report (v1 single-level or v2 multi-level)
+// into the level/room shape trajectoryPlanEvidence consumes. Room polygons
+// keep the report's own keys so the evidence names the exact rooms the
+// reviewer sees.
+export function proposalReportPlanLevels(report) {
+  const roomsByKey = new Map((report?.rooms ?? [])
+    .map((room) => [room.roomKey, room]));
+  const planRoom = (room) => ({
+    id: room.roomKey,
+    points: room.geometry?.points ?? [],
+  });
+  if (Array.isArray(report?.levels) && report.levels.length) {
+    return report.levels.map((level) => ({
+      id: level.levelKey,
+      elevationM: level.elevationM,
+      rooms: (level.roomKeys ?? [])
+        .map((key) => roomsByKey.get(key))
+        .filter(Boolean)
+        .map(planRoom),
+    }));
+  }
+  return [{
+    id: "level-001",
+    elevationM: Number(report?.summary?.inferredFloorElevationM ?? 0),
+    rooms: [...roomsByKey.values()].map(planRoom),
+  }];
+}
+
 function orientation(ax, az, bx, bz, cx, cz) {
   const value = (bz - az) * (cx - bx) - (bx - ax) * (cz - bz);
   if (value > 1e-12) return 1;

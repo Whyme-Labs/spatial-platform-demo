@@ -9007,6 +9007,19 @@ function floorplanExtractionAssets(): Asset[] {
   ));
 }
 
+function floorplanTrajectoryAssets(): Asset[] {
+  const versionId = state.spatial?.version?.id;
+  if (!versionId) return [];
+  return (state.selected?.assets ?? []).filter((asset) => (
+    asset.version_id === versionId &&
+    asset.kind === "source" &&
+    ["las", "laz"].includes(asset.format.toLowerCase()) &&
+    asset.integrity_status === "verified" &&
+    /^[a-f0-9]{64}$/i.test(asset.sha256 ?? "") &&
+    asset.size_bytes <= 512 * 1024 * 1024
+  ));
+}
+
 function openFloorplanExtractionDialog(): void {
   const assets = floorplanExtractionAssets();
   if (!assets.length) {
@@ -9026,6 +9039,14 @@ function openFloorplanExtractionDialog(): void {
       asset.id,
     ));
   }
+  const trajectorySelect = byId<HTMLSelectElement>("floorplanTrajectoryAsset");
+  trajectorySelect.replaceChildren(new Option("None — no traversal evidence", ""));
+  for (const asset of floorplanTrajectoryAssets()) {
+    trajectorySelect.append(new Option(
+      `${asset.file_name} · ${asset.format.toUpperCase()} · ${formatBytes(asset.size_bytes)}`,
+      asset.id,
+    ));
+  }
   byId("floorplanExtractionError").textContent = "";
   floorplanExtractionOperation = null;
   floorplanExtractionDialog.showModal();
@@ -9036,9 +9057,11 @@ async function queueFloorplanExtraction(form: FormData): Promise<void> {
   const version = state.spatial?.version;
   if (!project || !version) throw new Error("Open an immutable scene version first.");
   const elevationValue = String(form.get("elevationHintM") ?? "").trim();
+  const trajectoryValue = String(form.get("trajectoryAssetId") ?? "").trim();
   const body = {
     versionId: version.id,
     inputAssetId: String(form.get("inputAssetId") ?? ""),
+    ...(trajectoryValue ? { trajectoryAssetId: trajectoryValue } : {}),
     coordinateAssurance: "registered_y_up_metric_frame",
     sourceUpAxis: String(form.get("sourceUpAxis") ?? "y"),
     registrationEvidence: String(form.get("registrationEvidence") ?? "").trim(),
@@ -11955,6 +11978,7 @@ const captureBundleRoleLabels: Record<string, string> = {
   calibration: "Intrinsics + extrinsics",
   imu_trajectory: "IMU trajectory",
   gnss_trajectory: "GNSS trajectory",
+  scanner_trajectory: "Scanner pose trajectory",
   metric_point_cloud: "Metric point cloud",
   gaussian_splat: "Gaussian splat",
   collision_mesh: "Collision mesh",
@@ -12806,6 +12830,7 @@ const capturePurposeHelp: Record<CaptureAssetPurpose, string> = {
   calibration: "Calibration evidence is preserved without claiming that the camera model or calibration accuracy has been independently verified.",
   imu_trajectory: "The trajectory is preserved as source evidence; semantic validation remains a review task.",
   gnss_trajectory: "GNSS evidence is preserved without inferring RTK fix quality, datum, or survey control.",
+  scanner_trajectory: "The scanner's registered pose path becomes traversal evidence: rooms it visited can qualify for automatic walkability at review time.",
   metric_point_cloud: "Metric geometry is stored as a point-cloud asset and does not enter the Gaussian reconstruction lane.",
   collision_mesh: "Collision geometry is preserved separately from appearance and requires spatial-alignment review.",
   vendor_semantic_mesh: "A vendor's classified mesh or segmentation sidecar is preserved verbatim as evidence. Its classification semantics are not parsed, and it never becomes collision or navigation geometry.",

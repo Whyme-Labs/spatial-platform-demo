@@ -220,6 +220,15 @@ Implemented:
   revision-bound collision/navigation recooking, versioned indicative
   revisions, and hash-bound private SVG/PDF/DXF exports that remain separate
   from measurement certification
+- Wayfinder scanner-trajectory traversal evidence: an optional registered
+  LAS/LAZ pose trajectory (`scanner_trajectory` upload role, e.g. the Trion's
+  `*.trajectory.las`) is pinned to a floor-plan extraction by immutable
+  SHA-256, served to the container under the job lease, and read back as
+  deterministic per-room visited evidence on the proposal (elevation-banded
+  against the extracted rooms, bounds-checked against the capture, fail-closed
+  at completion in both directions); the pose path is SLAM ego-motion, so
+  mirror-phantom rooms can never appear visited and glass never lets the rig
+  through — groundwork for trajectory-qualified automatic doorway opening
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1, optionally bound to one container structure
