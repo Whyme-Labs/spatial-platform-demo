@@ -354,8 +354,39 @@ jobs:
           npx wrangler d1 execute DB --env production --remote --json --command \
             "SELECT c.slug FROM release_channels c JOIN releases r ON r.id = c.active_release_id WHERE r.revoked_at IS NULL AND r.access_policy = 'public'" \
             > "$RUNNER_TEMP/release-slugs.json"
-          slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/release-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
-          test -n "$slugs"
+          # Same contract as production-watch.yml (see issue #27): a malformed
+          # enumeration must fail loudly — a broken query must never read as
+          # "nothing to verify" — but a well-formed EMPTY result is a
+          # legitimate operator-chosen state (every release unpublished,
+          # revoked, or access-gated; gated releases cannot be probed).
+          slugs=$(node -e '
+            const raw = require("node:fs").readFileSync(
+              process.env.RUNNER_TEMP + "/release-slugs.json", "utf8");
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch (error) {
+              console.error("release-slugs.json is not valid JSON: " + error.message);
+              process.exit(1);
+            }
+            const first = Array.isArray(parsed) ? parsed[0] : null;
+            if (!first || first.success !== true || !Array.isArray(first.results)) {
+              console.error(
+                "release-slugs.json is not a successful wrangler d1 result envelope");
+              process.exit(1);
+            }
+            const slugs = first.results.map((row) => row && row.slug);
+            if (slugs.some((slug) => typeof slug !== "string" || slug === "")) {
+              console.error("public-release enumeration returned a row without a slug");
+              process.exit(1);
+            }
+            console.log(slugs.join("\n"));
+          ')
+          if [ -z "$slugs" ]; then
+            echo "::notice::No active public releases — nothing to verify for this deploy."
+            printf 'no active public releases\n' | tee "$EVIDENCE_DIR/verified-releases.txt"
+            exit 0
+          fi
           printf '%s\n' "$slugs" | tee "$EVIDENCE_DIR/verified-releases.txt"
           while IFS= read -r slug; do
             npm run verify:navigation -- "$PRODUCTION_ORIGIN/api/releases/$slug/manifest"
