@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_MINIMUM_VISITED_SAMPLES,
   openingAdjacentRoomIds,
+  spanTrajectoryQualification,
+  trajectoryQualifiedUnknownOpenings,
   parseTrajectoryPositions,
   proposalReportPlanLevels,
   trajectoryPlanEvidence,
@@ -325,5 +327,77 @@ describe("trajectoryWithinCaptureBounds", () => {
       { min: [40.5, 1.5, 2], max: [47.5, 1.5, 2] },
       capture,
     ), false);
+  });
+});
+
+describe("trajectoryQualifiedUnknownOpenings", () => {
+  const reviewPlan = {
+    levels: [{
+      id: "level-001",
+      elevationM: 0,
+      rooms: [
+        { id: "room-001", points: [[0, 0], [4, 0], [4, 4], [0, 4]] },
+        { id: "room-002", points: [[4, 0], [8, 0], [8, 4], [4, 4]] },
+        { id: "room-phantom", points: [[8, 0], [12, 0], [12, 4], [8, 4]] },
+      ],
+      openings: [
+        // interior doorway between the two visited rooms
+        { id: "opening-001", type: "unknown", start: [4, 1.5], end: [4, 2.5] },
+        // crossing into the never-visited (mirror-phantom) room
+        { id: "opening-002", type: "unknown", start: [8, 1.5], end: [8, 2.5] },
+        // envelope window: one neighbour only
+        { id: "opening-003", type: "unknown", start: [0, 1.5], end: [0, 2.5] },
+        // operator already classified this one; not the machine's to open
+        { id: "opening-004", type: "window", start: [4, 3.2], end: [4, 3.8] },
+      ],
+    }],
+  };
+  const evidence = {
+    schemaVersion: "trajectory-evidence-v1",
+    visitedRoomIds: ["level-001/room-001", "level-001/room-002"],
+  };
+
+  it("opens only the interior doorway between two visited rooms", () => {
+    assert.deepEqual(trajectoryQualifiedUnknownOpenings({
+      plan: reviewPlan,
+      trajectoryEvidence: evidence,
+    }), [{
+      levelId: "level-001",
+      openingId: "opening-001",
+      roomIds: ["room-001", "room-002"],
+    }]);
+  });
+
+  it("fails closed without evidence or on a foreign schema version", () => {
+    assert.deepEqual(trajectoryQualifiedUnknownOpenings({
+      plan: reviewPlan,
+      trajectoryEvidence: null,
+    }), []);
+    assert.deepEqual(trajectoryQualifiedUnknownOpenings({
+      plan: reviewPlan,
+      trajectoryEvidence: { ...evidence, schemaVersion: "trajectory-evidence-v2" },
+    }), []);
+  });
+
+  it("never opens a span whose far room the scanner did not visit", () => {
+    const verdict = spanTrajectoryQualification({
+      level: reviewPlan.levels[0],
+      levelId: "level-001",
+      span: { start: [8, 1.5], end: [8, 2.5] },
+      visitedRoomIds: evidence.visitedRoomIds,
+    });
+    assert.equal(verdict.qualified, false);
+    assert.equal(verdict.reason, "adjacent_room_unvisited");
+  });
+
+  it("never opens an envelope span with a single neighbour", () => {
+    const verdict = spanTrajectoryQualification({
+      level: reviewPlan.levels[0],
+      levelId: "level-001",
+      span: { start: [0, 1.5], end: [0, 2.5] },
+      visitedRoomIds: evidence.visitedRoomIds,
+    });
+    assert.equal(verdict.qualified, false);
+    assert.equal(verdict.reason, "envelope_or_unmodelled");
   });
 });

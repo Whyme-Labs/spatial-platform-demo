@@ -407,3 +407,77 @@ export function openingAdjacentRoomIds({
     .slice(0, 2)
     .map((candidate) => candidate.roomId);
 }
+
+// ————— Trajectory auto-open qualification (issue #32) —————
+
+// The receipt source name for machine-minted passability coverage.
+export const TRAJECTORY_AUTO_OPEN_SOURCE = "trajectory-evidence";
+
+// Decides whether one wall-line span (an unknown opening, or a capture
+// crossing) qualifies for trajectory auto-open: it must sit between exactly
+// two modelled rooms, and the scanner must have physically visited BOTH.
+// Everything else stays sealed — an envelope window has one neighbour, a
+// mirror-phantom room is never visited, and a room the operator added after
+// the scan carries no evidence. Failing closed here is the design, not a
+// limitation.
+export function spanTrajectoryQualification({
+  level,
+  levelId,
+  span,
+  visitedRoomIds,
+  maximumGapM = OPENING_ROOM_MAXIMUM_GAP_M,
+}) {
+  const adjacent = openingAdjacentRoomIds({ level, opening: span, maximumGapM });
+  if (adjacent.length < 2) {
+    return { qualified: false, reason: "envelope_or_unmodelled", roomIds: adjacent };
+  }
+  const visited = new Set(
+    Array.isArray(visitedRoomIds)
+      ? visitedRoomIds.filter((id) => typeof id === "string")
+      : [],
+  );
+  const unvisited = adjacent.filter((roomId) => !visited.has(`${levelId}/${roomId}`));
+  if (unvisited.length) {
+    return { qualified: false, reason: "adjacent_room_unvisited", roomIds: adjacent };
+  }
+  return { qualified: true, reason: "both_adjacent_rooms_visited", roomIds: adjacent };
+}
+
+// Every `unknown` opening of a reviewed plan that trajectory evidence
+// qualifies for cooking as passable. Deterministic and fail-closed: no
+// evidence, a foreign schema version, or malformed visited ids yield an
+// empty list (the plan cooks sealed, exactly as before Wayfinder).
+export function trajectoryQualifiedUnknownOpenings({
+  plan,
+  trajectoryEvidence,
+  maximumGapM = OPENING_ROOM_MAXIMUM_GAP_M,
+}) {
+  if (!trajectoryEvidence ||
+    trajectoryEvidence.schemaVersion !== TRAJECTORY_EVIDENCE_SCHEMA_VERSION ||
+    !Array.isArray(trajectoryEvidence.visitedRoomIds)) {
+    return [];
+  }
+  const qualified = [];
+  for (const level of plan?.levels ?? []) {
+    const levelId = String(level.id ?? level.levelKey ?? "");
+    if (!levelId) continue;
+    for (const opening of level.openings ?? []) {
+      if (!opening || opening.type !== "unknown") continue;
+      const openingId = String(opening.id ?? opening.openingKey ?? "");
+      if (!openingId) continue;
+      const verdict = spanTrajectoryQualification({
+        level,
+        levelId,
+        span: opening,
+        visitedRoomIds: trajectoryEvidence.visitedRoomIds,
+        maximumGapM,
+      });
+      if (verdict.qualified) {
+        qualified.push({ levelId, openingId, roomIds: verdict.roomIds });
+      }
+    }
+  }
+  return qualified.sort((left, right) =>
+    left.levelId.localeCompare(right.levelId) ||
+    left.openingId.localeCompare(right.openingId));
+}

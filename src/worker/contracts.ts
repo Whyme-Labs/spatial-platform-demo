@@ -61,6 +61,8 @@ export const projectWorkflowPolicySchema = z.object({
     .default("automatic-extract-review"),
   navigationClearance: z.enum(projectWorkflowPolicyIds.navigationClearance)
     .default("approved-scene"),
+  trajectoryAutoOpen: z.enum(projectWorkflowPolicyIds.trajectoryAutoOpen)
+    .default("off"),
 }).strict();
 export const projectCustomFieldTypeSchema = z.enum([
   "text",
@@ -2291,6 +2293,63 @@ export const trajectoryEvidenceSchema = z.object({
 });
 
 export type TrajectoryEvidence = z.infer<typeof trajectoryEvidenceSchema>;
+
+// Wayfinder (#32): the blob frozen into floorplan_revisions.trajectory_evidence_json
+// when a revision is approved under the trajectoryAutoOpen policy. It binds
+// the proposal's trajectory evidence to the exact `unknown` openings that
+// evidence qualified for cooking as passable — the collision cook, the
+// navigation authoring receipt, and automatic acceptance all echo this frozen
+// value; none of them recompute the qualification.
+export const frozenTrajectoryAutoOpenSchema = z.object({
+  schemaVersion: z.literal("trajectory-auto-open-v1"),
+  evidence: trajectoryEvidenceSchema,
+  qualifiedOpenings: z.array(z.object({
+    levelId: z.string().min(1).max(120),
+    openingId: z.string().min(1).max(120),
+    roomIds: z.array(z.string().min(1).max(120)).length(2),
+  }).strict()).max(2_000),
+}).strict().superRefine((frozen, context) => {
+  const identities = frozen.qualifiedOpenings.map((opening) =>
+    `${opening.levelId}/${opening.openingId}`);
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["qualifiedOpenings"],
+      message: "Each qualified opening may appear at most once",
+    });
+  }
+  const visited = new Set(frozen.evidence.visitedRoomIds);
+  for (const [index, opening] of frozen.qualifiedOpenings.entries()) {
+    if (opening.roomIds.some((roomId) => !visited.has(`${opening.levelId}/${roomId}`))) {
+      context.addIssue({
+        code: "custom",
+        path: ["qualifiedOpenings", index],
+        message: "A qualified opening must join two rooms the evidence marks visited",
+      });
+    }
+  }
+});
+
+export type FrozenTrajectoryAutoOpen = z.infer<typeof frozenTrajectoryAutoOpenSchema>;
+
+// undefined = no blob frozen (feature off at approval — the sealed cook).
+// null = a blob exists but is unreadable or internally inconsistent; callers
+// must FAIL CLOSED, exactly as parseFrozenCaptureAgreement's contract.
+export function parseFrozenTrajectoryAutoOpen(
+  trajectoryEvidenceJson: string | null,
+): FrozenTrajectoryAutoOpen | null | undefined {
+  if (trajectoryEvidenceJson === null || trajectoryEvidenceJson.trim() === "") {
+    return undefined;
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trajectoryEvidenceJson);
+  } catch {
+    return null;
+  }
+  const parsed = frozenTrajectoryAutoOpenSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
 
 export const floorplanProposalReportSchema = z.object({
     schemaVersion: z.literal("1.0.0"),

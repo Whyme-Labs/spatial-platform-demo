@@ -79,6 +79,8 @@ import {
   floorplanCaptureAgreementSchema,
   frozenCaptureAgreementBlockReason,
   parseFrozenCaptureAgreement,
+  parseFrozenTrajectoryAutoOpen,
+  trajectoryEvidenceSchema,
   unresolvedCaptureAgreementCrossings,
   sceneRouteSchema,
   privacyRegionSchema,
@@ -202,8 +204,10 @@ import {
   projectPolicyForDeliveryTemplate,
   projectPolicyForPersistedDeliveryTemplate,
   structureWorkflowAllowsAutomaticProposal,
+  trajectoryAutoOpenEnabled,
   type ProjectWorkflowPolicy,
 } from "../shared/project-policies";
+import { trajectoryQualifiedUnknownOpenings } from "../../scripts/trajectory-evidence-core.mjs";
 import {
   parseMeasurementGrade,
   publicationMeasurementDisclaimer,
@@ -9036,7 +9040,7 @@ app.post("/api/projects/:projectId/spatial/navigation-builds", async (context) =
     context.env.DB.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
-        revision.capture_agreement_json,
+        revision.capture_agreement_json, revision.trajectory_evidence_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -10715,6 +10719,36 @@ app.post(
     const extractionParameters = parseStoredObject(extraction.parameters_json);
     const automaticPipeline = extractionParameters && typeof extractionParameters === "object" &&
       Reflect.get(extractionParameters, "automaticPipeline") === true;
+    // Wayfinder (#32): under the trajectoryAutoOpen policy, an approval
+    // freezes the proposal's trajectory evidence together with the exact
+    // `unknown` openings it qualifies (both adjacent rooms scanner-visited).
+    // The frozen blob is the single source the collision cook, the authoring
+    // receipt, and automatic acceptance echo. Policy off, no evidence, or
+    // evidence that fails its schema ⇒ nothing frozen ⇒ the sealed cook.
+    let trajectoryAutoOpenJson: string | null = null;
+    if (revisionId && automaticPipeline && parsed.data.plan) {
+      const reviewPolicy = await workflowPolicyForSceneVersion(
+        context.env.DB,
+        project,
+        extraction.version_id,
+      );
+      if (trajectoryAutoOpenEnabled(reviewPolicy.policy)) {
+        const evidenceRaw = proposalReportStored && typeof proposalReportStored === "object"
+          ? Reflect.get(proposalReportStored, "trajectoryEvidence")
+          : undefined;
+        const evidence = trajectoryEvidenceSchema.safeParse(evidenceRaw);
+        if (evidence.success) {
+          trajectoryAutoOpenJson = JSON.stringify({
+            schemaVersion: "trajectory-auto-open-v1",
+            evidence: evidence.data,
+            qualifiedOpenings: trajectoryQualifiedUnknownOpenings({
+              plan: parsed.data.plan,
+              trajectoryEvidence: evidence.data,
+            }),
+          });
+        }
+      }
+    }
     let republishSourceRelease: {
       id: string;
       version_id: string;
@@ -10800,9 +10834,22 @@ app.post(
               : [];
           }),
         );
+        const frozenTrajectory = parseFrozenTrajectoryAutoOpen(trajectoryAutoOpenJson);
+        if (frozenTrajectory === null) {
+          return conflict(
+            context,
+            "The trajectory auto-open evidence could not be frozen into a valid receipt",
+          );
+        }
         const structuralConfig = structuralCollisionConfigFromReviewPlan(
           parsed.data.plan,
-          { proposedWallThicknessByKey },
+          {
+            proposedWallThicknessByKey,
+            trajectoryOpenOpenings: new Set(
+              (frozenTrajectory?.qualifiedOpenings ?? []).map((opening) =>
+                `${opening.levelId}/${opening.openingId}`),
+            ),
+          },
         );
         const bytes = buildAuthoredStructuralCollisionGlb(structuralConfig, {
           generator: "Spatial Studio reviewed-floorplan-collision-v2",
@@ -10824,6 +10871,13 @@ app.post(
             "The capture-agreement resolutions could not be frozen into a valid receipt",
           );
         }
+        const overrideTrajectoryFragment = trajectoryAutoOpenReceiptFragment(trajectoryAutoOpenJson);
+        if (overrideTrajectoryFragment === "invalid") {
+          return conflict(
+            context,
+            "The trajectory auto-open evidence could not be frozen into a valid receipt",
+          );
+        }
         const automaticState = await currentNavigationAuthoringState(
           context.env.DB,
           auth.organisationId,
@@ -10836,6 +10890,7 @@ app.post(
             collisionAssetId,
             collisionSha256,
             ...overrideAgreementFragment,
+            ...overrideTrajectoryFragment,
           },
         );
         if (automaticState.profile.worldUnit !== "metres") {
@@ -11051,9 +11106,9 @@ app.post(
               id, organisation_id, project_id, version_id, extraction_id,
               revision_number, plan_json, plan_hash, source_proposal_hash,
               review_note, created_by, capture_agreement_json,
-              navigation_receipt_version
+              trajectory_evidence_json, navigation_receipt_version
             )
-            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
               'floorplan-navigation-receipt-v1'
             WHERE EXISTS (
               SELECT 1 FROM floorplan_extraction_runs
@@ -11074,6 +11129,7 @@ app.post(
             parsed.data.note,
             auth.userId,
             captureAgreementJson,
+            trajectoryAutoOpenJson,
             extraction.id,
             parsed.data.clientOperationId,
             requestHash,
@@ -24568,7 +24624,7 @@ async function captureSpatialSnapshot(
     database.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
-        revision.capture_agreement_json,
+        revision.capture_agreement_json, revision.trajectory_evidence_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -25054,7 +25110,7 @@ export async function currentNavigationAuthoringState(
     database.prepare(`
       SELECT revision.id, revision.plan_hash, revision.collision_asset_id,
         revision.collision_sha256, revision.navigation_receipt_version,
-        revision.capture_agreement_json,
+        revision.capture_agreement_json, revision.trajectory_evidence_json,
         collision.sha256 AS current_collision_sha256,
         collision.integrity_status AS collision_integrity_status,
         collision.deleted_at AS collision_deleted_at
@@ -25135,6 +25191,29 @@ export function captureAgreementReceiptFragment(
   };
 }
 
+// Wayfinder (#32): the authoring-hash fragment for trajectory auto-open. It
+// must be byte-identical whether built from the review-time frozen JSON or the
+// stored floorplan_revisions row — the same two-site contract as
+// captureAgreementReceiptFragment — or automatic acceptance can never
+// reproduce the frozen hash. Absent blob ⇒ {} so pre-Wayfinder revisions and
+// policy-off approvals hash exactly as before.
+export function trajectoryAutoOpenReceiptFragment(
+  trajectoryEvidenceJson: string | null,
+): { trajectoryAutoOpen?: Record<string, unknown> } | "invalid" {
+  const frozen = parseFrozenTrajectoryAutoOpen(trajectoryEvidenceJson);
+  if (frozen === undefined) return {};
+  if (frozen === null) return "invalid";
+  return {
+    trajectoryAutoOpen: {
+      schemaVersion: "trajectory-auto-open-receipt-v1",
+      trajectorySha256: frozen.evidence.trajectory.sha256,
+      trajectoryAssetId: frozen.evidence.trajectory.assetId,
+      visitedRoomCount: frozen.evidence.visitedRoomIds.length,
+      qualifiedOpenings: frozen.qualifiedOpenings,
+    },
+  };
+}
+
 function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | null {
   if (!row || typeof row !== "object") return null;
   const floorplanRevisionId = readStringProperty(row, "id");
@@ -25150,13 +25229,16 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
   const agreementFragment = captureAgreementReceiptFragment(
     readStringProperty(row, "capture_agreement_json") ?? null,
   );
+  const trajectoryFragment = trajectoryAutoOpenReceiptFragment(
+    readStringProperty(row, "trajectory_evidence_json") ?? null,
+  );
   if (
     receiptVersion === "floorplan-navigation-receipt-v1" &&
     floorplanRevisionId && planHash && /^[a-f0-9]{64}$/.test(planHash) &&
     collisionAssetId && collisionSha256 && /^[a-f0-9]{64}$/.test(collisionSha256) &&
     currentCollisionSha256 === collisionSha256 &&
     collisionIntegrityStatus === "verified" && collisionDeletedAt === null &&
-    agreementFragment !== "invalid"
+    agreementFragment !== "invalid" && trajectoryFragment !== "invalid"
   ) {
     return {
       schemaVersion: "reviewed-floorplan-navigation-receipt-v1",
@@ -25165,6 +25247,7 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
       collisionAssetId,
       collisionSha256,
       ...agreementFragment,
+      ...trajectoryFragment,
     };
   }
   return {
@@ -25178,6 +25261,7 @@ function floorplanNavigationReceipt(row: unknown): Record<string, unknown> | nul
     collisionIntegrityStatus: collisionIntegrityStatus ?? null,
     collisionDeleted: collisionDeletedAt !== null,
     captureAgreementInvalid: agreementFragment === "invalid",
+    trajectoryAutoOpenInvalid: trajectoryFragment === "invalid",
   };
 }
 
