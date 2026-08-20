@@ -16358,6 +16358,36 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (Object.keys(navigationClearanceViolations).length) {
     return unprocessable(context, navigationClearanceViolations);
   }
+  // Wayfinder exposure gate (#34): walkable space opened by machine trajectory
+  // evidence is honest at the credential-gated tier, but public exposure is a
+  // human-attested claim. Ratification is the existing correction-draft lane —
+  // classify the auto-opened openings (Mark doorway) and re-approve, which
+  // re-cooks the map as operator-attested and clears this gate naturally.
+  if (parsed.data.accessPolicy === "public" || parsed.data.accessPolicy === "unlisted") {
+    const machineOpened = await trajectoryAutoOpenedOpeningCount(
+      context.env.DB,
+      auth.organisationId,
+      project.id,
+      approved.id,
+    );
+    if (machineOpened === null) {
+      return conflict(
+        context,
+        "Publication blocked: the approved walking map's trajectory auto-open evidence is unreadable. Re-review the floor plan to freeze a valid revision before public exposure.",
+      );
+    }
+    if (machineOpened > 0) {
+      return unprocessable(context, {
+        accessPolicy: [
+          `Public exposure requires operator-ratified structure: ${machineOpened} ` +
+          `opening(s) in the approved walking map were opened by machine trajectory ` +
+          `evidence. Publish with token or customer-authenticated access, or open a ` +
+          `structure correction draft, classify the auto-opened openings as doorways, ` +
+          `and re-approve to make the walking map operator-attested.`,
+        ],
+      });
+    }
+  }
   if (approvedPolicy.policy.hosting === "managed-required") {
     if (!(await projectHasActiveManagedHosting(context.env.DB, auth.organisationId, project.id))) {
       return conflict(
@@ -22647,6 +22677,30 @@ async function measurementPolicyBlockReason(
     return "Professional certification requires a controlled-measurement workflow policy";
   }
   return null;
+}
+
+// Wayfinder (#34): how many openings in the version's approved walking map
+// were opened by machine trajectory evidence. 0 = fully operator-attested
+// (or no walking map / feature off). null = a frozen blob exists but is
+// unreadable — callers must FAIL CLOSED. Reads the same latest-approved
+// revision the navigation authoring receipt is built from.
+async function trajectoryAutoOpenedOpeningCount(
+  database: D1Database,
+  organisationId: string,
+  projectId: string,
+  versionId: string,
+): Promise<number | null> {
+  const revision = await database.prepare(`
+    SELECT trajectory_evidence_json FROM floorplan_revisions
+    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
+      AND status = 'approved'
+    ORDER BY revision_number DESC, created_at DESC LIMIT 1
+  `).bind(organisationId, projectId, versionId)
+    .first<{ trajectory_evidence_json: string | null }>();
+  const frozen = parseFrozenTrajectoryAutoOpen(revision?.trajectory_evidence_json ?? null);
+  if (frozen === undefined) return 0;
+  if (frozen === null) return null;
+  return frozen.qualifiedOpenings.length;
 }
 
 async function sceneVersionUsesOperatorAttestation(
