@@ -663,6 +663,7 @@ type JobLeaseRow = {
   semantic_config_json: string | null;
   floorplan_extraction_id: string | null;
   floorplan_config_json: string | null;
+  floorplan_source_evidence_json: string | null;
   navigation_build_id: string | null;
   navigation_build_config_json: string | null;
 };
@@ -10261,6 +10262,76 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
       ],
     });
   }
+  // Wayfinder (#30): a pinned scanner trajectory is optional evidence, but
+  // once pinned it is held to the same immutable bar as the point cloud —
+  // verified integrity, frozen sha256, and the capture's own version.
+  let trajectoryEvidencePin: {
+    assetId: string;
+    fileName: string;
+    sourceFormat: string;
+    sizeBytes: number;
+    sha256: string;
+  } | null = null;
+  if (parsed.data.trajectoryAssetId) {
+    const trajectoryAsset = await context.env.DB.prepare(`
+      SELECT id, version_id, kind, format, integrity_status, file_name, size_bytes, sha256
+      FROM assets
+      WHERE id = ? AND project_id = ? AND organisation_id = ? AND deleted_at IS NULL
+    `).bind(
+      parsed.data.trajectoryAssetId,
+      project.id,
+      auth.organisationId,
+    ).first<{
+      id: string;
+      version_id: string;
+      kind: string;
+      format: string;
+      integrity_status: string;
+      file_name: string;
+      size_bytes: number;
+      sha256: string | null;
+    }>();
+    if (!trajectoryAsset) return notFound(context, "Scanner trajectory asset not found");
+    if (trajectoryAsset.version_id !== version.id) {
+      return unprocessable(context, {
+        trajectoryAssetId: ["Scanner trajectory does not belong to the selected version"],
+      });
+    }
+    const trajectoryFormat = trajectoryAsset.format.toLowerCase();
+    if (trajectoryAsset.kind !== "source" || !["las", "laz"].includes(trajectoryFormat)) {
+      return unprocessable(context, {
+        trajectoryAssetId: [
+          "Scanner trajectory evidence requires a LAS or LAZ source asset",
+        ],
+      });
+    }
+    if (trajectoryAsset.integrity_status !== "verified") {
+      return conflict(
+        context,
+        "Scanner trajectory asset has not passed immutable integrity verification",
+      );
+    }
+    if (!trajectoryAsset.sha256 || !/^[a-f0-9]{64}$/i.test(trajectoryAsset.sha256)) {
+      return conflict(
+        context,
+        "Scanner trajectory asset is missing the immutable SHA-256 required as traversal evidence",
+      );
+    }
+    if (trajectoryAsset.size_bytes > 512 * 1024 * 1024) {
+      return unprocessable(context, {
+        trajectoryAssetId: [
+          "This worker profile accepts scanner trajectories up to 512 MiB",
+        ],
+      });
+    }
+    trajectoryEvidencePin = {
+      assetId: trajectoryAsset.id,
+      fileName: trajectoryAsset.file_name,
+      sourceFormat: trajectoryFormat,
+      sizeBytes: trajectoryAsset.size_bytes,
+      sha256: trajectoryAsset.sha256,
+    };
+  }
   const extractionId = crypto.randomUUID();
   const jobId = crypto.randomUUID();
   const normalizer =
@@ -10293,6 +10364,7 @@ app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (contex
     sourceUpAxis: parsed.data.sourceUpAxis,
     registrationEvidence: parsed.data.registrationEvidence,
     normalizer,
+    ...(trajectoryEvidencePin ? { trajectory: trajectoryEvidencePin } : {}),
   };
   await context.env.DB.batch([
     context.env.DB.prepare(`
@@ -13729,6 +13801,7 @@ app.post("/api/worker/jobs/lease", async (context) => {
       se.parameters_json AS semantic_config_json,
       fe.id AS floorplan_extraction_id,
       fe.parameters_json AS floorplan_config_json,
+      fe.source_evidence_json AS floorplan_source_evidence_json,
       nb.id AS navigation_build_id,
       nb.parameters_json AS navigation_build_config_json
     FROM processing_jobs j
@@ -13860,6 +13933,20 @@ app.post("/api/worker/jobs/lease", async (context) => {
         ? {
           floorplanExtractionId: job.floorplan_extraction_id,
           floorplanConfig: parseStoredObject(job.floorplan_config_json ?? "{}"),
+          ...(() => {
+            // The Wayfinder trajectory pin travels with the lease so the
+            // container knows to fetch inputs/trajectory and which bytes to
+            // expect; absence simply disables trajectory evidence.
+            const sourceEvidence = parseStoredObject(
+              job.floorplan_source_evidence_json ?? "{}",
+            );
+            const trajectory = sourceEvidence && typeof sourceEvidence === "object"
+              ? Reflect.get(sourceEvidence, "trajectory")
+              : null;
+            return trajectory && typeof trajectory === "object"
+              ? { floorplanTrajectory: trajectory }
+              : {};
+          })(),
         }
         : {}),
       ...(job.navigation_build_id
@@ -13930,6 +14017,41 @@ app.get("/api/worker/jobs/:jobId/inputs/:role", async (context) => {
     response.headers.set(
       "Content-Disposition",
       `attachment; filename="${captureAsset.file_name.replaceAll("\"", "")}"`,
+    );
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
+  }
+  // Wayfinder (#30): the scanner trajectory pinned for a floor-plan
+  // extraction is served under the same job lease as the point cloud. The
+  // pin lives in the extraction run's frozen source evidence, so the
+  // container can only ever fetch the exact asset the operator pinned.
+  if (role === "trajectory") {
+    const extraction = await context.env.DB.prepare(`
+      SELECT source_evidence_json FROM floorplan_extraction_runs
+      WHERE job_id = ? AND organisation_id = ? AND project_id = ?
+    `).bind(lease.id, lease.organisation_id, lease.project_id)
+      .first<{ source_evidence_json: string | null }>();
+    const sourceEvidence = parseStoredObject(extraction?.source_evidence_json ?? "{}");
+    const trajectory = sourceEvidence && typeof sourceEvidence === "object"
+      ? Reflect.get(sourceEvidence, "trajectory")
+      : null;
+    const trajectoryAssetId = trajectory && typeof trajectory === "object"
+      ? Reflect.get(trajectory, "assetId")
+      : null;
+    if (typeof trajectoryAssetId !== "string" || !trajectoryAssetId) {
+      return notFound(context, "This job has no pinned scanner trajectory input");
+    }
+    const trajectoryAsset = await context.env.DB.prepare(`
+      SELECT * FROM assets
+      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+        AND integrity_status = 'verified' AND deleted_at IS NULL
+    `).bind(trajectoryAssetId, lease.organisation_id, lease.project_id, lease.version_id)
+      .first<AssetRow>();
+    if (!trajectoryAsset) return notFound(context, "Pinned scanner trajectory asset not found");
+    const response = await serveR2Object(context, trajectoryAsset.object_key);
+    response.headers.set(
+      "Content-Disposition",
+      `attachment; filename="${trajectoryAsset.file_name.replaceAll("\"", "")}"`,
     );
     response.headers.set("Cache-Control", "private, no-store");
     return response;
@@ -15166,7 +15288,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     SELECT j.id, j.organisation_id, j.project_id, j.version_id,
       j.input_asset_id, j.state, a.size_bytes AS input_size_bytes,
       a.format AS input_format, r.id AS extraction_id, r.parameters_json,
-      r.normalizer, r.created_by
+      r.source_evidence_json, r.normalizer, r.created_by
     FROM processing_jobs j
     JOIN floorplan_extraction_runs r ON r.job_id = j.id
     JOIN assets a ON a.id = j.input_asset_id
@@ -15189,6 +15311,7 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
     input_format: string;
     extraction_id: string;
     parameters_json: string;
+    source_evidence_json: string | null;
     normalizer: string;
     created_by: string;
   }>();
@@ -15280,6 +15403,43 @@ app.post("/api/worker/jobs/:jobId/floorplan-extraction-complete", async (context
         report: [`Floor-plan report parameter ${property} differs from the queued job`],
       });
     }
+  }
+  // Wayfinder (#31), fail closed both ways: a pinned scanner trajectory MUST
+  // come back as trajectory evidence over those exact bytes (a processor that
+  // silently skipped the analysis would otherwise pass), and evidence may
+  // never appear for a trajectory the operator did not pin.
+  const storedSourceEvidence = parseStoredObject(job.source_evidence_json ?? "{}");
+  const pinnedTrajectory = storedSourceEvidence && typeof storedSourceEvidence === "object"
+    ? Reflect.get(storedSourceEvidence, "trajectory")
+    : null;
+  const reportedTrajectoryEvidence = parsed.data.report.trajectoryEvidence;
+  if (pinnedTrajectory && typeof pinnedTrajectory === "object") {
+    if (!reportedTrajectoryEvidence) {
+      return validationError(context, {
+        report: [
+          "A scanner trajectory is pinned for this extraction but the report carries no trajectory evidence",
+        ],
+      });
+    }
+    for (const [property, expected] of [
+      ["assetId", Reflect.get(pinnedTrajectory, "assetId")],
+      ["sha256", Reflect.get(pinnedTrajectory, "sha256")],
+      ["sourceFormat", Reflect.get(pinnedTrajectory, "sourceFormat")],
+    ] as const) {
+      if (Reflect.get(reportedTrajectoryEvidence.trajectory, property) !== expected) {
+        return validationError(context, {
+          report: [
+            `Trajectory evidence ${property} does not match the pinned scanner trajectory`,
+          ],
+        });
+      }
+    }
+  } else if (reportedTrajectoryEvidence) {
+    return validationError(context, {
+      report: [
+        "The report carries trajectory evidence but this extraction pinned no scanner trajectory",
+      ],
+    });
   }
   const maximumSamplePoints = Reflect.get(serverParameters as object, "maximumSamplePoints");
   const sampledPointCount = Reflect.get(parsed.data.report.source, "sampledPointCount");
@@ -18295,6 +18455,34 @@ async function queueAutomaticFloorplanExtraction(
     maximumSamplePoints: 2_000_000,
     elevationHintM: null,
   };
+  // Wayfinder (#30): the automatic lane pins a scanner trajectory only when
+  // the version carries exactly one unambiguous candidate — a verified LAS/LAZ
+  // source asset whose name says it is a trajectory (the Trion exports
+  // `*.trajectory.las`). Anything less certain stays unpinned; an operator can
+  // still pin explicitly through the Studio extraction dialog.
+  const trajectoryCandidates = await context.env.DB.prepare(`
+    SELECT id, file_name, format, size_bytes, sha256 FROM assets
+    WHERE version_id = ? AND project_id = ? AND organisation_id = ?
+      AND kind = 'source' AND lower(format) IN ('las', 'laz')
+      AND integrity_status = 'verified' AND deleted_at IS NULL
+      AND lower(file_name) LIKE '%trajectory%'
+      AND sha256 IS NOT NULL AND size_bytes <= 536870912
+    ORDER BY file_name
+  `).bind(input.versionId, input.projectId, input.organisationId)
+    .all<{ id: string; file_name: string; format: string; size_bytes: number; sha256: string }>();
+  const soleTrajectoryCandidate = trajectoryCandidates.results.length === 1
+    ? trajectoryCandidates.results[0]
+    : undefined;
+  const trajectoryPin = soleTrajectoryCandidate &&
+      /^[a-f0-9]{64}$/i.test(soleTrajectoryCandidate.sha256)
+    ? {
+      assetId: soleTrajectoryCandidate.id,
+      fileName: soleTrajectoryCandidate.file_name,
+      sourceFormat: soleTrajectoryCandidate.format.toLowerCase(),
+      sizeBytes: soleTrajectoryCandidate.size_bytes,
+      sha256: soleTrajectoryCandidate.sha256,
+    }
+    : null;
   const sourceEvidence = {
     assetId: input.assetId,
     fileName: input.fileName,
@@ -18307,11 +18495,13 @@ async function queueAutomaticFloorplanExtraction(
     registrationEvidence: parameters.registrationEvidence,
     normalizer,
     automaticPipeline: true,
+    ...(trajectoryPin ? { trajectory: trajectoryPin } : {}),
   };
   const requestHash = await sha256Hex(JSON.stringify({
     versionId: input.versionId,
     inputAssetId: input.assetId,
     ...parameters,
+    ...(trajectoryPin ? { trajectoryAssetId: trajectoryPin.assetId } : {}),
   }));
   await context.env.DB.batch([
     context.env.DB.prepare(`

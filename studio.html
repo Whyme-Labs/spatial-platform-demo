@@ -989,6 +989,8 @@
       <p>The processor normalizes a verified metric point cloud and produces an indicative proposal. PLY is read natively; E57, LAS, LAZ, and PTS are normalized through PDAL with recorded provenance.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Registered metric point cloud</span><select id="floorplanInputAsset" name="inputAssetId" required></select></label>
+        <label class="full"><span>Scanner pose trajectory (optional)</span><select id="floorplanTrajectoryAsset" name="trajectoryAssetId"></select></label>
+        <p class="field-note full">A registered trajectory (for example the Trion's <code>.trajectory.las</code>) becomes traversal evidence: rooms the scanner physically visited are recorded on the proposal so genuine doorways can qualify for automatic walkability.</p>
         <label class="full"><span>Compatibility note</span><textarea name="registrationEvidence" minlength="10" maxlength="2000" required placeholder="Identify the scan/export and how you verified that its scale and orientation match this scene."></textarea></label>
       </div>
       <details class="form-advanced-settings">

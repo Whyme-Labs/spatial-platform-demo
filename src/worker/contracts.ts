@@ -2071,6 +2071,10 @@ export const floorplanExtractionSchema = z.object({
   clientOperationId: z.string().uuid(),
   versionId: z.string().uuid(),
   inputAssetId: z.string().uuid(),
+  // Optional Wayfinder input (#30): the scanner's registered pose trajectory
+  // (LAS/LAZ, same frame as the point cloud). Absent = no machine
+  // traversability evidence; extraction behaves exactly as before.
+  trajectoryAssetId: z.string().uuid().nullable().optional(),
   coordinateAssurance: z.literal("registered_y_up_metric_frame"),
   sourceUpAxis: z.enum(["y", "z"]).default("y"),
   registrationEvidence: z.string().trim().min(10).max(2000),
@@ -2233,6 +2237,61 @@ export const captureAgreementResolutionSchema = z.object({
 
 export type CaptureAgreementResolution = z.infer<typeof captureAgreementResolutionSchema>;
 
+// Wayfinder trajectory evidence (#31): where the scanner's registered pose
+// path went, banded per storey and tested against the proposal's room
+// polygons. The pose path is SLAM ego-motion, never point returns, so a
+// mirror's phantom room can never appear visited and glass never lets the
+// rig through — visits are machine-grade traversability evidence. The
+// trajectory pin (asset id + sha256) travels inside the evidence so any
+// receipt built from it can stand alone.
+export const trajectoryEvidenceSchema = z.object({
+  schemaVersion: z.literal("trajectory-evidence-v1"),
+  trajectory: z.object({
+    assetId: z.string().uuid(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    sourceFormat: z.enum(["las", "laz"]),
+    vertexCount: z.number().int().positive(),
+    sampledPointCount: z.number().int().positive(),
+    samplingStride: z.number().int().positive(),
+  }),
+  parameters: z.object({
+    minimumVisitedSamples: z.number().int().min(1).max(10_000),
+    carryHeightBandM: z.object({
+      minimum: z.number().min(0).max(10),
+      maximum: z.number().min(0).max(10),
+    }),
+  }),
+  sampleCount: z.number().int().positive(),
+  unassignedSampleCount: z.number().int().nonnegative(),
+  levels: z.array(z.object({
+    levelId: z.string().min(1).max(120),
+    elevationM: boundedMetricSchema,
+    sampleCount: z.number().int().nonnegative(),
+    rooms: z.array(z.object({
+      roomId: z.string().min(1).max(120),
+      sampleCount: z.number().int().nonnegative(),
+      visited: z.boolean(),
+    })).max(250),
+  })).min(1).max(100),
+  visitedRoomIds: z.array(z.string().min(1).max(250)).max(25_000),
+}).superRefine((evidence, context) => {
+  const derived = evidence.levels
+    .flatMap((level) => level.rooms
+      .filter((room) => room.visited)
+      .map((room) => `${level.levelId}/${room.roomId}`))
+    .sort();
+  if (derived.length !== evidence.visitedRoomIds.length ||
+    derived.some((id, index) => id !== evidence.visitedRoomIds[index])) {
+    context.addIssue({
+      code: "custom",
+      path: ["visitedRoomIds"],
+      message: "visitedRoomIds must be exactly the sorted visited rooms of the level evidence",
+    });
+  }
+});
+
+export type TrajectoryEvidence = z.infer<typeof trajectoryEvidenceSchema>;
+
 export const floorplanProposalReportSchema = z.object({
     schemaVersion: z.literal("1.0.0"),
     method: z.enum([
@@ -2261,6 +2320,7 @@ export const floorplanProposalReportSchema = z.object({
     walls: z.array(floorplanWallProposalSchema).min(1).max(5_000),
     openings: z.array(floorplanOpeningProposalSchema).max(2_000),
     captureAgreement: floorplanCaptureAgreementSchema.optional(),
+    trajectoryEvidence: trajectoryEvidenceSchema.optional(),
     humanReviewRequired: z.literal(true),
     limitations: z.array(z.string().trim().min(10).max(1000)).min(1).max(20),
   }).superRefine((report, context) => {

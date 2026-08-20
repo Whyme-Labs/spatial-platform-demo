@@ -2630,7 +2630,7 @@ function semanticCellSortKey(component) {
     .sort()[0];
 }
 
-function semanticRound(value) {
+export function semanticRound(value) {
   const rounded = Math.round(value * 1_000_000) / 1_000_000;
   return Object.is(rounded, -0) ? 0 : rounded;
 }
@@ -2985,7 +2985,7 @@ export function processorFailure(error) {
   };
 }
 
-function parsePlyDescriptor(bytes) {
+export function parsePlyDescriptor(bytes) {
   const marker = Buffer.from("end_header");
   const markerOffset = bytes.indexOf(marker);
   if (markerOffset < 0 || markerOffset > maximumHeaderBytes) {
@@ -3077,7 +3077,7 @@ function parsePlyDescriptor(bytes) {
   };
 }
 
-function parseAsciiVertices(bytes, descriptor, consume) {
+export function parseAsciiVertices(bytes, descriptor, consume) {
   const body = bytes.subarray(descriptor.dataOffset).toString("utf8");
   const lines = body.split(/\r?\n/);
   let vertexIndex = 0;
@@ -3105,7 +3105,7 @@ function parseAsciiVertices(bytes, descriptor, consume) {
   }
 }
 
-function parseBinaryVertices(bytes, descriptor, consume) {
+export function parseBinaryVertices(bytes, descriptor, consume) {
   const requiredBytes = descriptor.dataOffset + descriptor.vertexCount * descriptor.recordBytes;
   if (bytes.length < requiredBytes) {
     throw new ProcessingAgentError(
