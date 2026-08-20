@@ -90,8 +90,40 @@ jobs:
 
       - name: Verify every active public release manifest
         run: |
-          slugs=$(node -e 'const r=JSON.parse(require("node:fs").readFileSync(process.env.RUNNER_TEMP + "/watch-slugs.json","utf8"));console.log(r[0].results.map((row)=>row.slug).join("\n"))')
-          test -n "$slugs"
+          # A malformed enumeration must fail loudly — a broken query reading
+          # as "nothing to verify" would blind the watch — but a well-formed
+          # EMPTY result is a legitimate state: every release is unpublished,
+          # revoked, or access-gated, and gated releases cannot be probed
+          # without their credential. Zero public releases is therefore green,
+          # not a failure (this fired as a false alarm when the operator
+          # revoked the last public demos; see issue #27).
+          slugs=$(node -e '
+            const raw = require("node:fs").readFileSync(
+              process.env.RUNNER_TEMP + "/watch-slugs.json", "utf8");
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch (error) {
+              console.error("watch-slugs.json is not valid JSON: " + error.message);
+              process.exit(1);
+            }
+            const first = Array.isArray(parsed) ? parsed[0] : null;
+            if (!first || first.success !== true || !Array.isArray(first.results)) {
+              console.error(
+                "watch-slugs.json is not a successful wrangler d1 result envelope");
+              process.exit(1);
+            }
+            const slugs = first.results.map((row) => row && row.slug);
+            if (slugs.some((slug) => typeof slug !== "string" || slug === "")) {
+              console.error("public-release enumeration returned a row without a slug");
+              process.exit(1);
+            }
+            console.log(slugs.join("\n"));
+          ')
+          if [ -z "$slugs" ]; then
+            echo "::notice::No active public releases — nothing to verify this run."
+            exit 0
+          fi
           echo "Verifying public releases:"
           echo "$slugs"
           failed=0
