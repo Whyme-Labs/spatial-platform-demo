@@ -142,6 +142,18 @@ structure correction draft, classify the auto-opened openings as doorways,
 and re-approve — the recook is operator-attested, the new revision freezes
 no machine qualification, and the gate clears.
 
+### Studio surfacing (issue #35)
+
+Approved revision cards in the Structure workflow render two lines from
+frozen data only: a machine-attestation line (trajectory digest, opened
+openings with their room pairs, demoted walls with pass-through counts, and
+the ratification path), and a sealed-cost line counting the unresolved
+openings the conservative default keeps closed — the visibility whose absence
+let noisy proposals be approved untouched. An unreadable frozen blob is
+surfaced, never hidden. The walkable-area (m²) shadow-cook diff described in
+the issue is deliberately not built; the opening counts deliver the operator
+insight without a second cook.
+
 ## Derivation and review boundary
 
 The first production extractor uses bounded metric occupancy:

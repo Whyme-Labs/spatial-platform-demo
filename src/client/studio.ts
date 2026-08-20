@@ -1,4 +1,5 @@
 import "@fontsource-variable/manrope";
+import { wayfinderRevisionSummaryLines } from "./wayfinder-summary";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import {
@@ -968,6 +969,7 @@ type SpatialWorkspace = {
     source_proposal_hash: string;
     review_note: string;
     capture_agreement_json?: string | null;
+    trajectory_evidence_json?: string | null;
     approved_at: string;
     created_at: string;
   }>;
@@ -8657,6 +8659,11 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
         `Approved ${parseTimestamp(revision.approved_at).toLocaleString()} · plan SHA-256 ${revision.plan_hash.slice(0, 16)}…`,
       ),
     );
+    if (revision.status === "approved") {
+      for (const line of wayfinderRevisionSummaryLines(revision)) {
+        card.append(element("small", line.tone === "machine" ? "field-note" : "muted-copy", line.text));
+      }
+    }
     const exportsForRevision = (spatial.floorplanExports ?? []).filter(
       (item) => item.revision_id === revision.id,
     );
