@@ -240,7 +240,10 @@ Implemented:
   ratification through a structure correction draft; short clutter walls the
   trajectory provably passed through below their claimed height, wholly
   inside a visited room and untouched by human classification, demote out of
-  the cook under the same frozen evidence and the same gate
+  the cook under the same frozen evidence and the same gate; Studio revision
+  cards surface the machine-attested changes with their ratification path and
+  a sealed-cost line counting the unresolved openings the conservative
+  default keeps closed
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1, optionally bound to one container structure
