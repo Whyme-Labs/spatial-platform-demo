@@ -1059,9 +1059,15 @@ async function start(): Promise<void> {
       }
     } else if (collisionDrivenMovement && physicalNavigationRuntime) {
       authoredTraversalOverlay?.update(null);
+      // Detour owns where Walk may go; Rapier owns how the capsule gets there.
+      // Reversing those authorities lets a valid collision floor extend past
+      // the reviewed navmesh and eventually drop the walker into shell void.
+      const navigationConstrained = movementMode === "walk" && detourNavigationRuntime
+        ? detourNavigationRuntime.moveCamera(origin, desired)
+        : desired;
       const resolved = physicalNavigationRuntime.moveCamera(
         origin,
-        desired,
+        navigationConstrained ?? origin,
         deltaSeconds,
       );
       noteMovementResistance(origin, desired, resolved, deltaSeconds);
@@ -2029,7 +2035,9 @@ function noteMovementResistance(
   // supporting floor once the capsule is resting. Keep that first reviewed
   // blocker for this uninterrupted resistance episode so the delayed hint
   // still names the geometry that caused it.
-  blockedMovementBarrier ??= physicalNavigationRuntime?.lastBlockedBarrier() ?? null;
+  blockedMovementBarrier ??= physicalNavigationRuntime?.lastBlockedBarrier() ??
+    physicalNavigationRuntime?.blockedStructuralBarrierNear(origin, desired) ??
+    null;
   blockedMovementSeconds += deltaSeconds;
   if (blockedMovementSeconds >= BLOCKED_MOVEMENT_HINT_SECONDS && !blockedMovementHintShown) {
     blockedMovementHintShown = true;

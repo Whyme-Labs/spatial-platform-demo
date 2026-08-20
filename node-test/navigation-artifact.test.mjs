@@ -327,6 +327,12 @@ describe("Unreal-equivalent navigation artifact", () => {
     assert.equal(artifact.collisionSemantics.structuralShellComplete, true);
     assert.equal(artifact.structuralGeometry.barrierSegments.length, 1);
     assert.deepEqual(artifact.collisionSemantics.ignoredGroups, ["FURNITURE", "TRIGGER"]);
+    const navXs = artifact.navMesh.vertices.map((vertex) => vertex[0]);
+    const navZs = artifact.navMesh.vertices.map((vertex) => vertex[2]);
+    const walkRecoveryBounds = [
+      [Math.min(...navXs) - profile.radius, -1.8, Math.min(...navZs) - profile.radius],
+      [Math.max(...navXs) + profile.radius, 1.8, Math.max(...navZs) + profile.radius],
+    ];
     assert.deepEqual(artifact.movementProfiles, {
       defaultMode: "walk",
       supportedModes: ["walk", "fly", "noclip"],
@@ -344,7 +350,7 @@ describe("Unreal-equivalent navigation artifact", () => {
         },
         speedUnitsPerSecond: 1.6,
         boostMultiplier: 3,
-        recoveryBounds: [[-0.22, -1.8, -0.22], [6.22, 1.8, 4.22]],
+        recoveryBounds: walkRecoveryBounds,
       },
       fly: {
         shape: "sphere",
