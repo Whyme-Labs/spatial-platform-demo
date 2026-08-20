@@ -567,6 +567,26 @@ lane. Until that corpus exists, the horse sample proves FJD ingestion and RAD
 generation plus correct fail-closed behavior; it does not prove FJD walking
 reconstruction.
 
+## FJD room-capture archive receipt
+
+Last measured: 2026-08-20
+
+The local source archive used for the private FJD room investigation is
+`/Users/sohweimeng/Downloads/2026-08-12-17-14-01.fjdslamp2.tgz`.
+It is 609,755,692 bytes with SHA-256
+`3c9b4452d4470bb28170a09816ec52ef67671f9d129ffb2cc72f80619d3dec6e` and
+contains one top-level `2026-08-12-17-14-01.fjdslamp2` entry. Reproduce with:
+
+```sh
+shasum -a 256 /Users/sohweimeng/Downloads/2026-08-12-17-14-01.fjdslamp2.tgz
+stat -f '%N %z bytes' /Users/sohweimeng/Downloads/2026-08-12-17-14-01.fjdslamp2.tgz
+tar -tzf /Users/sohweimeng/Downloads/2026-08-12-17-14-01.fjdslamp2.tgz
+```
+
+This receipt establishes source-byte identity only. It does not grant
+commercial use, self-hosting, or redistribution rights and must not be used to
+bypass the capture-bundle rights gate.
+
 ## FJD production private-upload receipt
 
 Last measured: 2026-08-03

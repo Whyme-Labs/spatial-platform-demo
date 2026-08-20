@@ -600,7 +600,7 @@ describe("Spatial Studio Worker", () => {
     });
   });
 
-  it("uses the immutable paired-upload receipt for render-native marking without a manual capture manifest", async () => {
+  it("keeps an operator-attested paired upload out of render-native authoring", async () => {
     const cookie = await login();
     const membership = await env.DB.prepare(`
       SELECT organisation_id AS organisationId, user_id AS userId
@@ -638,7 +638,7 @@ describe("Spatial Studio Worker", () => {
         JSON.stringify({
           adapter: "fjd-trion",
           captureJourney: {
-            schemaVersion: "paired-capture-journey-v1",
+            schemaVersion: "paired-capture-journey-v2",
             id: journeyId,
             captureAdapter: "fjd-trion",
             primaryAssetId: visualAssetId,
@@ -647,6 +647,12 @@ describe("Spatial Studio Worker", () => {
             sourceCoordinateFrameId: `capture-journey:${journeyId}`,
             confirmedBy: membership!.userId,
             confirmedAt: new Date().toISOString(),
+            qualification: {
+              method: "operator-attestation-v1",
+              status: "verified",
+              confirmedBy: membership!.userId,
+              confirmedAt: new Date().toISOString(),
+            },
           },
         }),
         membership!.userId,
@@ -686,34 +692,10 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/projects/${projectId}/spatial/authoring-renderable?versionId=${versionId}`,
       { headers: { cookie } },
     );
-    expect(response.status).toBe(200);
-    const body = await response.json<{
-      renderable: {
-        viewer: {
-          sourceToWorld: unknown;
-          captureRegistration: Record<string, unknown>;
-        };
-      };
-    }>();
-    expect(body.renderable.viewer.sourceToWorld).toEqual({
-      sourceUpAxis: "Y",
-      worldUnit: "metres",
-      metresPerSourceUnit: 1,
-      yawDegrees: 0,
-      translationMetres: [0, 0, 0],
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("no verified paired-upload frame receipt"),
     });
-    expect(body.renderable.viewer.captureRegistration).toMatchObject({
-      source: "paired-capture-journey",
-      journeyId,
-      primaryAssetId: visualAssetId,
-      primarySha256: visualSha256,
-      evidenceAssetId: geometryAssetId,
-      evidenceSha256: geometrySha256,
-    });
-    expect(body.renderable.viewer.captureRegistration.transformSha256)
-      .toMatch(/^[a-f0-9]{64}$/);
-    expect(body.renderable.viewer.captureRegistration.receiptSha256)
-      .toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("rejects unauthenticated tenant APIs", async () => {

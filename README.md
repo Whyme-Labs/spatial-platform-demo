@@ -73,15 +73,18 @@ registration check, and publication freezes the verified transform and receipt
 with the walking artifacts rather than trusting a separately entered visual
 transform.
 
-The intake also requires one narrow provenance assertion: both exports must be
-direct outputs of the same capture and must retain the same registered
-right-handed Y-up metre frame. The Worker binds that declaration to the exact
-visual and geometry asset IDs, then derives and hashes the identity
-capture-to-scene transform after both assets pass integrity verification. This
-receipt unlocks private render-native inspection without forcing the operator
-through the older legal capture-manifest form or asking them to type scale,
-yaw, or translation values. Files transformed independently must use a
-measured registration instead.
+The intake can preserve one narrow provenance assertion: both exports are
+direct outputs of the same capture. That operator statement is not registration
+evidence and never derives an identity transform, queues walking geometry, or
+qualifies a release. Automatic paired PLY qualification must measure the same
+frame metadata, units, up axis, and overlapping bounds from both files. Every
+other pairing — including a Gaussian PLY with LAS/E57/LAZ/PTS geometry — stays
+provenance-only until a reviewed capture manifest freezes the numeric
+source-to-world transform against exact asset hashes. Private version preview
+is the review surface while that evidence is missing. Raw capture, vendor
+project, pose, calibration, trajectory, and semantic source evidence can attach
+to the approved visual version without creating a new visual revision or
+changing its lifecycle status.
 
 Hardware qualification is currently **FJD first** because FJD is the first
 capture device in the product rollout. The repository pins official P2 and V4e

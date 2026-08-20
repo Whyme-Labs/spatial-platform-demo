@@ -226,15 +226,15 @@ describe("vendor-neutral capture bundle", () => {
         operatingSystem: "Windows",
       },
       coordinateFrame: {
-        id: "project-local-y-up",
+        id: "project-local-z-up",
         units: "metres",
-        axisConvention: "right-handed-y-up",
+        axisConvention: "right-handed-z-up",
         epsg: null,
         registrationMethod: "The operator preserved the scanner-local metric frame without an external control network.",
         sceneRegistration: {
           evidenceAssetId: pointCloudId,
           sourceToWorld: {
-            sourceUpAxis: "Y",
+            sourceUpAxis: "Z",
             worldUnit: "metres",
             metresPerSourceUnit: 1,
             yawDegrees: 0,
@@ -422,7 +422,7 @@ describe("vendor-neutral capture bundle", () => {
         evidenceAssetId: pointCloudId,
         transformSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
         sourceToWorld: {
-          sourceUpAxis: "Y",
+          sourceUpAxis: "Z",
           worldUnit: "metres",
           metresPerSourceUnit: 1,
           yawDegrees: 0,

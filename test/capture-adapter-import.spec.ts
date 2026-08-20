@@ -310,6 +310,101 @@ describe("capture adapter evidence ingestion", () => {
     });
   });
 
+  it("attaches raw capture evidence without changing a published visual version", async () => {
+    const cookie = await login();
+    const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        name: `Raw evidence ${crypto.randomUUID().slice(0, 8)}`,
+        captureOrigin: "fjd",
+        assetProducer: "fjd-trion",
+        deliveryTemplate: "Property showcase",
+      }),
+    });
+    expect(projectResponse.status).toBe(201);
+    const { project } = await projectResponse.json<{ project: { id: string } }>();
+    const visualResponse = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        fileName: "room.rad",
+        sizeBytes: 16,
+        format: "rad",
+        purpose: "web_scene",
+        mimeType: "application/octet-stream",
+      }),
+    });
+    expect(visualResponse.status).toBe(201);
+    const visual = await visualResponse.json<{ upload: { versionId: string } }>();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE scene_versions SET status = 'PUBLISHED' WHERE id = ?")
+        .bind(visual.upload.versionId),
+      env.DB.prepare("UPDATE projects SET status = 'PUBLISHED' WHERE id = ?")
+        .bind(project.id),
+    ]);
+
+    const rawBytes = new TextEncoder().encode("raw-fjd-evidence");
+    const created = await exports.default.fetch(`${origin}/api/projects/${project.id}/uploads`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        targetVersionId: visual.upload.versionId,
+        fileName: "room.fjdslam",
+        sizeBytes: rawBytes.byteLength,
+        format: "fjdslam",
+        purpose: "raw_capture",
+        mimeType: "application/octet-stream",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const { upload } = await created.json<{
+      upload: { id: string; versionId: string; assetId: string };
+    }>();
+    expect(upload.versionId).toBe(visual.upload.versionId);
+    const uploadedPart = await exports.default.fetch(
+      `${origin}/api/uploads/${upload.id}/parts/1`,
+      {
+        method: "PUT",
+        headers: { cookie, "content-length": String(rawBytes.byteLength) },
+        body: rawBytes,
+      },
+    );
+    expect(uploadedPart.status).toBe(200);
+    const { part } = await uploadedPart.json<{ part: { etag: string } }>();
+    const completed = await exports.default.fetch(`${origin}/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ parts: [{ partNumber: 1, etag: part.etag }] }),
+    });
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({
+      asset: {
+        id: upload.assetId,
+        versionId: visual.upload.versionId,
+        purpose: "raw_capture",
+        kind: "source",
+      },
+      job: { type: "asset.evidence-validate", state: "QUEUED" },
+    });
+    const statuses = await env.DB.prepare(`
+      SELECT version.status AS version_status, project.status AS project_status
+      FROM scene_versions version
+      JOIN projects project ON project.id = version.project_id
+      WHERE version.id = ?
+    `).bind(visual.upload.versionId).first<{
+      version_status: string;
+      project_status: string;
+    }>();
+    expect(statuses).toEqual({
+      version_status: "PUBLISHED",
+      project_status: "PUBLISHED",
+    });
+  });
+
   it("records an explicit source-only transition instead of silently retaining the old producer", async () => {
     const cookie = await login();
     const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {

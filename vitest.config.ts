@@ -59,6 +59,7 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "**/.git/**",
+      "**/.claude/worktrees/**",
       ".tools/**",
       "node-test/**",
       "e2e/**",

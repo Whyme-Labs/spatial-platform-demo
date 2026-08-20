@@ -38,6 +38,7 @@ import {
   assetProducerForLegacyAdapter,
   captureAdapterDisplayLabel,
   captureAdapterProfiles,
+  captureAssetPurposeCanAttachToExistingVersion,
   captureFormatsForPurpose,
   captureOriginForLegacyAdapter,
   captureOriginIds,
@@ -3738,7 +3739,7 @@ async function renderNewCaptureHelp(): Promise<void> {
   if (preflight.status === "qualified") frameConfirmation.checked = false;
   qualificationStatus.textContent = preflight.status === "qualified"
     ? "Automatic qualification available. The processor will verify the shared frame identity, metre scale, Y-up axis, and exact bounds overlap from both uploaded PLY files."
-    : "These files cannot prove their shared frame automatically. Confirm the unchanged coordinate system to use the fallback attestation.";
+    : "These files cannot prove their shared frame automatically. The fallback attestation preserves provenance only; register measured capture-to-scene evidence before building or publishing walking geometry.";
 }
 
 async function createCapture(form: FormData): Promise<void> {
@@ -3844,7 +3845,9 @@ async function createCapture(form: FormData): Promise<void> {
       progress: byId<HTMLElement>("newProjectUploadProgress"),
       error: byId("projectError"),
       closeDialog: newProjectDialog,
-      successToast: "Capture uploaded; splat, floor plan, and navigation processing started",
+      successToast: automaticQualification
+        ? "Capture uploaded; splat, floor plan, and navigation processing started"
+        : "Capture uploaded; provenance preserved. Register measured alignment before building walking geometry",
     }, {
       targetVersionId: primary.asset.versionId,
       clientOperationId: captureJourneyOperation.geometryUploadOperationId,
@@ -12812,16 +12815,16 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   if (formats.includes(prior as CaptureAssetFormat)) formatSelect.value = prior;
   const fileInput = byId<HTMLInputElement>("uploadAssetInput");
   fileInput.accept = formats.map((format) => `.${format}`).join(",");
-  const collisionTarget = purpose === "collision_mesh"
-    ? auxiliaryCollisionTargetVersion()
+  const attachmentTarget = captureAssetPurposeCanAttachToExistingVersion(purpose)
+    ? auxiliaryAssetTargetVersion()
     : null;
-  byId("uploadPurposeHelp").textContent = collisionTarget
-    ? `${capturePurposeHelp[purpose]} It will attach to v${collisionTarget.version_number}, the latest approved visual version, without replacing its immutable scene bytes.`
+  byId("uploadPurposeHelp").textContent = attachmentTarget
+    ? `${capturePurposeHelp[purpose]} It will attach to v${attachmentTarget.version_number}, the latest approved visual version, without replacing its immutable scene bytes.`
     : capturePurposeHelp[purpose];
   syncUploadPosterCameraRequirement();
 }
 
-function auxiliaryCollisionTargetVersion(): Version | null {
+function auxiliaryAssetTargetVersion(): Version | null {
   if (!state.selected) return null;
   return [...state.selected.versions]
     .sort((left, right) => right.version_number - left.version_number)
@@ -12833,6 +12836,10 @@ function auxiliaryCollisionTargetVersion(): Version | null {
         asset.integrity_status === "verified"
       )
     ) ?? null;
+}
+
+function auxiliaryCollisionTargetVersion(): Version | null {
+  return auxiliaryAssetTargetVersion();
 }
 
 function syncUploadPosterCameraRequirement(): void {
@@ -13023,11 +13030,13 @@ async function uploadAsset(
   if (!(file instanceof File)) throw new Error("Choose a capture file to upload.");
   const format = String(form.get("format") ?? "");
   const purpose = String(form.get("purpose") ?? "") as CaptureAssetPurpose;
-  const targetVersionId = options.targetVersionId ?? (purpose === "collision_mesh"
-    ? auxiliaryCollisionTargetVersion()?.id ?? null
-    : null);
-  if (purpose === "collision_mesh" && !targetVersionId) {
-    throw new Error("Approve a visual scene version before attaching collision geometry.");
+  const targetVersionId = options.targetVersionId ?? (
+    captureAssetPurposeCanAttachToExistingVersion(purpose)
+      ? auxiliaryAssetTargetVersion()?.id ?? null
+      : null
+  );
+  if (captureAssetPurposeCanAttachToExistingVersion(purpose) && !targetVersionId) {
+    throw new Error("Approve a visual scene version before attaching capture evidence or geometry.");
   }
   const posterCameraText = String(form.get("posterCamera") ?? "").trim();
   let posterCamera: unknown;
