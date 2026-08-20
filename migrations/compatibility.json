@@ -211,6 +211,9 @@
     },
     "0063_job_dispatch_exhaustion.sql": {
       "phase": "expand"
+    },
+    "0064_floorplan_trajectory_auto_open.sql": {
+      "phase": "expand"
     }
   }
 }

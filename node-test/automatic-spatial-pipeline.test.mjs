@@ -741,6 +741,57 @@ describe("automatic multi-level spatial pipeline", () => {
     assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("south")).length, 2);
     assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("north")).length, 1);
     assert.equal(config.barrierSegments.filter((barrier) => barrier.id.includes("east")).length, 1);
+
+    // Wayfinder (#32): the same unknown gap cooks as passable only when its
+    // frozen level/opening identity is in the trajectory-qualified set; a
+    // mismatched identity changes nothing.
+    const opened = structuralCollisionConfigFromReviewPlan(plan, {
+      trajectoryOpenOpenings: new Set(["ground/unknown"]),
+    });
+    assert.equal(opened.barrierSegments.filter((barrier) => barrier.id.includes("east")).length, 2);
+    assert.equal(opened.barrierSegments.filter((barrier) => barrier.id.includes("north")).length, 1);
+    const mismatched = structuralCollisionConfigFromReviewPlan(plan, {
+      trajectoryOpenOpenings: new Set(["ground/window", "upper/unknown"]),
+    });
+    assert.equal(mismatched.barrierSegments.filter((barrier) => barrier.id.includes("east")).length, 1);
+  });
+
+  it("lays a threshold floor across a trajectory-opened doorway between two rooms", () => {
+    const plan = {
+      schemaVersion: "1.0.0",
+      units: "metres",
+      coordinateFrame: "registered_y_up_metric_frame",
+      levels: [{
+        id: "ground",
+        label: "Ground",
+        elevationM: 0,
+        ceilingElevationM: 2.8,
+        rooms: [
+          { id: "room-a", label: "Room A", points: [[0, 0], [4, 0], [4, 4], [0, 4]] },
+          { id: "room-b", label: "Room B", points: [[4.2, 0], [8, 0], [8, 4], [4.2, 4]] },
+        ],
+        walls: [
+          { id: "shared", label: "Shared", start: [4.1, 0], end: [4.1, 4], thicknessM: 0.2, heightM: 2.8 },
+        ],
+        openings: [
+          { id: "gap", label: "Gap", type: "unknown", wallId: "shared", start: [4.1, 1.5], end: [4.1, 2.5], widthM: 1, heightM: null },
+        ],
+      }],
+      connectors: [],
+    };
+    const sealed = structuralCollisionConfigFromReviewPlan(plan);
+    assert.equal(
+      sealed.floorSurfaces.filter((surface) => surface.id === "auto-threshold-gap").length,
+      0,
+    );
+    const opened = structuralCollisionConfigFromReviewPlan(plan, {
+      trajectoryOpenOpenings: new Set(["ground/gap"]),
+    });
+    assert.equal(
+      opened.floorSurfaces.filter((surface) => surface.id === "auto-threshold-gap").length,
+      1,
+    );
+    assert.equal(opened.barrierSegments.filter((barrier) => barrier.id.includes("shared")).length, 2);
   });
 
   it("fails closed when a level has no captured ceiling support", () => {

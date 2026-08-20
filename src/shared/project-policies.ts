@@ -8,6 +8,11 @@ export const projectWorkflowPolicyIds = {
   requiredFiles: ["visual-and-registered-geometry"],
   structureWorkflow: ["automatic-extract-review", "review-every-proposal"],
   navigationClearance: ["approved-scene", "ada-route-review", "custom"],
+  // Wayfinder (#32): whether trajectory evidence may cook unresolved (type
+  // "unknown") openings as passable when the scanner visited both adjacent
+  // rooms. Off everywhere by default — opening walkable space on machine
+  // evidence is an explicit per-project decision, not a platform default.
+  trajectoryAutoOpen: ["off", "visited-rooms"],
 } as const;
 
 export type ProjectWorkflowPolicy = {
@@ -21,6 +26,7 @@ export type ProjectWorkflowPolicy = {
   requiredFiles: typeof projectWorkflowPolicyIds.requiredFiles[number];
   structureWorkflow: typeof projectWorkflowPolicyIds.structureWorkflow[number];
   navigationClearance: typeof projectWorkflowPolicyIds.navigationClearance[number];
+  trajectoryAutoOpen: typeof projectWorkflowPolicyIds.trajectoryAutoOpen[number];
 };
 
 export const projectDeliveryTemplates = [
@@ -68,6 +74,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     requiredFiles: "visual-and-registered-geometry",
     structureWorkflow: "automatic-extract-review",
     navigationClearance: "approved-scene",
+    trajectoryAutoOpen: "off",
   },
   "Venue navigator": {
     schemaVersion: "project-workflow-policy-v1",
@@ -80,6 +87,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     requiredFiles: "visual-and-registered-geometry",
     structureWorkflow: "review-every-proposal",
     navigationClearance: "ada-route-review",
+    trajectoryAutoOpen: "off",
   },
   "Film production scene": {
     schemaVersion: "project-workflow-policy-v1",
@@ -92,6 +100,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     requiredFiles: "visual-and-registered-geometry",
     structureWorkflow: "automatic-extract-review",
     navigationClearance: "custom",
+    trajectoryAutoOpen: "off",
   },
   "Measured capture pack": {
     schemaVersion: "project-workflow-policy-v1",
@@ -104,6 +113,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     requiredFiles: "visual-and-registered-geometry",
     structureWorkflow: "review-every-proposal",
     navigationClearance: "approved-scene",
+    trajectoryAutoOpen: "off",
   },
 };
 
@@ -118,6 +128,7 @@ export const legacyUnspecifiedProjectWorkflowPolicy: ProjectWorkflowPolicy = {
   requiredFiles: "visual-and-registered-geometry",
   structureWorkflow: "review-every-proposal",
   navigationClearance: "custom",
+  trajectoryAutoOpen: "off",
 };
 
 export function projectPolicyForDeliveryTemplate(deliveryTemplate: string): ProjectWorkflowPolicy {
@@ -141,6 +152,12 @@ export function structureWorkflowAllowsAutomaticProposal(
   return workflow === "automatic-extract-review";
 }
 
+export function trajectoryAutoOpenEnabled(
+  policy: ProjectWorkflowPolicy,
+): boolean {
+  return policy.trajectoryAutoOpen === "visited-rooms";
+}
+
 export function parseProjectWorkflowPolicy(value: unknown): ProjectWorkflowPolicy | null {
   if (!value || typeof value !== "object") return null;
   const policy = value as Record<string, unknown>;
@@ -150,6 +167,7 @@ export function parseProjectWorkflowPolicy(value: unknown): ProjectWorkflowPolic
     requiredFiles: policy.requiredFiles ?? "visual-and-registered-geometry",
     structureWorkflow: policy.structureWorkflow ?? "automatic-extract-review",
     navigationClearance: policy.navigationClearance ?? "approved-scene",
+    trajectoryAutoOpen: policy.trajectoryAutoOpen ?? "off",
   };
   for (const [field, values] of Object.entries(projectWorkflowPolicyIds)) {
     if (!(values as readonly unknown[]).includes(normalized[field])) return null;

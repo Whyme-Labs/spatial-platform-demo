@@ -229,6 +229,13 @@ Implemented:
   at completion in both directions); the pose path is SLAM ego-motion, so
   mirror-phantom rooms can never appear visited and glass never lets the rig
   through — groundwork for trajectory-qualified automatic doorway opening
+- trajectory auto-open (opt-in `trajectoryAutoOpen` workflow policy, default
+  off): approval freezes the evidence plus the exact unresolved openings it
+  qualifies — between two modelled rooms the scanner both visited — into the
+  revision; the collision cook opens exactly those openings (barrier split +
+  threshold floor in lockstep) and the navigation authoring receipt carries a
+  machine-attestation fragment reproducible from the frozen row, failing
+  closed on any unreadable blob
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1, optionally bound to one container structure

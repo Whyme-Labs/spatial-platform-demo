@@ -186,6 +186,13 @@ export function automaticStructuralCollisionConfig(report, {
 
 export function structuralCollisionConfigFromReviewPlan(plan, {
   proposedWallThicknessByKey = new Map(),
+  // Wayfinder (#32): frozen `${levelId}/${openingId}` identities of `unknown`
+  // openings that trajectory evidence qualified for cooking as passable (the
+  // scanner physically visited both adjacent rooms). The caller freezes this
+  // list with the revision; passing nothing cooks the plan sealed exactly as
+  // before. Widening happens at this single filter so barrier splitting AND
+  // threshold floors stay in lockstep.
+  trajectoryOpenOpenings = new Set(),
 } = {}) {
   const levels = plan.levels.map((level) => ({
     levelKey: level.id,
@@ -229,7 +236,9 @@ export function structuralCollisionConfigFromReviewPlan(plan, {
       evidence: { levelKey: level.id },
     }))),
     openings: plan.levels.flatMap((level) => level.openings
-      .filter((opening) => opening.type === "door" || opening.type === "opening")
+      .filter((opening) => opening.type === "door" || opening.type === "opening" ||
+        (opening.type === "unknown" &&
+          trajectoryOpenOpenings.has(`${level.id}/${opening.id}`)))
       .map((opening) => ({
       openingKey: opening.id,
       elevationM: level.elevationM,

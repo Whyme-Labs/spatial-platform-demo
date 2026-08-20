@@ -91,6 +91,31 @@ explicitly in the extraction dialog. Trajectory-qualified automatic doorway
 opening (crossings whose both adjacent rooms were visited) builds on this
 evidence and is tracked separately (Wayfinder issues #32–#35).
 
+### Trajectory auto-open (issue #32, opt-in per project)
+
+Under the `trajectoryAutoOpen: "visited-rooms"` workflow policy (default
+`"off"` on every delivery template), approving a floor plan freezes the
+proposal's trajectory evidence into
+`floorplan_revisions.trajectory_evidence_json` together with the exact list
+of `unknown` openings that evidence qualifies: an opening qualifies only when
+it sits between exactly two modelled rooms and the scanner physically visited
+both. Envelope spans (one neighbour), mirror-phantom rooms (never visited,
+because pose paths are never reflected), rooms the operator drew after the
+scan (no evidence), and operator-classified openings all stay sealed; a
+missing or schema-invalid evidence blob freezes nothing and the plan cooks
+sealed exactly as before.
+
+The frozen blob is the single source of truth: the collision cook widens its
+opening filter from it (barrier splitting and threshold floors stay in
+lockstep at one filter), and the navigation authoring receipt appends a
+`trajectory-auto-open-receipt-v1` fragment from it in both hash sites —
+review-time freeze and acceptance-time recompute — so the frozen authoring
+hash remains reproducible from the stored revision row and an unreadable blob
+fails closed. No capture-agreement change is needed: an auto-opened span has
+its barrier split away, so it can never surface as a final crossing; the
+machine attestation lives in the authoring receipt and the frozen revision
+column, which is also what the exposure gate (issue #34) will key on.
+
 ## Derivation and review boundary
 
 The first production extractor uses bounded metric occupancy:
