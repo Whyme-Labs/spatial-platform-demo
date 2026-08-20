@@ -28,6 +28,7 @@ describe("behavior-driving project policies", () => {
         requiredFiles: "visual-and-registered-geometry",
         structureWorkflow: "automatic-extract-review",
         navigationClearance: "approved-scene",
+        trajectoryAutoOpen: "off",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -40,6 +41,7 @@ describe("behavior-driving project policies", () => {
         requiredFiles: "visual-and-registered-geometry",
         structureWorkflow: "review-every-proposal",
         navigationClearance: "ada-route-review",
+        trajectoryAutoOpen: "off",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -52,6 +54,7 @@ describe("behavior-driving project policies", () => {
         requiredFiles: "visual-and-registered-geometry",
         structureWorkflow: "automatic-extract-review",
         navigationClearance: "custom",
+        trajectoryAutoOpen: "off",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -64,6 +67,7 @@ describe("behavior-driving project policies", () => {
         requiredFiles: "visual-and-registered-geometry",
         structureWorkflow: "review-every-proposal",
         navigationClearance: "approved-scene",
+        trajectoryAutoOpen: "off",
       },
     ]);
   });
@@ -79,6 +83,7 @@ describe("behavior-driving project policies", () => {
       requiredFiles: ["visual-and-registered-geometry"],
       structureWorkflow: ["automatic-extract-review", "review-every-proposal"],
       navigationClearance: ["approved-scene", "ada-route-review", "custom"],
+      trajectoryAutoOpen: ["off", "visited-rooms"],
     });
   });
 
@@ -100,6 +105,7 @@ describe("behavior-driving project policies", () => {
       requiredFiles: "visual-and-registered-geometry",
       structureWorkflow: "automatic-extract-review",
       navigationClearance: "approved-scene",
+      trajectoryAutoOpen: "off",
     });
   });
 
