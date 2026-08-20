@@ -147,6 +147,7 @@ import {
   assetProducerForLegacyAdapter,
   captureAdapterForOrigin,
   captureAdapterIds,
+  captureAssetPurposeCanAttachToExistingVersion,
   captureOriginForLegacyAdapter,
   planCaptureAssetImport,
   planProducedAssetImport,
@@ -8144,6 +8145,13 @@ async function qualifiedSceneRegistration(
     };
   }
   if (!pairedRegistration) {
+    // A paired journey that failed registration qualification must never fall
+    // through to the authored-shell identity path. That fallback is only for
+    // a shell authored directly on one visual master; paired metric geometry
+    // needs its own measured capture-to-scene registration.
+    if (await sceneVersionUsesOperatorAttestation(database, projectId, versionId)) {
+      return null;
+    }
     // Last, because a measured registration should always outrank a frame that
     // coincides only because the shell was drawn on the visual.
     return authoredShellVisualRegistration(database, organisationId, projectId, versionId);
@@ -12663,7 +12671,6 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   if (!fileNameMatchesFormat(parsed.data.fileName, parsed.data.format)) return validationError(context, { fileName: ["File extension does not match declared format"] });
   const purpose: CaptureAssetPurpose = parsed.data.purpose ??
     (parsed.data.format === "rad" ? "web_scene" : "gaussian_splat");
-  const auxiliaryPurposes = new Set<CaptureAssetPurpose>(["metric_point_cloud", "collision_mesh"]);
   const producedAssetPurposes = new Set<CaptureAssetPurpose>([
     "gaussian_splat",
     "web_scene",
@@ -12679,9 +12686,14 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
       error: "Choose and record the pipeline that produced this derived asset before uploading it",
     }, 422);
   }
-  if (parsed.data.targetVersionId && !auxiliaryPurposes.has(purpose)) {
+  if (
+    parsed.data.targetVersionId &&
+    !captureAssetPurposeCanAttachToExistingVersion(purpose)
+  ) {
     return unprocessable(context, {
-      targetVersionId: ["Only registered metric geometry or collision geometry may attach to an existing scene version"],
+      targetVersionId: [
+        "Only capture evidence, registered metric geometry, or collision geometry may attach to an existing scene version",
+      ],
     });
   }
   if (parsed.data.captureJourney && (
@@ -13127,7 +13139,7 @@ app.post("/api/uploads/:uploadId/complete", async (context) => {
   const versionBeforeUpload = await context.env.DB.prepare(
     "SELECT status FROM scene_versions WHERE id = ? AND project_id = ?",
   ).bind(upload.version_id, upload.project_id).first<{ status: string }>();
-  const auxiliaryAttachment = ["metric_point_cloud", "collision_mesh"].includes(upload.purpose) &&
+  const auxiliaryAttachment = captureAssetPurposeCanAttachToExistingVersion(upload.purpose) &&
     versionBeforeUpload?.status !== "UPLOADING";
   const completionStatements: D1PreparedStatement[] = [
     context.env.DB.prepare(`
@@ -16086,12 +16098,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       if (Object.keys(navigationClearanceViolations).length) {
         return unprocessable(context, navigationClearanceViolations);
       }
-      if (
-        ["public", "unlisted"].includes(parsed.data.accessPolicy) &&
-        await sceneVersionUsesOperatorAttestation(context.env.DB, project.id, latestVersion.id)
-      ) {
+      if (await sceneVersionUsesOperatorAttestation(
+        context.env.DB,
+        project.id,
+        latestVersion.id,
+      )) {
         return context.json({
-          error: "Public release requires processor-qualified registration evidence; operator attestation supports private review only",
+          error:
+            "Release requires processor-qualified registration evidence; operator attestation supports version preview only",
         }, 422);
       }
     }
@@ -16133,12 +16147,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (Object.keys(navigationClearanceViolations).length) {
     return unprocessable(context, navigationClearanceViolations);
   }
-  if (
-    ["public", "unlisted"].includes(parsed.data.accessPolicy) &&
-    await sceneVersionUsesOperatorAttestation(context.env.DB, project.id, approved.id)
-  ) {
+  if (await sceneVersionUsesOperatorAttestation(
+    context.env.DB,
+    project.id,
+    approved.id,
+  )) {
     return context.json({
-      error: "Public release requires processor-qualified registration evidence; operator attestation supports private review only",
+      error:
+        "Release requires processor-qualified registration evidence; operator attestation supports version preview only",
     }, 422);
   }
   if (approvedPolicy.policy.hosting === "managed-required") {
@@ -23241,12 +23257,13 @@ export async function completeReleaseRepublishIntent(
       `Automatic republish stopped because navigation clearance no longer satisfies the frozen workflow policy: ${JSON.stringify(navigationClearanceViolations)}`,
     );
   }
-  if (
-    ["public", "unlisted"].includes(intent.access_policy) &&
-    await sceneVersionUsesOperatorAttestation(env.DB, intent.project_id, intent.version_id)
-  ) {
+  if (await sceneVersionUsesOperatorAttestation(
+    env.DB,
+    intent.project_id,
+    intent.version_id,
+  )) {
     return fail(
-      "Automatic republish stopped because public release requires processor-qualified registration evidence",
+      "Automatic republish stopped because release requires processor-qualified registration evidence",
     );
   }
   if (

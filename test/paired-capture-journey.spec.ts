@@ -54,7 +54,7 @@ describe("paired capture journey receipts", () => {
     });
   });
 
-  it("distinguishes operator attestation from processor-qualified registration", () => {
+  it("keeps operator attestation as provenance without accepting it as registration", () => {
     const attested = createPairedCaptureJourney({
       request: { id: crypto.randomUUID(), sameFrameConfirmed: true },
       captureAdapter: "open-import",
@@ -64,7 +64,8 @@ describe("paired capture journey receipts", () => {
     });
 
     expect(pairedCaptureJourneyRegistrationAssurance(attested)).toBe("operator-attested");
-    expect(pairedCaptureJourneyHasAcceptedRegistration(attested)).toBe(true);
+    expect(pairedCaptureJourneyHasAcceptedRegistration(attested)).toBe(false);
+    expect(pairedCaptureJourneyMeetsAssurance(attested, "operator-attested")).toBe(true);
     expect(pairedCaptureJourneyMeetsAssurance(attested, "processor-qualified")).toBe(false);
   });
 
@@ -101,6 +102,7 @@ describe("paired capture journey receipts", () => {
 
     const qualified = parsePairedCaptureJourney({ ...pending, qualification });
     expect(qualified).not.toBeNull();
+    expect(pairedCaptureJourneyHasAcceptedRegistration(qualified!)).toBe(true);
     expect(pairedCaptureJourneyMeetsAssurance(qualified!, "processor-qualified")).toBe(true);
     expect(pairedCaptureJourneyMeetsAssurance(qualified!, "independently-reviewed")).toBe(false);
     expect(pairedCaptureJourneyMeetsAssurance(qualified!, "professionally-controlled")).toBe(false);

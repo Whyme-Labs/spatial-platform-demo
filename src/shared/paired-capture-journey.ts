@@ -149,7 +149,11 @@ export function pairedCaptureJourneyRegistrationAssurance(
 export function pairedCaptureJourneyHasAcceptedRegistration(
   journey: PairedCaptureJourney,
 ): boolean {
-  return pairedCaptureJourneyRegistrationAssurance(journey) !== null;
+  // An operator can attest that two exports came from one capture, but that
+  // statement does not measure their axes, scale, handedness, or bounds. Keep
+  // the attestation as provenance while requiring processor evidence before
+  // the journey can register visual and traversal geometry.
+  return pairedCaptureJourneyMeetsAssurance(journey, "processor-qualified");
 }
 
 export function pairedCaptureJourneyMeetsAssurance(

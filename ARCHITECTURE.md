@@ -444,9 +444,16 @@ container until a real vendor export has been inspected. FJD also
 does not promise that a Gaussian result and its point cloud share one frame —
 Trion Model aligns them through an operator-run Linkage matching step, and no
 release note names a 3DGS export format or describes 3DGS-to-point-cloud
-alignment — so a same-frame claim stays an operator assertion rather than a
-vendor guarantee. The current Studio flow records an operator-reviewed manual
-transform against those immutable exports. Automatic XGRIDS/FJD metadata
+alignment — so a same-frame claim stays provenance, not registration. Studio
+preserves that attestation against the exact asset IDs but cannot use it to
+derive an identity transform, queue walking geometry, or qualify any release.
+Paired PLY files can become processor-qualified only after their declared frame,
+units, up axis, and streamed bounds agree. Mixed formats require a reviewed
+capture manifest with an explicit source-to-world transform; this is the path
+for the FJD Gaussian-PLY plus LAS workflow. Immutable raw, vendor-project,
+pose, calibration, trajectory, and semantic evidence can attach to an existing
+approved visual version. The attachment queues evidence validation but does not
+replace scene bytes or change the version lifecycle. Automatic XGRIDS/FJD metadata
 extraction remains an adapter qualification gap; opaque vendor containers are
 not parsed today. Future versioned extractors will emit the same reviewed
 receipt:

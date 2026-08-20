@@ -66,6 +66,26 @@ export const captureAssetPurposes = [
 
 export type CaptureAssetPurpose = typeof captureAssetPurposes[number];
 
+const existingVersionAttachmentPurposes = new Set<CaptureAssetPurpose>([
+  "vendor_project",
+  "raw_capture",
+  "source_images",
+  "source_video",
+  "camera_poses",
+  "calibration",
+  "imu_trajectory",
+  "gnss_trajectory",
+  "metric_point_cloud",
+  "collision_mesh",
+  "vendor_semantic_mesh",
+]);
+
+export function captureAssetPurposeCanAttachToExistingVersion(
+  purpose: CaptureAssetPurpose,
+): boolean {
+  return existingVersionAttachmentPurposes.has(purpose);
+}
+
 export const captureAssetFormats = [
   "ply",
   "spz",
