@@ -538,6 +538,7 @@ export async function buildRecastNavigationArtifact(input) {
       );
     }
     const triangleComponents = collectTriangleComponents(vertices, debugIndices);
+    const navigationBounds = boundsOf(vertices.flat());
     const queryHalfExtents = {
       x: Math.max(input.agent.radius * 2, input.build.cellSize * 2),
       y: Math.max(input.agent.height, input.build.cellHeight * 2),
@@ -831,6 +832,7 @@ export async function buildRecastNavigationArtifact(input) {
               collisionSemantics.includedGroups,
               input.agent,
               artifactBounds,
+              navigationBounds,
             ),
           }
         : {}),
@@ -1123,8 +1125,8 @@ function pointTuple2(value) {
     : null;
 }
 
-function movementProfiles(collisionGroups, agent, bounds) {
-  const recoveryBounds = [
+function movementRecoveryBounds(bounds, agent) {
+  return [
     [
       bounds[0][0] - agent.radius,
       bounds[0][1] - agent.height,
@@ -1136,6 +1138,33 @@ function movementProfiles(collisionGroups, agent, bounds) {
       bounds[1][2] + agent.radius,
     ],
   ];
+}
+
+function walkRecoveryBounds(collisionBounds, navigationBounds, agent) {
+  // Walk is owned by the cooked Detour footprint, not the larger collision
+  // shell used by Fly. The vertical span still covers every reviewed level;
+  // Detour supplies the per-position floor height.
+  return [
+    [
+      navigationBounds[0][0] - agent.radius,
+      collisionBounds[0][1] - agent.height,
+      navigationBounds[0][2] - agent.radius,
+    ],
+    [
+      navigationBounds[1][0] + agent.radius,
+      collisionBounds[1][1] + agent.height,
+      navigationBounds[1][2] + agent.radius,
+    ],
+  ];
+}
+
+function movementProfiles(collisionGroups, agent, collisionBounds, navigationBounds) {
+  const collisionRecoveryBounds = movementRecoveryBounds(collisionBounds, agent);
+  const navigationRecoveryBounds = walkRecoveryBounds(
+    collisionBounds,
+    navigationBounds,
+    agent,
+  );
   const planarInput = {
     forward: ["KeyW", "ArrowUp"],
     backward: ["KeyS", "ArrowDown"],
@@ -1154,7 +1183,7 @@ function movementProfiles(collisionGroups, agent, bounds) {
       input: planarInput,
       speedUnitsPerSecond: agent.maxSpeed,
       boostMultiplier: 3,
-      recoveryBounds,
+      recoveryBounds: navigationRecoveryBounds,
     },
     fly: {
       shape: "sphere",
@@ -1168,7 +1197,7 @@ function movementProfiles(collisionGroups, agent, bounds) {
       },
       speedUnitsPerSecond: agent.maxSpeed,
       boostMultiplier: 3,
-      recoveryBounds,
+      recoveryBounds: collisionRecoveryBounds,
     },
     noclip: {
       operatorOnly: true,
@@ -1183,7 +1212,7 @@ function movementProfiles(collisionGroups, agent, bounds) {
       },
       speedUnitsPerSecond: agent.maxSpeed,
       boostMultiplier: 3,
-      recoveryBounds,
+      recoveryBounds: collisionRecoveryBounds,
     },
   };
 }

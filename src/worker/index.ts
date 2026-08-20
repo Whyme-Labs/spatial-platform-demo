@@ -148,6 +148,7 @@ import {
   captureAdapterForOrigin,
   captureAdapterIds,
   captureAssetPurposeCanAttachToExistingVersion,
+  captureFileNameMatchesFormat,
   captureOriginForLegacyAdapter,
   planCaptureAssetImport,
   planProducedAssetImport,
@@ -12668,7 +12669,11 @@ app.post("/api/projects/:projectId/uploads", async (context) => {
   const maximumUploadBytes = positiveInteger(context.env.MAX_UPLOAD_BYTES, 100 * 1024 * 1024 * 1024);
   if (parsed.data.sizeBytes > maximumUploadBytes) return context.json({ error: "Asset exceeds organisation upload limit" }, 413);
   const sessionPartSizeBytes = uploadPartSizeBytes(parsed.data.sizeBytes);
-  if (!fileNameMatchesFormat(parsed.data.fileName, parsed.data.format)) return validationError(context, { fileName: ["File extension does not match declared format"] });
+  if (!captureFileNameMatchesFormat(parsed.data.fileName, parsed.data.format)) {
+    return validationError(context, {
+      fileName: ["File extension does not match declared format"],
+    });
+  }
   const purpose: CaptureAssetPurpose = parsed.data.purpose ??
     (parsed.data.format === "rad" ? "web_scene" : "gaussian_splat");
   const producedAssetPurposes = new Set<CaptureAssetPurpose>([
@@ -16098,16 +16103,6 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       if (Object.keys(navigationClearanceViolations).length) {
         return unprocessable(context, navigationClearanceViolations);
       }
-      if (await sceneVersionUsesOperatorAttestation(
-        context.env.DB,
-        project.id,
-        latestVersion.id,
-      )) {
-        return context.json({
-          error:
-            "Release requires processor-qualified registration evidence; operator attestation supports version preview only",
-        }, 422);
-      }
     }
     if (
       candidatePolicy.hosting === "managed-required" &&
@@ -16146,16 +16141,6 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   );
   if (Object.keys(navigationClearanceViolations).length) {
     return unprocessable(context, navigationClearanceViolations);
-  }
-  if (await sceneVersionUsesOperatorAttestation(
-    context.env.DB,
-    project.id,
-    approved.id,
-  )) {
-    return context.json({
-      error:
-        "Release requires processor-qualified registration evidence; operator attestation supports version preview only",
-    }, 422);
   }
   if (approvedPolicy.policy.hosting === "managed-required") {
     if (!(await projectHasActiveManagedHosting(context.env.DB, auth.organisationId, project.id))) {
@@ -22732,11 +22717,6 @@ async function isSameOrigin(context: Context<AppEnvironment>): Promise<boolean> 
   return Boolean(domain && customDomainReady(domain));
 }
 
-function fileNameMatchesFormat(fileName: string, format: string): boolean {
-  const lower = fileName.toLowerCase();
-  return lower.endsWith(`.${format}`);
-}
-
 function legacyCaptureAdapter(adapter: CaptureAdapterId): Exclude<CaptureAdapterId, "drone-imagery"> {
   return adapter === "drone-imagery" ? "open-import" : adapter;
 }
@@ -23257,13 +23237,14 @@ export async function completeReleaseRepublishIntent(
       `Automatic republish stopped because navigation clearance no longer satisfies the frozen workflow policy: ${JSON.stringify(navigationClearanceViolations)}`,
     );
   }
-  if (await sceneVersionUsesOperatorAttestation(
+  if (!(await qualifiedSceneRegistration(
     env.DB,
+    intent.organisation_id,
     intent.project_id,
     intent.version_id,
-  )) {
+  ))) {
     return fail(
-      "Automatic republish stopped because release requires processor-qualified registration evidence",
+      "Automatic republish stopped because the scene has no verified capture-to-scene registration",
     );
   }
   if (

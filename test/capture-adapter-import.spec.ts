@@ -353,7 +353,7 @@ describe("capture adapter evidence ingestion", () => {
       body: JSON.stringify({
         clientOperationId: crypto.randomUUID(),
         targetVersionId: visual.upload.versionId,
-        fileName: "room.fjdslam",
+        fileName: "room.fjdslamp2",
         sizeBytes: rawBytes.byteLength,
         format: "fjdslam",
         purpose: "raw_capture",

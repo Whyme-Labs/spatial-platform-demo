@@ -120,6 +120,35 @@ export const captureAssetFormats = [
 
 export type CaptureAssetFormat = typeof captureAssetFormats[number];
 
+const fileExtensionsByFormat: Partial<
+  Record<CaptureAssetFormat, readonly string[]>
+> = {
+  fjdslam: ["fjdslam", "fjdslamp2"],
+};
+
+export function captureFileExtensionsForFormat(
+  format: CaptureAssetFormat,
+): readonly string[] {
+  return fileExtensionsByFormat[format] ?? [format];
+}
+
+export function captureFileNameMatchesFormat(
+  fileName: string,
+  format: CaptureAssetFormat,
+): boolean {
+  const lowerFileName = fileName.toLowerCase();
+  return captureFileExtensionsForFormat(format).some((extension) =>
+    lowerFileName.endsWith(`.${extension}`)
+  );
+}
+
+export function captureFormatForFileName(
+  fileName: string,
+  formats: readonly CaptureAssetFormat[] = captureAssetFormats,
+): CaptureAssetFormat | null {
+  return formats.find((format) => captureFileNameMatchesFormat(fileName, format)) ?? null;
+}
+
 export type CaptureAdapterProfile = {
   id: CaptureAdapterId;
   label: string;

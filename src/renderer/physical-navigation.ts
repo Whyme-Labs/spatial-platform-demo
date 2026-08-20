@@ -68,6 +68,7 @@ export class PhysicalNavigationRuntime {
   }>;
   #mode: PhysicalMovementMode;
   #verticalVelocity = 0;
+  #lastGroundedCenter: Vector3Tuple | null = null;
   #controlledFailure: string | null = null;
   #structuralBarriers: StructuralBarrierSegment[] = [];
   #structuralBlockerBoxes: StructuralBlockerBox[] = [];
@@ -259,6 +260,21 @@ export class PhysicalNavigationRuntime {
     return null;
   }
 
+  blockedStructuralBarrierNear(
+    from: Vector3Tuple,
+    desired: Vector3Tuple,
+  ): { id: string; kind: "structural" } | null {
+    const deltaX = desired[0] - from[0];
+    const deltaZ = desired[2] - from[2];
+    const length = Math.hypot(deltaX, deltaZ);
+    if (length <= CONTROLLED_MOVEMENT_EPSILON_METRES) return null;
+    const nearest = this.#nearestBarrierSegment(
+      desired,
+      [-deltaX / length, 0, -deltaZ / length],
+    );
+    return nearest ? { id: nearest, kind: "structural" } : null;
+  }
+
   #blockerBoxAt(point: Vector3Tuple): StructuralBlockerBox | null {
     const tolerance = 0.05;
     for (const box of this.#structuralBlockerBoxes) {
@@ -291,9 +307,11 @@ export class PhysicalNavigationRuntime {
 
   setMode(mode: PhysicalMovementMode, cameraPosition: Vector3Tuple): boolean {
     if (mode === this.#mode) return this.placeCamera(cameraPosition) !== null;
-    const center = this.#cameraToCenter(cameraPosition, mode);
-    if (!this.#canPlaceCenter(center, mode) ||
-      (mode === "walk" && !this.#hasSafeGroundForWalk(cameraPosition))) return false;
+    const requestedCenter = this.#cameraToCenter(cameraPosition, mode);
+    const center = mode === "walk"
+      ? this.#groundedCenterNear(requestedCenter)
+      : requestedCenter;
+    if (!center || !this.#canPlaceCenter(center, mode)) return false;
     this.#world.removeCharacterController(this.#controller);
     this.#world.removeCollider(this.#collider, true);
     const player = createPlayer(this.#world, this.#body, this.#agent, mode);
@@ -303,6 +321,7 @@ export class PhysicalNavigationRuntime {
     this.#verticalVelocity = 0;
     this.#body.setTranslation(toRapierVector(center), true);
     this.#world.step();
+    this.#lastGroundedCenter = mode === "walk" ? [...center] : null;
     return true;
   }
 
@@ -318,6 +337,7 @@ export class PhysicalNavigationRuntime {
       if (!this.#canPlaceCenter(center, "fly")) return null;
       this.#body.setTranslation(toRapierVector(center), true);
       this.#verticalVelocity = 0;
+      this.#lastGroundedCenter = null;
       return [...position];
     }
     const requested = this.#cameraToCenter(position, "walk");
@@ -325,6 +345,7 @@ export class PhysicalNavigationRuntime {
     if (!grounded || !this.#canPlaceCenter(grounded, "walk")) return null;
     this.#body.setTranslation(toRapierVector(grounded), true);
     this.#verticalVelocity = 0;
+    this.#lastGroundedCenter = [...grounded];
     return this.#centerToCamera(grounded, "walk");
   }
 
@@ -380,26 +401,6 @@ export class PhysicalNavigationRuntime {
     );
   }
 
-  #hasSafeGroundForWalk(cameraPosition: Vector3Tuple): boolean {
-    const center = this.#cameraToCenter(cameraPosition, "walk");
-    const halfHeight = Math.max(0.01, this.#agent.height / 2 - this.#agent.radius);
-    const maximumLandingDistance = Math.max(this.#agent.maxClimb, 0.05) + 0.03;
-    const hit = this.#world.castShape(
-      toRapierVector(center),
-      { x: 0, y: 0, z: 0, w: 1 },
-      { x: 0, y: -1, z: 0 },
-      new RAPIER.Capsule(halfHeight, this.#agent.radius),
-      0,
-      maximumLandingDistance,
-      true,
-      undefined,
-      undefined,
-      this.#collider,
-      this.#body,
-    );
-    return Boolean(hit && hit.time_of_impact <= maximumLandingDistance);
-  }
-
   moveCamera(
     from: Vector3Tuple,
     desired: Vector3Tuple,
@@ -441,7 +442,8 @@ export class PhysicalNavigationRuntime {
     this.#controller.computeColliderMovement(this.#collider, translation);
     const corrected = this.#controller.computedMovement();
     this.#recordMovementContacts();
-    if (this.#mode === "walk" && this.#controller.computedGrounded()) {
+    const grounded = this.#mode === "walk" && this.#controller.computedGrounded();
+    if (grounded) {
       this.#verticalVelocity = 0;
     }
     const nextCenter = {
@@ -453,9 +455,14 @@ export class PhysicalNavigationRuntime {
       [nextCenter.x, nextCenter.y, nextCenter.z],
       this.#mode,
     );
+    if (this.#mode === "walk" && !grounded) {
+      // Walk has no jump or drop mechanic. Losing floor support therefore
+      // means the cooked collision has a hole, never an intended transition.
+      return this.#restoreGroundedCamera();
+    }
     if (!insideBounds(nextCamera, this.#recoveryBounds[this.#mode])) {
       this.#verticalVelocity = 0;
-      return null;
+      return this.#mode === "walk" ? this.#restoreGroundedCamera() : null;
     }
     this.#body.setNextKinematicTranslation(nextCenter);
     // Match the physics integration to the same clamped wall-clock delta the
@@ -464,7 +471,16 @@ export class PhysicalNavigationRuntime {
     this.#world.timestep = Math.max(1 / 1_000, Math.min(0.05, deltaSeconds));
     this.#world.step();
     const actual = this.#body.translation();
+    if (grounded) this.#lastGroundedCenter = [actual.x, actual.y, actual.z];
     return this.#centerToCamera([actual.x, actual.y, actual.z], this.#mode);
+  }
+
+  #restoreGroundedCamera(): Vector3Tuple | null {
+    this.#verticalVelocity = 0;
+    if (!this.#lastGroundedCenter) return null;
+    this.#body.setTranslation(toRapierVector(this.#lastGroundedCenter), true);
+    this.#world.step();
+    return this.#centerToCamera(this.#lastGroundedCenter, "walk");
   }
 
   moveControlledCamera(from: Vector3Tuple, desired: Vector3Tuple): Vector3Tuple | null {

@@ -145,6 +145,32 @@ test("a synced camera outside the captured world recovers to the body", async ({
   expect(walked.position[0]).toBeGreaterThan(after.position[0] + 0.3);
 });
 
+test("Walk cannot leave Detour through an exposed collision-floor edge", async ({ page }) => {
+  const fixture = await buildFixture({ openSouthBoundaryGap: true });
+  await mountFixture(page, fixture, {
+    sendRuntime: true,
+    cameraQuery: "camera=4,1.6,2&target=4,1.6,4",
+  });
+
+  const canvas = page.frameLocator("#renderer").locator("#sparkCanvas");
+  await canvas.focus();
+  await page.keyboard.down("ArrowUp");
+  await page.waitForTimeout(3_500);
+  await page.keyboard.up("ArrowUp");
+  await page.waitForTimeout(500);
+
+  const stopped = await captureCamera(page);
+  expect(stopped.position[1]).toBeGreaterThan(1.4);
+  expect(stopped.position[1]).toBeLessThan(1.8);
+  expect(stopped.position[2]).toBeLessThan(4);
+
+  await page.keyboard.down("ArrowDown");
+  await page.waitForTimeout(700);
+  await page.keyboard.up("ArrowDown");
+  const reversed = await captureCamera(page);
+  expect(reversed.position[2]).toBeLessThan(stopped.position[2] - 0.25);
+});
+
 test("a dynamic door refuses to close on a player standing in it", async ({ page }) => {
   const fixture = await buildFixture();
   await mountFixture(page, fixture, { sendRuntime: true });
@@ -190,11 +216,29 @@ test("a walker stopped by a closed door is told which door", async ({ page }) =>
   await page.keyboard.up("ShiftLeft");
 });
 
-async function buildFixture(): Promise<{
+async function buildFixture({
+  openSouthBoundaryGap = false,
+}: {
+  openSouthBoundaryGap?: boolean;
+} = {}): Promise<{
   collision: Uint8Array;
   navigationArtifact: Record<string, unknown> & { navMesh: unknown };
   scene: Uint8Array;
 }> {
+  const southBoundary = openSouthBoundaryGap
+    ? [
+        { id: "south-wall-west", start: [0, 4], end: [3, 4], minY: 0, maxY: 3 },
+        { id: "south-wall-east", start: [5, 4], end: [8, 4], minY: 0, maxY: 3 },
+      ]
+    : [{ id: "south-wall", start: [0, 4], end: [8, 4], minY: 0, maxY: 3 }];
+  const captureBoundary = openSouthBoundaryGap
+    ? [
+        { id: "capture-north", start: [-2, -2], end: [10, -2], minY: 0, maxY: 3 },
+        { id: "capture-east", start: [10, -2], end: [10, 6], minY: 0, maxY: 3 },
+        { id: "capture-south", start: [10, 6], end: [-2, 6], minY: 0, maxY: 3 },
+        { id: "capture-west", start: [-2, 6], end: [-2, -2], minY: 0, maxY: 3 },
+      ]
+    : [];
   const collision = buildAuthoredStructuralCollisionGlb({
     schemaVersion: "authored-structural-collision-v2",
     provenance: "operator_reviewed",
@@ -204,7 +248,8 @@ async function buildFixture(): Promise<{
       { id: "west-wall", start: [0, 0], end: [0, 4], minY: 0, maxY: 3 },
       { id: "east-wall", start: [8, 0], end: [8, 4], minY: 0, maxY: 3 },
       { id: "north-wall", start: [0, 0], end: [8, 0], minY: 0, maxY: 3 },
-      { id: "south-wall", start: [0, 4], end: [8, 4], minY: 0, maxY: 3 },
+      ...southBoundary,
+      ...captureBoundary,
     ],
     dynamicBarrierBoxes: [{
       id: "door-to-far-side",

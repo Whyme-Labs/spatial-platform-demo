@@ -456,9 +456,11 @@ describe("project capture and policy governance", () => {
         }),
       },
     );
-    expect(release.status).toBe(422);
+    expect(release.status).toBe(400);
     await expect(release.json()).resolves.toMatchObject({
-      error: expect.stringContaining("processor-qualified"),
+      details: {
+        project: [expect.stringContaining("no approved scene version")],
+      },
     });
 
     const measuredProject = await createProject("Attested measured scene", "Measured capture pack");

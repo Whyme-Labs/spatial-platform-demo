@@ -39,6 +39,8 @@ import {
   captureAdapterDisplayLabel,
   captureAdapterProfiles,
   captureAssetPurposeCanAttachToExistingVersion,
+  captureFileExtensionsForFormat,
+  captureFormatForFileName,
   captureFormatsForPurpose,
   captureOriginForLegacyAdapter,
   captureOriginIds,
@@ -2209,8 +2211,12 @@ function bindInterface(): void {
       syncUploadPurpose(uploadPurpose.value as CaptureAssetPurpose);
     }
     const format = byId<HTMLSelectElement>("uploadFormat");
-    if (extension && Array.from(format.options).some((option) => option.value === extension)) {
-      format.value = extension;
+    const detectedFormat = captureFormatForFileName(
+      file.name,
+      captureFormatsForPurpose(uploadPurpose.value as CaptureAssetPurpose),
+    );
+    if (detectedFormat) {
+      format.value = detectedFormat;
       syncUploadPosterCameraRequirement();
     }
   });
@@ -12814,7 +12820,9 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   ));
   if (formats.includes(prior as CaptureAssetFormat)) formatSelect.value = prior;
   const fileInput = byId<HTMLInputElement>("uploadAssetInput");
-  fileInput.accept = formats.map((format) => `.${format}`).join(",");
+  fileInput.accept = formats.flatMap((format) =>
+    captureFileExtensionsForFormat(format).map((extension) => `.${extension}`)
+  ).join(",");
   const attachmentTarget = captureAssetPurposeCanAttachToExistingVersion(purpose)
     ? auxiliaryAssetTargetVersion()
     : null;

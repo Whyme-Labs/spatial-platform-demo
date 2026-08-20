@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   captureAdapterDisplayLabel,
   captureAdapterProfiles,
+  captureFileExtensionsForFormat,
+  captureFileNameMatchesFormat,
+  captureFormatForFileName,
   planCaptureAssetImport,
 } from "../src/shared/capture-adapters";
 
@@ -101,5 +104,16 @@ describe("capture adapter import contract", () => {
       accepted: false,
       reason: expect.stringContaining("web"),
     });
+  });
+
+  it("recognizes the native FJD SLAM extension without changing its wire format", () => {
+    expect(captureFileExtensionsForFormat("fjdslam")).toEqual([
+      "fjdslam",
+      "fjdslamp2",
+    ]);
+    expect(captureFileNameMatchesFormat("room.fjdslamp2", "fjdslam")).toBe(true);
+    expect(captureFormatForFileName("room.fjdslamp2", ["zip", "fjdslam"]))
+      .toBe("fjdslam");
+    expect(captureFileNameMatchesFormat("room.tgz", "fjdslam")).toBe(false);
   });
 });

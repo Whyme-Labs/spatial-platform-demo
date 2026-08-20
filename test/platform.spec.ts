@@ -600,7 +600,7 @@ describe("Spatial Studio Worker", () => {
     });
   });
 
-  it("keeps an operator-attested paired upload out of render-native authoring", async () => {
+  it("requires measured registration but lets an accepted manifest supersede attested provenance", async () => {
     const cookie = await login();
     const membership = await env.DB.prepare(`
       SELECT organisation_id AS organisationId, user_id AS userId
@@ -621,7 +621,7 @@ describe("Spatial Studio Worker", () => {
         INSERT INTO projects
           (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
         VALUES (?, ?, 'Paired authoring fixture', ?, 'QA_REQUIRED', 'fjd-trion',
-          'venue-navigator', ?)
+          'property-tour', ?)
       `).bind(
         projectId,
         membership!.organisationId,
@@ -695,6 +695,144 @@ describe("Spatial Studio Worker", () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({
       error: expect.stringContaining("no verified paired-upload frame receipt"),
+    });
+
+    const manifestId = crypto.randomUUID();
+    const manifestAssetId = crypto.randomUUID();
+    const workflowPolicyRevisionId = crypto.randomUUID();
+    const registrationPayload = {
+      schemaVersion: "capture-to-scene-registration-v1",
+      sourceCoordinateFrameId: `capture-journey:${journeyId}`,
+      targetCoordinateFrameId: "scene-world-right-handed-y-up-metres",
+      evidenceAssetId: geometryAssetId,
+      evidenceSha256: geometrySha256,
+      method: "Reviewed metric geometry registers the paired capture to the scene frame.",
+      sourceToWorld: {
+        sourceUpAxis: "Y",
+        worldUnit: "metres",
+        metresPerSourceUnit: 1,
+        yawDegrees: 0,
+        translationMetres: [0, 0, 0],
+      },
+    };
+    const registrationSha256 = await sha256Hex(JSON.stringify(registrationPayload));
+    const canonicalManifest = JSON.stringify({
+      format: "whymelabs.spatial.capture-bundle",
+      schemaVersion: "1.0.0",
+      manifestId,
+      project: { id: projectId, captureAdapter: "fjd-trion" },
+      version: { id: versionId, versionNumber: 1 },
+      coordinateFrame: {
+        id: registrationPayload.sourceCoordinateFrameId,
+        units: "metres",
+        axisConvention: "right-handed-y-up",
+        epsg: null,
+        registrationMethod: registrationPayload.method,
+      },
+      sceneRegistration: {
+        ...registrationPayload,
+        transformSha256: registrationSha256,
+      },
+      assets: [{
+        id: geometryAssetId,
+        roles: ["metric_point_cloud", "traversal_evidence"],
+        sha256: geometrySha256,
+      }],
+    });
+    const manifestSha256 = await sha256Hex(canonicalManifest);
+    await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO project_workflow_policy_revisions (
+          id, organisation_id, project_id, revision_number, delivery_template,
+          policy_json, transition_reason, created_by, classification_status
+        ) VALUES (?, ?, ?, 1, 'Property showcase', ?,
+          'Test fixture freezes the classified publication policy.', ?, 'classified')
+      `).bind(
+        workflowPolicyRevisionId,
+        membership!.organisationId,
+        projectId,
+        JSON.stringify(projectPolicyForDeliveryTemplate("Property showcase")),
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        INSERT INTO assets (
+          id, organisation_id, project_id, version_id, kind, format, object_key,
+          file_name, mime_type, size_bytes, sha256, integrity_status
+        ) VALUES (?, ?, ?, ?, 'report', 'capture-bundle-manifest-json', ?,
+          'capture-bundle-manifest.json', 'application/json', ?, ?, 'verified')
+      `).bind(
+        manifestAssetId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        `reports-private/${membership!.organisationId}/${projectId}/${versionId}/capture-bundle-manifest.json`,
+        new TextEncoder().encode(canonicalManifest).byteLength,
+        manifestSha256,
+      ),
+      env.DB.prepare(`
+        INSERT INTO capture_bundle_manifests (
+          id, organisation_id, project_id, version_id, adapter, adapter_v2,
+          schema_version, status, result, client_operation_id, request_hash,
+          manifest_asset_id, manifest_hash, canonical_manifest_json,
+          validation_json, created_by, review_decision, review_note,
+          reviewed_by, reviewed_at, review_generation
+        ) VALUES (?, ?, ?, ?, 'fjd-trion', 'fjd-trion', '1.0.0',
+          'reviewed', 'ready', ?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?, datetime('now'), 1)
+      `).bind(
+        manifestId,
+        membership!.organisationId,
+        projectId,
+        versionId,
+        crypto.randomUUID(),
+        "c".repeat(64),
+        manifestAssetId,
+        manifestSha256,
+        canonicalManifest,
+        JSON.stringify({ method: "capture-bundle-contract-v1", result: "ready" }),
+        membership!.userId,
+        "Accepted measured registration supersedes the original provenance attestation.",
+        membership!.userId,
+      ),
+      env.DB.prepare(`
+        UPDATE scene_versions
+        SET status = 'APPROVED', manifest_json = ?, workflow_policy_revision_id = ?,
+          updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(JSON.stringify({
+        webAssetId: visualAssetId,
+        visualGrade: "C",
+        privacyStatus: "approved",
+        measurementGrade: "visual-only",
+      }), workflowPolicyRevisionId, versionId),
+      env.DB.prepare(`
+        UPDATE projects SET workflow_policy_revision_id = ? WHERE id = ?
+      `).bind(workflowPolicyRevisionId, projectId),
+    ]);
+
+    const acceptedResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/authoring-renderable?versionId=${versionId}`,
+      { headers: { cookie } },
+    );
+    expect(acceptedResponse.status).toBe(200);
+
+    const releaseResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/releases`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({
+          slug: `accepted-registration-${projectId.slice(0, 8)}`,
+          accessPolicy: "unlisted",
+          viewerConfig: {
+            title: "Accepted registration fixture",
+            measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+          },
+        }),
+      },
+    );
+    expect(releaseResponse.status).toBe(409);
+    await expect(releaseResponse.json()).resolves.toMatchObject({
+      error: expect.stringContaining("collision, navigation report, and Detour navmesh"),
     });
   });
 
