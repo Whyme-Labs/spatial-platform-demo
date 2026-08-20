@@ -10,6 +10,10 @@ import {
   metricPointCloudPly,
   metricRoomPoints,
 } from "../scripts/staging-lifecycle-fixture.mjs";
+import {
+  createPlyCoordinateEvidenceAccumulator,
+  parsePlyCoordinateDescriptor,
+} from "../scripts/capture-compatibility-core.mjs";
 
 const canaryUrl = new URL("../scripts/staging-lifecycle-canary.mjs", import.meta.url);
 
@@ -33,6 +37,27 @@ test("new and rotated sessions are captured before identity checks and revoked o
   assert.ok(refreshCapture >= refreshStart && refreshCapture < refreshIdentity);
   assert.match(source, /await revokeRejectedSession\(candidateCookie, "initial identity verification", error\)/);
   assert.match(source, /await revokeRejectedSession\(candidateCookie, "refreshed identity verification", error\)/);
+});
+
+test("the lifecycle canary requests processor-qualified paired registration", async () => {
+  const source = await readFile(canaryUrl, "utf8");
+  assert.doesNotMatch(source, /sameFrameConfirmed/);
+  assert.equal(
+    source.match(/qualification: "automatic-ply-coordinate-evidence-v1"/g)?.length,
+    2,
+  );
+  assert.match(source, /spatial_studio_coordinate_frame/);
+  assert.match(source, /spatial_studio_up_axis Y/);
+  assert.match(source, /spatial_studio_units metres/);
+
+  const metricBytes = metricPointCloudPly(metricRoomPoints());
+  const descriptor = parsePlyCoordinateDescriptor(metricBytes);
+  const accumulator = createPlyCoordinateEvidenceAccumulator(descriptor);
+  accumulator.consume(metricBytes.subarray(descriptor.dataOffset));
+  const evidence = accumulator.finish();
+  assert.equal(evidence.coordinateFrameId, "staging-lifecycle-room-y-up-metres");
+  assert.equal(evidence.sourceUpAxis, "Y");
+  assert.equal(evidence.worldUnit, "metres");
 });
 
 test("the raw comparison fixture is distinct and registers without ambiguity", async () => {

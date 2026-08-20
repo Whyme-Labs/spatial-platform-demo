@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import {
   metricPointCloudPly,
   metricRoomPoints,
+  stagingLifecycleCoordinateFrameId,
 } from "./staging-lifecycle-fixture.mjs";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
@@ -103,7 +104,10 @@ try {
   projectId = created.project.id;
   stage("project-created", { projectId });
 
-  const captureJourney = { id: randomUUID(), sameFrameConfirmed: true };
+  const captureJourney = {
+    id: randomUUID(),
+    qualification: "automatic-ply-coordinate-evidence-v1",
+  };
   const visualPoints = visualRoomPoints();
   const visualBytes = gaussianPly(visualPoints);
   report.measurements.visualInputBytes = visualBytes.byteLength;
@@ -160,7 +164,10 @@ try {
 
   const baselineVersionId = versionId;
   const baselineGeometryAssetId = geometry.upload.assetId;
-  const candidateJourney = { id: randomUUID(), sameFrameConfirmed: true };
+  const candidateJourney = {
+    id: randomUUID(),
+    qualification: "automatic-ply-coordinate-evidence-v1",
+  };
   const candidateVisual = await uploadBytes({
     projectId,
     bytes: gaussianPly(visualRoomPoints()),
@@ -616,6 +623,9 @@ function gaussianPly(points) {
     "ply",
     "format binary_little_endian 1.0",
     "comment deterministic staging lifecycle Gaussian room fixture",
+    `comment spatial_studio_coordinate_frame ${stagingLifecycleCoordinateFrameId}`,
+    "comment spatial_studio_up_axis Y",
+    "comment spatial_studio_units metres",
     `element vertex ${points.length}`,
     ...properties.map((name) => `property float ${name}`),
     "end_header",

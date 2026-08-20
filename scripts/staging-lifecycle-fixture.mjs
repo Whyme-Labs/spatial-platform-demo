@@ -1,3 +1,6 @@
+export const stagingLifecycleCoordinateFrameId =
+  "staging-lifecycle-room-y-up-metres";
+
 export function metricRoomPoints({ candidateChange = false } = {}) {
   const points = [];
   for (let xIndex = 0; xIndex <= 16; xIndex += 1) {
@@ -43,16 +46,25 @@ export function metricRoomPoints({ candidateChange = false } = {}) {
 }
 
 export function metricPointCloudPly(points) {
-  return new TextEncoder().encode([
+  const header = new TextEncoder().encode([
     "ply",
-    "format ascii 1.0",
+    "format binary_little_endian 1.0",
     "comment deterministic staging lifecycle registered metric room fixture",
+    `comment spatial_studio_coordinate_frame ${stagingLifecycleCoordinateFrameId}`,
+    "comment spatial_studio_up_axis Y",
+    "comment spatial_studio_units metres",
     `element vertex ${points.length}`,
     "property float x",
     "property float y",
     "property float z",
     "end_header",
-    ...points.map((point) => point.join(" ")),
     "",
   ].join("\n"));
+  const bytes = new Uint8Array(header.byteLength + points.length * 12);
+  bytes.set(header);
+  const view = new DataView(bytes.buffer);
+  points.forEach((point, pointIndex) => point.forEach((value, axis) => {
+    view.setFloat32(header.byteLength + pointIndex * 12 + axis * 4, value, true);
+  }));
+  return bytes;
 }
