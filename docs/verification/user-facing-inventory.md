@@ -571,7 +571,7 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | editProjectDialog | global | studio.html:666 | DIALOG-A | static | studio.html:666 |
 | qaDialog | global | studio.html:686 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
 | releaseDialog | global | studio.html:706 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| publicationConfirmationDialog | global | studio.html:761 | DIALOG-A | static | studio.html:761 |
+| publicationConfirmationDialog | global | studio.html:761 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
 | reviewerDialog | global | studio.html:773 | DIALOG-A | static | studio.html:773 |
 | deliveryDialog | global | studio.html:789 | DIALOG-A | static | studio.html:789 |
 | domainDialog | global | studio.html:813 | DIALOG-A | static | studio.html:813 |
