@@ -375,6 +375,8 @@ test("a captured starting view publishes with its measured quality receipt", asy
   await expect(page.locator("#releaseError")).toHaveText("");
 
   await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await page.locator("#publicationConfirmationDialog")
+    .getByRole("button", { name: "Make it public", exact: true }).click();
   await expect.poll(() => publishedBody).not.toBeNull();
   expect(publishedBody).toMatchObject({
     startingViewQuality: {
@@ -437,6 +439,8 @@ test("a mostly-black captured starting view warns at capture and surfaces the pu
 
   // …and the worker rejection lands in the same error element on submit.
   await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await page.locator("#publicationConfirmationDialog")
+    .getByRole("button", { name: "Make it public", exact: true }).click();
   await expect.poll(() => publishedBody).not.toBeNull();
   expect(publishedBody).toMatchObject({
     startingViewQuality: { nearBlackFraction: 0.97 },
@@ -477,6 +481,8 @@ test("release authoring resets project-specific fields and submits scene rotatio
   expect(pageErrors).toEqual([]);
   await dialog.locator("input[name='sceneRotationZ']").fill("180");
   await dialog.getByRole("button", { name: "Publish release", exact: true }).click();
+  await page.locator("#publicationConfirmationDialog")
+    .getByRole("button", { name: "Make it public", exact: true }).click();
   await expect.poll(() => publishedBody).not.toBeNull();
   expect(publishedBody).toMatchObject({
     viewerConfig: {
