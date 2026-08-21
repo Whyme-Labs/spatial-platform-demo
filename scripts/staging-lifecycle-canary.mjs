@@ -476,12 +476,14 @@ async function authenticateServiceOperator() {
 // cookie it now holds. The product client reconciles exactly this way, so the
 // canary must too — otherwise it fails deploys for the one condition the
 // contract promises to survive, which is what it exists to prove.
-const STALE_REFRESH_RECONCILIATION_DELAYS_MS = [250, 750, 1500];
-
 async function refreshServiceOperatorSession() {
+  // Kept inside the function: this module is evaluated in an order where a
+  // top-level const declared beside its only caller can still be in its
+  // temporal dead zone when the canary runs.
+  const reconciliationDelaysMs = [250, 750, 1500];
   let response;
   let payload;
-  for (const [attempt, waitMs] of STALE_REFRESH_RECONCILIATION_DELAYS_MS.entries()) {
+  for (const [attempt, waitMs] of reconciliationDelaysMs.entries()) {
     ({ response, value: payload } = await requestJsonWithBudget(
       `${origin}/api/auth/refresh`,
       {
@@ -500,7 +502,7 @@ async function refreshServiceOperatorSession() {
       report.measurements.sessionRefreshes += 1;
       return;
     }
-    if (attempt === STALE_REFRESH_RECONCILIATION_DELAYS_MS.length - 1) break;
+    if (attempt === reconciliationDelaysMs.length - 1) break;
     await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
   }
   if (!response.ok) {
