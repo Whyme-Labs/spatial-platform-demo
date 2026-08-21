@@ -16219,6 +16219,67 @@ app.post("/api/versions/:versionId/approve", async (context) => {
   return context.json({ version: { id: version.id, status: "APPROVED" }, reportId });
 });
 
+// Reveal a token release's access link for the operator dashboard. Tokens
+// are minted deterministically from the release's client_operation_id and
+// the server secret, so nothing new is stored: this re-derives the token,
+// PROVES it against the frozen hash (a mismatch — legacy row, rotated
+// pepper — fails closed with the republish path), and audits every reveal.
+app.get("/api/projects/:projectId/releases/:releaseId/access-token", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  const release = await context.env.DB.prepare(`
+    SELECT r.id, r.access_policy, r.access_token_hash, r.client_operation_id,
+      r.revoked_at, c.slug
+    FROM releases r
+    LEFT JOIN release_channels c ON c.project_id = r.project_id
+      AND c.organisation_id = r.organisation_id
+    WHERE r.id = ? AND r.project_id = ? AND r.organisation_id = ?
+  `).bind(
+    context.req.param("releaseId"),
+    context.req.param("projectId"),
+    auth.organisationId,
+  ).first<{
+    id: string;
+    access_policy: string;
+    access_token_hash: string | null;
+    client_operation_id: string | null;
+    revoked_at: string | null;
+    slug: string | null;
+  }>();
+  if (!release) return notFound(context, "Release not found");
+  if (release.access_policy !== "token") {
+    return conflict(context, "Only token releases carry an access token");
+  }
+  if (release.revoked_at) {
+    return conflict(context, "A revoked release's token is dead; republish to mint a new one");
+  }
+  if (!release.client_operation_id || !release.access_token_hash) {
+    return conflict(
+      context,
+      "This release predates recoverable tokens; republish to mint a new access link",
+    );
+  }
+  const accessToken = await releaseAccessToken(
+    release.client_operation_id,
+    context.env.SESSION_PEPPER,
+  );
+  const derivedHash = await sha256Hex(`${accessToken}:${context.env.SESSION_PEPPER}`);
+  if (derivedHash !== release.access_token_hash) {
+    return conflict(
+      context,
+      "The stored token no longer matches its mint parameters; republish to rotate it",
+    );
+  }
+  await audit(context, auth, "release.access_token.view", "release", release.id, {
+    slug: release.slug,
+  });
+  const url = release.slug
+    ? `${new URL(context.req.url).origin}/s/${release.slug}?access_token=${encodeURIComponent(accessToken)}`
+    : null;
+  return context.json({ accessToken, url });
+});
+
 app.post("/api/projects/:projectId/releases", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;

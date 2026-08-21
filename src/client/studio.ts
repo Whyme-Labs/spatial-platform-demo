@@ -11841,6 +11841,25 @@ function renderProjectDetail(): void {
       }, () => exportNavigationTraversalEvidence(release));
     });
     releaseRow.append(exportEvidence);
+    if (release.access_policy === "token" && !release.revoked_at) {
+      const reveal = element("button", "quiet-button", "Reveal access link");
+      reveal.addEventListener("click", () => {
+        void runAction({
+          key: `reveal-release-token:${release.id}`,
+          trigger: reveal,
+          pendingLabel: "Revealing…",
+        }, async () => {
+          const result = await api<{ accessToken: string; url: string | null }>(
+            `/api/projects/${detail.project.id}/releases/${release.id}/access-token`,
+          );
+          const link = result.url ?? result.accessToken;
+          showNotice(`Access link: ${link}`, "success");
+          await navigator.clipboard.writeText(link).catch(() => undefined);
+          showToast("Access link copied");
+        });
+      });
+      releaseRow.append(reveal);
+    }
     if (release.is_active) {
       const revoke = element("button", "danger-button", "Revoke");
       revoke.addEventListener("click", async () => {
@@ -13723,6 +13742,18 @@ async function publishRelease(form: FormData): Promise<void> {
         } before publishing this transform.`,
       );
     }
+    const accessPolicy = String(form.get("accessPolicy") ?? "token");
+    // Open exposure is a deliberate act, never a dialog default: anyone with
+    // the link (public and unlisted alike) walks the scene with no credential.
+    if (accessPolicy === "public" || accessPolicy === "unlisted") {
+      const confirmed = await confirmPublicationDecision({
+        title: accessPolicy === "public" ? "Publish publicly?" : "Publish unlisted?",
+        message: "Anyone with the link will enter this scene with no credential. " +
+          "Choose Access token instead to gate it behind a shareable secret link.",
+        confirmLabel: accessPolicy === "public" ? "Make it public" : "Publish unlisted",
+      });
+      if (!confirmed) return;
+    }
     const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
       `/api/projects/${state.selected.project.id}/releases`,
       {
@@ -13730,7 +13761,7 @@ async function publishRelease(form: FormData): Promise<void> {
         body: JSON.stringify({
           clientOperationId: releaseOperationId,
           slug: String(form.get("slug") ?? ""),
-          accessPolicy: String(form.get("accessPolicy") ?? "public"),
+          accessPolicy,
           expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
           ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
           ...(startingViewQuality ? { startingViewQuality } : {}),
