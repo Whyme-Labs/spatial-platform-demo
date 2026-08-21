@@ -254,21 +254,21 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await expect(release).toBeVisible();
   await expect(release.locator("select[name='qualityPreset']")).toBeVisible();
   await expect(release.locator("select[name='qualityPreset']")).toHaveValue("standard");
-  await release.locator("select[name='accessPolicy']").selectOption("unlisted");
+  await release.locator("select[name='accessPolicy']").selectOption("public");
   await expect(release.locator("input[name='splatBudgetMillions']")).toBeHidden();
   await expect(release.locator('textarea[name="measurementDisclaimer"]')).toHaveValue(
     "This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.",
   );
   await release.getByRole("button", { name: "Publish release", exact: true }).click();
-  // Open exposure is a deliberate act: unlisted (like public) now requires an
-  // explicit confirmation before the publish request fires.
+  // Open exposure is a deliberate act: public requires an explicit
+  // confirmation before the publish request fires.
   const openExposureConfirmation = page.locator("#publicationConfirmationDialog");
-  await expect(openExposureConfirmation.getByText("Publish unlisted?", { exact: true })).toBeVisible();
+  await expect(openExposureConfirmation.getByText("Publish publicly?", { exact: true })).toBeVisible();
   await openExposureConfirmation
-    .getByRole("button", { name: "Publish unlisted", exact: true }).click();
+    .getByRole("button", { name: "Make it public", exact: true }).click();
   await expect.poll(() => publishedBody).not.toBeNull();
   expect(publishedBody).toMatchObject({
-    accessPolicy: "unlisted",
+    accessPolicy: "public",
     viewerConfig: {
       title: "Corrected Spark room",
       defaultMovementMode: "walk",
