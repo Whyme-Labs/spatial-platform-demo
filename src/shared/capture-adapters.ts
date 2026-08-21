@@ -358,3 +358,28 @@ export function planProducedAssetImport(input: {
     format: input.format,
   });
 }
+
+// Operators should not have to restate what a filename already says. Each rule
+// below is a name or extension that maps to exactly ONE purpose in practice;
+// genuinely ambiguous inputs (a .ply that could be a Gaussian master or metric
+// geometry, a .glb that could be collision or a vendor semantic export) return
+// null so the operator still chooses. Detection is a default, never a lock:
+// the dialog shows what it inferred and the picker stays editable.
+const purposeByFileNamePattern: ReadonlyArray<{
+  test: (lowerFileName: string) => boolean;
+  purpose: CaptureAssetPurpose;
+}> = [
+  // Name wins over extension: a Trion trajectory is a LAS whose name says so.
+  { test: (name) => /trajector(y|ies)/.test(name) && /\.(las|laz)$/.test(name), purpose: "scanner_trajectory" },
+  { test: (name) => /\.(las|laz|e57|pts)$/.test(name), purpose: "metric_point_cloud" },
+  { test: (name) => name.endsWith(".rad"), purpose: "web_scene" },
+  { test: (name) => /\.(spz|sog|splat|ksplat)$/.test(name), purpose: "gaussian_splat" },
+  { test: (name) => /\.(fjdslam|fjdslamp2|xbin|lcc|lcc2)$/.test(name), purpose: "vendor_project" },
+  { test: (name) => /\.(mp4|mov|webm)$/.test(name), purpose: "source_video" },
+  { test: (name) => /\.(jpg|jpeg|png|webp)$/.test(name), purpose: "source_images" },
+];
+
+export function inferCaptureAssetPurpose(fileName: string): CaptureAssetPurpose | null {
+  const lowerFileName = fileName.toLowerCase();
+  return purposeByFileNamePattern.find((rule) => rule.test(lowerFileName))?.purpose ?? null;
+}

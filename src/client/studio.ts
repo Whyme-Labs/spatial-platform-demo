@@ -43,6 +43,7 @@ import {
   captureFileExtensionsForFormat,
   captureFormatForFileName,
   captureFormatsForPurpose,
+  inferCaptureAssetPurpose,
   captureOriginForLegacyAdapter,
   captureOriginIds,
   planProducedAssetImport,
@@ -2207,10 +2208,14 @@ function bindInterface(): void {
   uploadAssetInput.addEventListener("change", () => {
     const file = uploadAssetInput.files?.[0];
     if (!file) return;
-    const extension = file.name.split(".").at(-1)?.toLowerCase();
-    if (extension && portableCaptureFormats.includes(extension as typeof portableCaptureFormats[number])) {
-      uploadPurpose.value = extension === "rad" ? "web_scene" : "gaussian_splat";
-      syncUploadPurpose(uploadPurpose.value as CaptureAssetPurpose);
+    // The filename already states what most uploads are; restating it in two
+    // dropdowns buried under a disclosure is work the operator should not do.
+    // Detection fills both and reports what it chose — ambiguous names simply
+    // leave the pickers alone.
+    const inferredPurpose = inferCaptureAssetPurpose(file.name);
+    if (inferredPurpose) {
+      uploadPurpose.value = inferredPurpose;
+      syncUploadPurpose(inferredPurpose);
     }
     const format = byId<HTMLSelectElement>("uploadFormat");
     const detectedFormat = captureFormatForFileName(
@@ -2221,6 +2226,10 @@ function bindInterface(): void {
       format.value = detectedFormat;
       syncUploadPosterCameraRequirement();
     }
+    const purposeLabel = uploadPurpose.selectedOptions[0]?.textContent ?? uploadPurpose.value;
+    byId("uploadDetectionNote").textContent = inferredPurpose
+      ? `Detected ${purposeLabel}${detectedFormat ? ` · ${detectedFormat.toUpperCase()}` : ""} from the file name. Change it under Advanced ingest options if that is wrong.`
+      : `Choose the asset purpose under Advanced ingest options — ${file.name.split(".").at(-1)?.toUpperCase() ?? "this format"} is used by more than one kind of evidence.`;
   });
   pauseUploadButton.addEventListener("click", () => {
     if (!uploadAbortController) return;
