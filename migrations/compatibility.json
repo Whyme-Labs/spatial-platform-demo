@@ -214,6 +214,18 @@
     },
     "0064_floorplan_trajectory_auto_open.sql": {
       "phase": "expand"
+    },
+    "0065_scanner_trajectory_upload_purpose.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_table upload_parts",
+        "drop_table upload_sessions",
+        "rename_table upload_sessions_v3 upload_sessions",
+        "rename_table upload_parts_v3 upload_parts"
+      ],
+      "expandMigration": "0064_floorplan_trajectory_auto_open.sql",
+      "oldestCompatibleAppRevision": "7616d5e121d605fcf78be3bf43446b3c81a15e9c",
+      "note": "SQLite table rebuild to widen the upload_sessions.purpose CHECK to the full captureAssetPurposes vocabulary. Widening an enumerated CHECK is backward compatible, so every application revision since the 0051 shape (pinned above) keeps working against it."
     }
   }
 }
