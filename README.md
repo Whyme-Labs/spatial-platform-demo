@@ -229,6 +229,12 @@ Implemented:
   at completion in both directions); the pose path is SLAM ego-motion, so
   mirror-phantom rooms can never appear visited and glass never lets the rig
   through — groundwork for trajectory-qualified automatic doorway opening
+- recoverable token release links: a token release's access link can be
+  revealed from the project release history — the token is re-derived from
+  the release's frozen mint parameters, proven against the stored hash before
+  it is returned (fail closed with the republish path), and every reveal is
+  audited; the publish dialog defaults to token access and open exposure
+  (public or unlisted) requires an explicit confirmation
 - trajectory auto-open (opt-in `trajectoryAutoOpen` workflow policy, default
   off): approval freezes the evidence plus the exact unresolved openings it
   qualifies — between two modelled rooms the scanner both visited — into the
