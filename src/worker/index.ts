@@ -14793,8 +14793,17 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
     ));
   }
   if (!navigationCompletion && !canaryCompletion) {
-    const auxiliaryCollisionCompletion = job.job_type === "asset.evidence-validate" &&
-      job.input_kind === "collision" &&
+    // Attaching supporting evidence to an already-approved version does not
+    // change the scene anyone sees — the upload dialog promises exactly that
+    // ("without replacing its immutable scene bytes") — so it must not demote
+    // the version back to QA. Only kinds that CAN become the published scene
+    // (a Gaussian master or a web scene) still force re-approval; source,
+    // point-cloud, collision, and report evidence do not. Collision alone was
+    // exempt before, which sent a scanner trajectory attached to a published
+    // version back through QA for evidence that never touched its bytes.
+    const auxiliaryEvidenceKinds = ["source", "pointcloud", "collision", "report"];
+    const auxiliaryEvidenceCompletion = job.job_type === "asset.evidence-validate" &&
+      auxiliaryEvidenceKinds.includes(String(job.input_kind)) &&
       ["APPROVED", "PUBLISHED"].includes(job.version_status);
     completionStatements.push(context.env.DB.prepare(`
       INSERT INTO qa_reports (id, organisation_id, project_id, version_id, status, report_json)
@@ -14806,7 +14815,7 @@ app.post("/api/worker/jobs/:jobId/complete", async (context) => {
       job.version_id,
       JSON.stringify(parsed.data.report),
     ));
-    if (!auxiliaryCollisionCompletion) {
+    if (!auxiliaryEvidenceCompletion) {
       completionStatements.push(
         context.env.DB.prepare(
           "UPDATE scene_versions SET status = 'QA_REQUIRED', updated_at = datetime('now') WHERE id = ?",
