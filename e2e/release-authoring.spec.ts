@@ -260,6 +260,12 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
     "This visual experience is not a certified survey and must not be relied upon for construction or boundary decisions.",
   );
   await release.getByRole("button", { name: "Publish release", exact: true }).click();
+  // Open exposure is a deliberate act: unlisted (like public) now requires an
+  // explicit confirmation before the publish request fires.
+  const openExposureConfirmation = page.locator("#publicationConfirmationDialog");
+  await expect(openExposureConfirmation.getByText("Publish unlisted?", { exact: true })).toBeVisible();
+  await openExposureConfirmation
+    .getByRole("button", { name: "Publish unlisted", exact: true }).click();
   await expect.poll(() => publishedBody).not.toBeNull();
   expect(publishedBody).toMatchObject({
     accessPolicy: "unlisted",
