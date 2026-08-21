@@ -11422,6 +11422,33 @@ function privatePreviewPageUrl(projectId: string, versionId: string): URL {
   );
 }
 
+// The access link of a live token release, recoverable on demand: the server
+// re-derives the token from the release's frozen mint parameters, proves it
+// against the stored hash, and audits the reveal.
+function revealAccessLinkButton(
+  projectId: string,
+  releaseId: string,
+  className: string,
+): HTMLButtonElement {
+  const reveal = element("button", className, "Reveal access link");
+  reveal.addEventListener("click", () => {
+    void runAction({
+      key: `reveal-release-token:${releaseId}`,
+      trigger: reveal,
+      pendingLabel: "Revealing…",
+    }, async () => {
+      const result = await api<{ accessToken: string; url: string | null }>(
+        `/api/projects/${projectId}/releases/${releaseId}/access-token`,
+      );
+      const link = result.url ?? result.accessToken;
+      showNotice(`Access link: ${link}`, "success");
+      await navigator.clipboard.writeText(link).catch(() => undefined);
+      showToast("Access link copied");
+    });
+  });
+  return reveal;
+}
+
 function renderProjectDetail(): void {
   const detail = state.selected;
   if (!detail) return;
@@ -11684,6 +11711,15 @@ function renderProjectDetail(): void {
     publishedLink.rel = "noopener";
     publishedLink.textContent = "Open published preview";
     sharing.append(publishedLink, projectFact("Published URL", `${location.origin}/s/${activeRelease.slug}`));
+    // A token release's published URL is incomplete without its token; the
+    // recoverable link belongs right beside it, not only in release history.
+    if (activeRelease.access_policy === "token" && !activeRelease.revoked_at) {
+      sharing.append(revealAccessLinkButton(
+        detail.project.id,
+        activeRelease.id,
+        "quiet-button wide",
+      ));
+    }
   }
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
   if (latestVersion?.status === "QA_REQUIRED" && navigationReady) {
@@ -11842,23 +11878,7 @@ function renderProjectDetail(): void {
     });
     releaseRow.append(exportEvidence);
     if (release.access_policy === "token" && !release.revoked_at) {
-      const reveal = element("button", "quiet-button", "Reveal access link");
-      reveal.addEventListener("click", () => {
-        void runAction({
-          key: `reveal-release-token:${release.id}`,
-          trigger: reveal,
-          pendingLabel: "Revealing…",
-        }, async () => {
-          const result = await api<{ accessToken: string; url: string | null }>(
-            `/api/projects/${detail.project.id}/releases/${release.id}/access-token`,
-          );
-          const link = result.url ?? result.accessToken;
-          showNotice(`Access link: ${link}`, "success");
-          await navigator.clipboard.writeText(link).catch(() => undefined);
-          showToast("Access link copied");
-        });
-      });
-      releaseRow.append(reveal);
+      releaseRow.append(revealAccessLinkButton(detail.project.id, release.id, "quiet-button"));
     }
     if (release.is_active) {
       const revoke = element("button", "danger-button", "Revoke");
