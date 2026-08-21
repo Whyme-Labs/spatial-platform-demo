@@ -26,7 +26,7 @@
 //     oldestCompatibleAppRevision.
 // The machine-readable report prints to stdout for the attestation.
 
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -153,6 +153,54 @@ function main() {
     }
     if (!/^[0-9a-f]{40}$/.test(entry.oldestCompatibleAppRevision ?? "")) {
       errors.push(`${file} must pin oldestCompatibleAppRevision (full git SHA) for the contracted schema`);
+    }
+  }
+
+  // The upload purpose vocabulary lives in src/shared/capture-adapters.ts, but
+  // the column that stores it pins an enumerated CHECK. A purpose added to one
+  // and not the other ships an import the operator can start and the schema
+  // then rejects (scanner_trajectory did exactly that). The newest CHECK must
+  // list the whole vocabulary, so widening the schema is part of adding one.
+  const sharedVocabularyPath = path.join(
+    MIGRATIONS_DIR, "..", "src", "shared", "capture-adapters.ts",
+  );
+  // Synthetic migration sets (the auditor's own fixtures) carry no application
+  // source; the vocabulary rule only applies to a real checkout.
+  const purposeVocabulary = !existsSync(sharedVocabularyPath) ? "not-applicable" : (() => {
+    const shared = readFileSync(sharedVocabularyPath, "utf8");
+    const declaration = shared.match(
+      /export const captureAssetPurposes = \[([\s\S]*?)\] as const;/,
+    );
+    return declaration
+      ? [...declaration[1].matchAll(/"([a-z_]+)"/g)].map((match) => match[1])
+      : null;
+  })();
+  if (purposeVocabulary === null) {
+    errors.push("src/shared/capture-adapters.ts declares no captureAssetPurposes array");
+  } else if (purposeVocabulary !== "not-applicable") {
+    const constraintFiles = files.filter((file) =>
+      /purpose TEXT NOT NULL DEFAULT/.test(readFileSync(path.join(MIGRATIONS_DIR, file), "utf8")));
+    const newest = constraintFiles.at(-1);
+    if (!newest) {
+      errors.push("no migration defines the upload purpose CHECK constraint");
+    } else {
+      const sql = readFileSync(path.join(MIGRATIONS_DIR, newest), "utf8");
+      const block = sql.match(/purpose TEXT NOT NULL DEFAULT[\s\S]*?CHECK \(purpose IN \(([\s\S]*?)\)\)/);
+      const admitted = block
+        ? [...block[1].matchAll(/'([a-z_]+)'/g)].map((match) => match[1])
+        : [];
+      for (const purpose of purposeVocabulary) {
+        if (!admitted.includes(purpose)) {
+          errors.push(
+            `${newest} upload purpose CHECK omits declared purpose ${purpose}: widen the constraint in a new migration`,
+          );
+        }
+      }
+      for (const purpose of admitted) {
+        if (!purposeVocabulary.includes(purpose)) {
+          errors.push(`${newest} upload purpose CHECK admits ${purpose}, which is not a declared capture asset purpose`);
+        }
+      }
     }
   }
 

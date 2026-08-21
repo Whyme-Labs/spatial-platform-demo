@@ -42,7 +42,7 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 - Governed fields: 247
 - Static and generated controls: 321
 - Route and control assurance: browser=9, deployed-staging=31, integration=112, production-attested=1, static=359, unit=1
-- Persisted state sets: 68
+- Persisted state sets: 69
 - Asynchronous workflows: 60
 
 ## Roles
@@ -993,6 +993,7 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | 0050_control_plane_invariants.sql:status:51 | status | pending, accepted, declined, expired, revoked | migrations/0050_control_plane_invariants.sql:51 | STATE-A | static | migrations/0050_control_plane_invariants.sql:51 |
 | 0051_vendor_semantic_scan_structures.sql:status:68 | status | OPEN, COMPLETED, ABORTED, FAILED | migrations/0051_vendor_semantic_scan_structures.sql:68 | STATE-A | static | migrations/0051_vendor_semantic_scan_structures.sql:68 |
 | 0054_durable_release_republish.sql:status:8 | status | pending, completed, failed | migrations/0054_durable_release_republish.sql:8 | STATE-A | static | migrations/0054_durable_release_republish.sql:8 |
+| 0065_scanner_trajectory_upload_purpose.sql:status:31 | status | OPEN, COMPLETED, ABORTED, FAILED | migrations/0065_scanner_trajectory_upload_purpose.sql:31 | STATE-A | static | migrations/0065_scanner_trajectory_upload_purpose.sql:31 |
 
 ## Asynchronous workflows
 
