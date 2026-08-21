@@ -72,6 +72,12 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      # platform.spec.ts serves the built client through the Worker, so the
+      # bundle must exist before the suite runs. The old serial gate built
+      # first for free; a parallel job has to build for itself.
+      - name: Build the client bundle
+        run: npm run build
+
       # Coverage instruments every module and roughly triples the run. The
       # thresholds still guard main, where a regression must not land; pull
       # requests run the same specs without the instrumentation tax.
