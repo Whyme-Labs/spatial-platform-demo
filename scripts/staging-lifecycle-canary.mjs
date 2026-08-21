@@ -69,6 +69,7 @@ const report = {
     candidateMetricInputBytes: null,
     candidateMetricPoints: null,
     sessionRefreshes: 0,
+    staleRefreshReconciliations: 0,
   },
 };
 let cookie = null;
@@ -470,15 +471,38 @@ async function authenticateServiceOperator() {
   }
 }
 
+// A 409 stale_refresh is a DOCUMENTED recoverable outcome, not a failure: it
+// means another rotation committed first and the browser should retry with the
+// cookie it now holds. The product client reconciles exactly this way, so the
+// canary must too — otherwise it fails deploys for the one condition the
+// contract promises to survive, which is what it exists to prove.
+const STALE_REFRESH_RECONCILIATION_DELAYS_MS = [250, 750, 1500];
+
 async function refreshServiceOperatorSession() {
-  const { response, value: payload } = await requestJsonWithBudget(
-    `${origin}/api/auth/refresh`,
-    {
-      method: "POST",
-      headers: { cookie, origin },
-    },
-    apiRequestBudget("session_refresh"),
-  );
+  let response;
+  let payload;
+  for (const [attempt, waitMs] of STALE_REFRESH_RECONCILIATION_DELAYS_MS.entries()) {
+    ({ response, value: payload } = await requestJsonWithBudget(
+      `${origin}/api/auth/refresh`,
+      {
+        method: "POST",
+        headers: { cookie, origin },
+      },
+      apiRequestBudget("session_refresh"),
+    ));
+    if (response.status !== 409 || payload?.code !== "stale_refresh") break;
+    report.measurements.staleRefreshReconciliations += 1;
+    // The cookie in hand may already be the winning one; a live session proves
+    // the rotation contract held even though this attempt lost the race.
+    const reconciled = await fetchJson("/api/auth/session", { headers: { cookie } });
+    if (reconciled.authenticated) {
+      assertServiceOperatorIdentity(reconciled.user, "reconciled session refresh");
+      report.measurements.sessionRefreshes += 1;
+      return;
+    }
+    if (attempt === STALE_REFRESH_RECONCILIATION_DELAYS_MS.length - 1) break;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, waitMs));
+  }
   if (!response.ok) {
     throw new Error(
       `Canary session refresh failed with HTTP ${response.status}: ${redact(JSON.stringify(payload))}`,
