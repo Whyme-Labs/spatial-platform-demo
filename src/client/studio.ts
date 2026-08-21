@@ -12696,6 +12696,13 @@ function openEditProjectDialog(): void {
   setValue("assetProducer", project.assetProducer ?? "");
   setValue("deliveryTemplate", project.deliveryTemplate);
   setValue("notes", project.notes ?? "");
+  // Trajectory auto-open changes what the platform will open on machine
+  // evidence alone, so it stays an administrator decision and is shown only
+  // to the role that can save it.
+  const trajectoryAutoOpenVisible = state.user?.role === "platform_admin";
+  byId("editProjectTrajectoryAutoOpenField").hidden = !trajectoryAutoOpenVisible;
+  byId("editProjectTrajectoryAutoOpenNote").hidden = !trajectoryAutoOpenVisible;
+  setValue("trajectoryAutoOpen", effectiveProjectWorkflowPolicy(project).trajectoryAutoOpen);
   renderProjectCustomFieldForm("editProjectCustomFields", project.customFields);
   const canGovern = state.user?.role === "platform_admin";
   for (const name of ["captureOrigin", "assetProducer", "deliveryTemplate"]) {
@@ -12715,6 +12722,10 @@ async function updateProject(form: FormData): Promise<void> {
   const project = state.selected?.project;
   if (!project) return;
   const assetProducer = String(form.get("assetProducer") ?? "");
+  const currentPolicy = effectiveProjectWorkflowPolicy(project);
+  const trajectoryAutoOpen = String(
+    form.get("trajectoryAutoOpen") ?? currentPolicy.trajectoryAutoOpen,
+  ) as ProjectWorkflowPolicy["trajectoryAutoOpen"];
   try {
     await api(`/api/projects/${project.id}`, {
       method: "PATCH",
@@ -12729,6 +12740,15 @@ async function updateProject(form: FormData): Promise<void> {
             captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
           assetProducer: assetProducer || null,
           deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
+          // The policy schema is strict and every dimension is behaviour, so
+          // the whole current policy travels with the one dimension this form
+          // edits — never a partial object that would reset the rest.
+          ...(trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen ? {
+            workflowPolicy: { ...currentPolicy, trajectoryAutoOpen },
+            transitionReason: trajectoryAutoOpen === "visited-rooms"
+              ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
+              : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.",
+          } : {}),
         } : {}),
       }),
     });
