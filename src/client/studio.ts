@@ -42,6 +42,7 @@ import {
   captureAssetPurposeCanAttachToExistingVersion,
   captureFileExtensionsForFormat,
   captureFormatForFileName,
+  captureAssetFormats,
   captureFormatsForPurpose,
   inferCaptureAssetPurpose,
   captureOriginForLegacyAdapter,
@@ -2201,6 +2202,15 @@ function bindInterface(): void {
   const uploadPurpose = byId<HTMLSelectElement>("uploadPurpose");
   const uploadFormat = byId<HTMLSelectElement>("uploadFormat");
   const uploadAssetInput = byId<HTMLInputElement>("uploadAssetInput");
+  // The picker must offer every format the dialog's purposes accept, or the
+  // operator cannot even select the evidence the platform asks for: a
+  // Gaussian-only filter hid metric point clouds, scanner trajectories, E57,
+  // video, and imagery behind a file dialog that refused to show them.
+  // Derived from the shared vocabulary so it cannot drift from the purposes.
+  uploadAssetInput.accept = captureAssetFormats
+    .flatMap((format) => captureFileExtensionsForFormat(format))
+    .map((extension) => `.${extension}`)
+    .join(",");
   uploadPurpose.addEventListener("change", () => {
     syncUploadPurpose(uploadPurpose.value as CaptureAssetPurpose);
   });

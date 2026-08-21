@@ -123,6 +123,7 @@ for (const entryPoint of entryPoints) {
 
   if (entryPoint.html === "studio.html") {
     auditStudioWorkflow(html, source);
+    auditUploadAcceptCoverage(html, source);
     auditStudioFieldRegistry(html, source, workerSource, studioFieldRegistry);
     await auditUploadPurposeOptions(html);
   }
@@ -466,6 +467,28 @@ async function auditUploadPurposeOptions(html) {
   if (!missing.length && !unknown.length &&
     declared.join(",") !== offered.join(",")) {
     failures.push("#uploadPurpose option order differs from the declared capture asset purposes");
+  }
+}
+
+// The upload picker must offer every extension the purposes accept. A literal
+// accept attribute drifted from the vocabulary and hid metric point clouds and
+// scanner trajectories from the file dialog while the purpose menu still
+// offered them, so the attribute must be derived in code, never hardcoded.
+function auditUploadAcceptCoverage(html, source) {
+  const input = html.match(/id="uploadAssetInput"[^>]*/)?.[0] ?? "";
+  if (!input) {
+    failures.push("studio.html has no uploadAssetInput file control");
+    return;
+  }
+  if (/accept=/.test(input)) {
+    failures.push(
+      "uploadAssetInput pins a literal accept attribute: derive it from captureAssetFormats so the picker cannot drift from the purposes",
+    );
+  }
+  if (!source.includes("uploadAssetInput.accept = captureAssetFormats")) {
+    failures.push(
+      "the upload picker no longer derives its accept list from the shared capture vocabulary",
+    );
   }
 }
 
