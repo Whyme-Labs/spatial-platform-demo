@@ -124,6 +124,7 @@ for (const entryPoint of entryPoints) {
   if (entryPoint.html === "studio.html") {
     auditStudioWorkflow(html, source);
     auditStudioFieldRegistry(html, source, workerSource, studioFieldRegistry);
+    await auditUploadPurposeOptions(html);
   }
 }
 
@@ -431,6 +432,41 @@ function projectJourneyDestinations(source) {
     if (destination) destinations.add(destination);
   });
   return destinations;
+}
+
+// The upload dialog's purpose options are static markup, while the vocabulary
+// they must mirror lives in src/shared/capture-adapters.ts. That split once
+// stranded a shipped purpose (scanner_trajectory): the Worker accepted it and
+// the format map knew it, but no operator could choose it. Every declared
+// purpose must be selectable, in the declared order.
+async function auditUploadPurposeOptions(html) {
+  const shared = await readProjectFile("src/shared/capture-adapters.ts");
+  const declaration = shared.match(
+    /export const captureAssetPurposes = \[([\s\S]*?)\] as const;/,
+  );
+  if (!declaration) {
+    failures.push("src/shared/capture-adapters.ts declares no captureAssetPurposes array");
+    return;
+  }
+  const declared = [...declaration[1].matchAll(/"([a-z_]+)"/g)].map((match) => match[1]);
+  const select = html.match(/<select id="uploadPurpose"[^>]*>([\s\S]*?)<\/select>/);
+  if (!select) {
+    failures.push("studio.html has no #uploadPurpose select to audit");
+    return;
+  }
+  const offered = [...select[1].matchAll(/<option value="([^"]+)"/g)].map((match) => match[1]);
+  const missing = declared.filter((purpose) => !offered.includes(purpose));
+  const unknown = offered.filter((purpose) => !declared.includes(purpose));
+  for (const purpose of missing) {
+    failures.push(`upload purpose ${purpose} is declared but has no #uploadPurpose option`);
+  }
+  for (const purpose of unknown) {
+    failures.push(`#uploadPurpose offers ${purpose}, which is not a declared capture asset purpose`);
+  }
+  if (!missing.length && !unknown.length &&
+    declared.join(",") !== offered.join(",")) {
+    failures.push("#uploadPurpose option order differs from the declared capture asset purposes");
+  }
 }
 
 function auditStudioFieldRegistry(html, source, worker, registry) {
