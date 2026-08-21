@@ -19,10 +19,74 @@ concurrency:
 # (and therefore staging), but typecheck, tests, browser proofs, and the
 # deployment dry-runs report their own results alongside it.
 jobs:
-  functional:
-    name: Typecheck, tests, browser proofs, deploy dry-run
+  # The gate used to be one serial job: typecheck and audits finished in
+  # seconds, then vitest-with-coverage ran five minutes and Playwright three
+  # more while everything else waited. Splitting it three ways runs those in
+  # parallel, so the gate finishes in roughly the time of its slowest half
+  # instead of their sum. production.yml gates on the WORKFLOW conclusion, so
+  # every job below must still pass before a deploy is allowed.
+  static:
+    name: Typecheck, audits, build, deploy dry-run
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 20
+    env:
+      CI: "true"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run the static half of the release gate
+        run: npm run check:static
+
+  tests:
+    name: Unit and integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CI: "true"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      # Coverage instruments every module and roughly triples the run. The
+      # thresholds still guard main, where a regression must not land; pull
+      # requests run the same specs without the instrumentation tax.
+      - name: Run vitest
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            npm run test:coverage
+          else
+            npm test
+          fi
+
+  browser:
+    name: Browser proofs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       CI: "true"
 
@@ -44,8 +108,8 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run the application release gate
-        run: npm run check
+      - name: Run the browser proofs
+        run: npm run test:e2e
 
       - name: Upload browser test evidence
         if: ${{ !cancelled() }}
