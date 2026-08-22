@@ -39,6 +39,7 @@ import {
   parseTrajectoryPositions,
   proposalReportPlanLevels,
   trajectoryPlanEvidence,
+  trajectoryWalkedFloor,
   trajectoryWallCrossingEvidence,
   trajectoryWithinCaptureBounds,
 } from "./trajectory-evidence-core.mjs";
@@ -435,12 +436,22 @@ async function processNextJob() {
             span: wall.geometry?.points ?? null,
           })),
         });
+        const planLevels = proposalReportPlanLevels(report).map((level) => ({
+          ...level,
+          ceilingElevationM: report.summary?.inferredCeilingElevationM ?? null,
+        }));
+        // Where the rig was carried is floor, whatever the room ring says.
+        const walkedFloors = trajectoryWalkedFloor({
+          positions: parsedTrajectory.positions,
+          plan: { levels: planLevels },
+        });
         report.trajectoryEvidence = {
           ...trajectoryPlanEvidence({
             positions: parsedTrajectory.positions,
             plan: { levels: proposalReportPlanLevels(report) },
           }),
           ...(wallCrossings.length ? { wallCrossings } : {}),
+          ...(walkedFloors.length ? { walkedFloors } : {}),
           trajectory: {
             assetId: String(job.floorplanTrajectory.assetId),
             sha256: trajectoryDownload.sha256,

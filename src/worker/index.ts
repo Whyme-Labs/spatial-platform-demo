@@ -68,6 +68,7 @@ import {
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
+  structureRebuildSchema,
   floorplanExtractionReviewSchema,
   floorplanCorrectionDraftSchema,
   floorplanExportSchema,
@@ -10189,6 +10190,73 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
   return context.json(parseStoredObject(storedReview.review_response_json ?? "{}"));
 });
 
+// Evidence attached after intake — a scanner trajectory, a corrected point
+// cloud — was unusable without re-uploading the capture, because only the
+// intake lane produces a reviewable structure proposal. Re-uploading is both
+// wasteful and refused outright when the version carries a paired-capture
+// journey, so the operator can instead re-run that exact lane over the
+// evidence already on the version.
+app.post("/api/projects/:projectId/spatial/versions/:versionId/structure-rebuilds", async (context) => {
+  const auth = await requireOperator(context);
+  if (auth instanceof Response) return auth;
+  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+  const parsed = structureRebuildSchema.safeParse(await readJson(context));
+  if (!parsed.success) return validationError(context, parsed.error.flatten());
+  const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
+  if (!project) return notFound(context, "Project not found");
+  if (project.status === "ARCHIVED") {
+    return conflict(context, "Archived projects cannot rebuild structure");
+  }
+  const version = await context.env.DB.prepare(`
+    SELECT id FROM scene_versions WHERE id = ? AND project_id = ?
+  `).bind(context.req.param("versionId"), project.id).first<{ id: string }>();
+  if (!version) return notFound(context, "Immutable scene version not found");
+  // The rebuild reuses the version's own registered geometry; naming no asset
+  // is what keeps it bound to the capture this version was built from.
+  const geometry = await context.env.DB.prepare(`
+    SELECT a.id, a.file_name, a.format, a.sha256, a.size_bytes, us.created_by
+    FROM assets a
+    JOIN upload_sessions us ON us.asset_id = a.id
+    WHERE a.project_id = ? AND a.organisation_id = ? AND a.version_id = ?
+      AND a.kind = 'pointcloud' AND us.purpose = 'metric_point_cloud'
+      AND a.integrity_status = 'verified' AND a.sha256 IS NOT NULL
+      AND a.deleted_at IS NULL
+    ORDER BY us.created_at DESC
+    LIMIT 1
+  `).bind(project.id, auth.organisationId, version.id).first<{
+    id: string;
+    file_name: string;
+    format: string;
+    sha256: string;
+    size_bytes: number;
+    created_by: string;
+  }>();
+  if (!geometry) {
+    return unprocessable(context, {
+      versionId: [
+        "This version has no verified metric point cloud to rebuild structure from",
+      ],
+    });
+  }
+  const extraction = await queueAutomaticFloorplanExtraction(context, {
+    organisationId: auth.organisationId,
+    projectId: project.id,
+    versionId: version.id,
+    assetId: geometry.id,
+    fileName: geometry.file_name,
+    format: geometry.format,
+    sha256: geometry.sha256,
+    sizeBytes: geometry.size_bytes,
+    createdBy: geometry.created_by,
+    rebuildOperationId: parsed.data.clientOperationId,
+  });
+  await audit(context, auth, "spatial.floorplan_extraction.rebuild", "floorplan_extraction", extraction.id, {
+    versionId: version.id,
+    inputAssetId: geometry.id,
+  });
+  return context.json({ extraction }, 202);
+});
+
 app.post("/api/projects/:projectId/spatial/floorplan-extractions", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
@@ -10730,12 +10798,17 @@ app.post(
     // evidence that fails its schema ⇒ nothing frozen ⇒ the sealed cook.
     let trajectoryAutoOpenJson: string | null = null;
     if (revisionId && automaticPipeline && parsed.data.plan) {
-      const reviewPolicy = await workflowPolicyForSceneVersion(
-        context.env.DB,
-        project,
-        extraction.version_id,
-      );
-      if (trajectoryAutoOpenEnabled(reviewPolicy.policy)) {
+      // Deliberately the PROJECT's current policy, not the version's frozen
+      // one. A version freezes the rules its own approval was judged under —
+      // measurement, publication, privacy — and those must never shift under
+      // it. Trajectory auto-open governs how a NEW structure revision is
+      // derived right now, by the operator making this very decision, so
+      // reading the version's ingest-time policy would mean the dimension
+      // could never apply to any capture that predates enabling it. The
+      // resulting revision still needs this operator's approval, still shows
+      // its machine-attested changes, and still cannot reach public exposure
+      // unratified.
+      if (trajectoryAutoOpenEnabled(projectWorkflowPolicy(project))) {
         const evidenceRaw = proposalReportStored && typeof proposalReportStored === "object"
           ? Reflect.get(proposalReportStored, "trajectoryEvidence")
           : undefined;
@@ -10866,6 +10939,7 @@ app.post(
               (frozenTrajectory?.demotedWalls ?? []).map((wall) =>
                 `${wall.levelId}/${wall.wallId}`),
             ),
+            walkedFloors: frozenTrajectory?.evidence.walkedFloors ?? [],
           },
         );
         const bytes = buildAuthoredStructuralCollisionGlb(structuralConfig, {
@@ -18581,9 +18655,16 @@ async function queueAutomaticFloorplanExtraction(
     sha256: string;
     sizeBytes: number;
     createdBy: string;
+    // An operator-requested rebuild runs the SAME lane over the SAME frozen
+    // capture, so it must not collapse into the intake run for that asset.
+    // Its client operation id scopes the key, which also makes the rebuild
+    // itself replay-safe.
+    rebuildOperationId?: string;
   },
 ): Promise<{ id: string; jobId: string; status: string }> {
-  const idempotencyKey = `automatic-floorplan:${input.assetId}:v2`;
+  const idempotencyKey = input.rebuildOperationId
+    ? `automatic-floorplan-rebuild:${input.assetId}:${input.rebuildOperationId}`
+    : `automatic-floorplan:${input.assetId}:v2`;
   const existing = await context.env.DB.prepare(`
     SELECT r.id, r.job_id, r.status
     FROM floorplan_extraction_runs r

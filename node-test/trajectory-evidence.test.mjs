@@ -451,8 +451,37 @@ describe("trajectoryDemotableWalls", () => {
     ],
   };
 
-  it("demotes only short pass-through clutter wholly inside a visited room", () => {
+  it("demotes short clutter the pose path rode through, wherever the room ring runs", () => {
     assert.deepEqual(trajectoryDemotableWalls({ plan, trajectoryEvidence: evidence }), [{
+      levelId: "level-001",
+      wallId: "wall-clutter",
+      crossingCount: 2,
+      roomId: "room-001",
+    }]);
+  });
+
+  it("demotes interior clutter the traced room ring excludes", () => {
+    // Real extractor rings hug observed floor, so free-standing clutter often
+    // falls outside the polygon. Containment must not decide this — the
+    // pass-through does.
+    const outsideRingPlan = {
+      levels: [{
+        id: "level-001",
+        elevationM: 0,
+        rooms: [{ id: "room-001", points: [[0, 0], [1, 0], [1, 1], [0, 1]] }],
+        walls: [
+          { id: "wall-clutter", start: [5, 5], end: [5, 6], thicknessM: 0.2, heightM: 2.5 },
+        ],
+      }],
+    };
+    assert.deepEqual(trajectoryDemotableWalls({
+      plan: outsideRingPlan,
+      trajectoryEvidence: {
+        schemaVersion: "trajectory-evidence-v1",
+        visitedRoomIds: ["level-001/room-001"],
+        wallCrossings: [{ wallId: "wall-clutter", crossingCount: 2 }],
+      },
+    }), [{
       levelId: "level-001",
       wallId: "wall-clutter",
       crossingCount: 2,

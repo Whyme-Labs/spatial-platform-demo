@@ -8648,6 +8648,35 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
     }, () => loadSpatialWorkspace(project.id));
   });
   controls.append(queue, refresh);
+  // Evidence attached after intake — a scanner trajectory, corrected
+  // geometry — only reaches a walking map through the automatic lane, and
+  // that lane used to run once at capture. Re-running it over the evidence
+  // already on this version avoids re-uploading a capture the platform
+  // already holds (and would refuse, since registered geometry must carry
+  // its original paired-capture receipt).
+  const versionId = spatial.version?.id ?? null;
+  if (versionId) {
+    const rebuild = element("button", "quiet-button", "Rebuild structure from this capture");
+    rebuild.addEventListener("click", () => {
+      void runAction({
+        key: `rebuild-structure:${versionId}`,
+        trigger: rebuild,
+        pendingLabel: "Queueing rebuild…",
+        disable: [queue, refresh],
+      }, async () => {
+        await api(
+          `/api/projects/${project.id}/spatial/versions/${versionId}/structure-rebuilds`,
+          {
+            method: "POST",
+            body: JSON.stringify({ clientOperationId: crypto.randomUUID() }),
+          },
+        );
+        showToast("Structure rebuild queued from the attached capture");
+        await loadSpatialWorkspace(project.id);
+      });
+    });
+    controls.append(rebuild);
+  }
   workflow.append(
     controls,
     element(
@@ -12929,10 +12958,12 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
     new Option(captureFormatLabels[format], format),
   ));
   if (formats.includes(prior as CaptureAssetFormat)) formatSelect.value = prior;
-  const fileInput = byId<HTMLInputElement>("uploadAssetInput");
-  fileInput.accept = formats.flatMap((format) =>
-    captureFileExtensionsForFormat(format).map((extension) => `.${extension}`)
-  ).join(",");
+  // The file picker deliberately stays permissive. Narrowing it to the
+  // selected purpose made the dialog unusable in the normal direction: the
+  // purpose is detected FROM the chosen file, so a picker that hides
+  // everything except the current purpose's formats can never show the file
+  // that would correct it. The format select below still narrows, and the
+  // server still validates purpose against format and adapter.
   const attachmentTarget = captureAssetPurposeCanAttachToExistingVersion(purpose)
     ? auxiliaryAssetTargetVersion()
     : null;

@@ -28,6 +28,12 @@ export class AutomaticSpatialPipelineError extends Error {
 
 export function automaticStructuralCollisionConfig(report, {
   provenance = "registered_metric_mesh",
+  // Wayfinder: floor the scanner is proven to have walked. Room polygons are
+  // traced from observed returns and in cluttered spaces cover only part of
+  // where a person actually went; this adds the rest. Walls and erosion are
+  // untouched, so it can only widen reachable space, never punch through
+  // anything solid.
+  walkedFloors = [],
 } = {}) {
   const rooms = Array.isArray(report.rooms) ? report.rooms : [];
   const walls = Array.isArray(report.walls) ? report.walls : [];
@@ -151,6 +157,32 @@ export function automaticStructuralCollisionConfig(report, {
     ...automaticThresholdSurfaces(roomSurfaces, openings),
     ...automaticAdjacencyThresholds(roomSurfaces, barrierSegments),
   );
+  // Walked floor carries its own lintel so the volume above it is bounded
+  // exactly like a room's, keeping the shell closed for the navmesh cook.
+  for (const walked of walkedFloors) {
+    const elevation = Number(walked.elevationM);
+    const ceiling = Number(walked.ceilingElevationM);
+    if (!Number.isFinite(elevation)) continue;
+    for (const [index, rectangle] of (walked.rectangles ?? []).entries()) {
+      const { minX, maxX, minZ, maxZ } = rectangle;
+      if (![minX, maxX, minZ, maxZ].every((value) => Number.isFinite(Number(value)))) continue;
+      const corners = (height) => [
+        [minX, height, minZ],
+        [maxX, height, minZ],
+        [maxX, height, maxZ],
+        [minX, height, maxZ],
+      ];
+      const id = `auto-walked-${walked.levelId}-${String(index + 1).padStart(4, "0")}`;
+      floorSurfaces.push({ id, points: corners(elevation), holes: [] });
+      if (Number.isFinite(ceiling) && ceiling > elevation) {
+        ceilingSurfaces.push({
+          id: id.replace("auto-walked-", "auto-walked-ceiling-"),
+          points: corners(ceiling).map(([x, y, z]) => [x, y, z]),
+          holes: [],
+        });
+      }
+    }
+  }
   const thresholdSurfaces = floorSurfaces.filter((surface) =>
     surface.id.startsWith("auto-threshold-"));
   // A doorway has a lintel: every threshold floor gets a matching ceiling quad
@@ -199,6 +231,8 @@ export function structuralCollisionConfigFromReviewPlan(plan, {
   // scanner-visited room. These cook as if the extractor had never proposed
   // them; passing nothing keeps every wall.
   trajectoryDemotedWalls = new Set(),
+  // Frozen walked-floor rectangles from the revision's trajectory evidence.
+  walkedFloors = [],
 } = {}) {
   const levels = plan.levels.map((level) => ({
     levelKey: level.id,
@@ -265,7 +299,7 @@ export function structuralCollisionConfigFromReviewPlan(plan, {
       connectorKey: connector.id,
       geometry: { type: "polygon", points: connector.points },
     })),
-  }, { provenance: "operator_reviewed" });
+  }, { provenance: "operator_reviewed", walkedFloors });
 }
 
 export function automaticNavigationLayout(config, geometry) {

@@ -576,21 +576,168 @@ export function trajectoryDemotableWalls({
       const to = polygonPointXZ(wall.end);
       if (!from || !to) continue;
       if (Math.hypot(to[0] - from[0], to[1] - from[1]) > maximumWallLengthM) continue;
+      // Containment in a room polygon used to be required here, and it was
+      // wrong on real captures: the extractor traces a room as a ring around
+      // observed floor, so genuine free-standing clutter sits OUTSIDE that
+      // ring and every real clutter wall failed the test. What actually
+      // carries the claim is the pass-through itself — the rig rode through
+      // the wall's plane below its own top. That is only trustworthy while
+      // consecutive samples are close enough to represent continuous travel
+      // rather than a chord cutting a corner, which the caller enforces by
+      // rejecting sparse trajectories.
       const middle = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
-      const containingRoom = rooms.find((room) =>
-        pointStrictlyInsideOutline(from, room.outline) &&
-        pointStrictlyInsideOutline(to, room.outline) &&
-        pointStrictlyInsideOutline(middle, room.outline));
-      if (!containingRoom) continue;
+      const nearestRoom = rooms.find((room) =>
+        pointStrictlyInsideOutline(from, room.outline) ||
+        pointStrictlyInsideOutline(to, room.outline) ||
+        pointStrictlyInsideOutline(middle, room.outline)) ?? rooms[0];
       demoted.push({
         levelId,
         wallId,
         crossingCount,
-        roomId: containingRoom.roomId,
+        roomId: nearestRoom.roomId,
       });
     }
   }
   return demoted.sort((left, right) =>
     left.levelId.localeCompare(right.levelId) ||
     left.wallId.localeCompare(right.wallId));
+}
+
+// ————— Trajectory-evidenced floor —————
+
+// Room polygons are traced from observed floor returns, which in a cluttered
+// space can cover a fraction of where a person actually walked: on the FJD
+// capture the ring held 12.9 m² while 73% of the pose samples fell outside it.
+// Those excluded areas are not blocked by anything — they are simply absent
+// from the floor, so no amount of opening walls makes them reachable.
+//
+// The rig having been carried through a spot is the strongest walkability
+// evidence available: stronger than inferring floor from returns, and immune
+// to the glass and mirror artifacts that confuse them. This turns the pose
+// path into floor. It only ever ADDS surface — walls still stand, agent
+// erosion still applies — so the worst case is floor under a standing wall,
+// which the wall continues to block.
+export const DEFAULT_WALKED_FLOOR_CELL_M = 0.25;
+// Half-width of the walked corridor. Recast erodes by roughly the agent
+// radius, so a corridor must exceed twice that to survive as navmesh.
+export const DEFAULT_WALKED_FLOOR_RADIUS_M = 0.6;
+
+function mergeCellsIntoRectangles(cells, cellSizeM) {
+  // Row runs first, then merge identical runs downward: far fewer surfaces
+  // than one quad per cell, and deterministic given a sorted cell set.
+  const byRow = new Map();
+  for (const key of cells) {
+    const [column, row] = key.split(",").map(Number);
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push(column);
+  }
+  const runs = [];
+  for (const row of [...byRow.keys()].sort((a, b) => a - b)) {
+    const columns = byRow.get(row).sort((a, b) => a - b);
+    let start = columns[0];
+    let previous = columns[0];
+    for (const column of columns.slice(1)) {
+      if (column === previous + 1) { previous = column; continue; }
+      runs.push({ row, start, end: previous });
+      start = column;
+      previous = column;
+    }
+    runs.push({ row, start, end: previous });
+  }
+  const open = new Map();
+  const rectangles = [];
+  for (const run of runs) {
+    const key = `${run.start},${run.end}`;
+    const pending = open.get(key);
+    if (pending && pending.endRow === run.row - 1) {
+      pending.endRow = run.row;
+      continue;
+    }
+    if (pending) rectangles.push(pending);
+    open.set(key, { start: run.start, end: run.end, startRow: run.row, endRow: run.row });
+  }
+  rectangles.push(...open.values());
+  return rectangles
+    .map((rectangle) => ({
+      minX: rectangle.start * cellSizeM,
+      maxX: (rectangle.end + 1) * cellSizeM,
+      minZ: rectangle.startRow * cellSizeM,
+      maxZ: (rectangle.endRow + 1) * cellSizeM,
+    }))
+    .sort((left, right) => left.minZ - right.minZ || left.minX - right.minX);
+}
+
+export function trajectoryWalkedFloor({
+  positions,
+  plan,
+  cellSizeM = DEFAULT_WALKED_FLOOR_CELL_M,
+  radiusM = DEFAULT_WALKED_FLOOR_RADIUS_M,
+  carryHeightBandM = DEFAULT_CARRY_HEIGHT_BAND_M,
+}) {
+  if (!Number.isFinite(cellSizeM) || cellSizeM < 0.05 || cellSizeM > 1) {
+    throw new ProcessingAgentError(
+      "INVALID_TRAJECTORY_PARAMETERS",
+      "Walked-floor cell size must be between 0.05 and 1 metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  if (!Number.isFinite(radiusM) || radiusM < 0.1 || radiusM > 3) {
+    throw new ProcessingAgentError(
+      "INVALID_TRAJECTORY_PARAMETERS",
+      "Walked-floor radius must be between 0.1 and 3 metres",
+      { failureClass: "input_validation", retryable: false },
+    );
+  }
+  const levels = (plan?.levels ?? [])
+    .map((level) => ({
+      levelId: String(level.id ?? level.levelKey ?? ""),
+      elevationM: Number(level.elevationM),
+      ceilingElevationM: Number(level.ceilingElevationM ?? level.elevationM),
+    }))
+    .filter((level) => level.levelId && Number.isFinite(level.elevationM))
+    .sort((left, right) => right.elevationM - left.elevationM ||
+      left.levelId.localeCompare(right.levelId));
+  const bandMinimum = Number(carryHeightBandM?.minimum ?? 0);
+  const bandMaximum = Number(carryHeightBandM?.maximum ?? 0);
+  const cellsByLevel = new Map(levels.map((level) => [level.levelId, new Set()]));
+  const reach = Math.ceil(radiusM / cellSizeM);
+  for (const position of positions ?? []) {
+    const x = Number(position[0]);
+    const y = Number(position[1]);
+    const z = Number(position[2]);
+    if (![x, y, z].every(Number.isFinite)) continue;
+    const level = levels.find((candidate) =>
+      y >= candidate.elevationM + bandMinimum && y <= candidate.elevationM + bandMaximum);
+    if (!level) continue;
+    const centreColumn = Math.floor(x / cellSizeM);
+    const centreRow = Math.floor(z / cellSizeM);
+    const cells = cellsByLevel.get(level.levelId);
+    for (let column = centreColumn - reach; column <= centreColumn + reach; column += 1) {
+      for (let row = centreRow - reach; row <= centreRow + reach; row += 1) {
+        const cellX = (column + 0.5) * cellSizeM;
+        const cellZ = (row + 0.5) * cellSizeM;
+        if (Math.hypot(cellX - x, cellZ - z) <= radiusM) cells.add(`${column},${row}`);
+      }
+    }
+  }
+  return levels
+    .filter((level) => cellsByLevel.get(level.levelId).size)
+    .map((level) => ({
+      levelId: level.levelId,
+      elevationM: semanticRound(level.elevationM),
+      ceilingElevationM: semanticRound(level.ceilingElevationM),
+      cellSizeM: semanticRound(cellSizeM),
+      radiusM: semanticRound(radiusM),
+      cellCount: cellsByLevel.get(level.levelId).size,
+      rectangles: mergeCellsIntoRectangles(
+        [...cellsByLevel.get(level.levelId)].sort(),
+        cellSizeM,
+      ).map((rectangle) => ({
+        minX: semanticRound(rectangle.minX),
+        maxX: semanticRound(rectangle.maxX),
+        minZ: semanticRound(rectangle.minZ),
+        maxZ: semanticRound(rectangle.maxZ),
+      })),
+    }))
+    .sort((left, right) => left.levelId.localeCompare(right.levelId));
 }
