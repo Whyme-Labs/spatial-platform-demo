@@ -635,42 +635,8 @@ async function approveAndPublish(gaussianRun, authCookie) {
     throw new Error("Gaussian processing did not create verified web and poster assets");
   }
 
-  const scanResult = await api(`/api/projects/${projectId}/privacy-scans`, {
-    method: "POST",
-    cookie: authCookie,
-    body: {
-      clientOperationId: crypto.randomUUID(),
-      versionId,
-      assetIds: [posterAsset.id],
-    },
-  });
-  let workspace;
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    workspace = await api(`/api/projects/${projectId}/spatial?versionId=${versionId}`, {
-      cookie: authCookie,
-    });
-    const scan = workspace.privacyScans.find((candidate) => candidate.id === scanResult.scan.id);
-    if (scan && ["COMPLETED", "FAILED", "DEAD_LETTER"].includes(scan.status)) {
-      if (scan.status !== "COMPLETED") {
-        throw new Error(`Privacy scan ${scan.id} ended ${scan.status}: ${scan.error_json ?? "no error"}`);
-      }
-      break;
-    }
-    await delay(Math.min(3000, 500 + attempt * 100));
-  }
-  const scan = workspace?.privacyScans.find((candidate) => candidate.id === scanResult.scan.id);
-  if (scan?.status !== "COMPLETED") throw new Error("Privacy scan did not complete");
-  for (const candidate of workspace.privacyCandidates.filter((item) => item.scan_id === scan.id)) {
-    await api(`/api/projects/${projectId}/privacy-candidates/${candidate.id}`, {
-      method: "PATCH",
-      cookie: authCookie,
-      body: {
-        status: "dismissed",
-        note: "Open-corpus poster reviewed during automated local E2E; no publishable personal data is present.",
-      },
-    });
-  }
-
+  // Automated privacy scanning was removed; this QA approval carries the
+  // operator's own privacy disposition.
   await api(`/api/versions/${versionId}/approve`, {
     method: "POST",
     cookie: authCookie,
@@ -683,6 +649,7 @@ async function approveAndPublish(gaussianRun, authCookie) {
       notes: "Pinned open-source indoor scene; visual demonstration only.",
     },
   });
+
   const slug = `open-corpus-${runId.slice(-8)}`;
   const published = await api(`/api/projects/${projectId}/releases`, {
     method: "POST",

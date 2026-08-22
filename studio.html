@@ -82,9 +82,7 @@
         <nav class="project-section-nav" aria-label="Project workspace">
           <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
           <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
-          <button id="projectPrivacyTab" type="button" data-project-section="privacy">Privacy</button>
           <button id="projectCompareTab" type="button" data-project-section="compare" hidden>Compare</button>
-          <button id="projectWalkTab" type="button" data-project-section="walk">Walk test</button>
           <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
           <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
           <button id="projectExpertTab" type="button" data-project-section="expert">Expert</button>
@@ -350,7 +348,7 @@
       <section class="capture-intake-step" data-capture-intake-step="3" aria-labelledby="captureIntakeReviewTitle" hidden>
         <h3 id="captureIntakeReviewTitle">Review and process</h3>
         <div id="newCaptureReview" class="capture-intake-review" aria-live="polite"></div>
-        <p class="field-note">The source files remain immutable. Machine-generated structure, privacy candidates, and walking evidence still require the stage-specific checks shown after processing.</p>
+        <p class="field-note">The source files remain immutable. Machine-generated structure and walking evidence still require the stage-specific checks shown after processing.</p>
       </section>
       <div class="upload-progress"><i id="newProjectUploadProgress"></i></div>
       <small id="newProjectStatus" role="status" aria-live="polite">Ready to upload.</small>
@@ -403,7 +401,6 @@
             <label><span>Description</span><input name="description" maxlength="500" /></label>
             <label><span>Default asset producer</span><select name="captureAdapter"><option value="xgrids-lcc">XGRIDS LCC export</option><option value="fjd-trion">FJD Trion export</option><option value="open-import">Compatible reconstruction or import</option></select></label>
             <label><span>Delivery template</span><select name="deliveryTemplate"><option>Property showcase</option><option>Venue navigator</option><option>Film production scene</option><option>Measured capture pack</option></select></label>
-            <label><span>Privacy review</span><select name="privacyReview"><option value="strict">Strict</option><option value="standard">Standard</option></select></label>
             <label><span>Publication</span><select name="publication"><option value="public-after-approval">Public after approval</option><option value="private-review">Private review</option></select></label>
             <label><span>Navigation</span><select name="navigation"><option value="visitor-walk">Visitor walk</option><option value="review-walk-and-fly">Review walk and fly</option></select></label>
             <label><span>Required files</span><select name="requiredFiles"><option value="visual-and-registered-geometry">Visual + registered geometry</option></select></label>
@@ -692,9 +689,7 @@
       <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">QUALITY GATE</span>
       <h2>Approve a web derivative.</h2>
-      <p>Only Spark RAD, SPZ, or SOG assets can be published. Privacy approval is mandatory.</p>
-      <section id="qaPrivacyEvidence" class="notice-card" aria-live="polite"></section>
-      <button id="qaOpenPrivacyWorkspace" class="quiet-button wide" type="button">Open privacy evidence workspace</button>
+      <p>Only Spark RAD, SPZ, or SOG assets can be published. Privacy review happens outside the platform; your confirmation below is the record of it.</p>
       <div class="mock-form-grid">
         <label class="full"><span>Web asset</span><select name="webAssetId" id="qaAssetSelect" required></select></label>
         <label><span>Visual quality decision</span><select name="visualGrade"><option value="A">A — Client-ready: no visible defects at the approved framing and quality preset</option><option value="B">B — Acceptable: minor defects do not distract from the intended experience</option><option value="C">C — Conditional: visible defects require an explicit acceptance note before release</option></select></label>
@@ -1070,22 +1065,6 @@
     </form>
   </dialog>
 
-  <dialog id="privacyCandidateDialog" class="dialog-card wide-dialog">
-    <form id="privacyCandidateForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
-      <span class="eyebrow">PRIVACY EVIDENCE</span>
-      <h2>Record the human decision.</h2>
-      <p id="privacyCandidateContext">Review the highlighted model candidate before changing its status.</p>
-      <input name="candidateId" type="hidden" />
-      <div class="mock-form-grid">
-        <label><span>Decision</span><select name="status" required><option value="dismissed">Dismiss false positive</option><option value="confirmed">Confirm privacy issue</option><option value="resolved">Mark issue resolved</option></select></label>
-        <label class="full"><span>Evidence note</span><textarea name="note" minlength="2" maxlength="1000" required placeholder="What did you verify, or how was the issue resolved?"></textarea></label>
-      </div>
-      <p class="field-note">Detection never approves publication automatically. Confirmed and pending candidates continue to block QA; resolved and dismissed candidates retain their audit history.</p>
-      <button class="primary-button wide" type="submit">Record privacy decision</button>
-      <p id="privacyCandidateError" class="form-error" role="alert"></p>
-    </form>
-  </dialog>
 
   <dialog id="measurementBriefDialog" class="dialog-card wide-dialog">
     <form id="measurementBriefForm">

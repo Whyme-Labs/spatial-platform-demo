@@ -350,7 +350,10 @@ function stringArgument(node) {
 }
 
 function auditStudioWorkflow(html, source) {
-  const mandatoryStages = ["structure", "privacy", "walk", "publish"];
+  // The walk stage dissolved once its embedded viewer and its publication gate
+  // were removed: routes and the walking profile are structural authoring, and
+  // build receipts are raw evidence Expert already owns.
+  const mandatoryStages = ["structure", "publish"];
   const journeyDestinations = projectJourneyDestinations(source);
   const sectionValues = new Set(
     Array.from(html.matchAll(/data-project-section=["']([^"']+)["']/g), (match) => match[1]),

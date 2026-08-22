@@ -231,7 +231,6 @@ test.describe("authenticated studio UI", () => {
     await frameConfirmation.check();
     await dialog.getByRole("button", { name: "Review processing plan", exact: true }).click();
     await expect(dialog.getByText("✓ Prepare the browser scene", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("✓ Run privacy detection", { exact: true })).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Create and process scene", exact: true })).toBeVisible();
     await expectResponsiveSurface(page, "#newProjectDialog");
   });

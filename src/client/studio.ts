@@ -378,7 +378,6 @@ type ProjectDetail = {
   captureBundles: CaptureBundle[];
   comparisonReadiness: ComparisonReadiness;
   previewReadyVersionIds: string[];
-  walkTestReadyVersionIds?: string[];
 };
 const emptyComparisonReadiness: ComparisonReadiness = {
   available: false,
@@ -864,37 +863,6 @@ type SpatialWorkspace = {
   entities: SpatialEntity[];
   routes: Array<{ id: string; label: string; accessibility: string; estimated_seconds: number | null }>;
   routeStops: Array<{ route_id: string; entity_id: string; sequence_number: number }>;
-  privacyRegions: Array<{ id: string; label: string; source: string; status: string; confidence: number | null }>;
-  privacyScans: Array<{
-    id: string;
-    status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "DEAD_LETTER";
-    detector: string;
-    detector_version: string;
-    attempt_count: number;
-    max_attempts: number;
-    input_count: number;
-    candidate_count: number;
-    evidence_json: string | null;
-    error_json: string | null;
-    created_at: string;
-    completed_at: string | null;
-  }>;
-  privacyCandidates: Array<{
-    id: string;
-    scan_id: string;
-    asset_id: string;
-    asset_file_name: string;
-    asset_mime_type: string;
-    target: string;
-    label: string;
-    bbox_json: string;
-    confidence: number | null;
-    detector_metadata_json: string;
-    status: "pending" | "confirmed" | "dismissed" | "resolved";
-    decision_note: string | null;
-    created_at: string;
-    reviewed_at: string | null;
-  }>;
   changeReports: GeometryChangeReport[];
   captureCompletenessReports: CaptureCompletenessReport[];
   captureScanStructures: CaptureScanStructure[];
@@ -1235,25 +1203,20 @@ type ProjectSection =
   | "overview"
   | "process"
   | "structure"
-  | "privacy"
   | "compare"
-  | "walk"
   | "publish"
   | "measurement"
   | "expert";
 
 type ProjectStageCapability =
   | "structure-processing-poll"
-  | "privacy-evidence-poll"
   | "comparison-evidence-poll";
 
 const projectStageCapabilities: Record<ProjectSection, readonly ProjectStageCapability[]> = {
   overview: [],
   process: [],
   structure: ["structure-processing-poll"],
-  privacy: ["privacy-evidence-poll"],
   compare: ["comparison-evidence-poll"],
-  walk: [],
   publish: [],
   measurement: [],
   expert: [],
@@ -1372,7 +1335,6 @@ const semanticReviewDialog = byId<HTMLDialogElement>("semanticReviewDialog");
 const floorplanExtractionDialog = byId<HTMLDialogElement>("floorplanExtractionDialog");
 const floorplanReviewDialog = byId<HTMLDialogElement>("floorplanReviewDialog");
 const routeDialog = byId<HTMLDialogElement>("routeDialog");
-const privacyCandidateDialog = byId<HTMLDialogElement>("privacyCandidateDialog");
 const measurementBriefDialog = byId<HTMLDialogElement>("measurementBriefDialog");
 const checkPointDialog = byId<HTMLDialogElement>("checkPointDialog");
 const captureCompletenessDialog = byId<HTMLDialogElement>("captureCompletenessDialog");
@@ -1398,21 +1360,6 @@ let captureQualificationMode:
   | typeof AUTOMATIC_PAIRED_CAPTURE_METHOD
   | typeof ATTESTED_PAIRED_CAPTURE_METHOD = ATTESTED_PAIRED_CAPTURE_METHOD;
 let captureQualificationRenderGeneration = 0;
-let latestWalkTestPose: {
-  position: [number, number, number];
-  target: [number, number, number];
-  observedAt: number;
-} | null = null;
-let previousWalkTestSample: { position: [number, number, number]; observedAt: number } | null = null;
-let activeWalkTestSession: {
-  projectId: string;
-  versionId: string;
-  buildId: string;
-  clientOperationId: string | null;
-  startPose: { position: [number, number, number]; target: [number, number, number] } | null;
-  movementObserved: boolean;
-  runtimeFailure: string | null;
-} | null = null;
 let captureJourneyOperation: {
   id: string;
   primaryUploadOperationId: string;
@@ -1469,7 +1416,6 @@ let activeUpload: {
   parts: Map<number, string>;
 } | null = null;
 let uploadAbortController: AbortController | null = null;
-let privacyScanOperation: { versionId: string; id: string } | null = null;
 let captureCompletenessOperation: {
   id: string;
   requestKey: string;
@@ -1497,7 +1443,6 @@ let floorplanReviewOperation: {
 const floorplanExportOperations = new Map<string, { id: string; requestKey: string }>();
 let customDomainWorkspace: CustomDomainWorkspace | null = null;
 const customDomainChallenges = new Map<string, string>();
-let privacyScanPollGeneration = 0;
 let semanticExtractionPollGeneration = 0;
 let floorplanExtractionPollGeneration = 0;
 type CaptureAgreementFinding = {
@@ -1671,7 +1616,6 @@ function bindInterface(): void {
   const floorplanExtractionForm = byId<HTMLFormElement>("floorplanExtractionForm");
   const floorplanReviewForm = byId<HTMLFormElement>("floorplanReviewForm");
   const routeForm = byId<HTMLFormElement>("routeForm");
-  const privacyCandidateForm = byId<HTMLFormElement>("privacyCandidateForm");
   const measurementBriefForm = byId<HTMLFormElement>("measurementBriefForm");
   const checkPointForm = byId<HTMLFormElement>("checkPointForm");
   const geometryChangeForm = byId<HTMLFormElement>("geometryChangeForm");
@@ -1706,7 +1650,6 @@ function bindInterface(): void {
     semanticExtractionForm,
     semanticReviewForm,
     routeForm,
-    privacyCandidateForm,
     measurementBriefForm,
     checkPointForm,
     geometryChangeForm,
@@ -2151,10 +2094,6 @@ function bindInterface(): void {
     }, discoverEnterpriseLogin).finally(updateEnterpriseLoginAvailability);
   });
   updateEnterpriseLoginAvailability();
-  byId("qaOpenPrivacyWorkspace").addEventListener("click", () => {
-    qaDialog.close();
-    activateProjectSection("privacy", true, "push", true);
-  });
   const resendButton = byId<HTMLButtonElement>("resendLoginCode");
   resendButton.addEventListener("click", () => {
     const email = byId<HTMLInputElement>("loginEmail").value.trim().toLowerCase();
@@ -2525,30 +2464,6 @@ function bindInterface(): void {
       errorTarget: byId("routeError"),
     }, () => createSpatialRoute(form));
   });
-  const privacyCandidateSubmit = privacyCandidateForm.querySelector<HTMLButtonElement>("[type='submit']")!;
-  const privacyCandidateStatus = privacyCandidateForm.elements.namedItem("status");
-  const privacyCandidateNote = privacyCandidateForm.elements.namedItem("note");
-  if (privacyCandidateStatus instanceof HTMLSelectElement && privacyCandidateNote instanceof HTMLTextAreaElement) {
-    privacyCandidateStatus.addEventListener("change", () => {
-      const resolved = privacyCandidateStatus.value === "resolved";
-      privacyCandidateNote.minLength = resolved ? 10 : 2;
-      privacyCandidateNote.placeholder = resolved
-        ? "Describe the applied redaction or other evidence that resolves this issue."
-        : "What did you verify?";
-    });
-  }
-  privacyCandidateForm.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(privacyCandidateForm);
-    const candidateId = String(form.get("candidateId") ?? "");
-    void runAction({
-      key: `privacy-candidate-decision:${candidateId}`,
-      trigger: privacyCandidateSubmit,
-      form: privacyCandidateForm,
-      pendingLabel: "Recording decision…",
-      errorTarget: byId("privacyCandidateError"),
-    }, () => recordPrivacyCandidateDecision(form));
-  });
   const briefSubmit = measurementBriefForm.querySelector<HTMLButtonElement>("[type='submit']")!;
   measurementBriefForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -2662,7 +2577,6 @@ function bindInterface(): void {
   });
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
-  window.addEventListener("message", handleWalkTestRendererMessage);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
   });
@@ -2686,9 +2600,7 @@ function bindInterface(): void {
   const projectSectionButtons: Array<[HTMLButtonElement, ProjectSection]> = [
     [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
-    [byId<HTMLButtonElement>("projectPrivacyTab"), "privacy"],
     [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
-    [byId<HTMLButtonElement>("projectWalkTab"), "walk"],
     [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
     [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
@@ -3134,9 +3046,11 @@ function projectSectionFromHash(): ProjectSection {
   const [candidate, , section] = window.location.hash.slice(1).split("/");
   if (section === "process") return "process";
   if (candidate === "spatial" || section === "scene" || section === "structure") return "structure";
-  if (section === "privacy") return "privacy";
+  // The privacy stage was removed; QA approval lives in Publish.
+  if (section === "privacy") return "publish";
   if (section === "compare") return "compare";
-  if (section === "walk") return "walk";
+  // The walk stage dissolved; its work moved to Structure and Expert.
+  if (section === "walk") return "structure";
   if (section === "publish") return "publish";
   if (candidate === "measurement" || section === "measurement") return "measurement";
   if (section === "expert") return "expert";
@@ -3242,7 +3156,7 @@ function activateView(
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
   byId("spatialWorkspace").hidden = !projectVisible ||
-    !["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection);
+    !["structure", "compare", "expert"].includes(state.projectSection);
   byId("publishWorkspace").hidden = !projectVisible || state.projectSection !== "publish";
   byId("measurementWorkspace").hidden = !projectVisible || state.projectSection !== "measurement";
   byId("hostingWorkspace").hidden = view !== "hosting";
@@ -3283,18 +3197,16 @@ function activateView(
   byId("viewTitle").textContent = headings[view].title;
   const spatialHeading: readonly [string, string] | undefined = ({
     structure: ["STRUCTURE", "Review reconstructed rooms and openings"],
-    privacy: ["PRIVACY", "Review privacy evidence before approval"],
     compare: ["COMPARE", "Review change evidence across immutable versions"],
-    walk: ["WALK TEST", "Verify movement, clearance, and destinations"],
     expert: ["EXPERT", "Inspect technical evidence and recovery controls"],
-  } as const)[state.projectSection as "structure" | "privacy" | "compare" | "walk" | "expert"];
+  } as const)[state.projectSection as "structure" | "compare" | "expert"];
   if (spatialHeading) {
     byId("spatialWorkspaceEyebrow").textContent = spatialHeading[0];
     byId("spatialWorkspaceTitle").textContent = spatialHeading[1];
   }
   renderJobs();
   if (view === "reviews") renderReviews();
-  if (projectVisible && ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)) {
+  if (projectVisible && ["structure", "compare", "expert"].includes(state.projectSection)) {
     renderSpatial();
     void ensureProjectWorkspace("spatial");
   }
@@ -3620,7 +3532,6 @@ function renderNewCaptureReview(): void {
     element("p", "capture-plan-item", "✓ Prepare the browser scene"),
     element("p", "capture-plan-item", "✓ Detect rooms, walls, and openings"),
     element("p", "capture-plan-item", "✓ Build the walkable area"),
-    element("p", "capture-plan-item", "✓ Run privacy detection"),
   );
 }
 
@@ -4132,7 +4043,6 @@ function editProjectTemplate(template: ProjectTemplate): void {
     captureAdapter: template.captureAdapter,
     deliveryTemplate: template.deliveryTemplate,
     notes: template.notes ?? "",
-    privacyReview: template.policy.privacyReview,
     publication: template.policy.publication,
     navigation: template.policy.navigation,
     requiredFiles: template.policy.requiredFiles,
@@ -4324,7 +4234,6 @@ async function saveProjectTemplate(form: FormData): Promise<void> {
     notes: optionalString(form.get("notes")),
     policy: {
       schemaVersion: "project-workflow-policy-v1",
-      privacyReview: String(form.get("privacyReview") ?? "strict"),
       publication: String(form.get("publication") ?? "public-after-approval"),
       navigation: String(form.get("navigation") ?? "visitor-walk"),
       requiredFiles: String(form.get("requiredFiles") ?? "visual-and-registered-geometry"),
@@ -6914,9 +6823,7 @@ function renderSpatial(): void {
   }
   const versionControl = element(
     "article",
-    state.projectSection === "walk"
-      ? "workspace-card-large spatial-version-control spatial-version-strip"
-      : "workspace-card-large spatial-version-control",
+    "workspace-card-large spatial-version-control",
   );
   const versionSelect = document.createElement("select");
   versionSelect.setAttribute("aria-label", "Spatial version");
@@ -7366,10 +7273,6 @@ function renderSpatial(): void {
     element("h3", "", "Build receipts and operator review"),
     navigationBuildHistory,
   );
-  const approvedNavigationBuild = navigationBuilds.find((build) => build.status === "APPROVED");
-  const walkTestCard = approvedNavigationBuild
-    ? renderWalkTestCard(spatial, approvedNavigationBuild)
-    : null;
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7428,161 +7331,6 @@ function renderSpatial(): void {
     ),
   );
 
-  const assurance = element("article", "workspace-card-large privacy-assurance");
-  assurance.id = "privacyAssuranceCard";
-  assurance.append(
-    element("span", "eyebrow", "PRIVACY EVIDENCE"),
-    element("h3", "", "Automated candidates, human decisions"),
-    element(
-      "p",
-      "muted-copy",
-      "Private rendered evidence frames are checked by the configured detector. The model can only propose candidates; an operator must dismiss, confirm, or resolve each one.",
-    ),
-  );
-  const posterAssets = (state.selected?.assets ?? []).filter((asset) =>
-    asset.version_id === spatial.version!.id &&
-    asset.kind === "poster" &&
-    asset.integrity_status === "verified"
-  );
-  const latestScan = spatial.privacyScans[0] ?? null;
-  const scanSummary = element("section", "privacy-scan-summary");
-  if (latestScan) {
-    const statusLine = element("div", "privacy-scan-heading");
-    statusLine.append(
-      element("span", `status-pill ${statusClass(latestScan.status)}`, humanStatus(latestScan.status)),
-      element(
-        "strong",
-        "",
-        `${latestScan.candidate_count} candidate${latestScan.candidate_count === 1 ? "" : "s"} across ${latestScan.input_count} frame${latestScan.input_count === 1 ? "" : "s"}`,
-      ),
-    );
-    scanSummary.append(
-      statusLine,
-      element(
-        "small",
-        "muted-copy",
-        `${latestScan.detector_version} · attempt ${latestScan.attempt_count}/${latestScan.max_attempts} · queued ${parseTimestamp(latestScan.created_at).toLocaleString()}`,
-      ),
-    );
-    if (latestScan.status === "QUEUED" || latestScan.status === "RUNNING") {
-      scanSummary.append(element("p", "inline-status", latestScan.status === "QUEUED"
-        ? "Waiting for the privacy worker. Refresh to retrieve the latest state."
-        : "Detection is running. Refresh to retrieve completed evidence."));
-    }
-    if (latestScan.status === "FAILED" || latestScan.status === "DEAD_LETTER") {
-      const retry = element("button", "quiet-button", "Retry failed scan");
-      retry.addEventListener("click", () => {
-        void runAction({
-          key: `privacy-scan-retry:${latestScan.id}`,
-          trigger: retry,
-          pendingLabel: "Queueing retry…",
-        }, () => retryPrivacyScan(latestScan.id));
-      });
-      scanSummary.append(
-        element("p", "form-error", privacyScanError(latestScan.error_json)),
-        retry,
-      );
-    }
-  } else {
-    scanSummary.append(element("p", "muted-copy", "No automated privacy evidence has been recorded for this version."));
-  }
-  const scanAction = element("button", "primary-button wide", latestScan ? "Run a new privacy scan" : "Run automated privacy scan");
-  const scanActive = latestScan?.status === "QUEUED" || latestScan?.status === "RUNNING";
-  scanAction.disabled = posterAssets.length === 0 || scanActive;
-  scanAction.title = posterAssets.length === 0
-    ? "A verified poster image is required before privacy detection can run."
-    : scanActive
-      ? "The latest privacy scan is still active."
-      : "";
-  scanAction.addEventListener("click", () => {
-    void runAction({
-      key: `privacy-scan:${project.id}:${spatial.version!.id}`,
-      trigger: scanAction,
-      pendingLabel: "Queueing scan…",
-    }, queuePrivacyScan);
-  });
-  scanSummary.append(
-    scanAction,
-    element(
-      "small",
-      "field-note",
-      posterAssets.length
-        ? `${posterAssets.length} verified evidence frame${posterAssets.length === 1 ? "" : "s"} will remain private during detection.`
-        : "Process this version to generate a verified private poster frame first.",
-    ),
-  );
-  assurance.append(scanSummary);
-
-  const latestCandidates = latestScan
-    ? spatial.privacyCandidates.filter((candidate) => candidate.scan_id === latestScan.id)
-    : [];
-  if (latestScan?.status === "COMPLETED" && !latestCandidates.length) {
-    assurance.append(element("div", "notice-card", "No privacy candidates were detected. The completed scan remains part of the QA evidence."));
-  }
-  if (latestCandidates.length) {
-    const candidates = element("section", "privacy-candidate-grid");
-    for (const candidate of latestCandidates) {
-      const card = element("article", `privacy-candidate-card ${candidate.status}`);
-      card.append(privacyCandidatePreview(project.id, candidate));
-      const copy = element("div", "privacy-candidate-copy");
-      const heading = element("div", "privacy-candidate-heading");
-      heading.append(
-        element("strong", "", candidate.label),
-        element("span", `status-pill ${statusClass(candidate.status.toUpperCase())}`, humanStatus(candidate.status)),
-      );
-      const confidence = candidate.confidence === null
-        ? "Model confidence unavailable"
-        : `${Math.round(candidate.confidence * 100)}% model confidence`;
-      copy.append(
-        heading,
-        element("small", "muted-copy", `${candidate.asset_file_name} · ${confidence}`),
-      );
-      if (candidate.decision_note) copy.append(element("p", "field-note", candidate.decision_note));
-      const review = element("button", candidate.status === "pending" || candidate.status === "confirmed"
-        ? "primary-button wide"
-        : "quiet-button wide", candidate.reviewed_at ? "Review decision" : "Review candidate");
-      review.addEventListener("click", () => openPrivacyCandidateDialog(candidate));
-      copy.append(review);
-      card.append(copy);
-      candidates.append(card);
-    }
-    assurance.append(candidates);
-  }
-
-  assurance.append(element("hr", "section-rule"));
-  assurance.append(element("h4", "", "Authored privacy regions"));
-  if (!spatial.privacyRegions.length) assurance.append(element("p", "muted-copy", "No privacy regions are awaiting review."));
-  for (const region of spatial.privacyRegions) {
-    const row = element("div", "review-line");
-    row.append(element("div", "", `${region.label} · ${humanStatus(region.source)} · ${humanStatus(region.status)}`));
-    if (region.status === "pending") {
-      const actions = element("span", "release-actions");
-      for (const status of ["approved", "rejected"] as const) {
-        const button = element("button", status === "approved" ? "quiet-button" : "danger-button", humanStatus(status));
-        button.addEventListener("click", () => {
-          void runAction({
-            key: `${status}-privacy:${region.id}`,
-            trigger: button,
-            pendingLabel: status === "approved" ? "Approving…" : "Rejecting…",
-          }, () => reviewPrivacyRegion(region.id, status));
-        });
-        actions.append(button);
-      }
-      row.append(actions);
-    }
-    if (region.status === "approved") {
-      const applied = element("button", "primary-button", "Mark redaction applied");
-      applied.addEventListener("click", () => {
-        void runAction({
-          key: `applied-privacy:${region.id}`,
-          trigger: applied,
-          pendingLabel: "Recording…",
-        }, () => reviewPrivacyRegion(region.id, "applied"));
-      });
-      row.append(applied);
-    }
-    assurance.append(row);
-  }
   const comparisonEvidence = compareDomain.renderStage({
     projectId: project.id,
     versions: state.selected?.versions ?? [],
@@ -7610,295 +7358,30 @@ function renderSpatial(): void {
     }, saveDefaultDeliveryPolicy);
   });
   delivery.append(savePolicy);
-  if (state.projectSection === "privacy") {
-    container.append(assurance);
-    return;
-  }
   if (state.projectSection === "compare") {
     container.append(comparisonEvidence);
     return;
   }
   if (state.projectSection === "structure") {
-    container.append(renderFloorplanWorkflow(project, spatial));
-    return;
-  }
-  if (state.projectSection === "walk") {
-    if (walkTestCard) container.append(walkTestCard);
-    container.append(routes, navigationBuildsCard);
+    // Routes, the walking profile, and vertical traversals are structural
+    // authoring: they are edited against the same approved geometry the rest
+    // of this stage reviews, and they used to sit behind a "Walk test" tab
+    // that no longer tested anything.
+    container.append(renderFloorplanWorkflow(project, spatial), routes);
     return;
   }
   if (!comparisonWorkspaceAvailable(state.selected?.comparisonReadiness ?? emptyComparisonReadiness)) {
     container.append(comparisonEvidence);
   }
-  container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
-}
-
-function renderWalkTestCard(
-  spatial: SpatialWorkspace,
-  build: SpatialWorkspace["navigationBuilds"][number],
-): HTMLElement {
-  const project = state.selected?.project;
-  if (
-    project && spatial.version &&
-    (
-      activeWalkTestSession?.projectId !== project.id ||
-      activeWalkTestSession.versionId !== spatial.version.id ||
-      activeWalkTestSession.buildId !== build.id
-    )
-  ) {
-    activeWalkTestSession = {
-      projectId: project.id,
-      versionId: spatial.version.id,
-      buildId: build.id,
-      clientOperationId: null,
-      startPose: null,
-      movementObserved: false,
-      runtimeFailure: null,
-    };
-    latestWalkTestPose = null;
-    previousWalkTestSample = null;
-  }
-  const card = element("article", "workspace-card-large walk-test-card");
-  const status = element("p", "field-note", "Preparing the approved scene and walking runtime…");
-  status.id = "walkTestStatus";
-  const heading = element("div", "walk-test-heading");
-  heading.append(
-    element("span", "eyebrow", "MOVEMENT VERIFICATION"),
-    element("h3", "", "Walk test"),
-    status,
+  // Build receipts are raw evidence and belong to Expert, which the redesign
+  // checklist already names as their owner.
+  container.append(
+    hierarchy,
+    semanticExtraction,
+    navigationBuildsCard,
+    captureEvidence,
+    delivery,
   );
-  const frame = document.createElement("iframe");
-  frame.id = "walkTestPreview";
-  frame.title = "Test the approved walking map inside the scene";
-  const evidence = walkTestEvidenceSummary(build);
-  const evidenceSummary = element("p", "field-note", evidence);
-  const reset = element("button", "quiet-button", "Reset walk test");
-  const usePosition = element("button", "quiet-button", "Set test start here");
-  usePosition.disabled = true;
-  usePosition.id = "walkTestUsePosition";
-  const complete = element("button", "primary-button", "Complete walk test");
-  complete.disabled = true;
-  complete.id = "walkTestComplete";
-  reset.addEventListener("click", () => {
-    latestWalkTestPose = null;
-    previousWalkTestSample = null;
-    if (activeWalkTestSession) {
-      activeWalkTestSession.startPose = null;
-      activeWalkTestSession.clientOperationId = null;
-      activeWalkTestSession.movementObserved = false;
-      activeWalkTestSession.runtimeFailure = null;
-    }
-    usePosition.disabled = true;
-    complete.disabled = true;
-    void prepareWalkTest(frame, status, spatial.version!.id);
-  });
-  usePosition.addEventListener("click", () => {
-    if (!latestWalkTestPose || !activeWalkTestSession) return;
-    activeWalkTestSession.startPose = {
-      position: [...latestWalkTestPose.position] as [number, number, number],
-      target: [...latestWalkTestPose.target] as [number, number, number],
-    };
-    activeWalkTestSession.clientOperationId = crypto.randomUUID();
-    activeWalkTestSession.movementObserved = false;
-    activeWalkTestSession.runtimeFailure = null;
-    complete.disabled = true;
-    status.textContent = "Starting point set. Walk away from it through the approved scene, then complete the test.";
-    showToast("Walk-test starting point set");
-  });
-  complete.addEventListener("click", () => {
-    if (!activeWalkTestSession || !latestWalkTestPose) return;
-    void runAction({
-      key: `complete-walk-test:${build.id}`,
-      trigger: complete,
-      pendingLabel: "Recording…",
-      disable: [reset, usePosition],
-    }, () => completeWalkTest(build.id, activeWalkTestSession!, latestWalkTestPose!));
-  });
-  const actions = element("div", "navigation-authoring-actions");
-  actions.append(reset, usePosition, complete);
-  const blockedReason = element("p", "field-note walk-test-blocked-reason");
-  blockedReason.id = "walkTestBlockedReason";
-  blockedReason.hidden = true;
-  const side = element("div", "walk-test-side");
-  side.append(heading, evidenceSummary, blockedReason, actions);
-  card.append(frame, side);
-  const completed = spatial.walkTests?.find((walkTest) =>
-    walkTest.navigation_build_id === build.id
-  );
-  if (completed) {
-    side.append(element(
-      "p",
-      "generated-readback",
-      `Walk-test receipt recorded ${parseTimestamp(completed.completed_at).toLocaleString()} for this exact approved walking map.`,
-    ));
-  }
-  window.queueMicrotask(() => void prepareWalkTest(frame, status, spatial.version!.id));
-  return card;
-}
-
-async function completeWalkTest(
-  buildId: string,
-  session: NonNullable<typeof activeWalkTestSession>,
-  endPose: NonNullable<typeof latestWalkTestPose>,
-): Promise<void> {
-  if (!session.startPose || !session.movementObserved || session.runtimeFailure) {
-    throw new Error("Set a starting point, walk away from it, and resolve runtime failures before completion.");
-  }
-  await api(`/api/projects/${session.projectId}/spatial/navigation-builds/${buildId}/walk-tests`, {
-    method: "POST",
-    body: JSON.stringify({
-      clientOperationId: session.clientOperationId ??= crypto.randomUUID(),
-      versionId: session.versionId,
-      startPose: session.startPose,
-      endPose: { position: endPose.position, target: endPose.target },
-      runtimeEvidence: {
-        movementObserved: true,
-        collisionFailureReported: false,
-        traversalBlockReported: false,
-      },
-    }),
-  });
-  showToast("Walk test completed and recorded");
-  await Promise.all([
-    loadSpatialWorkspace(session.projectId),
-    selectProject(session.projectId, false, false),
-  ]);
-}
-
-// What the operator can actually do about each stop reason. A wall may be
-// clutter the demotion policy could clear; the floor edge is the limit of the
-// capture itself and no policy reaches it.
-function walkTestBlockedAdvice(kind: string): string {
-  if (kind === "navigation_map_clearance") {
-    return " · demoting the nearby wall run, if it is clutter rather than building, is what widens this";
-  }
-  if (kind === "capture_edge" || kind === "unsupported_floor") {
-    return " · no policy opens this; only capturing more of the space does";
-  }
-  if (kind === "structural") {
-    return " · if this is clutter rather than building, a wider clutter-demotion mode would clear it";
-  }
-  if (kind === "dynamic") return " · open the door in the scene";
-  if (kind === "outside_recovery_bounds") return " · the reviewed movement bounds end here";
-  return "";
-}
-
-function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][number]): string {
-  try {
-    const artifact = JSON.parse(build.artifact_json ?? "{}") as Record<string, unknown>;
-    const validation = Reflect.get(artifact, "validation");
-    const physical = Reflect.get(artifact, "physicalValidation");
-    const unreachable = validation && typeof validation === "object"
-      ? Reflect.get(validation, "unreachableDestinationIds")
-      : null;
-    const failed = physical && typeof physical === "object"
-      ? Reflect.get(physical, "failedDestinationIds")
-      : null;
-    const unreachableCount = Array.isArray(unreachable) ? unreachable.length : 0;
-    const failedCount = Array.isArray(failed) ? failed.length : 0;
-    return `${unreachableCount} unreachable authored destinations · ${failedCount} failed physical routes in the approved processor receipt.`;
-  } catch {
-    return "The approved build receipt could not be summarized; inspect its immutable evidence above.";
-  }
-}
-
-async function prepareWalkTest(
-  frame: HTMLIFrameElement,
-  status: HTMLElement,
-  versionId: string,
-): Promise<void> {
-  frame.onload = null;
-  frame.src = "about:blank";
-  status.textContent = "Preparing the approved scene and walking runtime…";
-  try {
-    const renderable = await createVersionPreview(versionId);
-    if (!frame.isConnected || state.spatial?.version?.id !== versionId) return;
-    frame.onload = () => sendVersionSpatialRuntime(frame, renderable);
-    frame.src = rendererAssetUrl(renderable).toString();
-  } catch (error) {
-    if (!frame.isConnected) return;
-    status.textContent = `Walk test unavailable: ${errorMessage(error)}`;
-  }
-}
-
-function handleWalkTestRendererMessage(event: MessageEvent<unknown>): void {
-  const frame = document.getElementById("walkTestPreview");
-  const status = document.getElementById("walkTestStatus");
-  if (
-    !(frame instanceof HTMLIFrameElement) || !status ||
-    event.origin !== location.origin || event.source !== frame.contentWindow ||
-    !event.data || typeof event.data !== "object" ||
-    Reflect.get(event.data, "source") !== "spatial-spark"
-  ) return;
-  const type = Reflect.get(event.data, "type");
-  // The in-scene hint is transient by design; the panel keeps the last verdict
-  // so an operator who was watching the scene can still read why they stopped.
-  if (type === "movement-blocked") {
-    const readout = document.getElementById("walkTestBlockedReason");
-    if (readout) {
-      const message = String(Reflect.get(event.data, "message") ?? "");
-      const cause = Reflect.get(event.data, "cause");
-      const kind = cause && typeof cause === "object"
-        ? String(Reflect.get(cause, "kind") ?? "unknown")
-        : "unknown";
-      readout.textContent = message
-        ? `Last stop · ${message}${walkTestBlockedAdvice(kind)}`
-        : "";
-      readout.hidden = !message;
-    }
-    return;
-  }
-  if (type === "ready") {
-    status.textContent = "Ready. Click the scene, then walk with WASD or arrow keys; collision remains enforced by the approved runtime.";
-    return;
-  }
-  if (type === "error") {
-    const message = String(Reflect.get(event.data, "message") ?? "walking runtime error");
-    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
-    const complete = document.getElementById("walkTestComplete");
-    if (complete instanceof HTMLButtonElement) complete.disabled = true;
-    status.textContent = `Runtime warning: ${message}`;
-    return;
-  }
-  if (type === "authored-traversal-state" && Reflect.get(event.data, "phase") === "blocked") {
-    const message = String(Reflect.get(event.data, "message") ?? "review the approved path evidence");
-    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
-    const complete = document.getElementById("walkTestComplete");
-    if (complete instanceof HTMLButtonElement) complete.disabled = true;
-    status.textContent = `Traversal blocked: ${message}`;
-    return;
-  }
-  if (type !== "camera-update") return;
-  const pose = Reflect.get(event.data, "cameraPose");
-  if (!pose || typeof pose !== "object") return;
-  const position = finiteStudioPoint(Reflect.get(pose, "position"));
-  const target = finiteStudioPoint(Reflect.get(pose, "target"));
-  if (!position || !target) return;
-  const observedAt = performance.now();
-  const elapsedSeconds = previousWalkTestSample
-    ? (observedAt - previousWalkTestSample.observedAt) / 1000
-    : 0;
-  const speed = previousWalkTestSample && elapsedSeconds > 0
-    ? Math.hypot(...position.map((value, axis) => value - previousWalkTestSample!.position[axis]!)) /
-      elapsedSeconds
-    : 0;
-  latestWalkTestPose = { position, target, observedAt };
-  previousWalkTestSample = { position, observedAt };
-  const usePosition = document.getElementById("walkTestUsePosition");
-  if (usePosition instanceof HTMLButtonElement) usePosition.disabled = false;
-  if (activeWalkTestSession?.startPose) {
-    activeWalkTestSession.movementObserved = position.some((coordinate, axis) =>
-      coordinate !== activeWalkTestSession!.startPose!.position[axis]
-    );
-  }
-  const complete = document.getElementById("walkTestComplete");
-  if (complete instanceof HTMLButtonElement) {
-    complete.disabled = !activeWalkTestSession?.movementObserved ||
-      Boolean(activeWalkTestSession.runtimeFailure);
-  }
-  status.textContent = `Walking runtime active · current speed ${speed.toFixed(2)} ${worldUnitSymbol(
-    state.spatial?.navigationProfile.worldUnit ?? "metres",
-  )}/s · no runtime collision failure reported.`;
 }
 
 function renderPublish(): void {
@@ -7920,11 +7403,6 @@ function renderPublish(): void {
   const navigationReady = Boolean(
     releasableVersion && detail.previewReadyVersionIds.includes(releasableVersion.id),
   );
-  const walkTestReady = Boolean(
-    releasableVersion &&
-    (detail.walkTestReadyVersionIds ?? []).includes(releasableVersion.id),
-  );
-  const privacy = privacyQaReadiness(state.spatial);
   const workflowPolicy = effectiveVersionWorkflowPolicy(detail.project, releasableVersion);
   const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
     subscription.project_id === detail.project.id && subscription.status === "active"
@@ -7938,8 +7416,6 @@ function renderPublish(): void {
       releasableVersion ? `Version ${releasableVersion.version_number} approved` : "Awaiting QA approval",
     ),
     projectFact("Walking map", navigationReady ? "Verified and approved" : "Not ready"),
-    projectFact("In-scene walk test", walkTestReady ? "Completed and recorded" : "Required before publication"),
-    projectFact("Privacy evidence", privacy.ready ? "Ready for human approval" : privacy.message),
     projectFact(
       "Managed hosting",
       workflowPolicy.hosting === "managed-required"
@@ -7974,7 +7450,7 @@ function renderPublish(): void {
     });
     card.append(review);
   }
-  if (releasableVersion && navigationReady && walkTestReady && hostingReady) {
+  if (releasableVersion && navigationReady && hostingReady) {
     const configure = element("button", "primary-button wide", "Configure publication");
     configure.addEventListener("click", () => {
       void runAction({
@@ -7984,7 +7460,7 @@ function renderPublish(): void {
       }, openReleaseDialog);
     });
     card.append(configure);
-  } else if (releasableVersion && navigationReady && walkTestReady && !hostingReady) {
+  } else if (releasableVersion && navigationReady && !hostingReady) {
     const configureHosting = element("button", "primary-button wide", "Configure managed hosting");
     configureHosting.addEventListener("click", () => {
       void runAction({
@@ -8816,7 +8292,7 @@ async function loadSpatialWorkspace(projectId: string, requestedVersionId?: stri
   state.spatialVersionId = workspace.version?.id ?? null;
   if (
     state.view === "project" &&
-    ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)
+    ["structure", "compare", "expert"].includes(state.projectSection)
   ) renderSpatial();
   if (state.view === "project" && state.projectSection === "publish") renderPublish();
 }
@@ -10390,201 +9866,6 @@ async function createSpatialRoute(form: FormData): Promise<void> {
   await loadSpatialWorkspace(project.id);
 }
 
-async function queuePrivacyScan(): Promise<void> {
-  const project = state.selected?.project;
-  const version = state.spatial?.version;
-  if (!project || !version) throw new Error("Open an immutable scene version first.");
-  const assetIds = (state.selected?.assets ?? [])
-    .filter((asset) =>
-      asset.version_id === version.id &&
-      asset.kind === "poster" &&
-      asset.integrity_status === "verified"
-    )
-    .map((asset) => asset.id)
-    .sort();
-  if (!assetIds.length) throw new Error("A verified private poster image is required before privacy detection can run.");
-  if (!privacyScanOperation || privacyScanOperation.versionId !== version.id) {
-    privacyScanOperation = { versionId: version.id, id: crypto.randomUUID() };
-  }
-  try {
-    const result = await api<{ scan: { id: string; status: string } }>(`/api/projects/${project.id}/privacy-scans`, {
-      method: "POST",
-      body: JSON.stringify({
-        clientOperationId: privacyScanOperation.id,
-        versionId: version.id,
-        assetIds,
-      }),
-    });
-    privacyScanOperation = null;
-    if (result.scan.status === "FAILED" || result.scan.status === "DEAD_LETTER") {
-      await loadSpatialWorkspace(project.id);
-      throw new Error("The existing privacy scan failed before it reached the worker. Use Retry failed scan.");
-    }
-    showToast("Privacy scan queued");
-    await loadSpatialWorkspace(project.id);
-    void pollPrivacyScan(project.id, result.scan.id);
-  } catch (error) {
-    await loadSpatialWorkspace(project.id).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function retryPrivacyScan(scanId: string): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) throw new Error("Open a project before retrying privacy detection.");
-  await api(`/api/projects/${project.id}/privacy-scans/${scanId}/retry`, { method: "POST" });
-  showToast("Privacy scan retry queued");
-  await loadSpatialWorkspace(project.id);
-  void pollPrivacyScan(project.id, scanId);
-}
-
-async function pollPrivacyScan(projectId: string, scanId: string): Promise<void> {
-  const generation = ++privacyScanPollGeneration;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1_500 : 3_000));
-    if (
-      generation !== privacyScanPollGeneration ||
-      !projectPollingContextIsActive(projectId, "privacy-evidence-poll")
-    ) return;
-    try {
-      await loadSpatialWorkspace(projectId);
-    } catch {
-      // Transient polling errors are retried without replacing the actionable workspace state.
-      continue;
-    }
-    const scan = state.spatial?.privacyScans.find((candidate) => candidate.id === scanId);
-    if (!scan || !["QUEUED", "RUNNING"].includes(scan.status)) return;
-  }
-  if (
-    generation === privacyScanPollGeneration &&
-    projectPollingContextIsActive(projectId, "privacy-evidence-poll")
-  ) {
-    showNotice("Privacy detection is still running. Refresh later; the queued evidence is retained.", "error");
-  }
-}
-
-function openPrivacyCandidateDialog(candidate: SpatialWorkspace["privacyCandidates"][number]): void {
-  const form = byId<HTMLFormElement>("privacyCandidateForm");
-  form.reset();
-  const candidateId = form.elements.namedItem("candidateId");
-  const status = form.elements.namedItem("status");
-  const note = form.elements.namedItem("note");
-  if (candidateId instanceof HTMLInputElement) candidateId.value = candidate.id;
-  if (status instanceof HTMLSelectElement) {
-    status.value = candidate.status === "pending" ? "dismissed" : candidate.status;
-    status.dispatchEvent(new Event("change"));
-  }
-  if (note instanceof HTMLTextAreaElement) note.value = candidate.decision_note ?? "";
-  byId("privacyCandidateContext").textContent =
-    `${candidate.label} in ${candidate.asset_file_name}. Current status: ${humanStatus(candidate.status)}.`;
-  byId("privacyCandidateError").textContent = "";
-  privacyCandidateDialog.showModal();
-}
-
-async function recordPrivacyCandidateDecision(form: FormData): Promise<void> {
-  const project = state.selected?.project;
-  const candidateId = String(form.get("candidateId") ?? "");
-  if (!project || !candidateId) throw new Error("The privacy candidate is no longer available.");
-  const status = String(form.get("status") ?? "");
-  await api(`/api/projects/${project.id}/privacy-candidates/${candidateId}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      status,
-      note: String(form.get("note") ?? "").trim(),
-    }),
-  });
-  privacyCandidateDialog.close();
-  showToast(`Privacy candidate ${humanStatus(status).toLowerCase()}`);
-  await loadSpatialWorkspace(project.id);
-}
-
-function privacyScanError(raw: string | null): string {
-  if (!raw) return "Detection failed before error evidence was recorded.";
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const message = Reflect.get(parsed, "message");
-    return typeof message === "string" ? message : "Detection failed. Retry the scan when the service is available.";
-  } catch {
-    return "Detection failed. Retry the scan when the service is available.";
-  }
-}
-
-function privacyCandidatePreview(
-  projectId: string,
-  candidate: SpatialWorkspace["privacyCandidates"][number],
-): HTMLElement {
-  const frame = element("figure", "privacy-frame");
-  const image = document.createElement("img");
-  image.alt = `Private privacy evidence frame for ${candidate.label}`;
-  image.loading = "lazy";
-  image.decoding = "async";
-  const status = element("span", "privacy-preview-status", "Loading private evidence…");
-  const retry = element("button", "quiet-button privacy-preview-retry", "Retry preview");
-  retry.type = "button";
-  retry.hidden = true;
-  const load = () => {
-    status.hidden = false;
-    status.textContent = "Loading private evidence…";
-    retry.hidden = true;
-    image.hidden = false;
-    image.src = `/api/projects/${projectId}/privacy-assets/${candidate.asset_id}?v=${Date.now()}`;
-  };
-  image.addEventListener("load", () => {
-    status.hidden = true;
-  });
-  image.addEventListener("error", () => {
-    image.hidden = true;
-    status.hidden = false;
-    status.textContent = "Private evidence preview could not be loaded.";
-    retry.hidden = false;
-  });
-  retry.addEventListener("click", load);
-  frame.append(image);
-  const bounds = parsePrivacyBounds(candidate.bbox_json);
-  if (bounds) {
-    const overlay = element("span", "privacy-bbox");
-    overlay.setAttribute("aria-hidden", "true");
-    overlay.style.left = `${bounds.xMin * 100}%`;
-    overlay.style.top = `${bounds.yMin * 100}%`;
-    overlay.style.width = `${(bounds.xMax - bounds.xMin) * 100}%`;
-    overlay.style.height = `${(bounds.yMax - bounds.yMin) * 100}%`;
-    frame.append(overlay);
-  }
-  frame.append(status, retry);
-  load();
-  return frame;
-}
-
-function parsePrivacyBounds(raw: string): {
-  xMin: number;
-  yMin: number;
-  xMax: number;
-  yMax: number;
-} | null {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const xMin = Number(Reflect.get(parsed, "xMin"));
-    const yMin = Number(Reflect.get(parsed, "yMin"));
-    const xMax = Number(Reflect.get(parsed, "xMax"));
-    const yMax = Number(Reflect.get(parsed, "yMax"));
-    if (![xMin, yMin, xMax, yMax].every(Number.isFinite)) return null;
-    if (xMin < 0 || yMin < 0 || xMax > 1 || yMax > 1 || xMin >= xMax || yMin >= yMax) return null;
-    return { xMin, yMin, xMax, yMax };
-  } catch {
-    return null;
-  }
-}
-
-async function reviewPrivacyRegion(regionId: string, status: "approved" | "rejected" | "applied"): Promise<void> {
-  const project = state.selected?.project;
-  if (!project) return;
-  await api(`/api/projects/${project.id}/spatial/privacy-regions/${regionId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-  showToast(`Privacy region ${status}`);
-  await loadSpatialWorkspace(project.id);
-}
 
 function openCaptureCompletenessDialog(): void {
   const versions = state.selected?.versions ?? [];
@@ -11300,16 +10581,14 @@ async function selectProject(
 
 function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
   const journey = projectJourneyState(detail);
-  const privacyIsStrict = effectiveProjectWorkflowPolicy(detail.project).privacyReview === "strict";
   if (!journey.hasCapture) return "overview";
   if (journey.captureQualification?.status === "blocked") return "process";
   if (!journey.renderableVersion) return "process";
   if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
   if (!journey.structureReady) return "structure";
-  if (privacyIsStrict && journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
-  if (!journey.navigationReady || !journey.walkTestReady) return "walk";
-  if (journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
-  if (!journey.privacyApproved) return "privacy";
+  if (!journey.navigationReady) return "publish";
+  if (journey.privacyVersion?.status === "QA_REQUIRED") return "publish";
+  if (!journey.privacyApproved) return "publish";
   if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
   return "overview";
 }
@@ -11347,10 +10626,6 @@ function projectJourneyState(detail: ProjectDetail) {
   const navigationReady = Boolean(
     renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
   );
-  const walkTestReady = Boolean(
-    navigationReady && renderableVersion &&
-    (detail.walkTestReadyVersionIds ?? []).includes(renderableVersion.id),
-  );
   const structureReady = navigationReady || Boolean(navigationJob);
   // Privacy follows the newest immutable version, including an auxiliary QA
   // version. Publication independently resolves the approved visual target,
@@ -11378,7 +10653,6 @@ function projectJourneyState(detail: ProjectDetail) {
     floorplanJob,
     navigationJob,
     navigationReady,
-    walkTestReady,
     structureReady,
     privacyVersion,
     privacyApproved,
@@ -11460,7 +10734,7 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
       (view === "spatial"
-        ? !["structure", "privacy", "compare", "walk", "expert", "publish"].includes(state.projectSection)
+        ? !["structure", "compare", "expert", "publish"].includes(state.projectSection)
         : state.projectSection !== "measurement")
     ) return;
     const retry = element("button", "quiet-button", "Retry");
@@ -11567,9 +10841,7 @@ function renderProjectDetail(): void {
     hasCapture,
     hasMetricGeometry,
     floorplanJob,
-    navigationJob,
     navigationReady,
-    walkTestReady,
     structureReady,
     privacyVersion: latestVersion,
     privacyApproved,
@@ -11748,41 +11020,17 @@ function renderProjectDetail(): void {
     ),
     projectJourneyStep(
       "4",
-      "Privacy",
-      privacyApproved ? "complete" : latestVersion?.status === "QA_REQUIRED" ? "current" : renderableVersion ? "waiting" : "blocked",
-      privacyApproved ? "Human approval recorded" : latestVersion?.status === "QA_REQUIRED" ? "Review findings" : "Wait for processed scene",
-      "privacy",
-    ),
-    projectJourneyStep(
-      "5",
-      "Walk test",
-      walkTestReady ? "complete" : navigationReady
-        ? "current"
-        : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
-        ? "current"
-        : navigationJob ? "blocked" : "waiting",
-      walkTestReady
-        ? "Operator test recorded"
-        : navigationReady
-          ? "Set start and complete test"
-          : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
-      "walk",
-    ),
-    projectJourneyStep(
-      "6",
       "Publish",
-      activeRelease ? "complete" : walkTestReady && privacyApproved ? "current" : "blocked",
+      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
       activeRelease
         ? `Live at /${activeRelease.slug}`
         : !privacyApproved
           ? "Privacy approval required"
-          : walkTestReady
+          : navigationReady
             ? "Choose audience and publish"
-            : navigationReady
-              ? "Complete the in-scene walk test"
             : walkingExceptionReviewReady
               ? "Review structural exceptions"
-              : "Verified walk required",
+              : "Verified walking map required",
       "publish",
     ),
   );
@@ -11833,7 +11081,7 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion && walkTestReady) {
+  if (releasableVisualVersion && navigationReady) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({
@@ -11867,7 +11115,6 @@ function renderProjectDetail(): void {
         : "Not recorded",
     ),
     projectFact("Delivery classification", detail.project.deliveryTemplate),
-    projectFact("Privacy policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).privacyReview)),
     projectFact("Publication policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).publication)),
     projectFact("Navigation policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).navigation)),
     projectFact("Required files", humanStatus(effectiveProjectWorkflowPolicy(detail.project).requiredFiles)),
@@ -13493,55 +12740,17 @@ async function openQaDialog(): Promise<void> {
     showNotice("No Spark RAD, SPZ, or SOG derivative is available for approval.", "error");
     return;
   }
-  const readiness = privacyQaReadiness(state.spatial);
-  const evidence = byId("qaPrivacyEvidence");
-  evidence.className = `notice-card${readiness.ready ? " success" : " warning"}`;
-  evidence.replaceChildren(
-    element("strong", "", readiness.ready ? "Privacy evidence is ready" : "Privacy evidence is incomplete"),
-    element("p", "", readiness.message),
-  );
+  // Privacy review happens outside the platform; the operator's confirmation on
+  // this form is the attestation, so the control starts unchecked and enabled.
   const privacyApproved = byId<HTMLFormElement>("qaForm").elements.namedItem("privacyApproved");
   const submit = byId<HTMLFormElement>("qaForm").querySelector<HTMLButtonElement>("[type='submit']")!;
   if (privacyApproved instanceof HTMLInputElement) {
     privacyApproved.checked = false;
-    privacyApproved.disabled = !readiness.ready;
+    privacyApproved.disabled = false;
   }
-  submit.disabled = !readiness.ready;
+  submit.disabled = false;
   byId("qaError").textContent = "";
   qaDialog.showModal();
-}
-
-function privacyQaReadiness(spatial: SpatialWorkspace | null): { ready: boolean; message: string } {
-  if (!spatial?.version) {
-    return { ready: false, message: "No immutable version is open for privacy review." };
-  }
-  const scan = spatial.privacyScans[0];
-  if (!scan) {
-    return { ready: false, message: "Run an automated privacy scan from Spatial authoring before approving publication." };
-  }
-  if (scan.status !== "COMPLETED") {
-    return {
-      ready: false,
-      message: `The latest privacy scan is ${humanStatus(scan.status).toLowerCase()}. Complete or retry it before QA.`,
-    };
-  }
-  const candidateBlockers = spatial.privacyCandidates.filter((candidate) =>
-    candidate.scan_id === scan.id &&
-    (candidate.status === "pending" || candidate.status === "confirmed")
-  ).length;
-  const regionBlockers = spatial.privacyRegions.filter((region) =>
-    region.status === "pending" || region.status === "approved"
-  ).length;
-  if (candidateBlockers || regionBlockers) {
-    return {
-      ready: false,
-      message: `${candidateBlockers} automated candidate${candidateBlockers === 1 ? "" : "s"} and ${regionBlockers} authored region${regionBlockers === 1 ? "" : "s"} still require resolution.`,
-    };
-  }
-  return {
-    ready: true,
-    message: `${scan.input_count} private evidence frame${scan.input_count === 1 ? "" : "s"} checked; every candidate and authored region has a recorded human outcome.`,
-  };
 }
 
 async function approveVersion(form: FormData): Promise<void> {

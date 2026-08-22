@@ -136,7 +136,6 @@ async function seedReviewableExtraction(input: {
       body: JSON.stringify({
         workflowPolicy: {
           schemaVersion: "project-workflow-policy-v1",
-          privacyReview: "strict",
           publication: "public-after-approval",
           navigation: "visitor-walk",
           measurement: "indicative",

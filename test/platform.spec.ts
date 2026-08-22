@@ -101,44 +101,6 @@ async function verifyOtp(
   });
 }
 
-async function recordCompletedPrivacyScan(
-  projectId: string,
-  versionId: string,
-  assetId: string,
-): Promise<void> {
-  const project = await env.DB.prepare(
-    "SELECT organisation_id, created_by FROM projects WHERE id = ?",
-  ).bind(projectId).first<{ organisation_id: string; created_by: string }>();
-  const asset = await env.DB.prepare(
-    "SELECT sha256, mime_type, size_bytes FROM assets WHERE id = ? AND version_id = ?",
-  ).bind(assetId, versionId).first<{ sha256: string | null; mime_type: string; size_bytes: number }>();
-  if (!project || !asset) throw new Error("Privacy fixture requires an existing project and asset");
-  const scanId = crypto.randomUUID();
-  await env.DB.batch([
-    env.DB.prepare(`
-      INSERT INTO privacy_scans
-        (id, organisation_id, project_id, version_id, client_operation_id,
-          request_hash, detector, detector_version, targets_json, status,
-          input_count, candidate_count, evidence_json, created_by, completed_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'test-fixture', 'test-fixture/1', '[]',
-        'COMPLETED', 1, 0, '{"humanReviewRequired":true}', ?, datetime('now'))
-    `).bind(
-      scanId,
-      project.organisation_id,
-      projectId,
-      versionId,
-      crypto.randomUUID(),
-      "d".repeat(64),
-      project.created_by,
-    ),
-    env.DB.prepare(`
-      INSERT INTO privacy_scan_inputs
-        (scan_id, asset_id, asset_sha256, mime_type, size_bytes)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(scanId, assetId, asset.sha256, asset.mime_type, asset.size_bytes),
-  ]);
-}
-
 describe("Spatial Studio Worker", () => {
   it("keeps legacy traversal receipts nullable but rejects partially written capture receipts", async () => {
     await login();
@@ -2429,7 +2391,6 @@ describe("Spatial Studio Worker", () => {
       notes: "Capture public routes before staff-only areas.",
       policy: {
         schemaVersion: "project-workflow-policy-v1",
-        privacyReview: "strict",
         publication: "private-review",
         navigation: "visitor-walk",
         measurement: "controlled",
@@ -3056,8 +3017,6 @@ describe("Spatial Studio Worker", () => {
       "c".repeat(64),
       completed.asset.id,
     ).run();
-
-    await recordCompletedPrivacyScan(project.id, completed.asset.versionId, completed.asset.id);
     const approvalRequest = {
       method: "POST",
       headers: { cookie, "content-type": "application/json" },
@@ -6191,7 +6150,7 @@ describe("Spatial Studio Worker", () => {
     });
   });
 
-  it("authors vendor-neutral scene semantics, routes, privacy, and adaptive delivery", async () => {
+  it("authors vendor-neutral scene semantics, routes, and adaptive delivery", async () => {
     const cookie = await login();
     const member = await env.DB.prepare(`
       SELECT organisation_id AS organisationId, user_id AS userId
@@ -6895,28 +6854,6 @@ describe("Spatial Studio Worker", () => {
     });
     expect(policyResponse.status).toBe(200);
 
-    const regionResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial/privacy-regions`, {
-      method: "POST",
-      headers: { cookie, "content-type": "application/json" },
-      body: JSON.stringify({
-        versionId,
-        label: "Personal photograph",
-        source: "operator",
-        geometry: { type: "polygon", points: [[0, 0, 0], [1, 0, 0], [1, 1, 0]] },
-      }),
-    });
-    expect(regionResponse.status).toBe(201);
-    const region = await regionResponse.json<{ privacyRegion: { id: string } }>();
-    const approveRegion = await exports.default.fetch(
-      `${origin}/api/projects/${projectId}/spatial/privacy-regions/${region.privacyRegion.id}`,
-      {
-        method: "PATCH",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ status: "approved" }),
-      },
-    );
-    expect(approveRegion.status).toBe(200);
-
     const workspace = await exports.default.fetch(`${origin}/api/projects/${projectId}/spatial`, {
       headers: { cookie },
     });
@@ -6928,7 +6865,6 @@ describe("Spatial Studio Worker", () => {
         { id: entity.entity.id, kind: "room", label: "Gallery one" },
       ],
       routes: [{ label: "First visit", accessibility: "step_free" }],
-      privacyRegions: [{ label: "Personal photograph", status: "approved" }],
       deliveryPolicy: { adaptive_quality: 1, mobile_lite_budget: 0.75 },
       collisionProxy: {
         version: "box-union-v1",
@@ -7529,177 +7465,6 @@ describe("Spatial Studio Worker", () => {
     });
   });
 
-  it("queues idempotent privacy scans, exposes evidence candidates, and gates QA on human resolution", async () => {
-    const cookie = await login();
-    const member = await env.DB.prepare(`
-      SELECT organisation_id AS organisationId, user_id AS userId
-      FROM memberships ORDER BY created_at LIMIT 1
-    `).first<{ organisationId: string; userId: string }>();
-    const projectId = crypto.randomUUID();
-    const versionId = crypto.randomUUID();
-    const posterAssetId = crypto.randomUUID();
-    const webAssetId = crypto.randomUUID();
-    const operationId = crypto.randomUUID();
-    const posterKey = `delivery-private/${member!.organisationId}/${projectId}/${versionId}/privacy-frame.png`;
-    await env.SPATIAL_ASSETS.put(posterKey, new Uint8Array([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-    ]), {
-      httpMetadata: { contentType: "image/png" },
-      customMetadata: { sha256: "a".repeat(64) },
-    });
-    await env.DB.batch([
-      env.DB.prepare(`
-        INSERT INTO projects
-          (id, organisation_id, name, slug, status, capture_adapter, delivery_template, created_by)
-        VALUES (?, ?, 'Privacy evidence contract', ?, 'QA_REQUIRED', 'open-import', 'property-tour', ?)
-      `).bind(projectId, member!.organisationId, `privacy-${projectId.slice(0, 8)}`, member!.userId),
-      env.DB.prepare(`
-        INSERT INTO scene_versions (id, project_id, version_number, status, created_by)
-        VALUES (?, ?, 1, 'QA_REQUIRED', ?)
-      `).bind(versionId, projectId, member!.userId),
-      env.DB.prepare(`
-        INSERT INTO assets
-          (id, organisation_id, project_id, version_id, kind, format, object_key,
-            file_name, mime_type, size_bytes, sha256, integrity_status)
-        VALUES (?, ?, ?, ?, 'poster', 'png', ?, 'privacy-frame.png', 'image/png', 8, ?, 'verified')
-      `).bind(
-        posterAssetId, member!.organisationId, projectId, versionId, posterKey, "a".repeat(64),
-      ),
-      env.DB.prepare(`
-        INSERT INTO assets
-          (id, organisation_id, project_id, version_id, kind, format, object_key,
-            file_name, mime_type, size_bytes, sha256, integrity_status)
-        VALUES (?, ?, ?, ?, 'web', 'rad', ?, 'scene.rad', 'application/octet-stream', 8, ?, 'verified')
-      `).bind(
-        webAssetId, member!.organisationId, projectId, versionId,
-        `delivery-private/${member!.organisationId}/${projectId}/${versionId}/scene.rad`,
-        "b".repeat(64),
-      ),
-    ]);
-
-    const requestBody = {
-      clientOperationId: operationId,
-      versionId,
-      assetIds: [posterAssetId],
-    };
-    const queued = await exports.default.fetch(
-      `${origin}/api/projects/${projectId}/privacy-scans`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
-    );
-    expect(queued.status).toBe(202);
-    const queuedBody = await queued.json<{ scan: { id: string; status: string } }>();
-    expect(queuedBody.scan.status).toBe("QUEUED");
-
-    const replay = await exports.default.fetch(
-      `${origin}/api/projects/${projectId}/privacy-scans`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
-    );
-    expect(replay.status).toBe(202);
-    await expect(replay.json()).resolves.toMatchObject({
-      scan: { id: queuedBody.scan.id },
-      idempotent: true,
-    });
-
-    const candidateId = crypto.randomUUID();
-    await env.DB.batch([
-      env.DB.prepare(`
-        UPDATE privacy_scans
-        SET status = 'COMPLETED', input_count = 1, candidate_count = 1,
-          evidence_json = ?, completed_at = datetime('now'), updated_at = datetime('now')
-        WHERE id = ?
-      `).bind(JSON.stringify({ detector: "test-fixture", inputs: 1 }), queuedBody.scan.id),
-      env.DB.prepare(`
-        INSERT INTO privacy_candidates
-          (id, scan_id, organisation_id, project_id, version_id, asset_id, target,
-            label, bbox_json, bbox_hash, detector_metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, 'human face', 'Human face', ?, ?, ?)
-      `).bind(
-        candidateId,
-        queuedBody.scan.id,
-        member!.organisationId,
-        projectId,
-        versionId,
-        posterAssetId,
-        JSON.stringify({ xMin: 0.1, yMin: 0.2, xMax: 0.4, yMax: 0.6 }),
-        "c".repeat(64),
-        JSON.stringify({ modelConfidenceUnavailable: true }),
-      ),
-    ]);
-
-    const workspace = await exports.default.fetch(
-      `${origin}/api/projects/${projectId}/spatial?versionId=${versionId}`,
-      { headers: { cookie } },
-    );
-    expect(workspace.status).toBe(200);
-    await expect(workspace.json()).resolves.toMatchObject({
-      privacyScans: [{
-        id: queuedBody.scan.id,
-        status: "COMPLETED",
-        input_count: 1,
-        candidate_count: 1,
-      }],
-      privacyCandidates: [{
-        id: candidateId,
-        asset_id: posterAssetId,
-        target: "human face",
-        status: "pending",
-      }],
-    });
-
-    const approvalBody = {
-      webAssetId,
-      posterAssetId,
-      visualGrade: "A",
-      privacyStatus: "approved",
-      measurementGrade: "visual-only",
-    };
-    const blockedApproval = await exports.default.fetch(
-      `${origin}/api/versions/${versionId}/approve`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify(approvalBody),
-      },
-    );
-    expect(blockedApproval.status).toBe(409);
-    await expect(blockedApproval.json()).resolves.toMatchObject({
-      error: expect.stringContaining("Privacy"),
-    });
-
-    const dismissed = await exports.default.fetch(
-      `${origin}/api/projects/${projectId}/privacy-candidates/${candidateId}`,
-      {
-        method: "PATCH",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({
-          status: "dismissed",
-          note: "Fixture contains no identifiable person.",
-        }),
-      },
-    );
-    expect(dismissed.status).toBe(200);
-
-    const approved = await exports.default.fetch(
-      `${origin}/api/versions/${versionId}/approve`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify(approvalBody),
-      },
-    );
-    expect(approved.status).toBe(409);
-    await expect(approved.json()).resolves.toMatchObject({
-      error: expect.stringContaining("QA approval blocked"),
-    });
-  });
 
   it("enforces retention in R2 and records an auditable lifecycle run", async () => {
     const cookie = await login();

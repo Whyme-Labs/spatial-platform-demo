@@ -1,5 +1,4 @@
 export const projectWorkflowPolicyIds = {
-  privacyReview: ["standard", "strict"],
   publication: ["private-review", "public-after-approval"],
   navigation: ["visitor-walk", "review-walk-and-fly"],
   measurement: ["hidden", "indicative", "controlled"],
@@ -26,7 +25,6 @@ export const projectWorkflowPolicyIds = {
 
 export type ProjectWorkflowPolicy = {
   schemaVersion: "project-workflow-policy-v1";
-  privacyReview: typeof projectWorkflowPolicyIds.privacyReview[number];
   publication: typeof projectWorkflowPolicyIds.publication[number];
   navigation: typeof projectWorkflowPolicyIds.navigation[number];
   measurement: typeof projectWorkflowPolicyIds.measurement[number];
@@ -75,7 +73,6 @@ export function normalizeProjectDeliveryTemplate(deliveryTemplate: string): Proj
 const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> = {
   "Property showcase": {
     schemaVersion: "project-workflow-policy-v1",
-    privacyReview: "strict",
     publication: "public-after-approval",
     navigation: "visitor-walk",
     measurement: "hidden",
@@ -89,7 +86,6 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
   },
   "Venue navigator": {
     schemaVersion: "project-workflow-policy-v1",
-    privacyReview: "strict",
     publication: "public-after-approval",
     navigation: "visitor-walk",
     measurement: "indicative",
@@ -103,7 +99,6 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
   },
   "Film production scene": {
     schemaVersion: "project-workflow-policy-v1",
-    privacyReview: "standard",
     publication: "private-review",
     navigation: "review-walk-and-fly",
     measurement: "hidden",
@@ -117,7 +112,6 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
   },
   "Measured capture pack": {
     schemaVersion: "project-workflow-policy-v1",
-    privacyReview: "strict",
     publication: "private-review",
     navigation: "visitor-walk",
     measurement: "controlled",
@@ -133,7 +127,6 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
 
 export const legacyUnspecifiedProjectWorkflowPolicy: ProjectWorkflowPolicy = {
   schemaVersion: "project-workflow-policy-v1",
-  privacyReview: "strict",
   publication: "private-review",
   navigation: "review-walk-and-fly",
   measurement: "hidden",
