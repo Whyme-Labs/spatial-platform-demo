@@ -255,8 +255,14 @@ Implemented:
   map is holding agent clearance, and a clamp with no floor beyond reports the
   edge of the capture — the three are indistinguishable from inside the scene
   but call for opposite responses, and only the last is beyond any policy. The
-  verdict is posted to the host so the Studio walk-test panel holds it after the
-  in-scene hint fades
+  verdict is held in the published viewer's own HUD, so a recipient who presses
+  forward and goes nowhere learns why in the scene they were given
+- the scene has one viewer — the page a recipient opens, reached from the Walk
+  stage. Walking it is a check, not a gate: the walk-test receipt no longer
+  gates publication, because its only assertion was that the end pose differed
+  from the start pose, while the processor already proves enclosure, wall
+  sweeps, corner slides, route replay, and reachability, and the operator
+  already approves the build with a typed review note
 - walked-floor clutter demotion (`trajectoryClutterDemotion` workflow policy,
   default `pass-through`): pass-through evidence alone only clears walls the
   rig walked straight through, which on a cluttered capture left 40.5% of the

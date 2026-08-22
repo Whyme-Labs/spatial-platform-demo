@@ -4979,24 +4979,12 @@ app.get("/api/projects/:projectId", async (context) => {
       ORDER BY created_at DESC
       LIMIT 50
     `).bind(projectId, auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT DISTINCT wt.version_id
-      FROM scene_navigation_walk_tests wt
-      JOIN scene_navigation_builds nb
-        ON nb.id = wt.navigation_build_id
-        AND nb.organisation_id = wt.organisation_id
-        AND nb.project_id = wt.project_id
-        AND nb.version_id = wt.version_id
-      WHERE wt.project_id = ? AND wt.organisation_id = ?
-        AND nb.status = 'APPROVED'
-    `).bind(projectId, auth.organisationId),
   ]);
   const versions = requiredBatchResult(detailResults, 0);
   const assets = requiredBatchResult(detailResults, 1);
   const jobs = requiredBatchResult(detailResults, 2);
   const releases = requiredBatchResult(detailResults, 3);
   const captureBundles = requiredBatchResult(detailResults, 4);
-  const walkTestVersions = requiredBatchResult(detailResults, 5);
   const previewCandidateVersion = versions.results.find((version) => {
     const versionId = version && typeof version === "object"
       ? readStringProperty(version, "id")
@@ -5062,12 +5050,6 @@ app.get("/api/projects/:projectId", async (context) => {
     captureBundles: captureBundles.results,
     comparisonReadiness: comparison,
     previewReadyVersionIds,
-    walkTestReadyVersionIds: walkTestVersions.results.flatMap((row) => {
-      const versionId = row && typeof row === "object"
-        ? readStringProperty(row, "version_id")
-        : null;
-      return versionId ? [versionId] : [];
-    }),
   });
 });
 
@@ -16726,29 +16708,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       "Publication blocked: the exact approved v7+ collision, navigation report, and Detour navmesh must all be present and verified",
     );
   }
-  const navigationAssets = Reflect.get(spatialSnapshot, "navigationAssets");
-  const approvedNavigationBuildId = navigationAssets && typeof navigationAssets === "object"
-    ? readNullableStringProperty(navigationAssets, "buildId")
-    : null;
-  const completedWalkTest = approvedNavigationBuildId
-    ? await context.env.DB.prepare(`
-      SELECT id FROM scene_navigation_walk_tests
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND navigation_build_id = ?
-      ORDER BY completed_at DESC LIMIT 1
-    `).bind(
-      auth.organisationId,
-      project.id,
-      approved.id,
-      approvedNavigationBuildId,
-    ).first<{ id: string }>()
-    : null;
-  if (!completedWalkTest) {
-    return conflict(
-      context,
-      "Publication blocked: complete and record the in-scene walk test for the exact approved walking map",
-    );
-  }
+  // The in-scene walk test used to gate publication here. Its whole assertion
+  // was that the end pose differed from the start pose — one millimetre passed
+  // — while the processor already proves room-anchor enclosure in six
+  // directions, both-direction capsule and sphere sweeps against every
+  // reviewed wall, corner slides, route replay, and Detour reachability, and
+  // an operator already approves the build with a typed review note. Binding
+  // the receipt to a build id (correctly) meant every rebuild retired it, so
+  // the gate degraded into rebuild-nudge-publish rather than assurance.
   if (
     hasNonIdentitySceneRotation(releaseViewerConfig.sceneRotationDegrees) &&
     hasAuthoredSpatialRuntime(spatialSnapshot)
@@ -23786,19 +23753,8 @@ export async function completeReleaseRepublishIntent(
         "Automatic republish stopped because the verified walking package is not the exact rebuilt navigation map",
       );
     }
-    const completedWalkTest = await env.DB.prepare(`
-      SELECT id FROM scene_navigation_walk_tests
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND navigation_build_id = ?
-      ORDER BY completed_at DESC LIMIT 1
-    `).bind(
-      intent.organisation_id,
-      intent.project_id,
-      intent.version_id,
-      navigationBuildId,
-    ).first<{ id: string }>();
-    if (!completedWalkTest) return null;
-
+    // Automatic republish no longer waits on a walk-test receipt; see the
+    // publication path for why the gate was removed.
     const releaseId = crypto.randomUUID();
     const publishedAt = new Date().toISOString();
     const spatialSnapshotJson = JSON.stringify(spatialSnapshot);

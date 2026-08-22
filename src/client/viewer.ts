@@ -238,6 +238,13 @@ type SparkRendererMessage =
     }
   | {
       source: "spatial-spark";
+      type: "movement-blocked";
+      message: string;
+      cause: { kind: string; id: string | null };
+      position: [number, number, number];
+    }
+  | {
+      source: "spatial-spark";
       type: "camera-set";
       requestId: string;
       accepted: boolean;
@@ -549,6 +556,17 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
       pending.resolve(message.cameraPose);
     } else {
       pending.reject(new Error(message.message ?? "The selected room is outside the authored walkable area."));
+    }
+    return;
+  }
+  // Someone pressing forward and going nowhere deserves to know why, in the
+  // scene they were given rather than only in the studio that produced it.
+  // The renderer's own hint is transient; this line holds the last verdict.
+  if (message.type === "movement-blocked") {
+    const readout = document.getElementById("viewerBlockedReason");
+    if (readout) {
+      readout.textContent = message.message;
+      readout.hidden = !message.message;
     }
     return;
   }

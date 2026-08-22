@@ -1365,7 +1365,7 @@
       "requestPath": "navigationProfile.maxSpeed",
       "persistencePath": "scene_navigation_profiles.max_speed",
       "consumer": "updateNavigationProfile",
-      "readback": "walkTestStatus",
+      "readback": "openNavigationProfileDialog",
       "unit": "selected world unit per second",
       "explanation": "Speed ceiling used by the visitor movement controller."
     },

@@ -378,7 +378,6 @@ type ProjectDetail = {
   captureBundles: CaptureBundle[];
   comparisonReadiness: ComparisonReadiness;
   previewReadyVersionIds: string[];
-  walkTestReadyVersionIds?: string[];
 };
 const emptyComparisonReadiness: ComparisonReadiness = {
   available: false,
@@ -1398,21 +1397,6 @@ let captureQualificationMode:
   | typeof AUTOMATIC_PAIRED_CAPTURE_METHOD
   | typeof ATTESTED_PAIRED_CAPTURE_METHOD = ATTESTED_PAIRED_CAPTURE_METHOD;
 let captureQualificationRenderGeneration = 0;
-let latestWalkTestPose: {
-  position: [number, number, number];
-  target: [number, number, number];
-  observedAt: number;
-} | null = null;
-let previousWalkTestSample: { position: [number, number, number]; observedAt: number } | null = null;
-let activeWalkTestSession: {
-  projectId: string;
-  versionId: string;
-  buildId: string;
-  clientOperationId: string | null;
-  startPose: { position: [number, number, number]; target: [number, number, number] } | null;
-  movementObserved: boolean;
-  runtimeFailure: string | null;
-} | null = null;
 let captureJourneyOperation: {
   id: string;
   primaryUploadOperationId: string;
@@ -2662,7 +2646,6 @@ function bindInterface(): void {
   });
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
-  window.addEventListener("message", handleWalkTestRendererMessage);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
   });
@@ -7633,154 +7616,38 @@ function renderSpatial(): void {
   container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
 }
 
+// The scene has one viewer: the page a recipient opens. Studio used to embed a
+// second, bare copy of the renderer here, which is what made "preview" and
+// "published" read as two different things when they are the same page over
+// different data. This card sends the operator to that one viewer, where the
+// runtime reports what stopped them in its own HUD.
 function renderWalkTestCard(
   spatial: SpatialWorkspace,
   build: SpatialWorkspace["navigationBuilds"][number],
 ): HTMLElement {
-  const project = state.selected?.project;
-  if (
-    project && spatial.version &&
-    (
-      activeWalkTestSession?.projectId !== project.id ||
-      activeWalkTestSession.versionId !== spatial.version.id ||
-      activeWalkTestSession.buildId !== build.id
-    )
-  ) {
-    activeWalkTestSession = {
-      projectId: project.id,
-      versionId: spatial.version.id,
-      buildId: build.id,
-      clientOperationId: null,
-      startPose: null,
-      movementObserved: false,
-      runtimeFailure: null,
-    };
-    latestWalkTestPose = null;
-    previousWalkTestSample = null;
-  }
-  const card = element("article", "workspace-card-large walk-test-card");
-  const status = element("p", "field-note", "Preparing the approved scene and walking runtime…");
-  status.id = "walkTestStatus";
-  const heading = element("div", "walk-test-heading");
-  heading.append(
+  const card = element("article", "workspace-card-large walk-scene-card");
+  card.append(
     element("span", "eyebrow", "MOVEMENT VERIFICATION"),
-    element("h3", "", "Walk test"),
-    status,
-  );
-  const frame = document.createElement("iframe");
-  frame.id = "walkTestPreview";
-  frame.title = "Test the approved walking map inside the scene";
-  const evidence = walkTestEvidenceSummary(build);
-  const evidenceSummary = element("p", "field-note", evidence);
-  const reset = element("button", "quiet-button", "Reset walk test");
-  const usePosition = element("button", "quiet-button", "Set test start here");
-  usePosition.disabled = true;
-  usePosition.id = "walkTestUsePosition";
-  const complete = element("button", "primary-button", "Complete walk test");
-  complete.disabled = true;
-  complete.id = "walkTestComplete";
-  reset.addEventListener("click", () => {
-    latestWalkTestPose = null;
-    previousWalkTestSample = null;
-    if (activeWalkTestSession) {
-      activeWalkTestSession.startPose = null;
-      activeWalkTestSession.clientOperationId = null;
-      activeWalkTestSession.movementObserved = false;
-      activeWalkTestSession.runtimeFailure = null;
-    }
-    usePosition.disabled = true;
-    complete.disabled = true;
-    void prepareWalkTest(frame, status, spatial.version!.id);
-  });
-  usePosition.addEventListener("click", () => {
-    if (!latestWalkTestPose || !activeWalkTestSession) return;
-    activeWalkTestSession.startPose = {
-      position: [...latestWalkTestPose.position] as [number, number, number],
-      target: [...latestWalkTestPose.target] as [number, number, number],
-    };
-    activeWalkTestSession.clientOperationId = crypto.randomUUID();
-    activeWalkTestSession.movementObserved = false;
-    activeWalkTestSession.runtimeFailure = null;
-    complete.disabled = true;
-    status.textContent = "Starting point set. Walk away from it through the approved scene, then complete the test.";
-    showToast("Walk-test starting point set");
-  });
-  complete.addEventListener("click", () => {
-    if (!activeWalkTestSession || !latestWalkTestPose) return;
-    void runAction({
-      key: `complete-walk-test:${build.id}`,
-      trigger: complete,
-      pendingLabel: "Recording…",
-      disable: [reset, usePosition],
-    }, () => completeWalkTest(build.id, activeWalkTestSession!, latestWalkTestPose!));
-  });
-  const actions = element("div", "navigation-authoring-actions");
-  actions.append(reset, usePosition, complete);
-  const blockedReason = element("p", "field-note walk-test-blocked-reason");
-  blockedReason.id = "walkTestBlockedReason";
-  blockedReason.hidden = true;
-  const side = element("div", "walk-test-side");
-  side.append(heading, evidenceSummary, blockedReason, actions);
-  card.append(frame, side);
-  const completed = spatial.walkTests?.find((walkTest) =>
-    walkTest.navigation_build_id === build.id
-  );
-  if (completed) {
-    side.append(element(
+    element("h3", "", "Walk the scene"),
+    element(
       "p",
-      "generated-readback",
-      `Walk-test receipt recorded ${parseTimestamp(completed.completed_at).toLocaleString()} for this exact approved walking map.`,
-    ));
-  }
-  window.queueMicrotask(() => void prepareWalkTest(frame, status, spatial.version!.id));
-  return card;
-}
-
-async function completeWalkTest(
-  buildId: string,
-  session: NonNullable<typeof activeWalkTestSession>,
-  endPose: NonNullable<typeof latestWalkTestPose>,
-): Promise<void> {
-  if (!session.startPose || !session.movementObserved || session.runtimeFailure) {
-    throw new Error("Set a starting point, walk away from it, and resolve runtime failures before completion.");
-  }
-  await api(`/api/projects/${session.projectId}/spatial/navigation-builds/${buildId}/walk-tests`, {
-    method: "POST",
-    body: JSON.stringify({
-      clientOperationId: session.clientOperationId ??= crypto.randomUUID(),
-      versionId: session.versionId,
-      startPose: session.startPose,
-      endPose: { position: endPose.position, target: endPose.target },
-      runtimeEvidence: {
-        movementObserved: true,
-        collisionFailureReported: false,
-        traversalBlockReported: false,
-      },
-    }),
+      "muted-copy",
+      "Opens the same page a recipient opens, on this exact approved walking map. " +
+        "Press into anything that stops you and the scene names what did it: a reviewed wall, " +
+        "the walking map holding agent clearance, or the edge of the captured floor.",
+    ),
+    element("p", "field-note", walkTestEvidenceSummary(build)),
+  );
+  const open = element("button", "primary-button wide", "Open the scene");
+  open.addEventListener("click", () => {
+    void runAction({
+      key: `open-walk-scene:${spatial.version!.id}`,
+      trigger: open,
+      pendingLabel: "Preparing scene…",
+    }, () => openVersionPreview(spatial.version!.id));
   });
-  showToast("Walk test completed and recorded");
-  await Promise.all([
-    loadSpatialWorkspace(session.projectId),
-    selectProject(session.projectId, false, false),
-  ]);
-}
-
-// What the operator can actually do about each stop reason. A wall may be
-// clutter the demotion policy could clear; the floor edge is the limit of the
-// capture itself and no policy reaches it.
-function walkTestBlockedAdvice(kind: string): string {
-  if (kind === "navigation_map_clearance") {
-    return " · demoting the nearby wall run, if it is clutter rather than building, is what widens this";
-  }
-  if (kind === "capture_edge" || kind === "unsupported_floor") {
-    return " · no policy opens this; only capturing more of the space does";
-  }
-  if (kind === "structural") {
-    return " · if this is clutter rather than building, a wider clutter-demotion mode would clear it";
-  }
-  if (kind === "dynamic") return " · open the door in the scene";
-  if (kind === "outside_recovery_bounds") return " · the reviewed movement bounds end here";
-  return "";
+  card.append(open);
+  return card;
 }
 
 function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][number]): string {
@@ -7802,105 +7669,6 @@ function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][num
   }
 }
 
-async function prepareWalkTest(
-  frame: HTMLIFrameElement,
-  status: HTMLElement,
-  versionId: string,
-): Promise<void> {
-  frame.onload = null;
-  frame.src = "about:blank";
-  status.textContent = "Preparing the approved scene and walking runtime…";
-  try {
-    const renderable = await createVersionPreview(versionId);
-    if (!frame.isConnected || state.spatial?.version?.id !== versionId) return;
-    frame.onload = () => sendVersionSpatialRuntime(frame, renderable);
-    frame.src = rendererAssetUrl(renderable).toString();
-  } catch (error) {
-    if (!frame.isConnected) return;
-    status.textContent = `Walk test unavailable: ${errorMessage(error)}`;
-  }
-}
-
-function handleWalkTestRendererMessage(event: MessageEvent<unknown>): void {
-  const frame = document.getElementById("walkTestPreview");
-  const status = document.getElementById("walkTestStatus");
-  if (
-    !(frame instanceof HTMLIFrameElement) || !status ||
-    event.origin !== location.origin || event.source !== frame.contentWindow ||
-    !event.data || typeof event.data !== "object" ||
-    Reflect.get(event.data, "source") !== "spatial-spark"
-  ) return;
-  const type = Reflect.get(event.data, "type");
-  // The in-scene hint is transient by design; the panel keeps the last verdict
-  // so an operator who was watching the scene can still read why they stopped.
-  if (type === "movement-blocked") {
-    const readout = document.getElementById("walkTestBlockedReason");
-    if (readout) {
-      const message = String(Reflect.get(event.data, "message") ?? "");
-      const cause = Reflect.get(event.data, "cause");
-      const kind = cause && typeof cause === "object"
-        ? String(Reflect.get(cause, "kind") ?? "unknown")
-        : "unknown";
-      readout.textContent = message
-        ? `Last stop · ${message}${walkTestBlockedAdvice(kind)}`
-        : "";
-      readout.hidden = !message;
-    }
-    return;
-  }
-  if (type === "ready") {
-    status.textContent = "Ready. Click the scene, then walk with WASD or arrow keys; collision remains enforced by the approved runtime.";
-    return;
-  }
-  if (type === "error") {
-    const message = String(Reflect.get(event.data, "message") ?? "walking runtime error");
-    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
-    const complete = document.getElementById("walkTestComplete");
-    if (complete instanceof HTMLButtonElement) complete.disabled = true;
-    status.textContent = `Runtime warning: ${message}`;
-    return;
-  }
-  if (type === "authored-traversal-state" && Reflect.get(event.data, "phase") === "blocked") {
-    const message = String(Reflect.get(event.data, "message") ?? "review the approved path evidence");
-    if (activeWalkTestSession) activeWalkTestSession.runtimeFailure = message;
-    const complete = document.getElementById("walkTestComplete");
-    if (complete instanceof HTMLButtonElement) complete.disabled = true;
-    status.textContent = `Traversal blocked: ${message}`;
-    return;
-  }
-  if (type !== "camera-update") return;
-  const pose = Reflect.get(event.data, "cameraPose");
-  if (!pose || typeof pose !== "object") return;
-  const position = finiteStudioPoint(Reflect.get(pose, "position"));
-  const target = finiteStudioPoint(Reflect.get(pose, "target"));
-  if (!position || !target) return;
-  const observedAt = performance.now();
-  const elapsedSeconds = previousWalkTestSample
-    ? (observedAt - previousWalkTestSample.observedAt) / 1000
-    : 0;
-  const speed = previousWalkTestSample && elapsedSeconds > 0
-    ? Math.hypot(...position.map((value, axis) => value - previousWalkTestSample!.position[axis]!)) /
-      elapsedSeconds
-    : 0;
-  latestWalkTestPose = { position, target, observedAt };
-  previousWalkTestSample = { position, observedAt };
-  const usePosition = document.getElementById("walkTestUsePosition");
-  if (usePosition instanceof HTMLButtonElement) usePosition.disabled = false;
-  if (activeWalkTestSession?.startPose) {
-    activeWalkTestSession.movementObserved = position.some((coordinate, axis) =>
-      coordinate !== activeWalkTestSession!.startPose!.position[axis]
-    );
-  }
-  const complete = document.getElementById("walkTestComplete");
-  if (complete instanceof HTMLButtonElement) {
-    complete.disabled = !activeWalkTestSession?.movementObserved ||
-      Boolean(activeWalkTestSession.runtimeFailure);
-  }
-  status.textContent = `Walking runtime active · current speed ${speed.toFixed(2)} ${worldUnitSymbol(
-    state.spatial?.navigationProfile.worldUnit ?? "metres",
-  )}/s · no runtime collision failure reported.`;
-}
-
 function renderPublish(): void {
   const container = byId("publishOverview");
   container.replaceChildren();
@@ -7920,10 +7688,6 @@ function renderPublish(): void {
   const navigationReady = Boolean(
     releasableVersion && detail.previewReadyVersionIds.includes(releasableVersion.id),
   );
-  const walkTestReady = Boolean(
-    releasableVersion &&
-    (detail.walkTestReadyVersionIds ?? []).includes(releasableVersion.id),
-  );
   const privacy = privacyQaReadiness(state.spatial);
   const workflowPolicy = effectiveVersionWorkflowPolicy(detail.project, releasableVersion);
   const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
@@ -7938,7 +7702,6 @@ function renderPublish(): void {
       releasableVersion ? `Version ${releasableVersion.version_number} approved` : "Awaiting QA approval",
     ),
     projectFact("Walking map", navigationReady ? "Verified and approved" : "Not ready"),
-    projectFact("In-scene walk test", walkTestReady ? "Completed and recorded" : "Required before publication"),
     projectFact("Privacy evidence", privacy.ready ? "Ready for human approval" : privacy.message),
     projectFact(
       "Managed hosting",
@@ -7974,7 +7737,7 @@ function renderPublish(): void {
     });
     card.append(review);
   }
-  if (releasableVersion && navigationReady && walkTestReady && hostingReady) {
+  if (releasableVersion && navigationReady && hostingReady) {
     const configure = element("button", "primary-button wide", "Configure publication");
     configure.addEventListener("click", () => {
       void runAction({
@@ -7984,7 +7747,7 @@ function renderPublish(): void {
       }, openReleaseDialog);
     });
     card.append(configure);
-  } else if (releasableVersion && navigationReady && walkTestReady && !hostingReady) {
+  } else if (releasableVersion && navigationReady && !hostingReady) {
     const configureHosting = element("button", "primary-button wide", "Configure managed hosting");
     configureHosting.addEventListener("click", () => {
       void runAction({
@@ -11307,7 +11070,7 @@ function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
   if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
   if (!journey.structureReady) return "structure";
   if (privacyIsStrict && journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
-  if (!journey.navigationReady || !journey.walkTestReady) return "walk";
+  if (!journey.navigationReady) return "publish";
   if (journey.privacyVersion?.status === "QA_REQUIRED") return "privacy";
   if (!journey.privacyApproved) return "privacy";
   if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
@@ -11347,10 +11110,6 @@ function projectJourneyState(detail: ProjectDetail) {
   const navigationReady = Boolean(
     renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
   );
-  const walkTestReady = Boolean(
-    navigationReady && renderableVersion &&
-    (detail.walkTestReadyVersionIds ?? []).includes(renderableVersion.id),
-  );
   const structureReady = navigationReady || Boolean(navigationJob);
   // Privacy follows the newest immutable version, including an auxiliary QA
   // version. Publication independently resolves the approved visual target,
@@ -11378,7 +11137,6 @@ function projectJourneyState(detail: ProjectDetail) {
     floorplanJob,
     navigationJob,
     navigationReady,
-    walkTestReady,
     structureReady,
     privacyVersion,
     privacyApproved,
@@ -11569,7 +11327,6 @@ function renderProjectDetail(): void {
     floorplanJob,
     navigationJob,
     navigationReady,
-    walkTestReady,
     structureReady,
     privacyVersion: latestVersion,
     privacyApproved,
@@ -11753,36 +11510,36 @@ function renderProjectDetail(): void {
       privacyApproved ? "Human approval recorded" : latestVersion?.status === "QA_REQUIRED" ? "Review findings" : "Wait for processed scene",
       "privacy",
     ),
+    // Walking the scene is a check an operator can make, not a gate they must
+    // clear: the processor already proves enclosure, wall sweeps, corner
+    // slides, route replay, and reachability, and the build carries a typed
+    // operator review. This step never blocks publication.
     projectJourneyStep(
       "5",
-      "Walk test",
-      walkTestReady ? "complete" : navigationReady
+      "Walk the scene",
+      navigationReady
         ? "current"
         : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
         ? "current"
         : navigationJob ? "blocked" : "waiting",
-      walkTestReady
-        ? "Operator test recorded"
-        : navigationReady
-          ? "Set start and complete test"
-          : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
+      navigationReady
+        ? "Walk it and see what stops you"
+        : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
       "walk",
     ),
     projectJourneyStep(
       "6",
       "Publish",
-      activeRelease ? "complete" : walkTestReady && privacyApproved ? "current" : "blocked",
+      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
       activeRelease
         ? `Live at /${activeRelease.slug}`
         : !privacyApproved
           ? "Privacy approval required"
-          : walkTestReady
+          : navigationReady
             ? "Choose audience and publish"
-            : navigationReady
-              ? "Complete the in-scene walk test"
             : walkingExceptionReviewReady
               ? "Review structural exceptions"
-              : "Verified walk required",
+              : "Verified walking map required",
       "publish",
     ),
   );
@@ -11833,7 +11590,7 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion && walkTestReady) {
+  if (releasableVisualVersion && navigationReady) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({

@@ -213,26 +213,15 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await expect(page.getByText("Privacy candidate dismissed", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Walk test", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Walk test", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Walk the scene", exact: true })).toBeVisible();
   await expect(page.getByLabel("Recast cell size", { exact: true })).toBeHidden();
   await expect(page.getByText(
     "0 unreachable authored destinations · 0 failed physical routes in the approved processor receipt.",
     { exact: true },
   )).toBeVisible();
-  const walkFrame = page.frameLocator("#walkTestPreview");
-  await walkFrame.getByRole("button", { name: "Stand at safe start", exact: true }).click();
-  const setStartingPosition = page.getByRole("button", {
-    name: "Set test start here",
-    exact: true,
-  });
-  await expect(setStartingPosition).toBeEnabled();
-  await setStartingPosition.click();
-  await expect(page.locator("#walkTestStatus")).toContainText("Starting point set");
-  await walkFrame.getByRole("button", { name: "Walk to destination", exact: true }).click();
-  const completeWalkTest = page.getByRole("button", { name: "Complete walk test", exact: true });
-  await expect(completeWalkTest).toBeEnabled();
-  await completeWalkTest.click();
-  await expect(page.getByText("Walk test completed and recorded", { exact: true })).toBeVisible();
+  // Walking the scene is a check, not a gate, and it happens in the one viewer
+  // a recipient opens rather than a second copy embedded here.
+  await expect(page.getByRole("button", { name: "Open the scene", exact: true })).toBeEnabled();
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
