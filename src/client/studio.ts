@@ -7716,8 +7716,11 @@ function renderWalkTestCard(
   });
   const actions = element("div", "navigation-authoring-actions");
   actions.append(reset, usePosition, complete);
+  const blockedReason = element("p", "field-note walk-test-blocked-reason");
+  blockedReason.id = "walkTestBlockedReason";
+  blockedReason.hidden = true;
   const side = element("div", "walk-test-side");
-  side.append(heading, evidenceSummary, actions);
+  side.append(heading, evidenceSummary, blockedReason, actions);
   card.append(frame, side);
   const completed = spatial.walkTests?.find((walkTest) =>
     walkTest.navigation_build_id === build.id
@@ -7760,6 +7763,24 @@ async function completeWalkTest(
     loadSpatialWorkspace(session.projectId),
     selectProject(session.projectId, false, false),
   ]);
+}
+
+// What the operator can actually do about each stop reason. A wall may be
+// clutter the demotion policy could clear; the floor edge is the limit of the
+// capture itself and no policy reaches it.
+function walkTestBlockedAdvice(kind: string): string {
+  if (kind === "navigation_map_clearance") {
+    return " · demoting the nearby wall run, if it is clutter rather than building, is what widens this";
+  }
+  if (kind === "capture_edge" || kind === "unsupported_floor") {
+    return " · no policy opens this; only capturing more of the space does";
+  }
+  if (kind === "structural") {
+    return " · if this is clutter rather than building, a wider clutter-demotion mode would clear it";
+  }
+  if (kind === "dynamic") return " · open the door in the scene";
+  if (kind === "outside_recovery_bounds") return " · the reviewed movement bounds end here";
+  return "";
 }
 
 function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][number]): string {
@@ -7810,6 +7831,23 @@ function handleWalkTestRendererMessage(event: MessageEvent<unknown>): void {
     Reflect.get(event.data, "source") !== "spatial-spark"
   ) return;
   const type = Reflect.get(event.data, "type");
+  // The in-scene hint is transient by design; the panel keeps the last verdict
+  // so an operator who was watching the scene can still read why they stopped.
+  if (type === "movement-blocked") {
+    const readout = document.getElementById("walkTestBlockedReason");
+    if (readout) {
+      const message = String(Reflect.get(event.data, "message") ?? "");
+      const cause = Reflect.get(event.data, "cause");
+      const kind = cause && typeof cause === "object"
+        ? String(Reflect.get(cause, "kind") ?? "unknown")
+        : "unknown";
+      readout.textContent = message
+        ? `Last stop · ${message}${walkTestBlockedAdvice(kind)}`
+        : "";
+      readout.hidden = !message;
+    }
+    return;
+  }
   if (type === "ready") {
     status.textContent = "Ready. Click the scene, then walk with WASD or arrow keys; collision remains enforced by the approved runtime.";
     return;

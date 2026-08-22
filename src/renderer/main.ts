@@ -33,7 +33,12 @@ import { captureAdapterDisplayLabel } from "../shared/capture-adapters";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
 import type { DetourNavigationRuntime } from "./detour-navigation";
 import type { PhysicalNavigationRuntime } from "./physical-navigation";
-import type { PhysicalMovementMode } from "./physical-navigation";
+import type { MovementRefusal, PhysicalMovementMode } from "./physical-navigation";
+import {
+  blockedMovementMessage,
+  type BlockedMovementBarrier,
+  type BlockedMovementCause,
+} from "./blocked-movement";
 import {
   AuthoredTraversalOverlay,
 } from "./authored-traversal-overlay";
@@ -125,6 +130,13 @@ type RendererMessage =
         up: Vector3Tuple;
         fovDegrees: number;
       };
+    }
+  | {
+      source: "spatial-spark";
+      type: "movement-blocked";
+      message: string;
+      cause: BlockedMovementCause;
+      position: Vector3Tuple;
     }
   | {
       source: "spatial-spark";
@@ -1070,7 +1082,17 @@ async function start(): Promise<void> {
         navigationConstrained ?? origin,
         deltaSeconds,
       );
-      noteMovementResistance(origin, desired, resolved, deltaSeconds);
+      // Detour clamps Walk BEFORE the capsule sweeps, so a walker stopped by
+      // the navmesh never touches a wall and never loses footing: without
+      // noticing the clamp here, the only honest verdict left is the generic
+      // one, which is what an operator was reading for every such stop.
+      noteMovementResistance(
+        origin,
+        desired,
+        resolved,
+        deltaSeconds,
+        navigationClampedShort(origin, desired, navigationConstrained),
+      );
       if (resolved) {
         camera.position.fromArray(resolved);
         lastWalkablePosition = camera.position.clone();
@@ -1999,19 +2021,37 @@ function movementStatusText(): string {
 // the walker is leaning on it rather than brushing past a corner.
 const BLOCKED_MOVEMENT_HINT_SECONDS = 1.2;
 const BLOCKED_MOVEMENT_EPSILON_METRES = 1e-4;
-type BlockedMovementBarrier = {
-  id: string;
-  kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
-};
 let blockedMovementSeconds = 0;
 let blockedMovementHintShown = false;
 let blockedMovementBarrier: BlockedMovementBarrier | null = null;
+let blockedMovementRefusal: MovementRefusal | null = null;
+let blockedMovementNavigationClamped = false;
+
+// True when the navmesh gave back materially less of the requested heading
+// than was asked for — the same 25% test the blocked check uses, so the two
+// agree about what counts as being stopped.
+function navigationClampedShort(
+  origin: Vector3Tuple,
+  desired: Vector3Tuple,
+  constrained: Vector3Tuple | null,
+): boolean {
+  const requestedX = desired[0] - origin[0];
+  const requestedZ = desired[2] - origin[2];
+  const requested = Math.hypot(requestedX, requestedZ);
+  if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES) return false;
+  if (!constrained) return true;
+  const advanced =
+    ((constrained[0] - origin[0]) * requestedX + (constrained[2] - origin[2]) * requestedZ) /
+    requested;
+  return advanced <= requested * 0.25;
+}
 
 function noteMovementResistance(
   origin: Vector3Tuple,
   desired: Vector3Tuple,
   resolved: Vector3Tuple | null,
   deltaSeconds: number,
+  navigationClamped = false,
 ): void {
   const requestedX = desired[0] - origin[0];
   const requestedZ = desired[2] - origin[2];
@@ -2025,6 +2065,8 @@ function noteMovementResistance(
   if (requested <= BLOCKED_MOVEMENT_EPSILON_METRES || advanced > requested * 0.25) {
     blockedMovementSeconds = 0;
     blockedMovementBarrier = null;
+    blockedMovementRefusal = null;
+    blockedMovementNavigationClamped = false;
     if (blockedMovementHintShown) {
       blockedMovementHintShown = false;
       setControlStatus(movementStatusText(), "ready");
@@ -2038,46 +2080,54 @@ function noteMovementResistance(
   blockedMovementBarrier ??= physicalNavigationRuntime?.lastBlockedBarrier() ??
     physicalNavigationRuntime?.blockedStructuralBarrierNear(origin, desired) ??
     null;
+  // A step refused for want of floor never produced a wall contact, so record
+  // it alongside: without it the walker is told a barrier stopped them when
+  // nothing did, and the operator goes hunting for a wall that is not there.
+  blockedMovementRefusal ??= physicalNavigationRuntime?.lastMovementRefusal() ?? null;
+  if (navigationClamped) blockedMovementNavigationClamped = true;
   blockedMovementSeconds += deltaSeconds;
   if (blockedMovementSeconds >= BLOCKED_MOVEMENT_HINT_SECONDS && !blockedMovementHintShown) {
     blockedMovementHintShown = true;
-    setControlStatus(
-      blockedMovementMessage(blockedMovementBarrier),
-      "info",
-    );
+    // Probed once, here, rather than every frame: a navmesh stop standing on
+    // perfectly good cooked floor is an over-conservative walking map, while
+    // one with no floor under it is the edge of the capture. The operator can
+    // act on the first and only re-scan for the second.
+    const floorAhead = blockedMovementNavigationClamped && !blockedMovementBarrier
+      ? physicalNavigationRuntime?.canPlaceCamera(desired) ?? false
+      : false;
+    const refusal: BlockedMovementCause = blockedMovementBarrier
+      ? { kind: blockedMovementBarrier.kind, id: blockedMovementBarrier.id }
+      : blockedMovementNavigationClamped
+      ? { kind: floorAhead ? "navigation_map_clearance" : "capture_edge", id: null }
+      : { kind: blockedMovementRefusal ?? "unknown", id: null };
+    const message = blockedMovementMessage(blockedMovementBarrier, refusal.kind);
+    setControlStatus(message, "info");
+    publishMovementBlocked(message, refusal, origin);
   }
+}
+
+// The walk test lives in an iframe inside Studio, where the operator is
+// reading the panel rather than the small in-scene pill. Reporting the same
+// verdict outward lets the panel hold it until the next attempt, so a
+// momentary hint is not the only chance to read why the walker stopped.
+function publishMovementBlocked(
+  message: string,
+  cause: BlockedMovementCause,
+  position: Vector3Tuple,
+): void {
+  post({
+    source: "spatial-spark",
+    type: "movement-blocked",
+    message,
+    cause,
+    position: [position[0], position[1], position[2]],
+  });
 }
 
 // A stopped walker deserves to know which reviewed geometry stopped them:
 // a real wall, a closed door, and the edge of the captured world all feel
 // identical from inside, and only the name tells an operator whether the
 // scene or the walker is wrong.
-function blockedMovementMessage(
-  blocker: BlockedMovementBarrier | null,
-): string {
-  if (!blocker) return "Blocked by the walking map · this surface has no reviewed opening";
-  if (blocker.kind === "dynamic") {
-    return `Blocked by ${blocker.id} · this door is closed`;
-  }
-  if (blocker.kind === "solid_furniture") {
-    return `Blocked by ${blocker.id} · solid furniture`;
-  }
-  if (blocker.kind === "no_go") {
-    return `Blocked by ${blocker.id} · reviewed no-go volume`;
-  }
-  if (blocker.id.startsWith("auto-capture-ring-")) {
-    return "Blocked at the reviewed edge of the captured world";
-  }
-  const automaticWall = blocker.id.match(/^auto-barrier-(.+)-\d+$/);
-  if (automaticWall) {
-    return `Blocked by ${automaticWall[1]} · automatic structural wall`;
-  }
-  if (blocker.id.startsWith("auto-threshold-")) {
-    return `Blocked by ${blocker.id} · reviewed threshold`;
-  }
-  return `Blocked by ${blocker.id} · reviewed structural wall`;
-}
-
 function startFlyAscend(event: PointerEvent): void {
   startMobileVerticalMovement(event, flyAscend, 1);
 }

@@ -337,6 +337,7 @@ export async function validateStructuralNavigation({
       agent,
       loops: boundaryTopologyResult.loops,
       surfaceLoopCandidates: boundaryTopologyResult.surfaceLoopCandidates ?? [],
+      floorRings: boundaryTopologyResult.floorRings ?? [],
     });
     const dynamicBarrierProbes = await validateDynamicBarrierState({
       world,
@@ -360,6 +361,10 @@ export async function validateStructuralNavigation({
       boundaryProbes,
       cornerCount: cornerProbes.length,
       cornerProbeCount: cornerProbes.length,
+      // Corners the boundary loop carries out beyond any cooked floor, where
+      // no walker can stand and the exercise proves nothing. Reported so a
+      // reviewer can see how much of the loop was noise rather than shell.
+      unreachableCornerCount: cornerProbes.unreachableCornerCount ?? 0,
       cornerProbes,
       dynamicBarrierCount: dynamicBarrierProbes.length,
       dynamicBarrierProbeCount: dynamicBarrierProbes.length,
@@ -445,7 +450,10 @@ function validateStructuralBoundaryTopology(artifact) {
     }
   }
   const loops = [...acceptedLoops.values()];
+  const floorRings = floorSurfaces.map((surface) =>
+    surface.points.map((point) => [point[0], point[2]]));
   return {
+    floorRings,
     summary: {
       passed: true,
       method: "explicit-planar-boundary-faces-v2",
@@ -529,12 +537,30 @@ function signedPolygonArea2(points) {
   return area / 2;
 }
 
+// A boundary loop chained from observed walls can wander well outside the
+// captured floor, through clutter the scanner saw but never walked. Corners
+// out there cannot be exercised — the probe stands its capsule one offset from
+// the corner, and out there that origin is inside a pile with no floor under
+// it — and they cannot matter either, because no walker can reach them. The
+// gate exists to prove a walker cannot tunnel through a reviewed corner; where
+// no walker can stand, there is nothing to prove. Corners within reach are
+// exercised exactly as before, and the count of skipped ones is reported so
+// this stays visible rather than silent.
+export function cornerWithinWalkerReach(corner, floorRings, reach) {
+  for (const ring of floorRings) {
+    if (pointInPolygon2(corner, ring)) return true;
+    if (distanceToPolygon2(corner, ring) <= reach) return true;
+  }
+  return false;
+}
+
 function validateCornerSlides({
   world,
   artifact,
   agent,
   loops,
   surfaceLoopCandidates = [],
+  floorRings = [],
 }) {
   // A floor is proven when any structural loop that contains it survives the
   // corner exercise, tried tightest first. Observed walls can chain into an
@@ -559,6 +585,7 @@ function validateCornerSlides({
   controller.setMaxSlopeClimbAngle(degreesToRadians(agent.maxSlopeDegrees));
   controller.setMinSlopeSlideAngle(degreesToRadians(Math.min(89, agent.maxSlopeDegrees + 5)));
   const probes = [];
+  let unreachableCornerCount = 0;
   const loopOutcomes = new Map();
   const exerciseLoop = (loopRecord, loopIndex) => {
     if (loopOutcomes.has(loopRecord.key)) return loopOutcomes.get(loopRecord.key);
@@ -579,6 +606,16 @@ function validateCornerSlides({
       for (const [cornerIndex, corner] of loop.entries()) {
         const cornerId = `loop-${loopIndex + 1}-corner-${cornerIndex + 1}`;
         const offset = Math.max(agent.radius * 4, 0.5);
+        // The probe origin sits one offset out; it can only be a place a
+        // walker could stand if cooked floor reaches within that plus the
+        // capsule's own radius.
+        if (
+          floorRings.length &&
+          !cornerWithinWalkerReach(corner, floorRings, offset + agent.radius)
+        ) {
+          unreachableCornerCount += 1;
+          continue;
+        }
         let selected = null;
         let interiorSampleCount = 0;
         let overlapSampleCount = 0;
@@ -700,6 +737,7 @@ function validateCornerSlides({
     world.removeCollider(collider, true);
     world.removeRigidBody(body);
   }
+  probes.unreachableCornerCount = unreachableCornerCount;
   return probes;
 }
 

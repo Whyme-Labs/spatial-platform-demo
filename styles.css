@@ -3351,3 +3351,6 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
   .walk-test-card { grid-template-columns:minmax(0,1fr); }
   .walk-test-card > iframe { min-height:300px; }
 }
+
+/* Why the walker stopped, held in the panel after the in-scene hint fades. */
+.walk-test-blocked-reason { padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(255,255,255,.03); color:var(--text); }
