@@ -206,10 +206,12 @@ import {
   projectPolicyForPersistedDeliveryTemplate,
   structureWorkflowAllowsAutomaticProposal,
   trajectoryAutoOpenEnabled,
+  trajectoryClutterDemotionMode,
   type ProjectWorkflowPolicy,
 } from "../shared/project-policies";
 import {
   trajectoryDemotableWalls,
+  trajectoryWalkedFloorDemotableWalls,
   trajectoryQualifiedUnknownOpenings,
 } from "../../scripts/trajectory-evidence-core.mjs";
 import {
@@ -10808,7 +10810,10 @@ app.post(
       // resulting revision still needs this operator's approval, still shows
       // its machine-attested changes, and still cannot reach public exposure
       // unratified.
-      if (trajectoryAutoOpenEnabled(projectWorkflowPolicy(project))) {
+      const reviewPolicy = projectWorkflowPolicy(project);
+      const autoOpenEnabled = trajectoryAutoOpenEnabled(reviewPolicy);
+      const clutterDemotionMode = trajectoryClutterDemotionMode(reviewPolicy);
+      if (autoOpenEnabled || clutterDemotionMode) {
         const evidenceRaw = proposalReportStored && typeof proposalReportStored === "object"
           ? Reflect.get(proposalReportStored, "trajectoryEvidence")
           : undefined;
@@ -10816,21 +10821,41 @@ app.post(
         if (evidence.success) {
           // A wall any frozen human classification touched is never the
           // machine's to remove, whichever way the human ruled (#33).
-          const demotedWalls = trajectoryDemotableWalls({
-            plan: parsed.data.plan,
-            trajectoryEvidence: evidence.data,
-            resolutionCoveredWallIds: new Set(
-              frozenResolutions.map((resolution) => resolution.barrierId),
-            ),
-          });
+          const resolutionCoveredWallIds = new Set(
+            frozenResolutions.map((resolution) => resolution.barrierId),
+          );
+          const demotedWalls = autoOpenEnabled
+            ? trajectoryDemotableWalls({
+              plan: parsed.data.plan,
+              trajectoryEvidence: evidence.data,
+              resolutionCoveredWallIds,
+            })
+            : [];
+          // Walked-floor demotion is its own dimension: it answers walls the
+          // rig went AROUND, which pass-through evidence structurally cannot
+          // reach. Recording only the walls pass-through did not already take
+          // keeps each receipt's evidence honest about what carried it.
+          const passThroughWallIds = new Set(demotedWalls.map((wall) =>
+            `${wall.levelId}/${wall.wallId}`));
+          const walkedFloorDemotedWalls = clutterDemotionMode
+            ? trajectoryWalkedFloorDemotableWalls({
+              plan: parsed.data.plan,
+              trajectoryEvidence: evidence.data,
+              mode: clutterDemotionMode,
+              resolutionCoveredWallIds,
+            }).filter((wall) => !passThroughWallIds.has(`${wall.levelId}/${wall.wallId}`))
+            : [];
           trajectoryAutoOpenJson = JSON.stringify({
             schemaVersion: "trajectory-auto-open-v1",
             evidence: evidence.data,
-            qualifiedOpenings: trajectoryQualifiedUnknownOpenings({
-              plan: parsed.data.plan,
-              trajectoryEvidence: evidence.data,
-            }),
+            qualifiedOpenings: autoOpenEnabled
+              ? trajectoryQualifiedUnknownOpenings({
+                plan: parsed.data.plan,
+                trajectoryEvidence: evidence.data,
+              })
+              : [],
             ...(demotedWalls.length ? { demotedWalls } : {}),
+            ...(walkedFloorDemotedWalls.length ? { walkedFloorDemotedWalls } : {}),
           });
         }
       }
@@ -10935,10 +10960,10 @@ app.post(
               (frozenTrajectory?.qualifiedOpenings ?? []).map((opening) =>
                 `${opening.levelId}/${opening.openingId}`),
             ),
-            trajectoryDemotedWalls: new Set(
-              (frozenTrajectory?.demotedWalls ?? []).map((wall) =>
-                `${wall.levelId}/${wall.wallId}`),
-            ),
+            trajectoryDemotedWalls: new Set([
+              ...(frozenTrajectory?.demotedWalls ?? []),
+              ...(frozenTrajectory?.walkedFloorDemotedWalls ?? []),
+            ].map((wall) => `${wall.levelId}/${wall.wallId}`)),
             walkedFloors: frozenTrajectory?.evidence.walkedFloors ?? [],
           },
         );
@@ -22869,7 +22894,8 @@ async function trajectoryAutoOpenedOpeningCount(
   const frozen = parseFrozenTrajectoryAutoOpen(revision?.trajectory_evidence_json ?? null);
   if (frozen === undefined) return 0;
   if (frozen === null) return null;
-  return frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0);
+  return frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0) +
+    (frozen.walkedFloorDemotedWalls?.length ?? 0);
 }
 
 async function sceneVersionUsesOperatorAttestation(
@@ -25436,6 +25462,11 @@ export function trajectoryAutoOpenReceiptFragment(
       // Present only when walls were demoted (#33), so pre-#33 frozen blobs
       // keep their exact receipt bytes and authoring hashes.
       ...(frozen.demotedWalls?.length ? { demotedWalls: frozen.demotedWalls } : {}),
+      // Same rule as above: absent unless walked-floor demotion actually
+      // fired, so blobs frozen before it keep their exact receipt bytes.
+      ...(frozen.walkedFloorDemotedWalls?.length
+        ? { walkedFloorDemotedWalls: frozen.walkedFloorDemotedWalls }
+        : {}),
     },
   };
 }

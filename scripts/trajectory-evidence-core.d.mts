@@ -127,3 +127,33 @@ export function trajectoryDemotableWalls(input: {
   resolutionCoveredWallIds?: ReadonlySet<string>;
   maximumWallLengthM?: number;
 }): Array<{ levelId: string; wallId: string; crossingCount: number; roomId: string }>;
+
+export const WALKED_FLOOR_DEMOTION_MODES: readonly ["walked-majority", "walked-contact"];
+export const WALKED_FLOOR_MAJORITY_FRACTION: number;
+
+export function wallWalkedFloorFraction(input: {
+  from: readonly [number, number];
+  to: readonly [number, number];
+  contains: (x: number, z: number) => boolean;
+}): number;
+
+export function trajectoryWalkedFloorDemotableWalls(input: {
+  plan: TrajectoryPlanLike & {
+    levels?: ReadonlyArray<{
+      walls?: ReadonlyArray<{
+        id?: unknown;
+        wallKey?: unknown;
+        start?: ReadonlyArray<number>;
+        end?: ReadonlyArray<number>;
+      }>;
+    }>;
+  };
+  trajectoryEvidence: unknown;
+  mode: "walked-majority" | "walked-contact" | null;
+  resolutionCoveredWallIds?: ReadonlySet<string>;
+}): Array<{
+  levelId: string;
+  wallId: string;
+  mode: "walked-majority" | "walked-contact";
+  walkedFraction: number;
+}>;

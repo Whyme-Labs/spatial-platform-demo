@@ -12741,7 +12741,13 @@ function openEditProjectDialog(): void {
   const trajectoryAutoOpenVisible = state.user?.role === "platform_admin";
   byId("editProjectTrajectoryAutoOpenField").hidden = !trajectoryAutoOpenVisible;
   byId("editProjectTrajectoryAutoOpenNote").hidden = !trajectoryAutoOpenVisible;
+  byId("editProjectTrajectoryClutterDemotionField").hidden = !trajectoryAutoOpenVisible;
+  byId("editProjectTrajectoryClutterDemotionNote").hidden = !trajectoryAutoOpenVisible;
   setValue("trajectoryAutoOpen", effectiveProjectWorkflowPolicy(project).trajectoryAutoOpen);
+  setValue(
+    "trajectoryClutterDemotion",
+    effectiveProjectWorkflowPolicy(project).trajectoryClutterDemotion,
+  );
   renderProjectCustomFieldForm("editProjectCustomFields", project.customFields);
   const canGovern = state.user?.role === "platform_admin";
   for (const name of ["captureOrigin", "assetProducer", "deliveryTemplate"]) {
@@ -12765,6 +12771,19 @@ async function updateProject(form: FormData): Promise<void> {
   const trajectoryAutoOpen = String(
     form.get("trajectoryAutoOpen") ?? currentPolicy.trajectoryAutoOpen,
   ) as ProjectWorkflowPolicy["trajectoryAutoOpen"];
+  const trajectoryClutterDemotion = String(
+    form.get("trajectoryClutterDemotion") ?? currentPolicy.trajectoryClutterDemotion,
+  ) as ProjectWorkflowPolicy["trajectoryClutterDemotion"];
+  const policyChanged = trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen ||
+    trajectoryClutterDemotion !== currentPolicy.trajectoryClutterDemotion;
+  const clutterDemotionReason = {
+    "pass-through":
+      "Limit clutter demotion to pass-through evidence: only walls the scanner walked through are removed.",
+    "walked-majority":
+      "Enable walked-majority clutter demotion: wall runs mostly standing on walked floor are removed.",
+    "walked-contact":
+      "Enable walked-contact clutter demotion: any wall run standing on walked floor is removed.",
+  }[trajectoryClutterDemotion];
   try {
     await api(`/api/projects/${project.id}`, {
       method: "PATCH",
@@ -12782,11 +12801,13 @@ async function updateProject(form: FormData): Promise<void> {
           // The policy schema is strict and every dimension is behaviour, so
           // the whole current policy travels with the one dimension this form
           // edits — never a partial object that would reset the rest.
-          ...(trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen ? {
-            workflowPolicy: { ...currentPolicy, trajectoryAutoOpen },
-            transitionReason: trajectoryAutoOpen === "visited-rooms"
-              ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
-              : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.",
+          ...(policyChanged ? {
+            workflowPolicy: { ...currentPolicy, trajectoryAutoOpen, trajectoryClutterDemotion },
+            transitionReason: trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen
+              ? (trajectoryAutoOpen === "visited-rooms"
+                ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
+                : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.")
+              : clutterDemotionReason,
           } : {}),
         } : {}),
       }),
