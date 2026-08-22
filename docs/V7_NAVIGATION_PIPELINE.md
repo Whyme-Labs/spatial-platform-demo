@@ -102,7 +102,16 @@ A build cannot be approved unless it proves:
 - every published room anchor is enclosed by valid floor, ceiling, and wall
   support in all six directions;
 - every reviewed wall blocks both-direction Walk-capsule and Fly-sphere sweeps;
-- capsule corner-slide probes preserve motion without penetrating barriers;
+- capsule corner-slide probes preserve motion without penetrating barriers, at
+  every boundary corner a walker could reach — cooked floor within the probe
+  offset plus the capsule radius. A boundary loop chained from observed walls
+  wanders far outside the captured floor through clutter the scanner saw but
+  never walked; on the FJD capture the loop enclosing a 34 m² floor carried
+  ~570 corners over 194 m². Corners out there cannot be exercised (the probe
+  origin lands inside a pile with no floor under it) and cannot matter
+  (walkability is bounded by cooked floor, so no walker can stand near them).
+  They are skipped and counted in `structuralValidation.unreachableCornerCount`
+  so the noise stays visible; a well-formed authored scene skips none;
 - every advertised room route replays in both directions;
 - every inferred room, including rooms on the same floor, owns a frozen
   reachability destination;

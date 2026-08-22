@@ -250,6 +250,13 @@ Implemented:
   cards surface the machine-attested changes with their ratification path and
   a sealed-cost line counting the unresolved openings the conservative
   default keeps closed
+- a stopped walker is told which authority refused the step: a reviewed barrier
+  keeps its wall name, a walking-map clamp over cooked floor reports that the
+  map is holding agent clearance, and a clamp with no floor beyond reports the
+  edge of the capture — the three are indistinguishable from inside the scene
+  but call for opposite responses, and only the last is beyond any policy. The
+  verdict is posted to the host so the Studio walk-test panel holds it after the
+  in-scene hint fades
 - walked-floor clutter demotion (`trajectoryClutterDemotion` workflow policy,
   default `pass-through`): pass-through evidence alone only clears walls the
   rig walked straight through, which on a cluttered capture left 40.5% of the
@@ -480,7 +487,10 @@ change. The processor builds
 Detour topology, replays all room routes with a Rapier capsule, proves every
 room anchor is enclosed in all six directions, sweeps both sides of every
 reviewed wall with both the production Walk capsule and Fly sphere, probes
-capsule corner slides, and proves each dynamic door is passable/open and
+capsule corner slides at every boundary corner a walker can reach — corners the
+boundary loop carries out beyond any cooked floor are skipped and counted,
+because no walker can stand near them and the probe cannot be placed there —
+and proves each dynamic door is passable/open and
 blocked/closed in both Rapier and Detour before publication. A release freezes
 the exact approved build ID, authoring hash, JSON report asset, Detour binary,
 SHA-256 hashes, and sizes. The example Home Scan authoring contract is

@@ -14,6 +14,7 @@ import {
 import {
   validatePhysicalNavigation,
   validateStructuralNavigation,
+  cornerWithinWalkerReach,
 } from "../scripts/physical-navigation-validation.mjs";
 
 describe("authored walkable collision", () => {
@@ -476,6 +477,9 @@ describe("authored walkable collision", () => {
     assert.equal(structural.boundaryProbeCount, 200);
     assert.equal(structural.cornerCount, 50);
     assert.equal(structural.cornerProbeCount, 50);
+    // A well-formed authored scene keeps every boundary corner beside its own
+    // floor, so nothing is ever skipped as out of a walker's reach.
+    assert.equal(structural.unreachableCornerCount, 0);
     assert.equal(structural.dynamicBarrierCount, 2);
     assert.equal(structural.dynamicBarrierProbeCount, 2);
     assert.deepEqual(structural.boundaryTopology, {
@@ -778,3 +782,38 @@ function triangleNormalY(positions, [first, second, third]) {
   const c = positions.slice(third * 3, third * 3 + 3);
   return (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
 }
+
+describe("cornerWithinWalkerReach", () => {
+  // A boundary loop chained from observed walls can wander far outside the
+  // cooked floor, through clutter the scanner saw but never walked. Those
+  // corners cannot be exercised and cannot matter, because walkability is
+  // bounded by cooked floor and no walker can stand near them.
+  const room = [[0, 0], [4, 0], [4, 3], [0, 3]];
+
+  it("keeps a corner standing on the floor", () => {
+    assert.equal(cornerWithinWalkerReach([2, 1.5], [room], 1.25), true);
+  });
+
+  it("keeps a corner just outside the floor edge within reach", () => {
+    assert.equal(cornerWithinWalkerReach([4.5, 1.5], [room], 1.25), true);
+    assert.equal(cornerWithinWalkerReach([5.2, 1.5], [room], 1.25), true);
+  });
+
+  it("skips a corner no walker can approach", () => {
+    // The FJD case: the failing corner sat 1.875 m from the nearest cooked
+    // floor while the probe reaches 1.25 m.
+    assert.equal(cornerWithinWalkerReach([5.875, 1.5], [room], 1.25), false);
+    assert.equal(cornerWithinWalkerReach([2, -4], [room], 1.25), false);
+  });
+
+  it("measures against every floor ring, not just the first", () => {
+    const far = [[20, 20], [22, 20], [22, 22], [20, 22]];
+    assert.equal(cornerWithinWalkerReach([21, 19.5], [room, far], 1.25), true);
+  });
+
+  it("never skips when no floor rings are known, so the gate stays closed", () => {
+    // The caller only consults this when rings exist; an empty set must not
+    // silently exempt anything if that ever changes.
+    assert.equal(cornerWithinWalkerReach([2, 1.5], [], 1.25), false);
+  });
+});

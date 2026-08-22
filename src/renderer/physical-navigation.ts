@@ -45,6 +45,13 @@ type MovementContact = {
 
 export type PhysicalMovementMode = "walk" | "fly";
 
+// Why the last walk step refused to go where it was asked. A capsule stopped
+// by a wall and a capsule that ran out of cooked floor feel identical from
+// inside the scene, but they mean opposite things to an operator: one is
+// geometry the pipeline chose to keep, the other is the edge of what the
+// scanner actually captured. Only the runtime can tell them apart.
+export type MovementRefusal = "unsupported_floor" | "outside_recovery_bounds";
+
 let initialization: Promise<void> | undefined;
 // Sub-millimetre float32 corrections from a graze along authored geometry must
 // not abort a controlled traversal; only genuine obstructions should block it.
@@ -73,6 +80,7 @@ export class PhysicalNavigationRuntime {
   #structuralBarriers: StructuralBarrierSegment[] = [];
   #structuralBlockerBoxes: StructuralBlockerBox[] = [];
   #lastContacts: MovementContact[] = [];
+  #lastRefusal: MovementRefusal | null = null;
 
   private constructor(
     world: RAPIER.World,
@@ -231,6 +239,13 @@ export class PhysicalNavigationRuntime {
   // "blocked by the walking map". Dynamic doors resolve by their own collider
   // handle; the merged structural trimesh resolves by matching the contact
   // point against the frozen barrier segments the artifact carries.
+  // The non-contact reason the last walk step was refused, if any. Cleared by
+  // every step that resolved normally, so it only ever describes the step the
+  // caller just made.
+  lastMovementRefusal(): MovementRefusal | null {
+    return this.#lastRefusal;
+  }
+
   lastBlockedBarrier(): {
     id: string;
     kind: "dynamic" | "structural" | "solid_furniture" | "no_go";
@@ -442,6 +457,7 @@ export class PhysicalNavigationRuntime {
     this.#controller.computeColliderMovement(this.#collider, translation);
     const corrected = this.#controller.computedMovement();
     this.#recordMovementContacts();
+    this.#lastRefusal = null;
     const grounded = this.#mode === "walk" && this.#controller.computedGrounded();
     if (grounded) {
       this.#verticalVelocity = 0;
@@ -458,10 +474,12 @@ export class PhysicalNavigationRuntime {
     if (this.#mode === "walk" && !grounded) {
       // Walk has no jump or drop mechanic. Losing floor support therefore
       // means the cooked collision has a hole, never an intended transition.
+      this.#lastRefusal = "unsupported_floor";
       return this.#restoreGroundedCamera();
     }
     if (!insideBounds(nextCamera, this.#recoveryBounds[this.#mode])) {
       this.#verticalVelocity = 0;
+      this.#lastRefusal = "outside_recovery_bounds";
       return this.#mode === "walk" ? this.#restoreGroundedCamera() : null;
     }
     this.#body.setNextKinematicTranslation(nextCenter);
