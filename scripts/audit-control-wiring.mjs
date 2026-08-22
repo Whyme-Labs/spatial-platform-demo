@@ -490,6 +490,14 @@ function auditUploadAcceptCoverage(html, source) {
       "the upload picker no longer derives its accept list from the shared capture vocabulary",
     );
   }
+  // Narrowing the picker per purpose is the same bug wearing a different hat:
+  // the purpose is detected FROM the chosen file, so a picker restricted to
+  // the current purpose can never show the file that would correct it.
+  if (/fileInput\.accept\s*=/.test(source)) {
+    failures.push(
+      "the upload picker is narrowed to the selected purpose: the file must be choosable before its purpose is known",
+    );
+  }
 }
 
 function auditStudioFieldRegistry(html, source, worker, registry) {

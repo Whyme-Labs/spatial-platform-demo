@@ -2069,6 +2069,13 @@ const point2MetricSchema = z.tuple([boundedMetricSchema, boundedMetricSchema]);
 const floorplanKeySchema = z.string().trim()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/);
 
+// Re-running the automatic structure lane over evidence already attached to a
+// version. It names no asset: the server resolves the version's own verified
+// metric point cloud, so a rebuild can never quietly point at other geometry.
+export const structureRebuildSchema = z.object({
+  clientOperationId: z.string().uuid(),
+}).strict();
+
 export const floorplanExtractionSchema = z.object({
   clientOperationId: z.string().uuid(),
   versionId: z.string().uuid(),
@@ -2283,6 +2290,23 @@ export const trajectoryEvidenceSchema = z.object({
     wallId: z.string().min(1).max(120),
     crossingCount: z.number().int().min(1).max(100_000),
   }).strict()).max(5_000).optional(),
+  // Floor the pose path proves is walkable, as merged axis-aligned
+  // rectangles per storey. Optional so evidence frozen before this field
+  // parses unchanged.
+  walkedFloors: z.array(z.object({
+    levelId: z.string().min(1).max(120),
+    elevationM: boundedMetricSchema,
+    ceilingElevationM: boundedMetricSchema.nullable(),
+    cellSizeM: z.number().min(0.05).max(1),
+    radiusM: z.number().min(0.1).max(3),
+    cellCount: z.number().int().nonnegative(),
+    rectangles: z.array(z.object({
+      minX: boundedMetricSchema,
+      maxX: boundedMetricSchema,
+      minZ: boundedMetricSchema,
+      maxZ: boundedMetricSchema,
+    }).strict()).max(5_000),
+  }).strict()).max(100).optional(),
 }).superRefine((evidence, context) => {
   const derived = evidence.levels
     .flatMap((level) => level.rooms
