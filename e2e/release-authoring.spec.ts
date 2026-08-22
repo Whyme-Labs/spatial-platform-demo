@@ -671,16 +671,19 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
   const card = page.locator("article.workspace-card-large").filter({
     has: page.getByRole("heading", { name: "Routes and movement runtime" }),
   });
+  const reviewCard = page.locator("article.workspace-card-large").filter({
+    has: page.getByRole("heading", { name: "Build receipts and operator review" }),
+  });
   const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
   const tuneNavigation = card.getByRole("button", { name: "Walking profile", exact: true });
   const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
-  const firstApprove = card.getByRole("button", { name: "Approve navigation", exact: true }).first();
-  const firstReject = card.getByRole("button", { name: "Reject", exact: true }).first();
-  const buildEvidence = card.getByText("Inspect build evidence", { exact: true }).first();
+  const firstApprove = reviewCard.getByRole("button", { name: "Approve navigation", exact: true }).first();
+  const firstReject = reviewCard.getByRole("button", { name: "Reject", exact: true }).first();
+  const buildEvidence = reviewCard.getByText("Inspect build evidence", { exact: true }).first();
   await expect(buildEvidence).toBeVisible();
   await buildEvidence.click();
-  await expect(card.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
+  await expect(reviewCard.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
 
   for (const viewport of [
     { width: 1280, height: 720 },
@@ -699,9 +702,14 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
       buildNavigation.boundingBox(),
       firstApprove.boundingBox(),
       firstReject.boundingBox(),
+      card.boundingBox(),
+      reviewCard.boundingBox(),
     ]);
-    const [createBox, tuneBox, traversalBox, buildBox, approveBox, rejectBox] = boxes;
-    if (!createBox || !tuneBox || !traversalBox || !buildBox || !approveBox || !rejectBox) {
+    const [createBox, tuneBox, traversalBox, buildBox, approveBox, rejectBox, routesCardBox, reviewCardBox] = boxes;
+    if (
+      !createBox || !tuneBox || !traversalBox || !buildBox || !approveBox || !rejectBox ||
+      !routesCardBox || !reviewCardBox
+    ) {
       throw new Error(`${viewport.width}px navigation controls are not measurable`);
     }
 
@@ -709,10 +717,20 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
       ["create/tune", tuneBox.y - (createBox.y + createBox.height)],
       ["tune/traversal", traversalBox.y - (tuneBox.y + tuneBox.height)],
       ["traversal/build", buildBox.y - (traversalBox.y + traversalBox.height)],
-      ["build/review", approveBox.y - (buildBox.y + buildBox.height)],
     ] as const) {
       expect(gap, `${viewport.width}px ${label} controls overlap`).toBeGreaterThan(0);
     }
+
+    // Authoring and review now live in sibling cards: they may sit side by side or
+    // stack, but they must never overlap and the review pair must stay separated.
+    const cardsSeparated = reviewCardBox.y >= routesCardBox.y + routesCardBox.height ||
+      reviewCardBox.x >= routesCardBox.x + routesCardBox.width ||
+      routesCardBox.y >= reviewCardBox.y + reviewCardBox.height ||
+      routesCardBox.x >= reviewCardBox.x + reviewCardBox.width;
+    expect(cardsSeparated, `${viewport.width}px authoring and review cards overlap`).toBe(true);
+    const reviewPairSeparated = rejectBox.x >= approveBox.x + approveBox.width ||
+      rejectBox.y >= approveBox.y + approveBox.height;
+    expect(reviewPairSeparated, `${viewport.width}px approve and reject overlap`).toBe(true);
 
     const horizontalOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
