@@ -6912,7 +6912,12 @@ function renderSpatial(): void {
     container.append(emptyState("Upload and process an immutable scene version before authoring semantics."));
     return;
   }
-  const versionControl = element("article", "workspace-card-large spatial-version-control");
+  const versionControl = element(
+    "article",
+    state.projectSection === "walk"
+      ? "workspace-card-large spatial-version-control spatial-version-strip"
+      : "workspace-card-large spatial-version-control",
+  );
   const versionSelect = document.createElement("select");
   versionSelect.setAttribute("aria-label", "Spatial version");
   for (const version of state.selected?.versions ?? []) {
@@ -7355,11 +7360,16 @@ function renderSpatial(): void {
     if (actions.childElementCount) row.append(actions);
     navigationBuildHistory.append(row);
   }
-  routes.append(navigationBuildHistory);
+  const navigationBuildsCard = element("article", "workspace-card-large navigation-builds-card");
+  navigationBuildsCard.append(
+    element("span", "eyebrow", "VERIFIED NAVIGATION"),
+    element("h3", "", "Build receipts and operator review"),
+    navigationBuildHistory,
+  );
   const approvedNavigationBuild = navigationBuilds.find((build) => build.status === "APPROVED");
-  if (approvedNavigationBuild) {
-    routes.append(renderWalkTestCard(spatial, approvedNavigationBuild));
-  }
+  const walkTestCard = approvedNavigationBuild
+    ? renderWalkTestCard(spatial, approvedNavigationBuild)
+    : null;
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7613,7 +7623,8 @@ function renderSpatial(): void {
     return;
   }
   if (state.projectSection === "walk") {
-    container.append(routes);
+    if (walkTestCard) container.append(walkTestCard);
+    container.append(routes, navigationBuildsCard);
     return;
   }
   if (!comparisonWorkspaceAvailable(state.selected?.comparisonReadiness ?? emptyComparisonReadiness)) {
@@ -7647,11 +7658,12 @@ function renderWalkTestCard(
     latestWalkTestPose = null;
     previousWalkTestSample = null;
   }
-  const card = element("section", "release-starting-view walk-test-card");
+  const card = element("article", "workspace-card-large walk-test-card");
   const status = element("p", "field-note", "Preparing the approved scene and walking runtime…");
   status.id = "walkTestStatus";
-  const heading = element("div");
+  const heading = element("div", "walk-test-heading");
   heading.append(
+    element("span", "eyebrow", "MOVEMENT VERIFICATION"),
     element("h3", "", "Walk test"),
     status,
   );
@@ -7704,12 +7716,14 @@ function renderWalkTestCard(
   });
   const actions = element("div", "navigation-authoring-actions");
   actions.append(reset, usePosition, complete);
-  card.append(heading, frame, evidenceSummary, actions);
+  const side = element("div", "walk-test-side");
+  side.append(heading, evidenceSummary, actions);
+  card.append(frame, side);
   const completed = spatial.walkTests?.find((walkTest) =>
     walkTest.navigation_build_id === build.id
   );
   if (completed) {
-    card.append(element(
+    side.append(element(
       "p",
       "generated-readback",
       `Walk-test receipt recorded ${parseTimestamp(completed.completed_at).toLocaleString()} for this exact approved walking map.`,

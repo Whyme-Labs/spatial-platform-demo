@@ -817,102 +817,102 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | src/client/studio.ts:save:6484 | button | save | generated/global | src/client/studio.ts:6484 | CONTROL-A | static | src/client/studio.ts:6484 |
 | src/client/studio.ts:revoke:6497 | button | revoke | generated/global | src/client/studio.ts:6497 | CONTROL-A | static | src/client/studio.ts:6497 |
 | src/client/studio.ts:resend:6540 | button | pending ? "Sending another code…" : remaining > 0 ? `Resend code in ${remaining}s` : !turnstileToken ? "Complete security check to resend" : | generated/global | src/client/studio.ts:6540 | CONTROL-A | static | src/client/studio.ts:6540 |
-| src/client/studio.ts:edit:6973 | button | edit | generated/global | src/client/studio.ts:6973 | CONTROL-A | static | src/client/studio.ts:6973 |
-| src/client/studio.ts:remove:6975 | button | remove | generated/global | src/client/studio.ts:6975 | CONTROL-A | static | src/client/studio.ts:6975 |
-| src/client/studio.ts:remove:6998 | button | remove | generated/global | src/client/studio.ts:6998 | CONTROL-A | static | src/client/studio.ts:6998 |
-| src/client/studio.ts:add:7011 | button | add | generated/global | src/client/studio.ts:7011 | CONTROL-A | static | src/client/studio.ts:7011 |
-| src/client/studio.ts:review:7063 | button | review | generated/global | src/client/studio.ts:7063 | CONTROL-A | static | src/client/studio.ts:7063 |
-| src/client/studio.ts:cancel:7071 | button | cancel | generated/global | src/client/studio.ts:7071 | CONTROL-A | static | src/client/studio.ts:7071 |
-| src/client/studio.ts:retry:7086 | button | retry | generated/global | src/client/studio.ts:7086 | CONTROL-A | static | src/client/studio.ts:7086 |
-| src/client/studio.ts:queueExtraction:7111 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7111 | CONTROL-A | static | src/client/studio.ts:7111 |
-| src/client/studio.ts:refreshExtractions:7121 | button | refreshExtractions | generated/global | src/client/studio.ts:7121 | CONTROL-A | static | src/client/studio.ts:7121 |
-| src/client/studio.ts:addRoute:7167 | button | addRoute | generated/global | src/client/studio.ts:7167 | CONTROL-A | static | src/client/studio.ts:7167 |
-| src/client/studio.ts:tuneNavigation:7170 | button | tuneNavigation | generated/global | src/client/studio.ts:7170 | CONTROL-A | static | src/client/studio.ts:7170 |
-| src/client/studio.ts:authorTraversal:7172 | button | authorTraversal | generated/global | src/client/studio.ts:7172 | CONTROL-A | static | src/client/studio.ts:7172 |
-| src/client/studio.ts:buildNavigation:7174 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7174 | CONTROL-A | static | src/client/studio.ts:7174 |
-| src/client/studio.ts:edit:7203 | button | edit | generated/global | src/client/studio.ts:7203 | CONTROL-A | static | src/client/studio.ts:7203 |
-| src/client/studio.ts:archive:7205 | button | archive | generated/global | src/client/studio.ts:7205 | CONTROL-A | static | src/client/studio.ts:7205 |
-| src/client/studio.ts:approve:7301 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7301 | CONTROL-A | static | src/client/studio.ts:7301 |
-| src/client/studio.ts:reject:7323 | button | reject | generated/global | src/client/studio.ts:7323 | CONTROL-A | static | src/client/studio.ts:7323 |
-| src/client/studio.ts:refresh:7335 | button | refresh | generated/global | src/client/studio.ts:7335 | CONTROL-A | static | src/client/studio.ts:7335 |
-| src/client/studio.ts:retry:7345 | button | retry | generated/global | src/client/studio.ts:7345 | CONTROL-A | static | src/client/studio.ts:7345 |
-| src/client/studio.ts:analyzeCapture:7398 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7398 | CONTROL-A | static | src/client/studio.ts:7398 |
-| src/client/studio.ts:retry:7463 | button | retry | generated/global | src/client/studio.ts:7463 | CONTROL-A | static | src/client/studio.ts:7463 |
-| src/client/studio.ts:scanAction:7479 | button | posterAssets.length === 0 ? "A verified poster image is required before privacy detection can run." : scanActive ? "The latest privacy scan | generated/global | src/client/studio.ts:7479 | CONTROL-A | static | src/client/studio.ts:7479 |
-| src/client/studio.ts:review:7531 | button | review | generated/global | src/client/studio.ts:7531 | CONTROL-A | static | src/client/studio.ts:7531 |
-| src/client/studio.ts:button:7551 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7551 | CONTROL-A | static | src/client/studio.ts:7551 |
-| src/client/studio.ts:applied:7564 | button | applied | generated/global | src/client/studio.ts:7564 | CONTROL-A | static | src/client/studio.ts:7564 |
-| src/client/studio.ts:savePolicy:7594 | button | savePolicy | generated/global | src/client/studio.ts:7594 | CONTROL-A | static | src/client/studio.ts:7594 |
-| src/client/studio.ts:reset:7663 | button | reset | generated/global | src/client/studio.ts:7663 | CONTROL-A | static | src/client/studio.ts:7663 |
-| src/client/studio.ts:usePosition:7664 | button | usePosition | generated/global | src/client/studio.ts:7664 | CONTROL-A | static | src/client/studio.ts:7664 |
-| src/client/studio.ts:complete:7667 | button | `Verified copy completed as destination project ${handoff.targetProjectId.slice(0, 8)}. ` + "Switch workspaces to repeat processing, QA, rev | generated/global | src/client/studio.ts:7667 | CONTROL-A | static | src/client/studio.ts:7667 |
-| src/client/studio.ts:review:7915 | button | review | generated/global | src/client/studio.ts:7915 | CONTROL-A | static | src/client/studio.ts:7915 |
-| src/client/studio.ts:configure:7926 | button | configure | generated/global | src/client/studio.ts:7926 | CONTROL-A | static | src/client/studio.ts:7926 |
-| src/client/studio.ts:configureHosting:7936 | button | configureHosting | generated/global | src/client/studio.ts:7936 | CONTROL-A | static | src/client/studio.ts:7936 |
-| src/client/studio.ts:publishedLink:7948 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7948 | CONTROL-A | static | src/client/studio.ts:7948 |
-| src/client/studio.ts:button:8010 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:8010 | CONTROL-A | static | src/client/studio.ts:8010 |
-| src/client/studio.ts:undo:8017 | button | undo | generated/global | src/client/studio.ts:8017 | CONTROL-A | static | src/client/studio.ts:8017 |
-| src/client/studio.ts:finish:8021 | button | finish | generated/global | src/client/studio.ts:8021 | CONTROL-A | static | src/client/studio.ts:8021 |
-| src/client/studio.ts:save:8025 | button | save | generated/global | src/client/studio.ts:8025 | CONTROL-A | static | src/client/studio.ts:8025 |
-| src/client/studio.ts:review:8595 | button | review | generated/global | src/client/studio.ts:8595 | CONTROL-A | static | src/client/studio.ts:8595 |
-| src/client/studio.ts:cancel:8600 | button | cancel | generated/global | src/client/studio.ts:8600 | CONTROL-A | static | src/client/studio.ts:8600 |
-| src/client/studio.ts:retry:8616 | button | retry | generated/global | src/client/studio.ts:8616 | CONTROL-A | static | src/client/studio.ts:8616 |
-| src/client/studio.ts:queue:8631 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8631 | CONTROL-A | static | src/client/studio.ts:8631 |
-| src/client/studio.ts:refresh:8641 | button | refresh | generated/global | src/client/studio.ts:8641 | CONTROL-A | static | src/client/studio.ts:8641 |
-| src/client/studio.ts:rebuild:8659 | button | rebuild | generated/global | src/client/studio.ts:8659 | CONTROL-A | static | src/client/studio.ts:8659 |
-| src/client/studio.ts:download:8721 | button | download | generated/global | src/client/studio.ts:8721 | CONTROL-A | static | src/client/studio.ts:8721 |
-| src/client/studio.ts:generate:8740 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8740 | CONTROL-A | static | src/client/studio.ts:8740 |
-| src/client/studio.ts:anchor:9681 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9681 | CONTROL-A | static | src/client/studio.ts:9681 |
-| src/client/studio.ts:retry:10470 | button | retry | generated/global | src/client/studio.ts:10470 | CONTROL-A | static | src/client/studio.ts:10470 |
-| src/client/studio.ts:review:10830 | button | review | generated/global | src/client/studio.ts:10830 | CONTROL-A | static | src/client/studio.ts:10830 |
-| src/client/studio.ts:addPoint:11018 | button | addPoint | generated/global | src/client/studio.ts:11018 | CONTROL-A | static | src/client/studio.ts:11018 |
-| src/client/studio.ts:report:11020 | button | report | generated/global | src/client/studio.ts:11020 | CONTROL-A | static | src/client/studio.ts:11020 |
-| src/client/studio.ts:generate:11030 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:11030 | CONTROL-A | static | src/client/studio.ts:11030 |
-| src/client/studio.ts:download:11051 | button | download | generated/global | src/client/studio.ts:11051 | CONTROL-A | static | src/client/studio.ts:11051 |
-| src/client/studio.ts:create:11087 | button | create | generated/global | src/client/studio.ts:11087 | CONTROL-A | static | src/client/studio.ts:11087 |
-| src/client/studio.ts:anchor:11204 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:11204 | CONTROL-A | static | src/client/studio.ts:11204 |
-| src/client/studio.ts:retry:11414 | button | retry | generated/global | src/client/studio.ts:11414 | CONTROL-A | static | src/client/studio.ts:11414 |
-| src/client/studio.ts:reveal:11481 | button | reveal | generated/global | src/client/studio.ts:11481 | CONTROL-A | static | src/client/studio.ts:11481 |
-| src/client/studio.ts:upload:11577 | button | upload | generated/global | src/client/studio.ts:11577 | CONTROL-A | static | src/client/studio.ts:11577 |
-| src/client/studio.ts:retry:11583 | button | retry | generated/global | src/client/studio.ts:11583 | CONTROL-A | static | src/client/studio.ts:11583 |
-| src/client/studio.ts:correction:11593 | button | correction | generated/global | src/client/studio.ts:11593 | CONTROL-A | static | src/client/studio.ts:11593 |
-| src/client/studio.ts:preview:11601 | button | "Select projects in the portfolio and choose a destination." \| "Select exactly one project and choose a destination." \| "Checking this project's recent verified copies…" \| `Recovered asset copy ${activeAssetHandoff.id.slice(0, 8)} from persisted state.` \| "Select exactly one project and choose a destination." \| "Recent copy status is unavailable. You can retry by reopening these tools." \| "Select at least one immutable asset and assign one or more truthful evidence roles." \| `${missingRoles.length} selected asset${missingRoles.length === 1 ? "" : "s"} still need an evidence role.` \| `${assets.length} immutable asset${assets.length === 1 ? "" : "s"} selected. ` + (ready.length ? `Evidences ${ready.join(", ")}. ` : "No del | generated/global | src/client/studio.ts:11601 | CONTROL-A | static | src/client/studio.ts:11601 |
-| src/client/studio.ts:copy:11609 | button | copy | generated/global | src/client/studio.ts:11609 | CONTROL-A | static | src/client/studio.ts:11609 |
-| src/client/studio.ts:editScene:11617 | button | editScene | generated/global | src/client/studio.ts:11617 | CONTROL-A | static | src/client/studio.ts:11617 |
-| src/client/studio.ts:refresh:11621 | button | refresh | generated/global | src/client/studio.ts:11621 | CONTROL-A | static | src/client/studio.ts:11621 |
-| src/client/studio.ts:reviewExceptions:11634 | button | reviewExceptions | generated/global | src/client/studio.ts:11634 | CONTROL-A | static | src/client/studio.ts:11634 |
-| src/client/studio.ts:retry:11640 | button | retry | generated/global | src/client/studio.ts:11640 | CONTROL-A | static | src/client/studio.ts:11640 |
-| src/client/studio.ts:refresh:11650 | button | refresh | generated/global | src/client/studio.ts:11650 | CONTROL-A | static | src/client/studio.ts:11650 |
-| src/client/studio.ts:publishedLink:11755 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11755 | CONTROL-A | static | src/client/studio.ts:11755 |
-| src/client/studio.ts:qaButton:11774 | button | qaButton | generated/global | src/client/studio.ts:11774 | CONTROL-A | static | src/client/studio.ts:11774 |
-| src/client/studio.ts:publishButton:11785 | button | publishButton | generated/global | src/client/studio.ts:11785 | CONTROL-A | static | src/client/studio.ts:11785 |
-| src/client/studio.ts:editButton:11835 | button | editButton | generated/global | src/client/studio.ts:11835 | CONTROL-A | static | src/client/studio.ts:11835 |
-| src/client/studio.ts:lifecycleButton:11838 | button | lifecycleButton | generated/global | src/client/studio.ts:11838 | CONTROL-A | static | src/client/studio.ts:11838 |
-| src/client/studio.ts:compareButton:11871 | button | compareButton | generated/global | src/client/studio.ts:11871 | CONTROL-A | static | src/client/studio.ts:11871 |
-| src/client/studio.ts:uploadButton:11875 | button | uploadButton | generated/global | src/client/studio.ts:11875 | CONTROL-A | static | src/client/studio.ts:11875 |
-| src/client/studio.ts:registerBundle:11899 | button | registerBundle | generated/global | src/client/studio.ts:11899 | CONTROL-A | static | src/client/studio.ts:11899 |
-| src/client/studio.ts:link:11913 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11913 | CONTROL-A | static | src/client/studio.ts:11913 |
-| src/client/studio.ts:exportEvidence:11919 | button | exportEvidence | generated/global | src/client/studio.ts:11919 | CONTROL-A | static | src/client/studio.ts:11919 |
-| src/client/studio.ts:revoke:11932 | button | revoke | generated/global | src/client/studio.ts:11932 | CONTROL-A | static | src/client/studio.ts:11932 |
-| src/client/studio.ts:rollback:11949 | button | rollback | generated/global | src/client/studio.ts:11949 | CONTROL-A | static | src/client/studio.ts:11949 |
-| src/client/studio.ts:inviteButton:11970 | button | inviteButton | generated/global | src/client/studio.ts:11970 | CONTROL-A | static | src/client/studio.ts:11970 |
-| src/client/studio.ts:reviewButton:11972 | button | reviewButton | generated/global | src/client/studio.ts:11972 | CONTROL-A | static | src/client/studio.ts:11972 |
-| src/client/studio.ts:deliveryButton:11984 | button | deliveryButton | generated/global | src/client/studio.ts:11984 | CONTROL-A | static | src/client/studio.ts:11984 |
-| src/client/studio.ts:spatialButton:11992 | button | spatialButton | generated/global | src/client/studio.ts:11992 | CONTROL-A | static | src/client/studio.ts:11992 |
-| src/client/studio.ts:measurementButton:11995 | button | measurementButton | generated/global | src/client/studio.ts:11995 | CONTROL-A | static | src/client/studio.ts:11995 |
-| src/client/studio.ts:domainButton:12007 | button | domainButton | generated/global | src/client/studio.ts:12007 | CONTROL-A | static | src/client/studio.ts:12007 |
-| src/client/studio.ts:step:12037 | button | step | generated/global | src/client/studio.ts:12037 | CONTROL-A | static | src/client/studio.ts:12037 |
-| src/client/studio.ts:review:12554 | button | review | generated/global | src/client/studio.ts:12554 | CONTROL-A | static | src/client/studio.ts:12554 |
-| src/client/studio.ts:retry:13038 | button | retry | generated/global | src/client/studio.ts:13038 | CONTROL-A | static | src/client/studio.ts:13038 |
-| src/client/studio.ts:resume:13088 | button | checkout.checkout_url | generated/global | src/client/studio.ts:13088 | CONTROL-A | static | src/client/studio.ts:13088 |
-| src/client/studio.ts:discard:13101 | button | discard | generated/global | src/client/studio.ts:13101 | CONTROL-A | static | src/client/studio.ts:13101 |
-| src/client/studio.ts:retry:14323 | button | retry | generated/global | src/client/studio.ts:14323 | CONTROL-A | static | src/client/studio.ts:14323 |
-| src/client/studio.ts:verify:14391 | button | verify | generated/global | src/client/studio.ts:14391 | CONTROL-A | static | src/client/studio.ts:14391 |
-| src/client/studio.ts:challenge:14403 | button | challenge | generated/global | src/client/studio.ts:14403 | CONTROL-A | static | src/client/studio.ts:14403 |
-| src/client/studio.ts:provision:14416 | button | provision | generated/global | src/client/studio.ts:14416 | CONTROL-A | static | src/client/studio.ts:14416 |
-| src/client/studio.ts:open:14442 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14442 | CONTROL-A | static | src/client/studio.ts:14442 |
-| src/client/studio.ts:remove:14449 | button | remove | generated/global | src/client/studio.ts:14449 | CONTROL-A | static | src/client/studio.ts:14449 |
-| src/client/studio.ts:verify:14504 | button | verify | generated/global | src/client/studio.ts:14504 | CONTROL-A | static | src/client/studio.ts:14504 |
+| src/client/studio.ts:edit:6978 | button | edit | generated/global | src/client/studio.ts:6978 | CONTROL-A | static | src/client/studio.ts:6978 |
+| src/client/studio.ts:remove:6980 | button | remove | generated/global | src/client/studio.ts:6980 | CONTROL-A | static | src/client/studio.ts:6980 |
+| src/client/studio.ts:remove:7003 | button | remove | generated/global | src/client/studio.ts:7003 | CONTROL-A | static | src/client/studio.ts:7003 |
+| src/client/studio.ts:add:7016 | button | add | generated/global | src/client/studio.ts:7016 | CONTROL-A | static | src/client/studio.ts:7016 |
+| src/client/studio.ts:review:7068 | button | review | generated/global | src/client/studio.ts:7068 | CONTROL-A | static | src/client/studio.ts:7068 |
+| src/client/studio.ts:cancel:7076 | button | cancel | generated/global | src/client/studio.ts:7076 | CONTROL-A | static | src/client/studio.ts:7076 |
+| src/client/studio.ts:retry:7091 | button | retry | generated/global | src/client/studio.ts:7091 | CONTROL-A | static | src/client/studio.ts:7091 |
+| src/client/studio.ts:queueExtraction:7116 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7116 | CONTROL-A | static | src/client/studio.ts:7116 |
+| src/client/studio.ts:refreshExtractions:7126 | button | refreshExtractions | generated/global | src/client/studio.ts:7126 | CONTROL-A | static | src/client/studio.ts:7126 |
+| src/client/studio.ts:addRoute:7172 | button | addRoute | generated/global | src/client/studio.ts:7172 | CONTROL-A | static | src/client/studio.ts:7172 |
+| src/client/studio.ts:tuneNavigation:7175 | button | tuneNavigation | generated/global | src/client/studio.ts:7175 | CONTROL-A | static | src/client/studio.ts:7175 |
+| src/client/studio.ts:authorTraversal:7177 | button | authorTraversal | generated/global | src/client/studio.ts:7177 | CONTROL-A | static | src/client/studio.ts:7177 |
+| src/client/studio.ts:buildNavigation:7179 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7179 | CONTROL-A | static | src/client/studio.ts:7179 |
+| src/client/studio.ts:edit:7208 | button | edit | generated/global | src/client/studio.ts:7208 | CONTROL-A | static | src/client/studio.ts:7208 |
+| src/client/studio.ts:archive:7210 | button | archive | generated/global | src/client/studio.ts:7210 | CONTROL-A | static | src/client/studio.ts:7210 |
+| src/client/studio.ts:approve:7306 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7306 | CONTROL-A | static | src/client/studio.ts:7306 |
+| src/client/studio.ts:reject:7328 | button | reject | generated/global | src/client/studio.ts:7328 | CONTROL-A | static | src/client/studio.ts:7328 |
+| src/client/studio.ts:refresh:7340 | button | refresh | generated/global | src/client/studio.ts:7340 | CONTROL-A | static | src/client/studio.ts:7340 |
+| src/client/studio.ts:retry:7350 | button | retry | generated/global | src/client/studio.ts:7350 | CONTROL-A | static | src/client/studio.ts:7350 |
+| src/client/studio.ts:analyzeCapture:7408 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7408 | CONTROL-A | static | src/client/studio.ts:7408 |
+| src/client/studio.ts:retry:7473 | button | retry | generated/global | src/client/studio.ts:7473 | CONTROL-A | static | src/client/studio.ts:7473 |
+| src/client/studio.ts:scanAction:7489 | button | posterAssets.length === 0 ? "A verified poster image is required before privacy detection can run." : scanActive ? "The latest privacy scan | generated/global | src/client/studio.ts:7489 | CONTROL-A | static | src/client/studio.ts:7489 |
+| src/client/studio.ts:review:7541 | button | review | generated/global | src/client/studio.ts:7541 | CONTROL-A | static | src/client/studio.ts:7541 |
+| src/client/studio.ts:button:7561 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7561 | CONTROL-A | static | src/client/studio.ts:7561 |
+| src/client/studio.ts:applied:7574 | button | applied | generated/global | src/client/studio.ts:7574 | CONTROL-A | static | src/client/studio.ts:7574 |
+| src/client/studio.ts:savePolicy:7604 | button | savePolicy | generated/global | src/client/studio.ts:7604 | CONTROL-A | static | src/client/studio.ts:7604 |
+| src/client/studio.ts:reset:7675 | button | reset | generated/global | src/client/studio.ts:7675 | CONTROL-A | static | src/client/studio.ts:7675 |
+| src/client/studio.ts:usePosition:7676 | button | usePosition | generated/global | src/client/studio.ts:7676 | CONTROL-A | static | src/client/studio.ts:7676 |
+| src/client/studio.ts:complete:7679 | button | `Verified copy completed as destination project ${handoff.targetProjectId.slice(0, 8)}. ` + "Switch workspaces to repeat processing, QA, rev | generated/global | src/client/studio.ts:7679 | CONTROL-A | static | src/client/studio.ts:7679 |
+| src/client/studio.ts:review:7929 | button | review | generated/global | src/client/studio.ts:7929 | CONTROL-A | static | src/client/studio.ts:7929 |
+| src/client/studio.ts:configure:7940 | button | configure | generated/global | src/client/studio.ts:7940 | CONTROL-A | static | src/client/studio.ts:7940 |
+| src/client/studio.ts:configureHosting:7950 | button | configureHosting | generated/global | src/client/studio.ts:7950 | CONTROL-A | static | src/client/studio.ts:7950 |
+| src/client/studio.ts:publishedLink:7962 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7962 | CONTROL-A | static | src/client/studio.ts:7962 |
+| src/client/studio.ts:button:8024 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:8024 | CONTROL-A | static | src/client/studio.ts:8024 |
+| src/client/studio.ts:undo:8031 | button | undo | generated/global | src/client/studio.ts:8031 | CONTROL-A | static | src/client/studio.ts:8031 |
+| src/client/studio.ts:finish:8035 | button | finish | generated/global | src/client/studio.ts:8035 | CONTROL-A | static | src/client/studio.ts:8035 |
+| src/client/studio.ts:save:8039 | button | save | generated/global | src/client/studio.ts:8039 | CONTROL-A | static | src/client/studio.ts:8039 |
+| src/client/studio.ts:review:8609 | button | review | generated/global | src/client/studio.ts:8609 | CONTROL-A | static | src/client/studio.ts:8609 |
+| src/client/studio.ts:cancel:8614 | button | cancel | generated/global | src/client/studio.ts:8614 | CONTROL-A | static | src/client/studio.ts:8614 |
+| src/client/studio.ts:retry:8630 | button | retry | generated/global | src/client/studio.ts:8630 | CONTROL-A | static | src/client/studio.ts:8630 |
+| src/client/studio.ts:queue:8645 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8645 | CONTROL-A | static | src/client/studio.ts:8645 |
+| src/client/studio.ts:refresh:8655 | button | refresh | generated/global | src/client/studio.ts:8655 | CONTROL-A | static | src/client/studio.ts:8655 |
+| src/client/studio.ts:rebuild:8673 | button | rebuild | generated/global | src/client/studio.ts:8673 | CONTROL-A | static | src/client/studio.ts:8673 |
+| src/client/studio.ts:download:8735 | button | download | generated/global | src/client/studio.ts:8735 | CONTROL-A | static | src/client/studio.ts:8735 |
+| src/client/studio.ts:generate:8754 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8754 | CONTROL-A | static | src/client/studio.ts:8754 |
+| src/client/studio.ts:anchor:9695 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9695 | CONTROL-A | static | src/client/studio.ts:9695 |
+| src/client/studio.ts:retry:10484 | button | retry | generated/global | src/client/studio.ts:10484 | CONTROL-A | static | src/client/studio.ts:10484 |
+| src/client/studio.ts:review:10844 | button | review | generated/global | src/client/studio.ts:10844 | CONTROL-A | static | src/client/studio.ts:10844 |
+| src/client/studio.ts:addPoint:11032 | button | addPoint | generated/global | src/client/studio.ts:11032 | CONTROL-A | static | src/client/studio.ts:11032 |
+| src/client/studio.ts:report:11034 | button | report | generated/global | src/client/studio.ts:11034 | CONTROL-A | static | src/client/studio.ts:11034 |
+| src/client/studio.ts:generate:11044 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:11044 | CONTROL-A | static | src/client/studio.ts:11044 |
+| src/client/studio.ts:download:11065 | button | download | generated/global | src/client/studio.ts:11065 | CONTROL-A | static | src/client/studio.ts:11065 |
+| src/client/studio.ts:create:11101 | button | create | generated/global | src/client/studio.ts:11101 | CONTROL-A | static | src/client/studio.ts:11101 |
+| src/client/studio.ts:anchor:11218 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:11218 | CONTROL-A | static | src/client/studio.ts:11218 |
+| src/client/studio.ts:retry:11428 | button | retry | generated/global | src/client/studio.ts:11428 | CONTROL-A | static | src/client/studio.ts:11428 |
+| src/client/studio.ts:reveal:11495 | button | reveal | generated/global | src/client/studio.ts:11495 | CONTROL-A | static | src/client/studio.ts:11495 |
+| src/client/studio.ts:upload:11591 | button | upload | generated/global | src/client/studio.ts:11591 | CONTROL-A | static | src/client/studio.ts:11591 |
+| src/client/studio.ts:retry:11597 | button | retry | generated/global | src/client/studio.ts:11597 | CONTROL-A | static | src/client/studio.ts:11597 |
+| src/client/studio.ts:correction:11607 | button | correction | generated/global | src/client/studio.ts:11607 | CONTROL-A | static | src/client/studio.ts:11607 |
+| src/client/studio.ts:preview:11615 | button | "Select projects in the portfolio and choose a destination." \| "Select exactly one project and choose a destination." \| "Checking this project's recent verified copies…" \| `Recovered asset copy ${activeAssetHandoff.id.slice(0, 8)} from persisted state.` \| "Select exactly one project and choose a destination." \| "Recent copy status is unavailable. You can retry by reopening these tools." \| "Select at least one immutable asset and assign one or more truthful evidence roles." \| `${missingRoles.length} selected asset${missingRoles.length === 1 ? "" : "s"} still need an evidence role.` \| `${assets.length} immutable asset${assets.length === 1 ? "" : "s"} selected. ` + (ready.length ? `Evidences ${ready.join(", ")}. ` : "No del | generated/global | src/client/studio.ts:11615 | CONTROL-A | static | src/client/studio.ts:11615 |
+| src/client/studio.ts:copy:11623 | button | copy | generated/global | src/client/studio.ts:11623 | CONTROL-A | static | src/client/studio.ts:11623 |
+| src/client/studio.ts:editScene:11631 | button | editScene | generated/global | src/client/studio.ts:11631 | CONTROL-A | static | src/client/studio.ts:11631 |
+| src/client/studio.ts:refresh:11635 | button | refresh | generated/global | src/client/studio.ts:11635 | CONTROL-A | static | src/client/studio.ts:11635 |
+| src/client/studio.ts:reviewExceptions:11648 | button | reviewExceptions | generated/global | src/client/studio.ts:11648 | CONTROL-A | static | src/client/studio.ts:11648 |
+| src/client/studio.ts:retry:11654 | button | retry | generated/global | src/client/studio.ts:11654 | CONTROL-A | static | src/client/studio.ts:11654 |
+| src/client/studio.ts:refresh:11664 | button | refresh | generated/global | src/client/studio.ts:11664 | CONTROL-A | static | src/client/studio.ts:11664 |
+| src/client/studio.ts:publishedLink:11769 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11769 | CONTROL-A | static | src/client/studio.ts:11769 |
+| src/client/studio.ts:qaButton:11788 | button | qaButton | generated/global | src/client/studio.ts:11788 | CONTROL-A | static | src/client/studio.ts:11788 |
+| src/client/studio.ts:publishButton:11799 | button | publishButton | generated/global | src/client/studio.ts:11799 | CONTROL-A | static | src/client/studio.ts:11799 |
+| src/client/studio.ts:editButton:11849 | button | editButton | generated/global | src/client/studio.ts:11849 | CONTROL-A | static | src/client/studio.ts:11849 |
+| src/client/studio.ts:lifecycleButton:11852 | button | lifecycleButton | generated/global | src/client/studio.ts:11852 | CONTROL-A | static | src/client/studio.ts:11852 |
+| src/client/studio.ts:compareButton:11885 | button | compareButton | generated/global | src/client/studio.ts:11885 | CONTROL-A | static | src/client/studio.ts:11885 |
+| src/client/studio.ts:uploadButton:11889 | button | uploadButton | generated/global | src/client/studio.ts:11889 | CONTROL-A | static | src/client/studio.ts:11889 |
+| src/client/studio.ts:registerBundle:11913 | button | registerBundle | generated/global | src/client/studio.ts:11913 | CONTROL-A | static | src/client/studio.ts:11913 |
+| src/client/studio.ts:link:11927 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11927 | CONTROL-A | static | src/client/studio.ts:11927 |
+| src/client/studio.ts:exportEvidence:11933 | button | exportEvidence | generated/global | src/client/studio.ts:11933 | CONTROL-A | static | src/client/studio.ts:11933 |
+| src/client/studio.ts:revoke:11946 | button | revoke | generated/global | src/client/studio.ts:11946 | CONTROL-A | static | src/client/studio.ts:11946 |
+| src/client/studio.ts:rollback:11963 | button | rollback | generated/global | src/client/studio.ts:11963 | CONTROL-A | static | src/client/studio.ts:11963 |
+| src/client/studio.ts:inviteButton:11984 | button | inviteButton | generated/global | src/client/studio.ts:11984 | CONTROL-A | static | src/client/studio.ts:11984 |
+| src/client/studio.ts:reviewButton:11986 | button | reviewButton | generated/global | src/client/studio.ts:11986 | CONTROL-A | static | src/client/studio.ts:11986 |
+| src/client/studio.ts:deliveryButton:11998 | button | deliveryButton | generated/global | src/client/studio.ts:11998 | CONTROL-A | static | src/client/studio.ts:11998 |
+| src/client/studio.ts:spatialButton:12006 | button | spatialButton | generated/global | src/client/studio.ts:12006 | CONTROL-A | static | src/client/studio.ts:12006 |
+| src/client/studio.ts:measurementButton:12009 | button | measurementButton | generated/global | src/client/studio.ts:12009 | CONTROL-A | static | src/client/studio.ts:12009 |
+| src/client/studio.ts:domainButton:12021 | button | domainButton | generated/global | src/client/studio.ts:12021 | CONTROL-A | static | src/client/studio.ts:12021 |
+| src/client/studio.ts:step:12051 | button | step | generated/global | src/client/studio.ts:12051 | CONTROL-A | static | src/client/studio.ts:12051 |
+| src/client/studio.ts:review:12568 | button | review | generated/global | src/client/studio.ts:12568 | CONTROL-A | static | src/client/studio.ts:12568 |
+| src/client/studio.ts:retry:13052 | button | retry | generated/global | src/client/studio.ts:13052 | CONTROL-A | static | src/client/studio.ts:13052 |
+| src/client/studio.ts:resume:13102 | button | checkout.checkout_url | generated/global | src/client/studio.ts:13102 | CONTROL-A | static | src/client/studio.ts:13102 |
+| src/client/studio.ts:discard:13115 | button | discard | generated/global | src/client/studio.ts:13115 | CONTROL-A | static | src/client/studio.ts:13115 |
+| src/client/studio.ts:retry:14337 | button | retry | generated/global | src/client/studio.ts:14337 | CONTROL-A | static | src/client/studio.ts:14337 |
+| src/client/studio.ts:verify:14405 | button | verify | generated/global | src/client/studio.ts:14405 | CONTROL-A | static | src/client/studio.ts:14405 |
+| src/client/studio.ts:challenge:14417 | button | challenge | generated/global | src/client/studio.ts:14417 | CONTROL-A | static | src/client/studio.ts:14417 |
+| src/client/studio.ts:provision:14430 | button | provision | generated/global | src/client/studio.ts:14430 | CONTROL-A | static | src/client/studio.ts:14430 |
+| src/client/studio.ts:open:14456 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14456 | CONTROL-A | static | src/client/studio.ts:14456 |
+| src/client/studio.ts:remove:14463 | button | remove | generated/global | src/client/studio.ts:14463 | CONTROL-A | static | src/client/studio.ts:14463 |
+| src/client/studio.ts:verify:14518 | button | verify | generated/global | src/client/studio.ts:14518 | CONTROL-A | static | src/client/studio.ts:14518 |
 | src/client/studio/stages/compare.ts:review:938 | button | review | generated/global | src/client/studio/stages/compare.ts:938 | CONTROL-A | static | src/client/studio/stages/compare.ts:938 |
 | src/client/studio/stages/compare.ts:visual:944 | button | visualAvailable ? "" : "Two versions need verified web scenes, approved navigation, and capture registration." | generated/global | src/client/studio/stages/compare.ts:944 | CONTROL-A | static | src/client/studio/stages/compare.ts:944 |
 | src/client/studio/stages/compare.ts:retry:1166 | button | retry | generated/global | src/client/studio/stages/compare.ts:1166 | CONTROL-A | static | src/client/studio/stages/compare.ts:1166 |
