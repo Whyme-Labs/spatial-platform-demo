@@ -36,12 +36,12 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 ## Measured inventory receipt
 
 - Roles: 4
-- Worker and client routes: 193
+- Worker and client routes: 192
 - Forms: 38
 - Dialogs: 37
 - Governed fields: 249
-- Static and generated controls: 320
-- Route and control assurance: browser=9, deployed-staging=31, integration=113, production-attested=1, static=358, unit=1
+- Static and generated controls: 318
+- Route and control assurance: browser=9, deployed-staging=31, integration=113, production-attested=1, static=355, unit=1
 - Persisted state sets: 69
 - Asynchronous workflows: 60
 
@@ -247,7 +247,6 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | CLIENT #project/:projectId/structure | operator | studio.html | ROUTE-A | static | studio.html |
 | CLIENT #project/:projectId/privacy | operator | studio.html | ROUTE-A | static | studio.html |
 | CLIENT #project/:projectId/compare | operator | studio.html | ROUTE-A | static | studio.html |
-| CLIENT #project/:projectId/walk | operator | studio.html | ROUTE-A | static | studio.html |
 | CLIENT #project/:projectId/publish | operator | studio.html | ROUTE-A | static | studio.html |
 | CLIENT #project/:projectId/measurement | operator | studio.html | ROUTE-A | static | studio.html |
 | CLIENT #project/:projectId/expert | operator | studio.html | ROUTE-A | static | studio.html |
@@ -256,42 +255,42 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 
 | Form | Dialog | Section | Source | Policy | Assurance | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| loginForm | loginDialog | global | studio.html:280 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| newProjectForm | newProjectDialog | global | studio.html:308 | FORM-A | static | studio.html:308 |
-| savedViewForm | savedViewDialog | global | studio.html:367 | FORM-A | static | studio.html:367 |
-| projectTemplateForm | portfolioToolsDialog | global | studio.html:399 | FORM-A | static | studio.html:399 |
-| projectFieldForm | portfolioToolsDialog | global | studio.html:450 | FORM-A | static | studio.html:450 |
-| teamInvitationForm | teamInvitationDialog | global | studio.html:500 | FORM-A | static | studio.html:500 |
-| identityProviderForm | identityProviderDialog | global | studio.html:516 | FORM-A | static | studio.html:516 |
-| captureAgentForm | captureAgentDialog | global | studio.html:533 | FORM-A | static | studio.html:533 |
-| uploadForm | uploadDialog | global | studio.html:570 | FORM-A | static | studio.html:570 |
-| captureBundleForm | captureBundleDialog | global | studio.html:599 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| captureBundleReviewForm | captureBundleReviewDialog | global | studio.html:651 | FORM-A | static | studio.html:651 |
-| editProjectForm | editProjectDialog | global | studio.html:667 | FORM-A | static | studio.html:667 |
-| qaForm | qaDialog | global | studio.html:691 | FORM-A | static | studio.html:691 |
-| releaseForm | releaseDialog | global | studio.html:711 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| reviewerForm | reviewerDialog | global | studio.html:778 | FORM-A | static | studio.html:778 |
-| deliveryForm | deliveryDialog | global | studio.html:794 | FORM-A | static | studio.html:794 |
-| domainForm | domainDialog | global | studio.html:818 | FORM-A | static | studio.html:818 |
-| entityForm | entityDialog | global | studio.html:842 | FORM-A | static | studio.html:842 |
-| navigationProfileForm | navigationProfileDialog | global | studio.html:861 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| navigationBuildForm | navigationBuildDialog | global | studio.html:889 | FORM-A | static | studio.html:889 |
-| navigationTraversalForm | navigationTraversalDialog | global | studio.html:918 | FORM-A | static | studio.html:918 |
-| semanticExtractionForm | semanticExtractionDialog | global | studio.html:939 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| semanticReviewForm | semanticReviewDialog | global | studio.html:968 | FORM-A | static | studio.html:968 |
-| floorplanExtractionForm | floorplanExtractionDialog | global | studio.html:989 | FORM-A | static | studio.html:989 |
-| floorplanReviewForm | floorplanReviewDialog | global | studio.html:1024 | FORM-A | static | studio.html:1024 |
-| routeForm | routeDialog | global | studio.html:1058 | FORM-A | static | studio.html:1058 |
-| privacyCandidateForm | privacyCandidateDialog | global | studio.html:1074 | FORM-A | static | studio.html:1074 |
-| measurementBriefForm | measurementBriefDialog | global | studio.html:1091 | FORM-A | static | studio.html:1091 |
-| checkPointForm | checkPointDialog | global | studio.html:1109 | FORM-A | static | studio.html:1109 |
-| geometryChangeForm | geometryChangeDialog | global | studio.html:1125 | FORM-A | static | studio.html:1125 |
-| geometryChangeReviewForm | geometryChangeReviewDialog | global | studio.html:1144 | FORM-A | static | studio.html:1144 |
-| rawSceneChangeForm | rawSceneChangeDialog | global | studio.html:1160 | FORM-A | static | studio.html:1160 |
-| rawSceneChangeReviewForm | rawSceneChangeReviewDialog | global | studio.html:1189 | FORM-A | static | studio.html:1189 |
-| captureCompletenessForm | captureCompletenessDialog | global | studio.html:1205 | FORM-A | static | studio.html:1205 |
-| captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1232 | FORM-A | static | studio.html:1232 |
-| versionComparisonForm | versionComparisonDialog | global | studio.html:1262 | FORM-A | static | studio.html:1262 |
+| loginForm | loginDialog | global | studio.html:279 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| newProjectForm | newProjectDialog | global | studio.html:307 | FORM-A | static | studio.html:307 |
+| savedViewForm | savedViewDialog | global | studio.html:366 | FORM-A | static | studio.html:366 |
+| projectTemplateForm | portfolioToolsDialog | global | studio.html:398 | FORM-A | static | studio.html:398 |
+| projectFieldForm | portfolioToolsDialog | global | studio.html:449 | FORM-A | static | studio.html:449 |
+| teamInvitationForm | teamInvitationDialog | global | studio.html:499 | FORM-A | static | studio.html:499 |
+| identityProviderForm | identityProviderDialog | global | studio.html:515 | FORM-A | static | studio.html:515 |
+| captureAgentForm | captureAgentDialog | global | studio.html:532 | FORM-A | static | studio.html:532 |
+| uploadForm | uploadDialog | global | studio.html:569 | FORM-A | static | studio.html:569 |
+| captureBundleForm | captureBundleDialog | global | studio.html:598 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| captureBundleReviewForm | captureBundleReviewDialog | global | studio.html:650 | FORM-A | static | studio.html:650 |
+| editProjectForm | editProjectDialog | global | studio.html:666 | FORM-A | static | studio.html:666 |
+| qaForm | qaDialog | global | studio.html:690 | FORM-A | static | studio.html:690 |
+| releaseForm | releaseDialog | global | studio.html:710 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| reviewerForm | reviewerDialog | global | studio.html:777 | FORM-A | static | studio.html:777 |
+| deliveryForm | deliveryDialog | global | studio.html:793 | FORM-A | static | studio.html:793 |
+| domainForm | domainDialog | global | studio.html:817 | FORM-A | static | studio.html:817 |
+| entityForm | entityDialog | global | studio.html:841 | FORM-A | static | studio.html:841 |
+| navigationProfileForm | navigationProfileDialog | global | studio.html:860 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| navigationBuildForm | navigationBuildDialog | global | studio.html:888 | FORM-A | static | studio.html:888 |
+| navigationTraversalForm | navigationTraversalDialog | global | studio.html:917 | FORM-A | static | studio.html:917 |
+| semanticExtractionForm | semanticExtractionDialog | global | studio.html:938 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| semanticReviewForm | semanticReviewDialog | global | studio.html:967 | FORM-A | static | studio.html:967 |
+| floorplanExtractionForm | floorplanExtractionDialog | global | studio.html:988 | FORM-A | static | studio.html:988 |
+| floorplanReviewForm | floorplanReviewDialog | global | studio.html:1023 | FORM-A | static | studio.html:1023 |
+| routeForm | routeDialog | global | studio.html:1057 | FORM-A | static | studio.html:1057 |
+| privacyCandidateForm | privacyCandidateDialog | global | studio.html:1073 | FORM-A | static | studio.html:1073 |
+| measurementBriefForm | measurementBriefDialog | global | studio.html:1090 | FORM-A | static | studio.html:1090 |
+| checkPointForm | checkPointDialog | global | studio.html:1108 | FORM-A | static | studio.html:1108 |
+| geometryChangeForm | geometryChangeDialog | global | studio.html:1124 | FORM-A | static | studio.html:1124 |
+| geometryChangeReviewForm | geometryChangeReviewDialog | global | studio.html:1143 | FORM-A | static | studio.html:1143 |
+| rawSceneChangeForm | rawSceneChangeDialog | global | studio.html:1159 | FORM-A | static | studio.html:1159 |
+| rawSceneChangeReviewForm | rawSceneChangeReviewDialog | global | studio.html:1188 | FORM-A | static | studio.html:1188 |
+| captureCompletenessForm | captureCompletenessDialog | global | studio.html:1204 | FORM-A | static | studio.html:1204 |
+| captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1231 | FORM-A | static | studio.html:1231 |
+| versionComparisonForm | versionComparisonDialog | global | studio.html:1261 | FORM-A | static | studio.html:1261 |
 | accessCodeForm | none | global | index.html:271 | FORM-A | browser | e2e/release-access-code.spec.ts |
 | sceneReviewForm | none | global | index.html:297 | FORM-A | static | index.html:297 |
 
@@ -299,8 +298,8 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 
 | Input | Type | Required | Source | Policy | Assurance | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| loginEmail | email | true | studio.html:285 | FIELD-A | browser | e2e/ui-quality.spec.ts |
-| loginCode | text | false | studio.html:286 | FIELD-A | static | studio.html:286 |
+| loginEmail | email | true | studio.html:284 | FIELD-A | browser | e2e/ui-quality.spec.ts |
+| loginCode | text | false | studio.html:285 | FIELD-A | static | studio.html:285 |
 
 ## Governed authenticated inputs
 
@@ -419,16 +418,16 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | navigation_traversal.sourcePath | navigationTraversalForm | walk / operator | required | navigationTraversal.sourcePath → scene_navigation_traversals.* → createNavigationTraversal → openNavigationTraversalDialog | FIELD-A | static | config/studio-field-registry.json |
 | navigation_traversal.speedUnitsPerSecond | navigationTraversalForm | walk / operator | required / selected world unit per second | navigationTraversal.speedUnitsPerSecond → scene_navigation_traversals.* → createNavigationTraversal → openNavigationTraversalDialog | FIELD-A | static | config/studio-field-registry.json |
 | navigation_traversal.traversalKind | navigationTraversalForm | walk / operator | required | navigationTraversal.traversalKind → scene_navigation_traversals.* → createNavigationTraversal → openNavigationTraversalDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.agent_height | navigationProfileForm | walk / expert | optional / selected world unit | navigationProfile.agentHeight → scene_navigation_profiles.agent_height → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
-| navigation.agent_radius | navigationProfileForm | walk / expert | optional / selected world unit | navigationProfile.agentRadius → scene_navigation_profiles.agent_radius → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
-| navigation.clearance_preset | navigationProfileForm | walk / operator | required | project.workflowPolicy.navigationClearance → project_workflow_policy_revisions.policy_json → openNavigationProfileDialog → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.eye_height | navigationProfileForm | walk / expert | optional / selected world unit | navigationProfile.eyeHeight → scene_navigation_profiles.eye_height → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.maximum_acceleration | navigationProfileForm | walk / expert | optional / selected world unit per second squared | navigationProfile.maxAcceleration → scene_navigation_profiles.max_acceleration → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.maximum_slope | navigationProfileForm | walk / expert | optional / degrees | navigationProfile.maxSlopeDegrees → scene_navigation_profiles.max_slope_degrees → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.maximum_speed | navigationProfileForm | walk / expert | optional / selected world unit per second | navigationProfile.maxSpeed → scene_navigation_profiles.max_speed → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.maximum_step | navigationProfileForm | walk / expert | optional / selected world unit | navigationProfile.maxStepMetres → scene_navigation_profiles.max_step_metres → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
-| navigation.preset | navigationProfileForm | walk / operator | required | project.workflowPolicy.navigation → project_workflow_policy_revisions.policy_json → openNavigationProfileDialog → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
-| navigation.world_unit | navigationProfileForm | walk / expert | optional / metres or provisional scene units | navigationProfile.worldUnit → scene_navigation_profiles.world_unit → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.agent_height | navigationProfileForm | structure / expert | optional / selected world unit | navigationProfile.agentHeight → scene_navigation_profiles.agent_height → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
+| navigation.agent_radius | navigationProfileForm | structure / expert | optional / selected world unit | navigationProfile.agentRadius → scene_navigation_profiles.agent_radius → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
+| navigation.clearance_preset | navigationProfileForm | structure / operator | required | project.workflowPolicy.navigationClearance → project_workflow_policy_revisions.policy_json → openNavigationProfileDialog → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.eye_height | navigationProfileForm | structure / expert | optional / selected world unit | navigationProfile.eyeHeight → scene_navigation_profiles.eye_height → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.maximum_acceleration | navigationProfileForm | structure / expert | optional / selected world unit per second squared | navigationProfile.maxAcceleration → scene_navigation_profiles.max_acceleration → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.maximum_slope | navigationProfileForm | structure / expert | optional / degrees | navigationProfile.maxSlopeDegrees → scene_navigation_profiles.max_slope_degrees → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.maximum_speed | navigationProfileForm | structure / expert | optional / selected world unit per second | navigationProfile.maxSpeed → scene_navigation_profiles.max_speed → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.maximum_step | navigationProfileForm | structure / expert | optional / selected world unit | navigationProfile.maxStepMetres → scene_navigation_profiles.max_step_metres → updateNavigationProfile → navigationProfileSummary | FIELD-A | static | config/studio-field-registry.json |
+| navigation.preset | navigationProfileForm | structure / operator | required | project.workflowPolicy.navigation → project_workflow_policy_revisions.policy_json → openNavigationProfileDialog → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
+| navigation.world_unit | navigationProfileForm | structure / expert | optional / metres or provisional scene units | navigationProfile.worldUnit → scene_navigation_profiles.world_unit → updateNavigationProfile → openNavigationProfileDialog | FIELD-A | static | config/studio-field-registry.json |
 | privacy_candidate.note | privacyCandidateForm | privacy / operator | required | privacyCandidate.note → privacy_candidates.* → recordPrivacyCandidateDecision → openPrivacyCandidateDialog | FIELD-A | static | config/studio-field-registry.json |
 | privacy_candidate.status | privacyCandidateForm | privacy / operator | required | privacyCandidate.status → privacy_candidates.* → recordPrivacyCandidateDecision → openPrivacyCandidateDialog | FIELD-A | static | config/studio-field-registry.json |
 | project_field.description | projectFieldForm | portfolio / operator | optional | projectField.description → project_custom_field_definitions.* → saveProjectField → renderProjectFieldManager | FIELD-A | static | config/studio-field-registry.json |
@@ -560,43 +559,43 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 
 | Dialog | Section | Source | Policy | Assurance | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| loginDialog | global | studio.html:279 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
-| newProjectDialog | global | studio.html:307 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| savedViewDialog | global | studio.html:366 | DIALOG-A | static | studio.html:366 |
-| portfolioToolsDialog | global | studio.html:382 | DIALOG-A | static | studio.html:382 |
-| teamInvitationDialog | global | studio.html:499 | DIALOG-A | static | studio.html:499 |
-| identityProviderDialog | global | studio.html:515 | DIALOG-A | static | studio.html:515 |
-| captureAgentDialog | global | studio.html:532 | DIALOG-A | static | studio.html:532 |
-| captureAgentTokenDialog | global | studio.html:554 | DIALOG-A | static | studio.html:554 |
-| uploadDialog | global | studio.html:569 | DIALOG-A | static | studio.html:569 |
-| captureBundleDialog | global | studio.html:598 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
-| captureBundleReviewDialog | global | studio.html:650 | DIALOG-A | static | studio.html:650 |
-| editProjectDialog | global | studio.html:666 | DIALOG-A | static | studio.html:666 |
-| qaDialog | global | studio.html:690 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| releaseDialog | global | studio.html:710 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| publicationConfirmationDialog | global | studio.html:765 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| reviewerDialog | global | studio.html:777 | DIALOG-A | static | studio.html:777 |
-| deliveryDialog | global | studio.html:793 | DIALOG-A | static | studio.html:793 |
-| domainDialog | global | studio.html:817 | DIALOG-A | static | studio.html:817 |
-| entityDialog | global | studio.html:841 | DIALOG-A | static | studio.html:841 |
-| navigationProfileDialog | global | studio.html:860 | DIALOG-A | static | studio.html:860 |
-| navigationBuildDialog | global | studio.html:888 | DIALOG-A | static | studio.html:888 |
-| navigationTraversalDialog | global | studio.html:917 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| semanticExtractionDialog | global | studio.html:938 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
-| semanticReviewDialog | global | studio.html:967 | DIALOG-A | static | studio.html:967 |
-| floorplanExtractionDialog | global | studio.html:988 | DIALOG-A | static | studio.html:988 |
-| floorplanReviewDialog | global | studio.html:1023 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| routeDialog | global | studio.html:1057 | DIALOG-A | static | studio.html:1057 |
-| privacyCandidateDialog | global | studio.html:1073 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| measurementBriefDialog | global | studio.html:1090 | DIALOG-A | static | studio.html:1090 |
-| checkPointDialog | global | studio.html:1108 | DIALOG-A | static | studio.html:1108 |
-| geometryChangeDialog | global | studio.html:1124 | DIALOG-A | static | studio.html:1124 |
-| geometryChangeReviewDialog | global | studio.html:1143 | DIALOG-A | static | studio.html:1143 |
-| rawSceneChangeDialog | global | studio.html:1159 | DIALOG-A | static | studio.html:1159 |
-| rawSceneChangeReviewDialog | global | studio.html:1188 | DIALOG-A | static | studio.html:1188 |
-| captureCompletenessDialog | global | studio.html:1204 | DIALOG-A | static | studio.html:1204 |
-| captureCompletenessReviewDialog | global | studio.html:1231 | DIALOG-A | static | studio.html:1231 |
-| versionComparisonDialog | global | studio.html:1247 | DIALOG-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| loginDialog | global | studio.html:278 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
+| newProjectDialog | global | studio.html:306 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| savedViewDialog | global | studio.html:365 | DIALOG-A | static | studio.html:365 |
+| portfolioToolsDialog | global | studio.html:381 | DIALOG-A | static | studio.html:381 |
+| teamInvitationDialog | global | studio.html:498 | DIALOG-A | static | studio.html:498 |
+| identityProviderDialog | global | studio.html:514 | DIALOG-A | static | studio.html:514 |
+| captureAgentDialog | global | studio.html:531 | DIALOG-A | static | studio.html:531 |
+| captureAgentTokenDialog | global | studio.html:553 | DIALOG-A | static | studio.html:553 |
+| uploadDialog | global | studio.html:568 | DIALOG-A | static | studio.html:568 |
+| captureBundleDialog | global | studio.html:597 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
+| captureBundleReviewDialog | global | studio.html:649 | DIALOG-A | static | studio.html:649 |
+| editProjectDialog | global | studio.html:665 | DIALOG-A | static | studio.html:665 |
+| qaDialog | global | studio.html:689 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| releaseDialog | global | studio.html:709 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| publicationConfirmationDialog | global | studio.html:764 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| reviewerDialog | global | studio.html:776 | DIALOG-A | static | studio.html:776 |
+| deliveryDialog | global | studio.html:792 | DIALOG-A | static | studio.html:792 |
+| domainDialog | global | studio.html:816 | DIALOG-A | static | studio.html:816 |
+| entityDialog | global | studio.html:840 | DIALOG-A | static | studio.html:840 |
+| navigationProfileDialog | global | studio.html:859 | DIALOG-A | static | studio.html:859 |
+| navigationBuildDialog | global | studio.html:887 | DIALOG-A | static | studio.html:887 |
+| navigationTraversalDialog | global | studio.html:916 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| semanticExtractionDialog | global | studio.html:937 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
+| semanticReviewDialog | global | studio.html:966 | DIALOG-A | static | studio.html:966 |
+| floorplanExtractionDialog | global | studio.html:987 | DIALOG-A | static | studio.html:987 |
+| floorplanReviewDialog | global | studio.html:1022 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| routeDialog | global | studio.html:1056 | DIALOG-A | static | studio.html:1056 |
+| privacyCandidateDialog | global | studio.html:1072 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| measurementBriefDialog | global | studio.html:1089 | DIALOG-A | static | studio.html:1089 |
+| checkPointDialog | global | studio.html:1107 | DIALOG-A | static | studio.html:1107 |
+| geometryChangeDialog | global | studio.html:1123 | DIALOG-A | static | studio.html:1123 |
+| geometryChangeReviewDialog | global | studio.html:1142 | DIALOG-A | static | studio.html:1142 |
+| rawSceneChangeDialog | global | studio.html:1158 | DIALOG-A | static | studio.html:1158 |
+| rawSceneChangeReviewDialog | global | studio.html:1187 | DIALOG-A | static | studio.html:1187 |
+| captureCompletenessDialog | global | studio.html:1203 | DIALOG-A | static | studio.html:1203 |
+| captureCompletenessReviewDialog | global | studio.html:1230 | DIALOG-A | static | studio.html:1230 |
+| versionComparisonDialog | global | studio.html:1246 | DIALOG-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
 
 ## Buttons and links
 
@@ -618,128 +617,127 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | projectStructureTab | button | Structure | generated/global | studio.html:84 | CONTROL-A | static | studio.html:84 |
 | projectPrivacyTab | button | Privacy | generated/global | studio.html:85 | CONTROL-A | static | studio.html:85 |
 | projectCompareTab | button | Compare | generated/global | studio.html:86 | CONTROL-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| projectWalkTab | button | Walk test | generated/global | studio.html:87 | CONTROL-A | static | studio.html:87 |
-| projectPublishTab | button | Publish | generated/global | studio.html:88 | CONTROL-A | static | studio.html:88 |
-| projectMeasurementTab | button | Measurement evidence | generated/global | studio.html:89 | CONTROL-A | static | studio.html:89 |
-| projectExpertTab | button | Expert | generated/global | studio.html:90 | CONTROL-A | static | studio.html:90 |
-| studio.html:button:106 | button | Current | generated/global | studio.html:106 | CONTROL-A | static | studio.html:106 |
-| studio.html:button:107 | button | Processing | generated/global | studio.html:107 | CONTROL-A | static | studio.html:107 |
-| studio.html:button:108 | button | QA | generated/global | studio.html:108 | CONTROL-A | static | studio.html:108 |
-| studio.html:button:109 | button | Published | generated/global | studio.html:109 | CONTROL-A | static | studio.html:109 |
-| studio.html:button:110 | button | Archived | generated/global | studio.html:110 | CONTROL-A | static | studio.html:110 |
-| saveProjectViewButton | button | Save view | generated/global | studio.html:153 | CONTROL-A | static | studio.html:153 |
-| deleteProjectViewButton | button | Delete view | generated/global | studio.html:154 | CONTROL-A | static | studio.html:154 |
-| loadMoreProjectViews | button | Load more views | generated/global | studio.html:155 | CONTROL-A | static | studio.html:155 |
-| clearProjectSelection | button | Clear | generated/global | studio.html:163 | CONTROL-A | static | studio.html:163 |
-| bulkRestoreProjects | button | Restore selected | generated/global | studio.html:164 | CONTROL-A | static | studio.html:164 |
-| bulkArchiveProjects | button | Archive selected | generated/global | studio.html:165 | CONTROL-A | static | studio.html:165 |
-| loadMoreProjects | button | Load more projects | generated/global | studio.html:173 | CONTROL-A | static | studio.html:173 |
-| loadMoreJobs | button | Load more jobs | generated/global | studio.html:185 | CONTROL-A | static | studio.html:185 |
-| loadMoreReleases | button | Load more releases | generated/global | studio.html:209 | CONTROL-A | static | studio.html:209 |
-| createCaptureAgentButton | button | Capture agent | generated/global | studio.html:267 | CONTROL-A | static | studio.html:267 |
-| addIdentityProviderButton | button | Configure SSO | generated/global | studio.html:268 | CONTROL-A | static | studio.html:268 |
-| inviteTeamButton | button | + Invite teammate | generated/global | studio.html:269 | CONTROL-A | static | studio.html:269 |
-| retryTurnstile | button | Retry security check | loginDialog / loginForm | studio.html:292 | CONTROL-A | static | studio.html:292 |
-| loginSubmit | button | Email me a code | loginDialog / loginForm | studio.html:295 | CONTROL-A | browser | e2e/ui-quality.spec.ts |
-| resendLoginCode | button | Resend code | loginDialog / loginForm | studio.html:296 | CONTROL-A | static | studio.html:296 |
-| changeLoginEmail | button | Use a different email | loginDialog / loginForm | studio.html:297 | CONTROL-A | static | studio.html:297 |
-| enterpriseLoginButton | button | Continue with enterprise SSO | loginDialog / loginForm | studio.html:300 | CONTROL-A | static | studio.html:300 |
-| studio.html:button:309 | button | × | newProjectDialog / newProjectForm | studio.html:309 | CONTROL-A | static | studio.html:309 |
-| newCaptureBack | button | Back | newProjectDialog / newProjectForm | studio.html:358 | CONTROL-A | static | studio.html:358 |
-| newCaptureNext | button | Continue to files | newProjectDialog / newProjectForm | studio.html:359 | CONTROL-A | static | studio.html:359 |
-| newCaptureSubmit | button | Create and process scene | newProjectDialog / newProjectForm | studio.html:360 | CONTROL-A | static | studio.html:360 |
-| studio.html:button:368 | button | × | savedViewDialog / savedViewForm | studio.html:368 | CONTROL-A | static | studio.html:368 |
-| studio.html:button:377 | button | Save project view | savedViewDialog / savedViewForm | studio.html:377 | CONTROL-A | static | studio.html:377 |
-| studio.html:button:384 | button | × | portfolioToolsDialog | studio.html:384 | CONTROL-A | static | studio.html:384 |
-| loadMoreProjectTemplates | button | Load more templates | portfolioToolsDialog | studio.html:397 | CONTROL-A | static | studio.html:397 |
-| cancelTemplateEdit | button | Cancel edit | portfolioToolsDialog / projectTemplateForm | studio.html:418 | CONTROL-A | static | studio.html:418 |
-| studio.html:button:419 | button | Create template | portfolioToolsDialog / projectTemplateForm | studio.html:419 | CONTROL-A | static | studio.html:419 |
-| exportSelectedProjects | button | Export selected | portfolioToolsDialog | studio.html:429 | CONTROL-A | static | studio.html:429 |
-| exportAllProjects | button | Export all | portfolioToolsDialog | studio.html:430 | CONTROL-A | static | studio.html:430 |
-| previewPortfolioImport | button | Validate import | portfolioToolsDialog | studio.html:440 | CONTROL-A | static | studio.html:440 |
-| commitPortfolioImport | button | Create projects | portfolioToolsDialog | studio.html:441 | CONTROL-A | static | studio.html:441 |
-| cancelProjectFieldEdit | button | Cancel edit | portfolioToolsDialog / projectFieldForm | studio.html:462 | CONTROL-A | static | studio.html:462 |
-| studio.html:button:463 | button | Create field | portfolioToolsDialog / projectFieldForm | studio.html:463 | CONTROL-A | static | studio.html:463 |
-| previewPortfolioHandoff | button | Preview handoff | portfolioToolsDialog | studio.html:475 | CONTROL-A | static | studio.html:475 |
-| commitPortfolioHandoff | button | Create DRAFT copies | portfolioToolsDialog | studio.html:476 | CONTROL-A | static | studio.html:476 |
-| previewAssetHandoff | button | Preview asset copy | portfolioToolsDialog | studio.html:488 | CONTROL-A | static | studio.html:488 |
-| commitAssetHandoff | button | Start verified copy | portfolioToolsDialog | studio.html:489 | CONTROL-A | static | studio.html:489 |
-| refreshAssetHandoff | button | Refresh progress | portfolioToolsDialog | studio.html:490 | CONTROL-A | static | studio.html:490 |
-| retryAssetHandoff | button | Retry failed items | portfolioToolsDialog | studio.html:491 | CONTROL-A | static | studio.html:491 |
-| cancelAssetHandoff | button | Cancel and clean up | portfolioToolsDialog | studio.html:492 | CONTROL-A | static | studio.html:492 |
-| studio.html:button:501 | button | × | teamInvitationDialog / teamInvitationForm | studio.html:501 | CONTROL-A | static | studio.html:501 |
-| studio.html:button:510 | button | Send secure invitation | teamInvitationDialog / teamInvitationForm | studio.html:510 | CONTROL-A | static | studio.html:510 |
-| studio.html:button:517 | button | × | identityProviderDialog / identityProviderForm | studio.html:517 | CONTROL-A | static | studio.html:517 |
-| studio.html:button:527 | button | Create draft provider | identityProviderDialog / identityProviderForm | studio.html:527 | CONTROL-A | static | studio.html:527 |
-| studio.html:button:534 | button | × | captureAgentDialog / captureAgentForm | studio.html:534 | CONTROL-A | static | studio.html:534 |
-| captureAgentSubmit | button | Create scoped token | captureAgentDialog / captureAgentForm | studio.html:549 | CONTROL-A | static | studio.html:549 |
-| studio.html:button:556 | button | × | captureAgentTokenDialog | studio.html:556 | CONTROL-A | static | studio.html:556 |
-| copyCaptureAgentToken | button | Copy token | captureAgentTokenDialog | studio.html:562 | CONTROL-A | static | studio.html:562 |
-| studio.html:button:563 | button | I stored it safely | captureAgentTokenDialog | studio.html:563 | CONTROL-A | static | studio.html:563 |
-| studio.html:button:571 | button | × | uploadDialog / uploadForm | studio.html:571 | CONTROL-A | static | studio.html:571 |
-| studio.html:button:592 | button | Start resumable upload | uploadDialog / uploadForm | studio.html:592 | CONTROL-A | static | studio.html:592 |
-| pauseUploadButton | button | Pause upload | uploadDialog / uploadForm | studio.html:593 | CONTROL-A | static | studio.html:593 |
-| studio.html:button:600 | button | × | captureBundleDialog / captureBundleForm | studio.html:600 | CONTROL-A | static | studio.html:600 |
-| studio.html:button:645 | button | Register immutable capture bundle | captureBundleDialog / captureBundleForm | studio.html:645 | CONTROL-A | static | studio.html:645 |
-| studio.html:button:652 | button | × | captureBundleReviewDialog / captureBundleReviewForm | studio.html:652 | CONTROL-A | static | studio.html:652 |
-| studio.html:button:661 | button | Record capture-contract review | captureBundleReviewDialog / captureBundleReviewForm | studio.html:661 | CONTROL-A | static | studio.html:661 |
-| studio.html:button:668 | button | × | editProjectDialog / editProjectForm | studio.html:668 | CONTROL-A | static | studio.html:668 |
-| studio.html:button:685 | button | Save project settings | editProjectDialog / editProjectForm | studio.html:685 | CONTROL-A | static | studio.html:685 |
-| studio.html:button:692 | button | × | qaDialog / qaForm | studio.html:692 | CONTROL-A | static | studio.html:692 |
-| qaOpenPrivacyWorkspace | button | Open privacy evidence workspace | qaDialog / qaForm | studio.html:697 | CONTROL-A | static | studio.html:697 |
-| studio.html:button:705 | button | Approve immutable version | qaDialog / qaForm | studio.html:705 | CONTROL-A | static | studio.html:705 |
-| studio.html:button:712 | button | × | releaseDialog / releaseForm | studio.html:712 | CONTROL-A | static | studio.html:712 |
-| releaseUseCurrentView | button | Use current view | releaseDialog / releaseForm | studio.html:732 | CONTROL-A | static | studio.html:732 |
-| studio.html:button:760 | button | Publish release | releaseDialog / releaseForm | studio.html:760 | CONTROL-A | static | studio.html:760 |
-| studio.html:button:771 | button | Keep current release | publicationConfirmationDialog | studio.html:771 | CONTROL-A | static | studio.html:771 |
-| publicationConfirmationSubmit | button | Confirm | publicationConfirmationDialog | studio.html:772 | CONTROL-A | static | studio.html:772 |
-| studio.html:button:779 | button | × | reviewerDialog / reviewerForm | studio.html:779 | CONTROL-A | static | studio.html:779 |
-| studio.html:button:788 | button | Send secure invitation | reviewerDialog / reviewerForm | studio.html:788 | CONTROL-A | static | studio.html:788 |
-| studio.html:button:795 | button | × | deliveryDialog / deliveryForm | studio.html:795 | CONTROL-A | static | studio.html:795 |
-| studio.html:button:811 | button | Save brand & retention | deliveryDialog / deliveryForm | studio.html:811 | CONTROL-A | static | studio.html:811 |
-| startHostingCheckout | button | Open billing workspace | deliveryDialog / deliveryForm | studio.html:812 | CONTROL-A | static | studio.html:812 |
-| studio.html:button:819 | button | × | domainDialog / domainForm | studio.html:819 | CONTROL-A | static | studio.html:819 |
-| studio.html:button:826 | button | Create verification record | domainDialog / domainForm | studio.html:826 | CONTROL-A | static | studio.html:826 |
-| studio.html:button:843 | button | × | entityDialog / entityForm | studio.html:843 | CONTROL-A | static | studio.html:843 |
-| studio.html:button:855 | button | Add spatial entity | entityDialog / entityForm | studio.html:855 | CONTROL-A | static | studio.html:855 |
-| studio.html:button:862 | button | × | navigationProfileDialog / navigationProfileForm | studio.html:862 | CONTROL-A | static | studio.html:862 |
-| studio.html:button:883 | button | Save walking profile | navigationProfileDialog / navigationProfileForm | studio.html:883 | CONTROL-A | static | studio.html:883 |
-| studio.html:button:890 | button | × | navigationBuildDialog / navigationBuildForm | studio.html:890 | CONTROL-A | static | studio.html:890 |
-| studio.html:button:912 | button | Build verified walking map | navigationBuildDialog / navigationBuildForm | studio.html:912 | CONTROL-A | static | studio.html:912 |
-| studio.html:button:919 | button | × | navigationTraversalDialog / navigationTraversalForm | studio.html:919 | CONTROL-A | static | studio.html:919 |
-| studio.html:button:933 | button | Author traversal | navigationTraversalDialog / navigationTraversalForm | studio.html:933 | CONTROL-A | static | studio.html:933 |
-| studio.html:button:940 | button | × | semanticExtractionDialog / semanticExtractionForm | studio.html:940 | CONTROL-A | static | studio.html:940 |
-| studio.html:button:962 | button | Queue semantic extraction | semanticExtractionDialog / semanticExtractionForm | studio.html:962 | CONTROL-A | static | studio.html:962 |
-| studio.html:button:969 | button | × | semanticReviewDialog / semanticReviewForm | studio.html:969 | CONTROL-A | static | studio.html:969 |
-| studio.html:button:983 | button | Record semantic review | semanticReviewDialog / semanticReviewForm | studio.html:983 | CONTROL-A | static | studio.html:983 |
-| studio.html:button:990 | button | × | floorplanExtractionDialog / floorplanExtractionForm | studio.html:990 | CONTROL-A | static | studio.html:990 |
-| studio.html:button:1018 | button | Queue floor-plan extraction | floorplanExtractionDialog / floorplanExtractionForm | studio.html:1018 | CONTROL-A | static | studio.html:1018 |
-| studio.html:button:1025 | button | × | floorplanReviewDialog / floorplanReviewForm | studio.html:1025 | CONTROL-A | static | studio.html:1025 |
-| studio.html:button:1052 | button | Save operator decision | floorplanReviewDialog / floorplanReviewForm | studio.html:1052 | CONTROL-A | static | studio.html:1052 |
-| studio.html:button:1059 | button | × | routeDialog / routeForm | studio.html:1059 | CONTROL-A | static | studio.html:1059 |
-| studio.html:button:1068 | button | Create guided route | routeDialog / routeForm | studio.html:1068 | CONTROL-A | static | studio.html:1068 |
-| studio.html:button:1075 | button | × | privacyCandidateDialog / privacyCandidateForm | studio.html:1075 | CONTROL-A | static | studio.html:1075 |
-| studio.html:button:1085 | button | Record privacy decision | privacyCandidateDialog / privacyCandidateForm | studio.html:1085 | CONTROL-A | static | studio.html:1085 |
-| studio.html:button:1092 | button | × | measurementBriefDialog / measurementBriefForm | studio.html:1092 | CONTROL-A | static | studio.html:1092 |
-| studio.html:button:1103 | button | Create evidence brief | measurementBriefDialog / measurementBriefForm | studio.html:1103 | CONTROL-A | static | studio.html:1103 |
-| studio.html:button:1110 | button | × | checkPointDialog / checkPointForm | studio.html:1110 | CONTROL-A | static | studio.html:1110 |
-| studio.html:button:1119 | button | Record check point | checkPointDialog / checkPointForm | studio.html:1119 | CONTROL-A | static | studio.html:1119 |
-| studio.html:button:1126 | button | × | geometryChangeDialog / geometryChangeForm | studio.html:1126 | CONTROL-A | static | studio.html:1126 |
-| studio.html:button:1138 | button | Generate metric evidence | geometryChangeDialog / geometryChangeForm | studio.html:1138 | CONTROL-A | static | studio.html:1138 |
-| studio.html:button:1145 | button | × | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1145 | CONTROL-A | static | studio.html:1145 |
-| studio.html:button:1154 | button | Record review | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1154 | CONTROL-A | static | studio.html:1154 |
-| studio.html:button:1161 | button | × | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1161 | CONTROL-A | static | studio.html:1161 |
-| studio.html:button:1183 | button | Queue registration and comparison | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1183 | CONTROL-A | static | studio.html:1183 |
-| studio.html:button:1190 | button | × | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1190 | CONTROL-A | static | studio.html:1190 |
-| studio.html:button:1199 | button | Record raw-scene review | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1199 | CONTROL-A | static | studio.html:1199 |
-| studio.html:button:1206 | button | × | captureCompletenessDialog / captureCompletenessForm | studio.html:1206 | CONTROL-A | static | studio.html:1206 |
-| studio.html:button:1226 | button | Analyze capture trajectory | captureCompletenessDialog / captureCompletenessForm | studio.html:1226 | CONTROL-A | static | studio.html:1226 |
-| studio.html:button:1233 | button | × | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1233 | CONTROL-A | static | studio.html:1233 |
-| studio.html:button:1242 | button | Record capture review | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1242 | CONTROL-A | static | studio.html:1242 |
-| studio.html:button:1249 | button | × | versionComparisonDialog | studio.html:1249 | CONTROL-A | static | studio.html:1249 |
-| comparisonSubmit | button | Load comparison | versionComparisonDialog / versionComparisonForm | studio.html:1265 | CONTROL-A | static | studio.html:1265 |
-| compareLeftRetry | button | Retry left renderer | versionComparisonDialog | studio.html:1280 | CONTROL-A | static | studio.html:1280 |
-| compareRightRetry | button | Retry right renderer | versionComparisonDialog | studio.html:1290 | CONTROL-A | static | studio.html:1290 |
+| projectPublishTab | button | Publish | generated/global | studio.html:87 | CONTROL-A | static | studio.html:87 |
+| projectMeasurementTab | button | Measurement evidence | generated/global | studio.html:88 | CONTROL-A | static | studio.html:88 |
+| projectExpertTab | button | Expert | generated/global | studio.html:89 | CONTROL-A | static | studio.html:89 |
+| studio.html:button:105 | button | Current | generated/global | studio.html:105 | CONTROL-A | static | studio.html:105 |
+| studio.html:button:106 | button | Processing | generated/global | studio.html:106 | CONTROL-A | static | studio.html:106 |
+| studio.html:button:107 | button | QA | generated/global | studio.html:107 | CONTROL-A | static | studio.html:107 |
+| studio.html:button:108 | button | Published | generated/global | studio.html:108 | CONTROL-A | static | studio.html:108 |
+| studio.html:button:109 | button | Archived | generated/global | studio.html:109 | CONTROL-A | static | studio.html:109 |
+| saveProjectViewButton | button | Save view | generated/global | studio.html:152 | CONTROL-A | static | studio.html:152 |
+| deleteProjectViewButton | button | Delete view | generated/global | studio.html:153 | CONTROL-A | static | studio.html:153 |
+| loadMoreProjectViews | button | Load more views | generated/global | studio.html:154 | CONTROL-A | static | studio.html:154 |
+| clearProjectSelection | button | Clear | generated/global | studio.html:162 | CONTROL-A | static | studio.html:162 |
+| bulkRestoreProjects | button | Restore selected | generated/global | studio.html:163 | CONTROL-A | static | studio.html:163 |
+| bulkArchiveProjects | button | Archive selected | generated/global | studio.html:164 | CONTROL-A | static | studio.html:164 |
+| loadMoreProjects | button | Load more projects | generated/global | studio.html:172 | CONTROL-A | static | studio.html:172 |
+| loadMoreJobs | button | Load more jobs | generated/global | studio.html:184 | CONTROL-A | static | studio.html:184 |
+| loadMoreReleases | button | Load more releases | generated/global | studio.html:208 | CONTROL-A | static | studio.html:208 |
+| createCaptureAgentButton | button | Capture agent | generated/global | studio.html:266 | CONTROL-A | static | studio.html:266 |
+| addIdentityProviderButton | button | Configure SSO | generated/global | studio.html:267 | CONTROL-A | static | studio.html:267 |
+| inviteTeamButton | button | + Invite teammate | generated/global | studio.html:268 | CONTROL-A | static | studio.html:268 |
+| retryTurnstile | button | Retry security check | loginDialog / loginForm | studio.html:291 | CONTROL-A | static | studio.html:291 |
+| loginSubmit | button | Email me a code | loginDialog / loginForm | studio.html:294 | CONTROL-A | browser | e2e/ui-quality.spec.ts |
+| resendLoginCode | button | Resend code | loginDialog / loginForm | studio.html:295 | CONTROL-A | static | studio.html:295 |
+| changeLoginEmail | button | Use a different email | loginDialog / loginForm | studio.html:296 | CONTROL-A | static | studio.html:296 |
+| enterpriseLoginButton | button | Continue with enterprise SSO | loginDialog / loginForm | studio.html:299 | CONTROL-A | static | studio.html:299 |
+| studio.html:button:308 | button | × | newProjectDialog / newProjectForm | studio.html:308 | CONTROL-A | static | studio.html:308 |
+| newCaptureBack | button | Back | newProjectDialog / newProjectForm | studio.html:357 | CONTROL-A | static | studio.html:357 |
+| newCaptureNext | button | Continue to files | newProjectDialog / newProjectForm | studio.html:358 | CONTROL-A | static | studio.html:358 |
+| newCaptureSubmit | button | Create and process scene | newProjectDialog / newProjectForm | studio.html:359 | CONTROL-A | static | studio.html:359 |
+| studio.html:button:367 | button | × | savedViewDialog / savedViewForm | studio.html:367 | CONTROL-A | static | studio.html:367 |
+| studio.html:button:376 | button | Save project view | savedViewDialog / savedViewForm | studio.html:376 | CONTROL-A | static | studio.html:376 |
+| studio.html:button:383 | button | × | portfolioToolsDialog | studio.html:383 | CONTROL-A | static | studio.html:383 |
+| loadMoreProjectTemplates | button | Load more templates | portfolioToolsDialog | studio.html:396 | CONTROL-A | static | studio.html:396 |
+| cancelTemplateEdit | button | Cancel edit | portfolioToolsDialog / projectTemplateForm | studio.html:417 | CONTROL-A | static | studio.html:417 |
+| studio.html:button:418 | button | Create template | portfolioToolsDialog / projectTemplateForm | studio.html:418 | CONTROL-A | static | studio.html:418 |
+| exportSelectedProjects | button | Export selected | portfolioToolsDialog | studio.html:428 | CONTROL-A | static | studio.html:428 |
+| exportAllProjects | button | Export all | portfolioToolsDialog | studio.html:429 | CONTROL-A | static | studio.html:429 |
+| previewPortfolioImport | button | Validate import | portfolioToolsDialog | studio.html:439 | CONTROL-A | static | studio.html:439 |
+| commitPortfolioImport | button | Create projects | portfolioToolsDialog | studio.html:440 | CONTROL-A | static | studio.html:440 |
+| cancelProjectFieldEdit | button | Cancel edit | portfolioToolsDialog / projectFieldForm | studio.html:461 | CONTROL-A | static | studio.html:461 |
+| studio.html:button:462 | button | Create field | portfolioToolsDialog / projectFieldForm | studio.html:462 | CONTROL-A | static | studio.html:462 |
+| previewPortfolioHandoff | button | Preview handoff | portfolioToolsDialog | studio.html:474 | CONTROL-A | static | studio.html:474 |
+| commitPortfolioHandoff | button | Create DRAFT copies | portfolioToolsDialog | studio.html:475 | CONTROL-A | static | studio.html:475 |
+| previewAssetHandoff | button | Preview asset copy | portfolioToolsDialog | studio.html:487 | CONTROL-A | static | studio.html:487 |
+| commitAssetHandoff | button | Start verified copy | portfolioToolsDialog | studio.html:488 | CONTROL-A | static | studio.html:488 |
+| refreshAssetHandoff | button | Refresh progress | portfolioToolsDialog | studio.html:489 | CONTROL-A | static | studio.html:489 |
+| retryAssetHandoff | button | Retry failed items | portfolioToolsDialog | studio.html:490 | CONTROL-A | static | studio.html:490 |
+| cancelAssetHandoff | button | Cancel and clean up | portfolioToolsDialog | studio.html:491 | CONTROL-A | static | studio.html:491 |
+| studio.html:button:500 | button | × | teamInvitationDialog / teamInvitationForm | studio.html:500 | CONTROL-A | static | studio.html:500 |
+| studio.html:button:509 | button | Send secure invitation | teamInvitationDialog / teamInvitationForm | studio.html:509 | CONTROL-A | static | studio.html:509 |
+| studio.html:button:516 | button | × | identityProviderDialog / identityProviderForm | studio.html:516 | CONTROL-A | static | studio.html:516 |
+| studio.html:button:526 | button | Create draft provider | identityProviderDialog / identityProviderForm | studio.html:526 | CONTROL-A | static | studio.html:526 |
+| studio.html:button:533 | button | × | captureAgentDialog / captureAgentForm | studio.html:533 | CONTROL-A | static | studio.html:533 |
+| captureAgentSubmit | button | Create scoped token | captureAgentDialog / captureAgentForm | studio.html:548 | CONTROL-A | static | studio.html:548 |
+| studio.html:button:555 | button | × | captureAgentTokenDialog | studio.html:555 | CONTROL-A | static | studio.html:555 |
+| copyCaptureAgentToken | button | Copy token | captureAgentTokenDialog | studio.html:561 | CONTROL-A | static | studio.html:561 |
+| studio.html:button:562 | button | I stored it safely | captureAgentTokenDialog | studio.html:562 | CONTROL-A | static | studio.html:562 |
+| studio.html:button:570 | button | × | uploadDialog / uploadForm | studio.html:570 | CONTROL-A | static | studio.html:570 |
+| studio.html:button:591 | button | Start resumable upload | uploadDialog / uploadForm | studio.html:591 | CONTROL-A | static | studio.html:591 |
+| pauseUploadButton | button | Pause upload | uploadDialog / uploadForm | studio.html:592 | CONTROL-A | static | studio.html:592 |
+| studio.html:button:599 | button | × | captureBundleDialog / captureBundleForm | studio.html:599 | CONTROL-A | static | studio.html:599 |
+| studio.html:button:644 | button | Register immutable capture bundle | captureBundleDialog / captureBundleForm | studio.html:644 | CONTROL-A | static | studio.html:644 |
+| studio.html:button:651 | button | × | captureBundleReviewDialog / captureBundleReviewForm | studio.html:651 | CONTROL-A | static | studio.html:651 |
+| studio.html:button:660 | button | Record capture-contract review | captureBundleReviewDialog / captureBundleReviewForm | studio.html:660 | CONTROL-A | static | studio.html:660 |
+| studio.html:button:667 | button | × | editProjectDialog / editProjectForm | studio.html:667 | CONTROL-A | static | studio.html:667 |
+| studio.html:button:684 | button | Save project settings | editProjectDialog / editProjectForm | studio.html:684 | CONTROL-A | static | studio.html:684 |
+| studio.html:button:691 | button | × | qaDialog / qaForm | studio.html:691 | CONTROL-A | static | studio.html:691 |
+| qaOpenPrivacyWorkspace | button | Open privacy evidence workspace | qaDialog / qaForm | studio.html:696 | CONTROL-A | static | studio.html:696 |
+| studio.html:button:704 | button | Approve immutable version | qaDialog / qaForm | studio.html:704 | CONTROL-A | static | studio.html:704 |
+| studio.html:button:711 | button | × | releaseDialog / releaseForm | studio.html:711 | CONTROL-A | static | studio.html:711 |
+| releaseUseCurrentView | button | Use current view | releaseDialog / releaseForm | studio.html:731 | CONTROL-A | static | studio.html:731 |
+| studio.html:button:759 | button | Publish release | releaseDialog / releaseForm | studio.html:759 | CONTROL-A | static | studio.html:759 |
+| studio.html:button:770 | button | Keep current release | publicationConfirmationDialog | studio.html:770 | CONTROL-A | static | studio.html:770 |
+| publicationConfirmationSubmit | button | Confirm | publicationConfirmationDialog | studio.html:771 | CONTROL-A | static | studio.html:771 |
+| studio.html:button:778 | button | × | reviewerDialog / reviewerForm | studio.html:778 | CONTROL-A | static | studio.html:778 |
+| studio.html:button:787 | button | Send secure invitation | reviewerDialog / reviewerForm | studio.html:787 | CONTROL-A | static | studio.html:787 |
+| studio.html:button:794 | button | × | deliveryDialog / deliveryForm | studio.html:794 | CONTROL-A | static | studio.html:794 |
+| studio.html:button:810 | button | Save brand & retention | deliveryDialog / deliveryForm | studio.html:810 | CONTROL-A | static | studio.html:810 |
+| startHostingCheckout | button | Open billing workspace | deliveryDialog / deliveryForm | studio.html:811 | CONTROL-A | static | studio.html:811 |
+| studio.html:button:818 | button | × | domainDialog / domainForm | studio.html:818 | CONTROL-A | static | studio.html:818 |
+| studio.html:button:825 | button | Create verification record | domainDialog / domainForm | studio.html:825 | CONTROL-A | static | studio.html:825 |
+| studio.html:button:842 | button | × | entityDialog / entityForm | studio.html:842 | CONTROL-A | static | studio.html:842 |
+| studio.html:button:854 | button | Add spatial entity | entityDialog / entityForm | studio.html:854 | CONTROL-A | static | studio.html:854 |
+| studio.html:button:861 | button | × | navigationProfileDialog / navigationProfileForm | studio.html:861 | CONTROL-A | static | studio.html:861 |
+| studio.html:button:882 | button | Save walking profile | navigationProfileDialog / navigationProfileForm | studio.html:882 | CONTROL-A | static | studio.html:882 |
+| studio.html:button:889 | button | × | navigationBuildDialog / navigationBuildForm | studio.html:889 | CONTROL-A | static | studio.html:889 |
+| studio.html:button:911 | button | Build verified walking map | navigationBuildDialog / navigationBuildForm | studio.html:911 | CONTROL-A | static | studio.html:911 |
+| studio.html:button:918 | button | × | navigationTraversalDialog / navigationTraversalForm | studio.html:918 | CONTROL-A | static | studio.html:918 |
+| studio.html:button:932 | button | Author traversal | navigationTraversalDialog / navigationTraversalForm | studio.html:932 | CONTROL-A | static | studio.html:932 |
+| studio.html:button:939 | button | × | semanticExtractionDialog / semanticExtractionForm | studio.html:939 | CONTROL-A | static | studio.html:939 |
+| studio.html:button:961 | button | Queue semantic extraction | semanticExtractionDialog / semanticExtractionForm | studio.html:961 | CONTROL-A | static | studio.html:961 |
+| studio.html:button:968 | button | × | semanticReviewDialog / semanticReviewForm | studio.html:968 | CONTROL-A | static | studio.html:968 |
+| studio.html:button:982 | button | Record semantic review | semanticReviewDialog / semanticReviewForm | studio.html:982 | CONTROL-A | static | studio.html:982 |
+| studio.html:button:989 | button | × | floorplanExtractionDialog / floorplanExtractionForm | studio.html:989 | CONTROL-A | static | studio.html:989 |
+| studio.html:button:1017 | button | Queue floor-plan extraction | floorplanExtractionDialog / floorplanExtractionForm | studio.html:1017 | CONTROL-A | static | studio.html:1017 |
+| studio.html:button:1024 | button | × | floorplanReviewDialog / floorplanReviewForm | studio.html:1024 | CONTROL-A | static | studio.html:1024 |
+| studio.html:button:1051 | button | Save operator decision | floorplanReviewDialog / floorplanReviewForm | studio.html:1051 | CONTROL-A | static | studio.html:1051 |
+| studio.html:button:1058 | button | × | routeDialog / routeForm | studio.html:1058 | CONTROL-A | static | studio.html:1058 |
+| studio.html:button:1067 | button | Create guided route | routeDialog / routeForm | studio.html:1067 | CONTROL-A | static | studio.html:1067 |
+| studio.html:button:1074 | button | × | privacyCandidateDialog / privacyCandidateForm | studio.html:1074 | CONTROL-A | static | studio.html:1074 |
+| studio.html:button:1084 | button | Record privacy decision | privacyCandidateDialog / privacyCandidateForm | studio.html:1084 | CONTROL-A | static | studio.html:1084 |
+| studio.html:button:1091 | button | × | measurementBriefDialog / measurementBriefForm | studio.html:1091 | CONTROL-A | static | studio.html:1091 |
+| studio.html:button:1102 | button | Create evidence brief | measurementBriefDialog / measurementBriefForm | studio.html:1102 | CONTROL-A | static | studio.html:1102 |
+| studio.html:button:1109 | button | × | checkPointDialog / checkPointForm | studio.html:1109 | CONTROL-A | static | studio.html:1109 |
+| studio.html:button:1118 | button | Record check point | checkPointDialog / checkPointForm | studio.html:1118 | CONTROL-A | static | studio.html:1118 |
+| studio.html:button:1125 | button | × | geometryChangeDialog / geometryChangeForm | studio.html:1125 | CONTROL-A | static | studio.html:1125 |
+| studio.html:button:1137 | button | Generate metric evidence | geometryChangeDialog / geometryChangeForm | studio.html:1137 | CONTROL-A | static | studio.html:1137 |
+| studio.html:button:1144 | button | × | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1144 | CONTROL-A | static | studio.html:1144 |
+| studio.html:button:1153 | button | Record review | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1153 | CONTROL-A | static | studio.html:1153 |
+| studio.html:button:1160 | button | × | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1160 | CONTROL-A | static | studio.html:1160 |
+| studio.html:button:1182 | button | Queue registration and comparison | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1182 | CONTROL-A | static | studio.html:1182 |
+| studio.html:button:1189 | button | × | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1189 | CONTROL-A | static | studio.html:1189 |
+| studio.html:button:1198 | button | Record raw-scene review | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1198 | CONTROL-A | static | studio.html:1198 |
+| studio.html:button:1205 | button | × | captureCompletenessDialog / captureCompletenessForm | studio.html:1205 | CONTROL-A | static | studio.html:1205 |
+| studio.html:button:1225 | button | Analyze capture trajectory | captureCompletenessDialog / captureCompletenessForm | studio.html:1225 | CONTROL-A | static | studio.html:1225 |
+| studio.html:button:1232 | button | × | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1232 | CONTROL-A | static | studio.html:1232 |
+| studio.html:button:1241 | button | Record capture review | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1241 | CONTROL-A | static | studio.html:1241 |
+| studio.html:button:1248 | button | × | versionComparisonDialog | studio.html:1248 | CONTROL-A | static | studio.html:1248 |
+| comparisonSubmit | button | Load comparison | versionComparisonDialog / versionComparisonForm | studio.html:1264 | CONTROL-A | static | studio.html:1264 |
+| compareLeftRetry | button | Retry left renderer | versionComparisonDialog | studio.html:1279 | CONTROL-A | static | studio.html:1279 |
+| compareRightRetry | button | Retry right renderer | versionComparisonDialog | studio.html:1289 | CONTROL-A | static | studio.html:1289 |
 | index.html:button:146 | button | Capture | generated/global | index.html:146 | CONTROL-A | static | index.html:146 |
 | index.html:button:147 | button | Reconstruct | generated/global | index.html:147 | CONTROL-A | static | index.html:147 |
 | index.html:button:148 | button | Structure | generated/global | index.html:148 | CONTROL-A | static | index.html:148 |
@@ -776,141 +774,140 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | index.html:a:243 | link | About Spatial Studio | generated/global | index.html:243 | LINK-A | static | index.html:243 |
 | accessSignInLink | link | Sign in | generated/global | index.html:288 | LINK-A | browser | e2e/release-access-code.spec.ts |
 | index.html:a:295 | link | Review inbox | generated/global | index.html:295 | LINK-A | static | index.html:295 |
-| src/client/studio.ts:button:3023 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3023 | CONTROL-A | static | src/client/studio.ts:3023 |
-| src/client/studio.ts:edit:4072 | button | edit | generated/global | src/client/studio.ts:4072 | CONTROL-A | static | src/client/studio.ts:4072 |
-| src/client/studio.ts:remove:4074 | button | remove | generated/global | src/client/studio.ts:4074 | CONTROL-A | static | src/client/studio.ts:4074 |
-| src/client/studio.ts:edit:4184 | button | edit | generated/global | src/client/studio.ts:4184 | CONTROL-A | static | src/client/studio.ts:4184 |
-| src/client/studio.ts:toggle:4186 | button | toggle | generated/global | src/client/studio.ts:4186 | CONTROL-A | static | src/client/studio.ts:4186 |
-| src/client/studio.ts:anchor:4375 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:4375 | CONTROL-A | static | src/client/studio.ts:4375 |
-| src/client/studio.ts:accept:5091 | button | accept | generated/global | src/client/studio.ts:5091 | CONTROL-A | static | src/client/studio.ts:5091 |
-| src/client/studio.ts:decline:5092 | button | decline | generated/global | src/client/studio.ts:5092 | CONTROL-A | static | src/client/studio.ts:5092 |
-| src/client/studio.ts:identity:5241 | button | identity | generated/global | src/client/studio.ts:5241 | CONTROL-A | static | src/client/studio.ts:5241 |
-| src/client/studio.ts:retry:5456 | button | retry | generated/global | src/client/studio.ts:5456 | CONTROL-A | static | src/client/studio.ts:5456 |
-| src/client/studio.ts:cancel:5467 | button | cancel | generated/global | src/client/studio.ts:5467 | CONTROL-A | static | src/client/studio.ts:5467 |
-| src/client/studio.ts:channel:5524 | a | `/s/${release.slug}` \| `/s/${release.slug}` | generated/global | src/client/studio.ts:5524 | CONTROL-A | static | src/client/studio.ts:5524 |
-| src/client/studio.ts:manage:5536 | button | manage | generated/global | src/client/studio.ts:5536 | CONTROL-A | static | src/client/studio.ts:5536 |
-| src/client/studio.ts:exportEvidence:5546 | button | exportEvidence | generated/global | src/client/studio.ts:5546 | CONTROL-A | static | src/client/studio.ts:5546 |
-| src/client/studio.ts:revoke:5556 | button | revoke | generated/global | src/client/studio.ts:5556 | CONTROL-A | static | src/client/studio.ts:5556 |
-| src/client/studio.ts:rollback:5573 | button | rollback | generated/global | src/client/studio.ts:5573 | CONTROL-A | static | src/client/studio.ts:5573 |
-| src/client/studio.ts:inspect:5638 | button | inspect | generated/global | src/client/studio.ts:5638 | CONTROL-A | static | src/client/studio.ts:5638 |
-| src/client/studio.ts:reviewScene:5648 | a | `/review/${project.release_slug}` \| isReviewer() ? "Review in scene" : "Open review link" | generated/global | src/client/studio.ts:5648 | CONTROL-A | static | src/client/studio.ts:5648 |
-| src/client/studio.ts:invite:5655 | button | invite | generated/global | src/client/studio.ts:5655 | CONTROL-A | static | src/client/studio.ts:5655 |
-| src/client/studio.ts:compare:5677 | button | compare | generated/global | src/client/studio.ts:5677 | CONTROL-A | static | src/client/studio.ts:5677 |
-| src/client/studio.ts:button:5696 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:5696 | CONTROL-A | static | src/client/studio.ts:5696 |
-| src/client/studio.ts:revoke:5723 | button | revoke | generated/global | src/client/studio.ts:5723 | CONTROL-A | static | src/client/studio.ts:5723 |
-| src/client/studio.ts:manage:5783 | button | manage | generated/global | src/client/studio.ts:5783 | CONTROL-A | static | src/client/studio.ts:5783 |
-| src/client/studio.ts:cancel:5809 | button | cancel | generated/global | src/client/studio.ts:5809 | CONTROL-A | static | src/client/studio.ts:5809 |
-| src/client/studio.ts:resume:5865 | a | checkout.checkout_url | generated/global | src/client/studio.ts:5865 | CONTROL-A | static | src/client/studio.ts:5865 |
-| src/client/studio.ts:runNow:5887 | button | runNow | generated/global | src/client/studio.ts:5887 | CONTROL-A | static | src/client/studio.ts:5887 |
-| src/client/studio.ts:restoreDrill:5895 | button | state.selected?.project ? `Read a retained object for ${state.selected.project.name}` : "Open a project first" | generated/global | src/client/studio.ts:5895 | CONTROL-A | static | src/client/studio.ts:5895 |
-| src/client/studio.ts:submit:6023 | button | entity ? "Save spatial entity" : "Add spatial entity" \| traversal ? "Save traversal" : "Author traversal" \| activeUpload?.projectId === state.selected.project.id ? "Resume upload" : "Start resumable upload" \| "Resume upload" \| options.confirmLabel | generated/global | src/client/studio.ts:6023 | CONTROL-A | static | src/client/studio.ts:6023 |
-| src/client/studio.ts:paid:6076 | button | paid | generated/global | src/client/studio.ts:6076 | CONTROL-A | static | src/client/studio.ts:6076 |
-| src/client/studio.ts:voidInvoice:6078 | button | voidInvoice | generated/global | src/client/studio.ts:6078 | CONTROL-A | static | src/client/studio.ts:6078 |
-| src/client/studio.ts:button:6150 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6150 | CONTROL-A | static | src/client/studio.ts:6150 |
-| src/client/studio.ts:activate:6306 | button | provider.secretConfigured ? "Run live OIDC discovery and activate this provider." : `Configure OIDC_CLIENT_SECRETS for key ${provider.id} be | generated/global | src/client/studio.ts:6306 | CONTROL-A | static | src/client/studio.ts:6306 |
-| src/client/studio.ts:disable:6324 | button | disable | generated/global | src/client/studio.ts:6324 | CONTROL-A | static | src/client/studio.ts:6324 |
-| src/client/studio.ts:remove:6337 | button | remove | generated/global | src/client/studio.ts:6337 | CONTROL-A | static | src/client/studio.ts:6337 |
-| src/client/studio.ts:edit:6403 | button | edit | generated/global | src/client/studio.ts:6403 | CONTROL-A | static | src/client/studio.ts:6403 |
-| src/client/studio.ts:rotate:6405 | button | rotate | generated/global | src/client/studio.ts:6405 | CONTROL-A | static | src/client/studio.ts:6405 |
-| src/client/studio.ts:revoke:6407 | button | revoke | generated/global | src/client/studio.ts:6407 | CONTROL-A | static | src/client/studio.ts:6407 |
-| src/client/studio.ts:reinvite:6455 | button | reinvite | generated/global | src/client/studio.ts:6455 | CONTROL-A | static | src/client/studio.ts:6455 |
-| src/client/studio.ts:save:6467 | button | save | generated/global | src/client/studio.ts:6467 | CONTROL-A | static | src/client/studio.ts:6467 |
-| src/client/studio.ts:revoke:6480 | button | revoke | generated/global | src/client/studio.ts:6480 | CONTROL-A | static | src/client/studio.ts:6480 |
-| src/client/studio.ts:resend:6523 | button | pending ? "Sending another code…" : remaining > 0 ? `Resend code in ${remaining}s` : !turnstileToken ? "Complete security check to resend" : | generated/global | src/client/studio.ts:6523 | CONTROL-A | static | src/client/studio.ts:6523 |
-| src/client/studio.ts:edit:6961 | button | edit | generated/global | src/client/studio.ts:6961 | CONTROL-A | static | src/client/studio.ts:6961 |
-| src/client/studio.ts:remove:6963 | button | remove | generated/global | src/client/studio.ts:6963 | CONTROL-A | static | src/client/studio.ts:6963 |
-| src/client/studio.ts:remove:6986 | button | remove | generated/global | src/client/studio.ts:6986 | CONTROL-A | static | src/client/studio.ts:6986 |
-| src/client/studio.ts:add:6999 | button | add | generated/global | src/client/studio.ts:6999 | CONTROL-A | static | src/client/studio.ts:6999 |
-| src/client/studio.ts:review:7051 | button | review | generated/global | src/client/studio.ts:7051 | CONTROL-A | static | src/client/studio.ts:7051 |
-| src/client/studio.ts:cancel:7059 | button | cancel | generated/global | src/client/studio.ts:7059 | CONTROL-A | static | src/client/studio.ts:7059 |
-| src/client/studio.ts:retry:7074 | button | retry | generated/global | src/client/studio.ts:7074 | CONTROL-A | static | src/client/studio.ts:7074 |
-| src/client/studio.ts:queueExtraction:7099 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7099 | CONTROL-A | static | src/client/studio.ts:7099 |
-| src/client/studio.ts:refreshExtractions:7109 | button | refreshExtractions | generated/global | src/client/studio.ts:7109 | CONTROL-A | static | src/client/studio.ts:7109 |
-| src/client/studio.ts:addRoute:7155 | button | addRoute | generated/global | src/client/studio.ts:7155 | CONTROL-A | static | src/client/studio.ts:7155 |
-| src/client/studio.ts:tuneNavigation:7158 | button | tuneNavigation | generated/global | src/client/studio.ts:7158 | CONTROL-A | static | src/client/studio.ts:7158 |
-| src/client/studio.ts:authorTraversal:7160 | button | authorTraversal | generated/global | src/client/studio.ts:7160 | CONTROL-A | static | src/client/studio.ts:7160 |
-| src/client/studio.ts:buildNavigation:7162 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7162 | CONTROL-A | static | src/client/studio.ts:7162 |
-| src/client/studio.ts:edit:7191 | button | edit | generated/global | src/client/studio.ts:7191 | CONTROL-A | static | src/client/studio.ts:7191 |
-| src/client/studio.ts:archive:7193 | button | archive | generated/global | src/client/studio.ts:7193 | CONTROL-A | static | src/client/studio.ts:7193 |
-| src/client/studio.ts:approve:7289 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7289 | CONTROL-A | static | src/client/studio.ts:7289 |
-| src/client/studio.ts:reject:7311 | button | reject | generated/global | src/client/studio.ts:7311 | CONTROL-A | static | src/client/studio.ts:7311 |
-| src/client/studio.ts:refresh:7323 | button | refresh | generated/global | src/client/studio.ts:7323 | CONTROL-A | static | src/client/studio.ts:7323 |
-| src/client/studio.ts:retry:7333 | button | retry | generated/global | src/client/studio.ts:7333 | CONTROL-A | static | src/client/studio.ts:7333 |
-| src/client/studio.ts:analyzeCapture:7391 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7391 | CONTROL-A | static | src/client/studio.ts:7391 |
-| src/client/studio.ts:retry:7456 | button | retry | generated/global | src/client/studio.ts:7456 | CONTROL-A | static | src/client/studio.ts:7456 |
-| src/client/studio.ts:scanAction:7472 | button | posterAssets.length === 0 ? "A verified poster image is required before privacy detection can run." : scanActive ? "The latest privacy scan | generated/global | src/client/studio.ts:7472 | CONTROL-A | static | src/client/studio.ts:7472 |
-| src/client/studio.ts:review:7524 | button | review | generated/global | src/client/studio.ts:7524 | CONTROL-A | static | src/client/studio.ts:7524 |
-| src/client/studio.ts:button:7544 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7544 | CONTROL-A | static | src/client/studio.ts:7544 |
-| src/client/studio.ts:applied:7557 | button | applied | generated/global | src/client/studio.ts:7557 | CONTROL-A | static | src/client/studio.ts:7557 |
-| src/client/studio.ts:savePolicy:7587 | button | savePolicy | generated/global | src/client/studio.ts:7587 | CONTROL-A | static | src/client/studio.ts:7587 |
-| src/client/studio.ts:open:7641 | button | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:7641 | CONTROL-A | static | src/client/studio.ts:7641 |
-| src/client/studio.ts:review:7730 | button | review | generated/global | src/client/studio.ts:7730 | CONTROL-A | static | src/client/studio.ts:7730 |
-| src/client/studio.ts:configure:7741 | button | configure | generated/global | src/client/studio.ts:7741 | CONTROL-A | static | src/client/studio.ts:7741 |
-| src/client/studio.ts:configureHosting:7751 | button | configureHosting | generated/global | src/client/studio.ts:7751 | CONTROL-A | static | src/client/studio.ts:7751 |
-| src/client/studio.ts:publishedLink:7763 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7763 | CONTROL-A | static | src/client/studio.ts:7763 |
-| src/client/studio.ts:button:7825 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7825 | CONTROL-A | static | src/client/studio.ts:7825 |
-| src/client/studio.ts:undo:7832 | button | undo | generated/global | src/client/studio.ts:7832 | CONTROL-A | static | src/client/studio.ts:7832 |
-| src/client/studio.ts:finish:7836 | button | finish | generated/global | src/client/studio.ts:7836 | CONTROL-A | static | src/client/studio.ts:7836 |
-| src/client/studio.ts:save:7840 | button | save | generated/global | src/client/studio.ts:7840 | CONTROL-A | static | src/client/studio.ts:7840 |
-| src/client/studio.ts:review:8410 | button | review | generated/global | src/client/studio.ts:8410 | CONTROL-A | static | src/client/studio.ts:8410 |
-| src/client/studio.ts:cancel:8415 | button | cancel | generated/global | src/client/studio.ts:8415 | CONTROL-A | static | src/client/studio.ts:8415 |
-| src/client/studio.ts:retry:8431 | button | retry | generated/global | src/client/studio.ts:8431 | CONTROL-A | static | src/client/studio.ts:8431 |
-| src/client/studio.ts:queue:8446 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8446 | CONTROL-A | static | src/client/studio.ts:8446 |
-| src/client/studio.ts:refresh:8456 | button | refresh | generated/global | src/client/studio.ts:8456 | CONTROL-A | static | src/client/studio.ts:8456 |
-| src/client/studio.ts:rebuild:8474 | button | rebuild | generated/global | src/client/studio.ts:8474 | CONTROL-A | static | src/client/studio.ts:8474 |
-| src/client/studio.ts:download:8536 | button | download | generated/global | src/client/studio.ts:8536 | CONTROL-A | static | src/client/studio.ts:8536 |
-| src/client/studio.ts:generate:8555 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8555 | CONTROL-A | static | src/client/studio.ts:8555 |
-| src/client/studio.ts:anchor:9496 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9496 | CONTROL-A | static | src/client/studio.ts:9496 |
-| src/client/studio.ts:retry:10285 | button | retry | generated/global | src/client/studio.ts:10285 | CONTROL-A | static | src/client/studio.ts:10285 |
-| src/client/studio.ts:review:10645 | button | review | generated/global | src/client/studio.ts:10645 | CONTROL-A | static | src/client/studio.ts:10645 |
-| src/client/studio.ts:addPoint:10833 | button | addPoint | generated/global | src/client/studio.ts:10833 | CONTROL-A | static | src/client/studio.ts:10833 |
-| src/client/studio.ts:report:10835 | button | report | generated/global | src/client/studio.ts:10835 | CONTROL-A | static | src/client/studio.ts:10835 |
-| src/client/studio.ts:generate:10845 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:10845 | CONTROL-A | static | src/client/studio.ts:10845 |
-| src/client/studio.ts:download:10866 | button | download | generated/global | src/client/studio.ts:10866 | CONTROL-A | static | src/client/studio.ts:10866 |
-| src/client/studio.ts:create:10902 | button | create | generated/global | src/client/studio.ts:10902 | CONTROL-A | static | src/client/studio.ts:10902 |
-| src/client/studio.ts:anchor:11019 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:11019 | CONTROL-A | static | src/client/studio.ts:11019 |
-| src/client/studio.ts:retry:11224 | button | retry | generated/global | src/client/studio.ts:11224 | CONTROL-A | static | src/client/studio.ts:11224 |
-| src/client/studio.ts:reveal:11291 | button | reveal | generated/global | src/client/studio.ts:11291 | CONTROL-A | static | src/client/studio.ts:11291 |
-| src/client/studio.ts:upload:11386 | button | upload | generated/global | src/client/studio.ts:11386 | CONTROL-A | static | src/client/studio.ts:11386 |
-| src/client/studio.ts:retry:11392 | button | retry | generated/global | src/client/studio.ts:11392 | CONTROL-A | static | src/client/studio.ts:11392 |
-| src/client/studio.ts:correction:11402 | button | correction | generated/global | src/client/studio.ts:11402 | CONTROL-A | static | src/client/studio.ts:11402 |
-| src/client/studio.ts:preview:11410 | button | "Select projects in the portfolio and choose a destination." \| "Select exactly one project and choose a destination." \| "Checking this project's recent verified copies…" \| `Recovered asset copy ${activeAssetHandoff.id.slice(0, 8)} from persisted state.` \| "Select exactly one project and choose a destination." \| "Recent copy status is unavailable. You can retry by reopening these tools." \| "Select at least one immutable asset and assign one or more truthful evidence roles." \| `${missingRoles.length} selected asset${missingRoles.length === 1 ? "" : "s"} still need an evidence role.` \| `${assets.length} immutable asset${assets.length === 1 ? "" : "s"} selected. ` + (ready.length ? `Evidences ${ready.join(", ")}. ` : "No del | generated/global | src/client/studio.ts:11410 | CONTROL-A | static | src/client/studio.ts:11410 |
-| src/client/studio.ts:copy:11418 | button | copy | generated/global | src/client/studio.ts:11418 | CONTROL-A | static | src/client/studio.ts:11418 |
-| src/client/studio.ts:editScene:11426 | button | editScene | generated/global | src/client/studio.ts:11426 | CONTROL-A | static | src/client/studio.ts:11426 |
-| src/client/studio.ts:refresh:11430 | button | refresh | generated/global | src/client/studio.ts:11430 | CONTROL-A | static | src/client/studio.ts:11430 |
-| src/client/studio.ts:reviewExceptions:11443 | button | reviewExceptions | generated/global | src/client/studio.ts:11443 | CONTROL-A | static | src/client/studio.ts:11443 |
-| src/client/studio.ts:retry:11449 | button | retry | generated/global | src/client/studio.ts:11449 | CONTROL-A | static | src/client/studio.ts:11449 |
-| src/client/studio.ts:refresh:11459 | button | refresh | generated/global | src/client/studio.ts:11459 | CONTROL-A | static | src/client/studio.ts:11459 |
-| src/client/studio.ts:publishedLink:11564 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11564 | CONTROL-A | static | src/client/studio.ts:11564 |
-| src/client/studio.ts:qaButton:11583 | button | qaButton | generated/global | src/client/studio.ts:11583 | CONTROL-A | static | src/client/studio.ts:11583 |
-| src/client/studio.ts:publishButton:11594 | button | publishButton | generated/global | src/client/studio.ts:11594 | CONTROL-A | static | src/client/studio.ts:11594 |
-| src/client/studio.ts:editButton:11644 | button | editButton | generated/global | src/client/studio.ts:11644 | CONTROL-A | static | src/client/studio.ts:11644 |
-| src/client/studio.ts:lifecycleButton:11647 | button | lifecycleButton | generated/global | src/client/studio.ts:11647 | CONTROL-A | static | src/client/studio.ts:11647 |
-| src/client/studio.ts:compareButton:11680 | button | compareButton | generated/global | src/client/studio.ts:11680 | CONTROL-A | static | src/client/studio.ts:11680 |
-| src/client/studio.ts:uploadButton:11684 | button | uploadButton | generated/global | src/client/studio.ts:11684 | CONTROL-A | static | src/client/studio.ts:11684 |
-| src/client/studio.ts:registerBundle:11708 | button | registerBundle | generated/global | src/client/studio.ts:11708 | CONTROL-A | static | src/client/studio.ts:11708 |
-| src/client/studio.ts:link:11722 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11722 | CONTROL-A | static | src/client/studio.ts:11722 |
-| src/client/studio.ts:exportEvidence:11728 | button | exportEvidence | generated/global | src/client/studio.ts:11728 | CONTROL-A | static | src/client/studio.ts:11728 |
-| src/client/studio.ts:revoke:11741 | button | revoke | generated/global | src/client/studio.ts:11741 | CONTROL-A | static | src/client/studio.ts:11741 |
-| src/client/studio.ts:rollback:11758 | button | rollback | generated/global | src/client/studio.ts:11758 | CONTROL-A | static | src/client/studio.ts:11758 |
-| src/client/studio.ts:inviteButton:11779 | button | inviteButton | generated/global | src/client/studio.ts:11779 | CONTROL-A | static | src/client/studio.ts:11779 |
-| src/client/studio.ts:reviewButton:11781 | button | reviewButton | generated/global | src/client/studio.ts:11781 | CONTROL-A | static | src/client/studio.ts:11781 |
-| src/client/studio.ts:deliveryButton:11793 | button | deliveryButton | generated/global | src/client/studio.ts:11793 | CONTROL-A | static | src/client/studio.ts:11793 |
-| src/client/studio.ts:spatialButton:11801 | button | spatialButton | generated/global | src/client/studio.ts:11801 | CONTROL-A | static | src/client/studio.ts:11801 |
-| src/client/studio.ts:measurementButton:11804 | button | measurementButton | generated/global | src/client/studio.ts:11804 | CONTROL-A | static | src/client/studio.ts:11804 |
-| src/client/studio.ts:domainButton:11816 | button | domainButton | generated/global | src/client/studio.ts:11816 | CONTROL-A | static | src/client/studio.ts:11816 |
-| src/client/studio.ts:step:11846 | button | step | generated/global | src/client/studio.ts:11846 | CONTROL-A | static | src/client/studio.ts:11846 |
-| src/client/studio.ts:review:12363 | button | review | generated/global | src/client/studio.ts:12363 | CONTROL-A | static | src/client/studio.ts:12363 |
-| src/client/studio.ts:retry:12847 | button | retry | generated/global | src/client/studio.ts:12847 | CONTROL-A | static | src/client/studio.ts:12847 |
-| src/client/studio.ts:resume:12897 | button | checkout.checkout_url | generated/global | src/client/studio.ts:12897 | CONTROL-A | static | src/client/studio.ts:12897 |
-| src/client/studio.ts:discard:12910 | button | discard | generated/global | src/client/studio.ts:12910 | CONTROL-A | static | src/client/studio.ts:12910 |
-| src/client/studio.ts:retry:14132 | button | retry | generated/global | src/client/studio.ts:14132 | CONTROL-A | static | src/client/studio.ts:14132 |
-| src/client/studio.ts:verify:14200 | button | verify | generated/global | src/client/studio.ts:14200 | CONTROL-A | static | src/client/studio.ts:14200 |
-| src/client/studio.ts:challenge:14212 | button | challenge | generated/global | src/client/studio.ts:14212 | CONTROL-A | static | src/client/studio.ts:14212 |
-| src/client/studio.ts:provision:14225 | button | provision | generated/global | src/client/studio.ts:14225 | CONTROL-A | static | src/client/studio.ts:14225 |
-| src/client/studio.ts:open:14251 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14251 | CONTROL-A | static | src/client/studio.ts:14251 |
-| src/client/studio.ts:remove:14258 | button | remove | generated/global | src/client/studio.ts:14258 | CONTROL-A | static | src/client/studio.ts:14258 |
-| src/client/studio.ts:verify:14313 | button | verify | generated/global | src/client/studio.ts:14313 | CONTROL-A | static | src/client/studio.ts:14313 |
+| src/client/studio.ts:button:3020 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3020 | CONTROL-A | static | src/client/studio.ts:3020 |
+| src/client/studio.ts:edit:4069 | button | edit | generated/global | src/client/studio.ts:4069 | CONTROL-A | static | src/client/studio.ts:4069 |
+| src/client/studio.ts:remove:4071 | button | remove | generated/global | src/client/studio.ts:4071 | CONTROL-A | static | src/client/studio.ts:4071 |
+| src/client/studio.ts:edit:4181 | button | edit | generated/global | src/client/studio.ts:4181 | CONTROL-A | static | src/client/studio.ts:4181 |
+| src/client/studio.ts:toggle:4183 | button | toggle | generated/global | src/client/studio.ts:4183 | CONTROL-A | static | src/client/studio.ts:4183 |
+| src/client/studio.ts:anchor:4372 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:4372 | CONTROL-A | static | src/client/studio.ts:4372 |
+| src/client/studio.ts:accept:5088 | button | accept | generated/global | src/client/studio.ts:5088 | CONTROL-A | static | src/client/studio.ts:5088 |
+| src/client/studio.ts:decline:5089 | button | decline | generated/global | src/client/studio.ts:5089 | CONTROL-A | static | src/client/studio.ts:5089 |
+| src/client/studio.ts:identity:5238 | button | identity | generated/global | src/client/studio.ts:5238 | CONTROL-A | static | src/client/studio.ts:5238 |
+| src/client/studio.ts:retry:5453 | button | retry | generated/global | src/client/studio.ts:5453 | CONTROL-A | static | src/client/studio.ts:5453 |
+| src/client/studio.ts:cancel:5464 | button | cancel | generated/global | src/client/studio.ts:5464 | CONTROL-A | static | src/client/studio.ts:5464 |
+| src/client/studio.ts:channel:5521 | a | `/s/${release.slug}` \| `/s/${release.slug}` | generated/global | src/client/studio.ts:5521 | CONTROL-A | static | src/client/studio.ts:5521 |
+| src/client/studio.ts:manage:5533 | button | manage | generated/global | src/client/studio.ts:5533 | CONTROL-A | static | src/client/studio.ts:5533 |
+| src/client/studio.ts:exportEvidence:5543 | button | exportEvidence | generated/global | src/client/studio.ts:5543 | CONTROL-A | static | src/client/studio.ts:5543 |
+| src/client/studio.ts:revoke:5553 | button | revoke | generated/global | src/client/studio.ts:5553 | CONTROL-A | static | src/client/studio.ts:5553 |
+| src/client/studio.ts:rollback:5570 | button | rollback | generated/global | src/client/studio.ts:5570 | CONTROL-A | static | src/client/studio.ts:5570 |
+| src/client/studio.ts:inspect:5635 | button | inspect | generated/global | src/client/studio.ts:5635 | CONTROL-A | static | src/client/studio.ts:5635 |
+| src/client/studio.ts:reviewScene:5645 | a | `/review/${project.release_slug}` \| isReviewer() ? "Review in scene" : "Open review link" | generated/global | src/client/studio.ts:5645 | CONTROL-A | static | src/client/studio.ts:5645 |
+| src/client/studio.ts:invite:5652 | button | invite | generated/global | src/client/studio.ts:5652 | CONTROL-A | static | src/client/studio.ts:5652 |
+| src/client/studio.ts:compare:5674 | button | compare | generated/global | src/client/studio.ts:5674 | CONTROL-A | static | src/client/studio.ts:5674 |
+| src/client/studio.ts:button:5693 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:5693 | CONTROL-A | static | src/client/studio.ts:5693 |
+| src/client/studio.ts:revoke:5720 | button | revoke | generated/global | src/client/studio.ts:5720 | CONTROL-A | static | src/client/studio.ts:5720 |
+| src/client/studio.ts:manage:5780 | button | manage | generated/global | src/client/studio.ts:5780 | CONTROL-A | static | src/client/studio.ts:5780 |
+| src/client/studio.ts:cancel:5806 | button | cancel | generated/global | src/client/studio.ts:5806 | CONTROL-A | static | src/client/studio.ts:5806 |
+| src/client/studio.ts:resume:5862 | a | checkout.checkout_url | generated/global | src/client/studio.ts:5862 | CONTROL-A | static | src/client/studio.ts:5862 |
+| src/client/studio.ts:runNow:5884 | button | runNow | generated/global | src/client/studio.ts:5884 | CONTROL-A | static | src/client/studio.ts:5884 |
+| src/client/studio.ts:restoreDrill:5892 | button | state.selected?.project ? `Read a retained object for ${state.selected.project.name}` : "Open a project first" | generated/global | src/client/studio.ts:5892 | CONTROL-A | static | src/client/studio.ts:5892 |
+| src/client/studio.ts:submit:6020 | button | entity ? "Save spatial entity" : "Add spatial entity" \| traversal ? "Save traversal" : "Author traversal" \| activeUpload?.projectId === state.selected.project.id ? "Resume upload" : "Start resumable upload" \| "Resume upload" \| options.confirmLabel | generated/global | src/client/studio.ts:6020 | CONTROL-A | static | src/client/studio.ts:6020 |
+| src/client/studio.ts:paid:6073 | button | paid | generated/global | src/client/studio.ts:6073 | CONTROL-A | static | src/client/studio.ts:6073 |
+| src/client/studio.ts:voidInvoice:6075 | button | voidInvoice | generated/global | src/client/studio.ts:6075 | CONTROL-A | static | src/client/studio.ts:6075 |
+| src/client/studio.ts:button:6147 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6147 | CONTROL-A | static | src/client/studio.ts:6147 |
+| src/client/studio.ts:activate:6303 | button | provider.secretConfigured ? "Run live OIDC discovery and activate this provider." : `Configure OIDC_CLIENT_SECRETS for key ${provider.id} be | generated/global | src/client/studio.ts:6303 | CONTROL-A | static | src/client/studio.ts:6303 |
+| src/client/studio.ts:disable:6321 | button | disable | generated/global | src/client/studio.ts:6321 | CONTROL-A | static | src/client/studio.ts:6321 |
+| src/client/studio.ts:remove:6334 | button | remove | generated/global | src/client/studio.ts:6334 | CONTROL-A | static | src/client/studio.ts:6334 |
+| src/client/studio.ts:edit:6400 | button | edit | generated/global | src/client/studio.ts:6400 | CONTROL-A | static | src/client/studio.ts:6400 |
+| src/client/studio.ts:rotate:6402 | button | rotate | generated/global | src/client/studio.ts:6402 | CONTROL-A | static | src/client/studio.ts:6402 |
+| src/client/studio.ts:revoke:6404 | button | revoke | generated/global | src/client/studio.ts:6404 | CONTROL-A | static | src/client/studio.ts:6404 |
+| src/client/studio.ts:reinvite:6452 | button | reinvite | generated/global | src/client/studio.ts:6452 | CONTROL-A | static | src/client/studio.ts:6452 |
+| src/client/studio.ts:save:6464 | button | save | generated/global | src/client/studio.ts:6464 | CONTROL-A | static | src/client/studio.ts:6464 |
+| src/client/studio.ts:revoke:6477 | button | revoke | generated/global | src/client/studio.ts:6477 | CONTROL-A | static | src/client/studio.ts:6477 |
+| src/client/studio.ts:resend:6520 | button | pending ? "Sending another code…" : remaining > 0 ? `Resend code in ${remaining}s` : !turnstileToken ? "Complete security check to resend" : | generated/global | src/client/studio.ts:6520 | CONTROL-A | static | src/client/studio.ts:6520 |
+| src/client/studio.ts:edit:6956 | button | edit | generated/global | src/client/studio.ts:6956 | CONTROL-A | static | src/client/studio.ts:6956 |
+| src/client/studio.ts:remove:6958 | button | remove | generated/global | src/client/studio.ts:6958 | CONTROL-A | static | src/client/studio.ts:6958 |
+| src/client/studio.ts:remove:6981 | button | remove | generated/global | src/client/studio.ts:6981 | CONTROL-A | static | src/client/studio.ts:6981 |
+| src/client/studio.ts:add:6994 | button | add | generated/global | src/client/studio.ts:6994 | CONTROL-A | static | src/client/studio.ts:6994 |
+| src/client/studio.ts:review:7046 | button | review | generated/global | src/client/studio.ts:7046 | CONTROL-A | static | src/client/studio.ts:7046 |
+| src/client/studio.ts:cancel:7054 | button | cancel | generated/global | src/client/studio.ts:7054 | CONTROL-A | static | src/client/studio.ts:7054 |
+| src/client/studio.ts:retry:7069 | button | retry | generated/global | src/client/studio.ts:7069 | CONTROL-A | static | src/client/studio.ts:7069 |
+| src/client/studio.ts:queueExtraction:7094 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7094 | CONTROL-A | static | src/client/studio.ts:7094 |
+| src/client/studio.ts:refreshExtractions:7104 | button | refreshExtractions | generated/global | src/client/studio.ts:7104 | CONTROL-A | static | src/client/studio.ts:7104 |
+| src/client/studio.ts:addRoute:7150 | button | addRoute | generated/global | src/client/studio.ts:7150 | CONTROL-A | static | src/client/studio.ts:7150 |
+| src/client/studio.ts:tuneNavigation:7153 | button | tuneNavigation | generated/global | src/client/studio.ts:7153 | CONTROL-A | static | src/client/studio.ts:7153 |
+| src/client/studio.ts:authorTraversal:7155 | button | authorTraversal | generated/global | src/client/studio.ts:7155 | CONTROL-A | static | src/client/studio.ts:7155 |
+| src/client/studio.ts:buildNavigation:7157 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7157 | CONTROL-A | static | src/client/studio.ts:7157 |
+| src/client/studio.ts:edit:7186 | button | edit | generated/global | src/client/studio.ts:7186 | CONTROL-A | static | src/client/studio.ts:7186 |
+| src/client/studio.ts:archive:7188 | button | archive | generated/global | src/client/studio.ts:7188 | CONTROL-A | static | src/client/studio.ts:7188 |
+| src/client/studio.ts:approve:7284 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7284 | CONTROL-A | static | src/client/studio.ts:7284 |
+| src/client/studio.ts:reject:7306 | button | reject | generated/global | src/client/studio.ts:7306 | CONTROL-A | static | src/client/studio.ts:7306 |
+| src/client/studio.ts:refresh:7318 | button | refresh | generated/global | src/client/studio.ts:7318 | CONTROL-A | static | src/client/studio.ts:7318 |
+| src/client/studio.ts:retry:7328 | button | retry | generated/global | src/client/studio.ts:7328 | CONTROL-A | static | src/client/studio.ts:7328 |
+| src/client/studio.ts:analyzeCapture:7382 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7382 | CONTROL-A | static | src/client/studio.ts:7382 |
+| src/client/studio.ts:retry:7447 | button | retry | generated/global | src/client/studio.ts:7447 | CONTROL-A | static | src/client/studio.ts:7447 |
+| src/client/studio.ts:scanAction:7463 | button | posterAssets.length === 0 ? "A verified poster image is required before privacy detection can run." : scanActive ? "The latest privacy scan | generated/global | src/client/studio.ts:7463 | CONTROL-A | static | src/client/studio.ts:7463 |
+| src/client/studio.ts:review:7515 | button | review | generated/global | src/client/studio.ts:7515 | CONTROL-A | static | src/client/studio.ts:7515 |
+| src/client/studio.ts:button:7535 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7535 | CONTROL-A | static | src/client/studio.ts:7535 |
+| src/client/studio.ts:applied:7548 | button | applied | generated/global | src/client/studio.ts:7548 | CONTROL-A | static | src/client/studio.ts:7548 |
+| src/client/studio.ts:savePolicy:7578 | button | savePolicy | generated/global | src/client/studio.ts:7578 | CONTROL-A | static | src/client/studio.ts:7578 |
+| src/client/studio.ts:review:7675 | button | review | generated/global | src/client/studio.ts:7675 | CONTROL-A | static | src/client/studio.ts:7675 |
+| src/client/studio.ts:configure:7686 | button | configure | generated/global | src/client/studio.ts:7686 | CONTROL-A | static | src/client/studio.ts:7686 |
+| src/client/studio.ts:configureHosting:7696 | button | configureHosting | generated/global | src/client/studio.ts:7696 | CONTROL-A | static | src/client/studio.ts:7696 |
+| src/client/studio.ts:publishedLink:7708 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7708 | CONTROL-A | static | src/client/studio.ts:7708 |
+| src/client/studio.ts:button:7770 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:7770 | CONTROL-A | static | src/client/studio.ts:7770 |
+| src/client/studio.ts:undo:7777 | button | undo | generated/global | src/client/studio.ts:7777 | CONTROL-A | static | src/client/studio.ts:7777 |
+| src/client/studio.ts:finish:7781 | button | finish | generated/global | src/client/studio.ts:7781 | CONTROL-A | static | src/client/studio.ts:7781 |
+| src/client/studio.ts:save:7785 | button | save | generated/global | src/client/studio.ts:7785 | CONTROL-A | static | src/client/studio.ts:7785 |
+| src/client/studio.ts:review:8355 | button | review | generated/global | src/client/studio.ts:8355 | CONTROL-A | static | src/client/studio.ts:8355 |
+| src/client/studio.ts:cancel:8360 | button | cancel | generated/global | src/client/studio.ts:8360 | CONTROL-A | static | src/client/studio.ts:8360 |
+| src/client/studio.ts:retry:8376 | button | retry | generated/global | src/client/studio.ts:8376 | CONTROL-A | static | src/client/studio.ts:8376 |
+| src/client/studio.ts:queue:8391 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8391 | CONTROL-A | static | src/client/studio.ts:8391 |
+| src/client/studio.ts:refresh:8401 | button | refresh | generated/global | src/client/studio.ts:8401 | CONTROL-A | static | src/client/studio.ts:8401 |
+| src/client/studio.ts:rebuild:8419 | button | rebuild | generated/global | src/client/studio.ts:8419 | CONTROL-A | static | src/client/studio.ts:8419 |
+| src/client/studio.ts:download:8481 | button | download | generated/global | src/client/studio.ts:8481 | CONTROL-A | static | src/client/studio.ts:8481 |
+| src/client/studio.ts:generate:8500 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8500 | CONTROL-A | static | src/client/studio.ts:8500 |
+| src/client/studio.ts:anchor:9441 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9441 | CONTROL-A | static | src/client/studio.ts:9441 |
+| src/client/studio.ts:retry:10230 | button | retry | generated/global | src/client/studio.ts:10230 | CONTROL-A | static | src/client/studio.ts:10230 |
+| src/client/studio.ts:review:10590 | button | review | generated/global | src/client/studio.ts:10590 | CONTROL-A | static | src/client/studio.ts:10590 |
+| src/client/studio.ts:addPoint:10778 | button | addPoint | generated/global | src/client/studio.ts:10778 | CONTROL-A | static | src/client/studio.ts:10778 |
+| src/client/studio.ts:report:10780 | button | report | generated/global | src/client/studio.ts:10780 | CONTROL-A | static | src/client/studio.ts:10780 |
+| src/client/studio.ts:generate:10790 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:10790 | CONTROL-A | static | src/client/studio.ts:10790 |
+| src/client/studio.ts:download:10811 | button | download | generated/global | src/client/studio.ts:10811 | CONTROL-A | static | src/client/studio.ts:10811 |
+| src/client/studio.ts:create:10847 | button | create | generated/global | src/client/studio.ts:10847 | CONTROL-A | static | src/client/studio.ts:10847 |
+| src/client/studio.ts:anchor:10964 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:10964 | CONTROL-A | static | src/client/studio.ts:10964 |
+| src/client/studio.ts:retry:11169 | button | retry | generated/global | src/client/studio.ts:11169 | CONTROL-A | static | src/client/studio.ts:11169 |
+| src/client/studio.ts:reveal:11236 | button | reveal | generated/global | src/client/studio.ts:11236 | CONTROL-A | static | src/client/studio.ts:11236 |
+| src/client/studio.ts:upload:11330 | button | upload | generated/global | src/client/studio.ts:11330 | CONTROL-A | static | src/client/studio.ts:11330 |
+| src/client/studio.ts:retry:11336 | button | retry | generated/global | src/client/studio.ts:11336 | CONTROL-A | static | src/client/studio.ts:11336 |
+| src/client/studio.ts:correction:11346 | button | correction | generated/global | src/client/studio.ts:11346 | CONTROL-A | static | src/client/studio.ts:11346 |
+| src/client/studio.ts:preview:11354 | button | "Select projects in the portfolio and choose a destination." \| "Select exactly one project and choose a destination." \| "Checking this project's recent verified copies…" \| `Recovered asset copy ${activeAssetHandoff.id.slice(0, 8)} from persisted state.` \| "Select exactly one project and choose a destination." \| "Recent copy status is unavailable. You can retry by reopening these tools." \| "Select at least one immutable asset and assign one or more truthful evidence roles." \| `${missingRoles.length} selected asset${missingRoles.length === 1 ? "" : "s"} still need an evidence role.` \| `${assets.length} immutable asset${assets.length === 1 ? "" : "s"} selected. ` + (ready.length ? `Evidences ${ready.join(", ")}. ` : "No del | generated/global | src/client/studio.ts:11354 | CONTROL-A | static | src/client/studio.ts:11354 |
+| src/client/studio.ts:copy:11362 | button | copy | generated/global | src/client/studio.ts:11362 | CONTROL-A | static | src/client/studio.ts:11362 |
+| src/client/studio.ts:editScene:11370 | button | editScene | generated/global | src/client/studio.ts:11370 | CONTROL-A | static | src/client/studio.ts:11370 |
+| src/client/studio.ts:refresh:11374 | button | refresh | generated/global | src/client/studio.ts:11374 | CONTROL-A | static | src/client/studio.ts:11374 |
+| src/client/studio.ts:reviewExceptions:11387 | button | reviewExceptions | generated/global | src/client/studio.ts:11387 | CONTROL-A | static | src/client/studio.ts:11387 |
+| src/client/studio.ts:retry:11393 | button | retry | generated/global | src/client/studio.ts:11393 | CONTROL-A | static | src/client/studio.ts:11393 |
+| src/client/studio.ts:refresh:11403 | button | refresh | generated/global | src/client/studio.ts:11403 | CONTROL-A | static | src/client/studio.ts:11403 |
+| src/client/studio.ts:publishedLink:11491 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11491 | CONTROL-A | static | src/client/studio.ts:11491 |
+| src/client/studio.ts:qaButton:11510 | button | qaButton | generated/global | src/client/studio.ts:11510 | CONTROL-A | static | src/client/studio.ts:11510 |
+| src/client/studio.ts:publishButton:11521 | button | publishButton | generated/global | src/client/studio.ts:11521 | CONTROL-A | static | src/client/studio.ts:11521 |
+| src/client/studio.ts:editButton:11571 | button | editButton | generated/global | src/client/studio.ts:11571 | CONTROL-A | static | src/client/studio.ts:11571 |
+| src/client/studio.ts:lifecycleButton:11574 | button | lifecycleButton | generated/global | src/client/studio.ts:11574 | CONTROL-A | static | src/client/studio.ts:11574 |
+| src/client/studio.ts:compareButton:11607 | button | compareButton | generated/global | src/client/studio.ts:11607 | CONTROL-A | static | src/client/studio.ts:11607 |
+| src/client/studio.ts:uploadButton:11611 | button | uploadButton | generated/global | src/client/studio.ts:11611 | CONTROL-A | static | src/client/studio.ts:11611 |
+| src/client/studio.ts:registerBundle:11635 | button | registerBundle | generated/global | src/client/studio.ts:11635 | CONTROL-A | static | src/client/studio.ts:11635 |
+| src/client/studio.ts:link:11649 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11649 | CONTROL-A | static | src/client/studio.ts:11649 |
+| src/client/studio.ts:exportEvidence:11655 | button | exportEvidence | generated/global | src/client/studio.ts:11655 | CONTROL-A | static | src/client/studio.ts:11655 |
+| src/client/studio.ts:revoke:11668 | button | revoke | generated/global | src/client/studio.ts:11668 | CONTROL-A | static | src/client/studio.ts:11668 |
+| src/client/studio.ts:rollback:11685 | button | rollback | generated/global | src/client/studio.ts:11685 | CONTROL-A | static | src/client/studio.ts:11685 |
+| src/client/studio.ts:inviteButton:11706 | button | inviteButton | generated/global | src/client/studio.ts:11706 | CONTROL-A | static | src/client/studio.ts:11706 |
+| src/client/studio.ts:reviewButton:11708 | button | reviewButton | generated/global | src/client/studio.ts:11708 | CONTROL-A | static | src/client/studio.ts:11708 |
+| src/client/studio.ts:deliveryButton:11720 | button | deliveryButton | generated/global | src/client/studio.ts:11720 | CONTROL-A | static | src/client/studio.ts:11720 |
+| src/client/studio.ts:spatialButton:11728 | button | spatialButton | generated/global | src/client/studio.ts:11728 | CONTROL-A | static | src/client/studio.ts:11728 |
+| src/client/studio.ts:measurementButton:11731 | button | measurementButton | generated/global | src/client/studio.ts:11731 | CONTROL-A | static | src/client/studio.ts:11731 |
+| src/client/studio.ts:domainButton:11743 | button | domainButton | generated/global | src/client/studio.ts:11743 | CONTROL-A | static | src/client/studio.ts:11743 |
+| src/client/studio.ts:step:11773 | button | step | generated/global | src/client/studio.ts:11773 | CONTROL-A | static | src/client/studio.ts:11773 |
+| src/client/studio.ts:review:12290 | button | review | generated/global | src/client/studio.ts:12290 | CONTROL-A | static | src/client/studio.ts:12290 |
+| src/client/studio.ts:retry:12774 | button | retry | generated/global | src/client/studio.ts:12774 | CONTROL-A | static | src/client/studio.ts:12774 |
+| src/client/studio.ts:resume:12824 | button | checkout.checkout_url | generated/global | src/client/studio.ts:12824 | CONTROL-A | static | src/client/studio.ts:12824 |
+| src/client/studio.ts:discard:12837 | button | discard | generated/global | src/client/studio.ts:12837 | CONTROL-A | static | src/client/studio.ts:12837 |
+| src/client/studio.ts:retry:14059 | button | retry | generated/global | src/client/studio.ts:14059 | CONTROL-A | static | src/client/studio.ts:14059 |
+| src/client/studio.ts:verify:14127 | button | verify | generated/global | src/client/studio.ts:14127 | CONTROL-A | static | src/client/studio.ts:14127 |
+| src/client/studio.ts:challenge:14139 | button | challenge | generated/global | src/client/studio.ts:14139 | CONTROL-A | static | src/client/studio.ts:14139 |
+| src/client/studio.ts:provision:14152 | button | provision | generated/global | src/client/studio.ts:14152 | CONTROL-A | static | src/client/studio.ts:14152 |
+| src/client/studio.ts:open:14178 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14178 | CONTROL-A | static | src/client/studio.ts:14178 |
+| src/client/studio.ts:remove:14185 | button | remove | generated/global | src/client/studio.ts:14185 | CONTROL-A | static | src/client/studio.ts:14185 |
+| src/client/studio.ts:verify:14240 | button | verify | generated/global | src/client/studio.ts:14240 | CONTROL-A | static | src/client/studio.ts:14240 |
 | src/client/studio/stages/compare.ts:review:938 | button | review | generated/global | src/client/studio/stages/compare.ts:938 | CONTROL-A | static | src/client/studio/stages/compare.ts:938 |
 | src/client/studio/stages/compare.ts:visual:944 | button | visualAvailable ? "" : "Two versions need verified web scenes, approved navigation, and capture registration." | generated/global | src/client/studio/stages/compare.ts:944 | CONTROL-A | static | src/client/studio/stages/compare.ts:944 |
 | src/client/studio/stages/compare.ts:retry:1166 | button | retry | generated/global | src/client/studio/stages/compare.ts:1166 | CONTROL-A | static | src/client/studio/stages/compare.ts:1166 |

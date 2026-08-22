@@ -257,12 +257,15 @@ Implemented:
   but call for opposite responses, and only the last is beyond any policy. The
   verdict is held in the published viewer's own HUD, so a recipient who presses
   forward and goes nowhere learns why in the scene they were given
-- the scene has one viewer — the page a recipient opens, reached from the Walk
-  stage. Walking it is a check, not a gate: the walk-test receipt no longer
-  gates publication, because its only assertion was that the end pose differed
-  from the start pose, while the processor already proves enclosure, wall
-  sweeps, corner slides, route replay, and reachability, and the operator
-  already approves the build with a typed review note
+- the scene has one viewer — the page a recipient opens. Walking it is a check,
+  not a gate: the walk-test receipt no longer gates publication, because its
+  only assertion was that the end pose differed from the start pose, while the
+  processor already proves enclosure, wall sweeps, corner slides, route replay,
+  and reachability, and the operator already approves the build with a typed
+  review note. The walk stage itself dissolved with it — routes, the walking
+  profile, and vertical traversals moved to Structure as the structural
+  authoring they are, and build receipts to Expert, which already owns raw
+  evidence
 - walked-floor clutter demotion (`trajectoryClutterDemotion` workflow policy,
   default `pass-through`): pass-through evidence alone only clears walls the
   rig walked straight through, which on a cluttered capture left 40.5% of the

@@ -1236,7 +1236,6 @@ type ProjectSection =
   | "structure"
   | "privacy"
   | "compare"
-  | "walk"
   | "publish"
   | "measurement"
   | "expert";
@@ -1252,7 +1251,6 @@ const projectStageCapabilities: Record<ProjectSection, readonly ProjectStageCapa
   structure: ["structure-processing-poll"],
   privacy: ["privacy-evidence-poll"],
   compare: ["comparison-evidence-poll"],
-  walk: [],
   publish: [],
   measurement: [],
   expert: [],
@@ -2671,7 +2669,6 @@ function bindInterface(): void {
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
     [byId<HTMLButtonElement>("projectPrivacyTab"), "privacy"],
     [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
-    [byId<HTMLButtonElement>("projectWalkTab"), "walk"],
     [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
     [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
@@ -3119,7 +3116,8 @@ function projectSectionFromHash(): ProjectSection {
   if (candidate === "spatial" || section === "scene" || section === "structure") return "structure";
   if (section === "privacy") return "privacy";
   if (section === "compare") return "compare";
-  if (section === "walk") return "walk";
+  // The walk stage dissolved; its work moved to Structure and Expert.
+  if (section === "walk") return "structure";
   if (section === "publish") return "publish";
   if (candidate === "measurement" || section === "measurement") return "measurement";
   if (section === "expert") return "expert";
@@ -3225,7 +3223,7 @@ function activateView(
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
   byId("spatialWorkspace").hidden = !projectVisible ||
-    !["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection);
+    !["structure", "privacy", "compare", "expert"].includes(state.projectSection);
   byId("publishWorkspace").hidden = !projectVisible || state.projectSection !== "publish";
   byId("measurementWorkspace").hidden = !projectVisible || state.projectSection !== "measurement";
   byId("hostingWorkspace").hidden = view !== "hosting";
@@ -3268,16 +3266,15 @@ function activateView(
     structure: ["STRUCTURE", "Review reconstructed rooms and openings"],
     privacy: ["PRIVACY", "Review privacy evidence before approval"],
     compare: ["COMPARE", "Review change evidence across immutable versions"],
-    walk: ["WALK TEST", "Verify movement, clearance, and destinations"],
     expert: ["EXPERT", "Inspect technical evidence and recovery controls"],
-  } as const)[state.projectSection as "structure" | "privacy" | "compare" | "walk" | "expert"];
+  } as const)[state.projectSection as "structure" | "privacy" | "compare" | "expert"];
   if (spatialHeading) {
     byId("spatialWorkspaceEyebrow").textContent = spatialHeading[0];
     byId("spatialWorkspaceTitle").textContent = spatialHeading[1];
   }
   renderJobs();
   if (view === "reviews") renderReviews();
-  if (projectVisible && ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)) {
+  if (projectVisible && ["structure", "privacy", "compare", "expert"].includes(state.projectSection)) {
     renderSpatial();
     void ensureProjectWorkspace("spatial");
   }
@@ -6897,9 +6894,7 @@ function renderSpatial(): void {
   }
   const versionControl = element(
     "article",
-    state.projectSection === "walk"
-      ? "workspace-card-large spatial-version-control spatial-version-strip"
-      : "workspace-card-large spatial-version-control",
+    "workspace-card-large spatial-version-control",
   );
   const versionSelect = document.createElement("select");
   versionSelect.setAttribute("aria-label", "Spatial version");
@@ -7349,10 +7344,6 @@ function renderSpatial(): void {
     element("h3", "", "Build receipts and operator review"),
     navigationBuildHistory,
   );
-  const approvedNavigationBuild = navigationBuilds.find((build) => build.status === "APPROVED");
-  const walkTestCard = approvedNavigationBuild
-    ? renderWalkTestCard(spatial, approvedNavigationBuild)
-    : null;
 
   const captureEvidence = element("article", "workspace-card-large capture-assurance");
   captureEvidence.append(
@@ -7602,71 +7593,25 @@ function renderSpatial(): void {
     return;
   }
   if (state.projectSection === "structure") {
-    container.append(renderFloorplanWorkflow(project, spatial));
-    return;
-  }
-  if (state.projectSection === "walk") {
-    if (walkTestCard) container.append(walkTestCard);
-    container.append(routes, navigationBuildsCard);
+    // Routes, the walking profile, and vertical traversals are structural
+    // authoring: they are edited against the same approved geometry the rest
+    // of this stage reviews, and they used to sit behind a "Walk test" tab
+    // that no longer tested anything.
+    container.append(renderFloorplanWorkflow(project, spatial), routes);
     return;
   }
   if (!comparisonWorkspaceAvailable(state.selected?.comparisonReadiness ?? emptyComparisonReadiness)) {
     container.append(comparisonEvidence);
   }
-  container.append(hierarchy, semanticExtraction, captureEvidence, delivery);
-}
-
-// The scene has one viewer: the page a recipient opens. Studio used to embed a
-// second, bare copy of the renderer here, which is what made "preview" and
-// "published" read as two different things when they are the same page over
-// different data. This card sends the operator to that one viewer, where the
-// runtime reports what stopped them in its own HUD.
-function renderWalkTestCard(
-  spatial: SpatialWorkspace,
-  build: SpatialWorkspace["navigationBuilds"][number],
-): HTMLElement {
-  const card = element("article", "workspace-card-large walk-scene-card");
-  card.append(
-    element("span", "eyebrow", "MOVEMENT VERIFICATION"),
-    element("h3", "", "Walk the scene"),
-    element(
-      "p",
-      "muted-copy",
-      "Opens the same page a recipient opens, on this exact approved walking map. " +
-        "Press into anything that stops you and the scene names what did it: a reviewed wall, " +
-        "the walking map holding agent clearance, or the edge of the captured floor.",
-    ),
-    element("p", "field-note", walkTestEvidenceSummary(build)),
+  // Build receipts are raw evidence and belong to Expert, which the redesign
+  // checklist already names as their owner.
+  container.append(
+    hierarchy,
+    semanticExtraction,
+    navigationBuildsCard,
+    captureEvidence,
+    delivery,
   );
-  const open = element("button", "primary-button wide", "Open the scene");
-  open.addEventListener("click", () => {
-    void runAction({
-      key: `open-walk-scene:${spatial.version!.id}`,
-      trigger: open,
-      pendingLabel: "Preparing scene…",
-    }, () => openVersionPreview(spatial.version!.id));
-  });
-  card.append(open);
-  return card;
-}
-
-function walkTestEvidenceSummary(build: SpatialWorkspace["navigationBuilds"][number]): string {
-  try {
-    const artifact = JSON.parse(build.artifact_json ?? "{}") as Record<string, unknown>;
-    const validation = Reflect.get(artifact, "validation");
-    const physical = Reflect.get(artifact, "physicalValidation");
-    const unreachable = validation && typeof validation === "object"
-      ? Reflect.get(validation, "unreachableDestinationIds")
-      : null;
-    const failed = physical && typeof physical === "object"
-      ? Reflect.get(physical, "failedDestinationIds")
-      : null;
-    const unreachableCount = Array.isArray(unreachable) ? unreachable.length : 0;
-    const failedCount = Array.isArray(failed) ? failed.length : 0;
-    return `${unreachableCount} unreachable authored destinations · ${failedCount} failed physical routes in the approved processor receipt.`;
-  } catch {
-    return "The approved build receipt could not be summarized; inspect its immutable evidence above.";
-  }
 }
 
 function renderPublish(): void {
@@ -8579,7 +8524,7 @@ async function loadSpatialWorkspace(projectId: string, requestedVersionId?: stri
   state.spatialVersionId = workspace.version?.id ?? null;
   if (
     state.view === "project" &&
-    ["structure", "privacy", "compare", "walk", "expert"].includes(state.projectSection)
+    ["structure", "privacy", "compare", "expert"].includes(state.projectSection)
   ) renderSpatial();
   if (state.view === "project" && state.projectSection === "publish") renderPublish();
 }
@@ -11218,7 +11163,7 @@ async function ensureProjectWorkspace(view: "spatial" | "measurement", force = f
       state.selected?.project.id !== projectId ||
       state.view !== "project" ||
       (view === "spatial"
-        ? !["structure", "privacy", "compare", "walk", "expert", "publish"].includes(state.projectSection)
+        ? !["structure", "privacy", "compare", "expert", "publish"].includes(state.projectSection)
         : state.projectSection !== "measurement")
     ) return;
     const retry = element("button", "quiet-button", "Retry");
@@ -11325,7 +11270,6 @@ function renderProjectDetail(): void {
     hasCapture,
     hasMetricGeometry,
     floorplanJob,
-    navigationJob,
     navigationReady,
     structureReady,
     privacyVersion: latestVersion,
@@ -11510,25 +11454,8 @@ function renderProjectDetail(): void {
       privacyApproved ? "Human approval recorded" : latestVersion?.status === "QA_REQUIRED" ? "Review findings" : "Wait for processed scene",
       "privacy",
     ),
-    // Walking the scene is a check an operator can make, not a gate they must
-    // clear: the processor already proves enclosure, wall sweeps, corner
-    // slides, route replay, and reachability, and the build carries a typed
-    // operator review. This step never blocks publication.
     projectJourneyStep(
       "5",
-      "Walk the scene",
-      navigationReady
-        ? "current"
-        : navigationJob && ["QUEUED", "LEASED", "RUNNING"].includes(navigationJob.state)
-        ? "current"
-        : navigationJob ? "blocked" : "waiting",
-      navigationReady
-        ? "Walk it and see what stops you"
-        : navigationJob ? humanStatus(navigationJob.state) : "Follows structure automatically",
-      "walk",
-    ),
-    projectJourneyStep(
-      "6",
       "Publish",
       activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
       activeRelease

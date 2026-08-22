@@ -87,8 +87,10 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
     exact: true,
   })).toBeVisible();
 
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/walk$`));
+  // Routes and the walking profile are structural authoring; the walk stage
+  // dissolved once it held neither a walk test nor its own viewer.
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await expect(page.getByRole("heading", { name: "Routes and movement runtime", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Expert", exact: true }).click();
@@ -212,16 +214,7 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await expect(privacyReview).toBeHidden();
   await expect(page.getByText("Privacy candidate dismissed", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Walk the scene", exact: true })).toBeVisible();
   await expect(page.getByLabel("Recast cell size", { exact: true })).toBeHidden();
-  await expect(page.getByText(
-    "0 unreachable authored destinations · 0 failed physical routes in the approved processor receipt.",
-    { exact: true },
-  )).toBeVisible();
-  // Walking the scene is a check, not a gate, and it happens in the one viewer
-  // a recipient opens rather than a second copy embedded here.
-  await expect(page.getByRole("button", { name: "Open the scene", exact: true })).toBeEnabled();
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
@@ -647,61 +640,47 @@ test("multi-level floor-plan review shows every level and vertical connector", a
   );
 });
 
-test("navigation authoring actions and review rows never touch or overlap", async ({ page }) => {
+const NAVIGATION_LAYOUT_VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 768, height: 1024 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+];
+
+// Authoring and review no longer share a stage: routes and the walking profile
+// are structural authoring, build receipts are raw evidence Expert owns. Each
+// is checked where it now lives.
+test("navigation authoring controls never touch or overlap", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
     has: page.getByRole("heading", { name: "Routes and movement runtime" }),
   });
-  const reviewCard = page.locator("article.workspace-card-large").filter({
-    has: page.getByRole("heading", { name: "Build receipts and operator review" }),
-  });
   const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
   const tuneNavigation = card.getByRole("button", { name: "Walking profile", exact: true });
   const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
-  const firstApprove = reviewCard.getByRole("button", { name: "Approve navigation", exact: true }).first();
-  const firstReject = reviewCard.getByRole("button", { name: "Reject", exact: true }).first();
-  const buildEvidence = reviewCard.getByText("Inspect build evidence", { exact: true }).first();
-  await expect(buildEvidence).toBeVisible();
-  await buildEvidence.click();
-  await expect(reviewCard.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
 
-  for (const viewport of [
-    { width: 1280, height: 720 },
-    { width: 768, height: 1024 },
-    { width: 390, height: 844 },
-    { width: 320, height: 568 },
-  ]) {
+  for (const viewport of NAVIGATION_LAYOUT_VIEWPORTS) {
     await page.setViewportSize(viewport);
     await card.scrollIntoViewIfNeeded();
-    await firstApprove.focus();
-
     const boxes = await Promise.all([
       createRoute.boundingBox(),
       tuneNavigation.boundingBox(),
       authorTraversal.boundingBox(),
       buildNavigation.boundingBox(),
-      firstApprove.boundingBox(),
-      firstReject.boundingBox(),
-      card.boundingBox(),
-      reviewCard.boundingBox(),
     ]);
-    const [createBox, tuneBox, traversalBox, buildBox, approveBox, rejectBox, routesCardBox, reviewCardBox] = boxes;
-    if (
-      !createBox || !tuneBox || !traversalBox || !buildBox || !approveBox || !rejectBox ||
-      !routesCardBox || !reviewCardBox
-    ) {
+    const [createBox, tuneBox, traversalBox, buildBox] = boxes;
+    if (!createBox || !tuneBox || !traversalBox || !buildBox) {
       throw new Error(`${viewport.width}px navigation controls are not measurable`);
     }
-
     for (const [label, gap] of [
       ["create/tune", tuneBox.y - (createBox.y + createBox.height)],
       ["tune/traversal", traversalBox.y - (tuneBox.y + tuneBox.height)],
@@ -709,18 +688,46 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
     ] as const) {
       expect(gap, `${viewport.width}px ${label} controls overlap`).toBeGreaterThan(0);
     }
+    const horizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(horizontalOverflow, `${viewport.width}px page overflows horizontally`).toBeLessThanOrEqual(1);
+  }
+});
 
-    // Authoring and review now live in sibling cards: they may sit side by side or
-    // stack, but they must never overlap and the review pair must stay separated.
-    const cardsSeparated = reviewCardBox.y >= routesCardBox.y + routesCardBox.height ||
-      reviewCardBox.x >= routesCardBox.x + routesCardBox.width ||
-      routesCardBox.y >= reviewCardBox.y + reviewCardBox.height ||
-      routesCardBox.x >= reviewCardBox.x + reviewCardBox.width;
-    expect(cardsSeparated, `${viewport.width}px authoring and review cards overlap`).toBe(true);
-    const reviewPairSeparated = rejectBox.x >= approveBox.x + approveBox.width ||
+test("navigation review rows never touch or overlap in Expert", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByRole("button", { name: "Expert", exact: true }).click();
+
+  const reviewCard = page.locator("article.workspace-card-large").filter({
+    has: page.getByRole("heading", { name: "Build receipts and operator review" }),
+  });
+  const firstApprove = reviewCard.getByRole("button", { name: "Approve navigation", exact: true }).first();
+  const firstReject = reviewCard.getByRole("button", { name: "Reject", exact: true }).first();
+  const buildEvidence = reviewCard.getByText("Inspect build evidence", { exact: true }).first();
+  await expect(buildEvidence).toBeVisible();
+  await buildEvidence.click();
+  await expect(reviewCard.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
+
+  for (const viewport of NAVIGATION_LAYOUT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    await reviewCard.scrollIntoViewIfNeeded();
+    await firstApprove.focus();
+    const [approveBox, rejectBox] = await Promise.all([
+      firstApprove.boundingBox(),
+      firstReject.boundingBox(),
+    ]);
+    if (!approveBox || !rejectBox) {
+      throw new Error(`${viewport.width}px review controls are not measurable`);
+    }
+    const separated = rejectBox.x >= approveBox.x + approveBox.width ||
       rejectBox.y >= approveBox.y + approveBox.height;
-    expect(reviewPairSeparated, `${viewport.width}px approve and reject overlap`).toBe(true);
-
+    expect(separated, `${viewport.width}px approve and reject overlap`).toBe(true);
     const horizontalOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
@@ -740,7 +747,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
   const dialog = page.locator("#navigationTraversalDialog");
