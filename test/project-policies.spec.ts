@@ -29,6 +29,8 @@ describe("behavior-driving project policies", () => {
         structureWorkflow: "automatic-extract-review",
         navigationClearance: "approved-scene",
         trajectoryAutoOpen: "off",
+      trajectoryClutterDemotion: "pass-through",
+        trajectoryClutterDemotion: "pass-through",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -42,6 +44,8 @@ describe("behavior-driving project policies", () => {
         structureWorkflow: "review-every-proposal",
         navigationClearance: "ada-route-review",
         trajectoryAutoOpen: "off",
+      trajectoryClutterDemotion: "pass-through",
+        trajectoryClutterDemotion: "pass-through",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -55,6 +59,8 @@ describe("behavior-driving project policies", () => {
         structureWorkflow: "automatic-extract-review",
         navigationClearance: "custom",
         trajectoryAutoOpen: "off",
+      trajectoryClutterDemotion: "pass-through",
+        trajectoryClutterDemotion: "pass-through",
       },
       {
         schemaVersion: "project-workflow-policy-v1",
@@ -68,6 +74,8 @@ describe("behavior-driving project policies", () => {
         structureWorkflow: "review-every-proposal",
         navigationClearance: "approved-scene",
         trajectoryAutoOpen: "off",
+      trajectoryClutterDemotion: "pass-through",
+        trajectoryClutterDemotion: "pass-through",
       },
     ]);
   });
@@ -84,6 +92,7 @@ describe("behavior-driving project policies", () => {
       structureWorkflow: ["automatic-extract-review", "review-every-proposal"],
       navigationClearance: ["approved-scene", "ada-route-review", "custom"],
       trajectoryAutoOpen: ["off", "visited-rooms"],
+      trajectoryClutterDemotion: ["pass-through", "walked-majority", "walked-contact"],
     });
   });
 
@@ -106,6 +115,7 @@ describe("behavior-driving project policies", () => {
       structureWorkflow: "automatic-extract-review",
       navigationClearance: "approved-scene",
       trajectoryAutoOpen: "off",
+      trajectoryClutterDemotion: "pass-through",
     });
   });
 

@@ -250,6 +250,20 @@ Implemented:
   cards surface the machine-attested changes with their ratification path and
   a sealed-cost line counting the unresolved openings the conservative
   default keeps closed
+- walked-floor clutter demotion (`trajectoryClutterDemotion` workflow policy,
+  default `pass-through`): pass-through evidence alone only clears walls the
+  rig walked straight through, which on a cluttered capture left 40.5% of the
+  walked floor reachable in three disconnected pieces — an operator walks
+  around a pile of goods, never through it, so aisle-flanking clutter can
+  never earn a crossing. `walked-majority` also demotes runs whose majority
+  stands on ground the rig was carried over (76.1%, one piece) and
+  `walked-contact` any run touching it (93.8%, one piece, at the cost of also
+  clearing a real wall the rig passed close beside). Neither can enlarge the
+  walkable world: floor is only ever laid under room polygons, thresholds, and
+  walked rectangles, so a demotion can at most join two places the rig already
+  stood. Frozen as `walkedFloorDemotedWalls`, apart from pass-through
+  demotions so each stays checkable on its own evidence, and counted by the
+  same exposure gate
 - vendor-neutral canonical pose-path coverage against authored rooms, with the
   immutable source JSON in private R2 and bounded completeness, recapture, and
   human-review evidence in D1, optionally bound to one container structure

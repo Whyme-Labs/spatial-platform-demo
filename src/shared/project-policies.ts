@@ -13,6 +13,15 @@ export const projectWorkflowPolicyIds = {
   // rooms. Off everywhere by default — opening walkable space on machine
   // evidence is an explicit per-project decision, not a platform default.
   trajectoryAutoOpen: ["off", "visited-rooms"],
+  // Wayfinder: whether walked-floor evidence may demote extracted wall runs
+  // that stand on ground the scanner was carried over. Pass-through demotion
+  // alone only fires on walls the rig walked STRAIGHT THROUGH, which never
+  // clears the clutter flanking an aisle. "walked-majority" demotes a run
+  // whose majority sits on walked floor; "walked-contact" demotes any run
+  // touching it, at the cost of also clearing a real wall the rig passed
+  // close beside. Neither can enlarge the walkable world: the cook lays floor
+  // only under room polygons, thresholds, and walked rectangles.
+  trajectoryClutterDemotion: ["pass-through", "walked-majority", "walked-contact"],
 } as const;
 
 export type ProjectWorkflowPolicy = {
@@ -27,6 +36,7 @@ export type ProjectWorkflowPolicy = {
   structureWorkflow: typeof projectWorkflowPolicyIds.structureWorkflow[number];
   navigationClearance: typeof projectWorkflowPolicyIds.navigationClearance[number];
   trajectoryAutoOpen: typeof projectWorkflowPolicyIds.trajectoryAutoOpen[number];
+  trajectoryClutterDemotion: typeof projectWorkflowPolicyIds.trajectoryClutterDemotion[number];
 };
 
 export const projectDeliveryTemplates = [
@@ -75,6 +85,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     structureWorkflow: "automatic-extract-review",
     navigationClearance: "approved-scene",
     trajectoryAutoOpen: "off",
+    trajectoryClutterDemotion: "pass-through",
   },
   "Venue navigator": {
     schemaVersion: "project-workflow-policy-v1",
@@ -88,6 +99,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     structureWorkflow: "review-every-proposal",
     navigationClearance: "ada-route-review",
     trajectoryAutoOpen: "off",
+    trajectoryClutterDemotion: "pass-through",
   },
   "Film production scene": {
     schemaVersion: "project-workflow-policy-v1",
@@ -101,6 +113,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     structureWorkflow: "automatic-extract-review",
     navigationClearance: "custom",
     trajectoryAutoOpen: "off",
+    trajectoryClutterDemotion: "pass-through",
   },
   "Measured capture pack": {
     schemaVersion: "project-workflow-policy-v1",
@@ -114,6 +127,7 @@ const deliveryPolicies: Record<ProjectDeliveryTemplate, ProjectWorkflowPolicy> =
     structureWorkflow: "review-every-proposal",
     navigationClearance: "approved-scene",
     trajectoryAutoOpen: "off",
+    trajectoryClutterDemotion: "pass-through",
   },
 };
 
@@ -129,6 +143,7 @@ export const legacyUnspecifiedProjectWorkflowPolicy: ProjectWorkflowPolicy = {
   structureWorkflow: "review-every-proposal",
   navigationClearance: "custom",
   trajectoryAutoOpen: "off",
+  trajectoryClutterDemotion: "pass-through",
 };
 
 export function projectPolicyForDeliveryTemplate(deliveryTemplate: string): ProjectWorkflowPolicy {
@@ -158,6 +173,21 @@ export function trajectoryAutoOpenEnabled(
   return policy.trajectoryAutoOpen === "visited-rooms";
 }
 
+export type TrajectoryClutterDemotionMode = Exclude<
+  ProjectWorkflowPolicy["trajectoryClutterDemotion"],
+  "pass-through"
+>;
+
+// The walked-floor demotion mode this policy asks the cook for, or null when
+// pass-through evidence alone governs wall removal.
+export function trajectoryClutterDemotionMode(
+  policy: ProjectWorkflowPolicy,
+): TrajectoryClutterDemotionMode | null {
+  return policy.trajectoryClutterDemotion === "pass-through"
+    ? null
+    : policy.trajectoryClutterDemotion;
+}
+
 export function parseProjectWorkflowPolicy(value: unknown): ProjectWorkflowPolicy | null {
   if (!value || typeof value !== "object") return null;
   const policy = value as Record<string, unknown>;
@@ -168,6 +198,7 @@ export function parseProjectWorkflowPolicy(value: unknown): ProjectWorkflowPolic
     structureWorkflow: policy.structureWorkflow ?? "automatic-extract-review",
     navigationClearance: policy.navigationClearance ?? "approved-scene",
     trajectoryAutoOpen: policy.trajectoryAutoOpen ?? "off",
+    trajectoryClutterDemotion: policy.trajectoryClutterDemotion ?? "pass-through",
   };
   for (const [field, values] of Object.entries(projectWorkflowPolicyIds)) {
     if (!(values as readonly unknown[]).includes(normalized[field])) return null;

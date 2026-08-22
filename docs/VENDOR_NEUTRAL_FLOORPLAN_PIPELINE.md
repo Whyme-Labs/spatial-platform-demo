@@ -130,6 +130,47 @@ human capture-agreement classification is never the machine's to remove,
 whichever way the human ruled. Demoted walls cook as if never proposed and
 count toward the exposure gate exactly like auto-opened openings.
 
+### Walked-floor clutter demotion (`trajectoryClutterDemotion`)
+
+Pass-through demotion only ever fires on a wall the rig walked STRAIGHT
+THROUGH, and that turns out to reach very little of a cluttered capture. On
+the FJD sample it took 12 crossings against 136 extracted wall runs and left
+12.90 m² of the 31.81 m² walked floor reachable — 40.5%, in three
+disconnected pieces. The reason is structural, not a tuning problem: an
+operator never walks through a pile of stacked goods, they walk down the
+aisle beside it, so the clutter that pinches an aisle can never earn a
+crossing. Shrinking the agent radius does not rescue it either; even an
+unrealistic 0.10 m walker only reaches 52%.
+
+The complementary evidence is the walked floor itself. Ground the rig was
+carried over is proven standable, so a full-height wall claiming that same
+ground contradicts the ego-motion record. The `trajectoryClutterDemotion`
+project policy chooses how much of that contradiction to act on:
+
+| value | rule | FJD result |
+| --- | --- | --- |
+| `pass-through` (default) | crossings only, as above | 12.90 m², 40.5%, 3 pieces |
+| `walked-majority` | plus runs whose majority stands on walked floor | 24.22 m², 76.1%, 1 piece |
+| `walked-contact` | plus any run touching walked floor | 29.83 m², 93.8%, 1 piece |
+
+`walked-contact` reaches furthest and costs the most fidelity: the walked
+floor is built by sweeping a disc along the path, so a real wall the rig
+passed close beside on one side also gets demoted.
+
+Neither walked mode can enlarge the walkable world. The cook lays floor ONLY
+under room polygons, thresholds, and walked rectangles
+(`structuralCollisionConfigFromReviewPlan`), so demoting a wall can at most
+join two places the rig already stood — never open ground that was never
+captured.
+
+Walked-floor demotions freeze as `walkedFloorDemotedWalls`, deliberately
+apart from `demotedWalls`: the evidence is different in kind, and each stays
+checkable on its own terms. The frozen blob rejects a walked-floor demotion
+on a storey the evidence never walked, a `walked-majority` entry under half
+coverage, and a mixture of modes in one approval. Walls already taken by
+pass-through evidence are not repeated. Like every machine change, these
+count toward the exposure gate.
+
 ### Exposure gate (issue #34)
 
 Machine-attested walkability caps a release at the credential-gated tier.

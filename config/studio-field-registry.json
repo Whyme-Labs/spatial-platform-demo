@@ -1235,6 +1235,19 @@
       "explanation": "Whether trajectory evidence may open unresolved openings between scanner-visited rooms; administrator-only and off by default."
     },
     {
+      "id": "project.edit.trajectory_clutter_demotion",
+      "form": "editProjectForm",
+      "name": "trajectoryClutterDemotion",
+      "audience": "operator",
+      "stage": "overview",
+      "required": false,
+      "requestPath": "project.workflowPolicy.trajectoryClutterDemotion",
+      "persistencePath": "project_workflow_policy_revisions.policy_json",
+      "consumer": "updateProject",
+      "readback": "openEditProjectDialog",
+      "explanation": "Whether walked-floor evidence may demote extracted wall runs standing on ground the scanner was carried over; administrator-only and pass-through by default."
+    },
+    {
       "id": "navigation.preset",
       "form": "navigationProfileForm",
       "name": "navigationIntent",

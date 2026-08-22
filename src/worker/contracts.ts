@@ -63,6 +63,8 @@ export const projectWorkflowPolicySchema = z.object({
     .default("approved-scene"),
   trajectoryAutoOpen: z.enum(projectWorkflowPolicyIds.trajectoryAutoOpen)
     .default("off"),
+  trajectoryClutterDemotion: z.enum(projectWorkflowPolicyIds.trajectoryClutterDemotion)
+    .default("pass-through"),
 }).strict();
 export const projectCustomFieldTypeSchema = z.enum([
   "text",
@@ -2348,6 +2350,17 @@ export const frozenTrajectoryAutoOpenSchema = z.object({
     crossingCount: z.number().int().min(1).max(100_000),
     roomId: z.string().min(1).max(120),
   }).strict()).max(2_000).optional(),
+  // Wayfinder: wall runs standing on floor the pose path proves walkable,
+  // demoted under the project's trajectoryClutterDemotion policy. Kept apart
+  // from `demotedWalls` because the evidence is different in kind — walked
+  // ground rather than a pass-through — and each stays checkable on its own
+  // terms. Optional so blobs frozen before this field parse unchanged.
+  walkedFloorDemotedWalls: z.array(z.object({
+    levelId: z.string().min(1).max(120),
+    wallId: z.string().min(1).max(120),
+    mode: z.enum(["walked-majority", "walked-contact"]),
+    walkedFraction: z.number().min(0).max(1),
+  }).strict()).max(5_000).optional(),
 }).strict().superRefine((frozen, context) => {
   const identities = frozen.qualifiedOpenings.map((opening) =>
     `${opening.levelId}/${opening.openingId}`);
@@ -2392,6 +2405,48 @@ export const frozenTrajectoryAutoOpenSchema = z.object({
         code: "custom",
         path: ["demotedWalls", index],
         message: "A demoted wall's crossing count must match the evidence's own record",
+      });
+    }
+  }
+  const walkedFloorLevelIds = new Set((frozen.evidence.walkedFloors ?? [])
+    .map((walked) => walked.levelId));
+  const walkedIdentities = (frozen.walkedFloorDemotedWalls ?? []).map((wall) =>
+    `${wall.levelId}/${wall.wallId}`);
+  if (new Set(walkedIdentities).size !== walkedIdentities.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["walkedFloorDemotedWalls"],
+      message: "Each walked-floor demoted wall may appear at most once",
+    });
+  }
+  const modes = new Set((frozen.walkedFloorDemotedWalls ?? []).map((wall) => wall.mode));
+  if (modes.size > 1) {
+    context.addIssue({
+      code: "custom",
+      path: ["walkedFloorDemotedWalls"],
+      message: "One approval freezes one clutter-demotion mode, not a mixture",
+    });
+  }
+  for (const [index, wall] of (frozen.walkedFloorDemotedWalls ?? []).entries()) {
+    if (!walkedFloorLevelIds.has(wall.levelId)) {
+      context.addIssue({
+        code: "custom",
+        path: ["walkedFloorDemotedWalls", index],
+        message: "A walked-floor demoted wall must sit on a storey the evidence walked",
+      });
+    }
+    if (wall.walkedFraction <= 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["walkedFloorDemotedWalls", index],
+        message: "A walked-floor demoted wall must stand on walked floor",
+      });
+    }
+    if (wall.mode === "walked-majority" && wall.walkedFraction < 0.5) {
+      context.addIssue({
+        code: "custom",
+        path: ["walkedFloorDemotedWalls", index],
+        message: "walked-majority requires most of the run to stand on walked floor",
       });
     }
   }

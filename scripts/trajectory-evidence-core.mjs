@@ -741,3 +741,119 @@ export function trajectoryWalkedFloor({
     }))
     .sort((left, right) => left.levelId.localeCompare(right.levelId));
 }
+
+// ————— Walked-floor clutter demotion —————
+
+// Pass-through demotion (above) only ever fires on a wall the rig walked
+// STRAIGHT THROUGH. On the FJD capture that was 12 crossings against 136
+// extracted wall runs, and it left 40.5% of the walked floor reachable: an
+// operator never walks through a pile of stacked goods, they walk down the
+// aisle beside it, so aisle-flanking clutter can never earn a crossing.
+//
+// The complementary evidence is the walked floor itself. Ground the rig was
+// carried over is proven standable; a 2.5 m wall claiming to occupy that same
+// ground contradicts the ego-motion record. Two thresholds, because the
+// inference weakens as the overlap shrinks:
+//
+//   walked-majority — most of the run sits on walked floor. Conservative:
+//                     keeps walls the rig merely passed near.
+//   walked-contact  — any part sits on walked floor. The disc that builds the
+//                     walked floor has a radius, so this also catches a real
+//                     wall the rig passed within that radius of on one side.
+//
+// Neither can enlarge the walkable world: the cook lays floor ONLY under room
+// polygons, thresholds, and walked rectangles, so demoting a wall can at most
+// join two places the rig already stood.
+export const WALKED_FLOOR_DEMOTION_MODES = Object.freeze([
+  "walked-majority",
+  "walked-contact",
+]);
+export const WALKED_FLOOR_MAJORITY_FRACTION = 0.5;
+const WALKED_FLOOR_WALL_SAMPLE_SPACING_M = 0.05;
+
+function walkedCellLookup(walkedFloor) {
+  const cellSizeM = Number(walkedFloor?.cellSizeM);
+  if (!Number.isFinite(cellSizeM) || cellSizeM <= 0) return null;
+  const cells = new Set();
+  for (const rectangle of walkedFloor?.rectangles ?? []) {
+    const minX = Number(rectangle?.minX);
+    const maxX = Number(rectangle?.maxX);
+    const minZ = Number(rectangle?.minZ);
+    const maxZ = Number(rectangle?.maxZ);
+    if (![minX, maxX, minZ, maxZ].every(Number.isFinite)) continue;
+    // The rectangles were merged from whole cells, so their edges land on cell
+    // boundaries and rounding recovers the exact index range.
+    for (let column = Math.round(minX / cellSizeM); column < Math.round(maxX / cellSizeM); column += 1) {
+      for (let row = Math.round(minZ / cellSizeM); row < Math.round(maxZ / cellSizeM); row += 1) {
+        cells.add(`${column},${row}`);
+      }
+    }
+  }
+  if (!cells.size) return null;
+  return (x, z) => cells.has(
+    `${Math.floor(x / cellSizeM)},${Math.floor(z / cellSizeM)}`,
+  );
+}
+
+// The fraction of a wall run's centre line that stands on walked floor.
+export function wallWalkedFloorFraction({ from, to, contains }) {
+  const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
+  const steps = Math.max(4, Math.ceil(length / WALKED_FLOOR_WALL_SAMPLE_SPACING_M));
+  let onWalkedFloor = 0;
+  for (let step = 0; step <= steps; step += 1) {
+    const ratio = step / steps;
+    if (contains(
+      from[0] + (to[0] - from[0]) * ratio,
+      from[1] + (to[1] - from[1]) * ratio,
+    )) onWalkedFloor += 1;
+  }
+  return onWalkedFloor / (steps + 1);
+}
+
+export function trajectoryWalkedFloorDemotableWalls({
+  plan,
+  trajectoryEvidence,
+  mode,
+  resolutionCoveredWallIds = new Set(),
+}) {
+  if (!WALKED_FLOOR_DEMOTION_MODES.includes(mode)) return [];
+  if (!trajectoryEvidence ||
+    trajectoryEvidence.schemaVersion !== TRAJECTORY_EVIDENCE_SCHEMA_VERSION ||
+    !Array.isArray(trajectoryEvidence.walkedFloors)) {
+    return [];
+  }
+  const lookupByLevelId = new Map();
+  for (const walkedFloor of trajectoryEvidence.walkedFloors) {
+    const levelId = String(walkedFloor?.levelId ?? "");
+    const lookup = walkedCellLookup(walkedFloor);
+    if (levelId && lookup) lookupByLevelId.set(levelId, lookup);
+  }
+  if (!lookupByLevelId.size) return [];
+  const minimumFraction = mode === "walked-majority" ? WALKED_FLOOR_MAJORITY_FRACTION : 0;
+  const demoted = [];
+  for (const level of plan?.levels ?? []) {
+    const levelId = String(level.id ?? level.levelKey ?? "");
+    const contains = lookupByLevelId.get(levelId);
+    if (!levelId || !contains) continue;
+    for (const wall of level.walls ?? []) {
+      const wallId = String(wall?.id ?? wall?.wallKey ?? "");
+      // A wall any frozen human classification touched is never the machine's
+      // to remove, exactly as for pass-through demotion.
+      if (!wallId || resolutionCoveredWallIds.has(wallId)) continue;
+      const from = polygonPointXZ(wall.start);
+      const to = polygonPointXZ(wall.end);
+      if (!from || !to) continue;
+      const walkedFraction = wallWalkedFloorFraction({ from, to, contains });
+      if (walkedFraction <= 0 || walkedFraction < minimumFraction) continue;
+      demoted.push({
+        levelId,
+        wallId,
+        mode,
+        walkedFraction: semanticRound(walkedFraction),
+      });
+    }
+  }
+  return demoted.sort((left, right) =>
+    left.levelId.localeCompare(right.levelId) ||
+    left.wallId.localeCompare(right.wallId));
+}

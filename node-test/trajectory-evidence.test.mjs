@@ -4,6 +4,7 @@ import {
   DEFAULT_MINIMUM_VISITED_SAMPLES,
   openingAdjacentRoomIds,
   trajectoryDemotableWalls,
+  trajectoryWalkedFloorDemotableWalls,
   trajectoryWallCrossingEvidence,
   spanTrajectoryQualification,
   trajectoryQualifiedUnknownOpenings,
@@ -505,5 +506,107 @@ describe("trajectoryDemotableWalls", () => {
         visitedRoomIds: ["level-001/room-001"],
       },
     }), []);
+  });
+});
+
+describe("trajectoryWalkedFloorDemotableWalls", () => {
+  // One storey whose walked floor is the 1 m square [0,1]x[0,1], laid down as
+  // four 0.5 m cells.
+  const evidence = {
+    schemaVersion: "trajectory-evidence-v1",
+    visitedRoomIds: ["level-001/room-001"],
+    walkedFloors: [{
+      levelId: "level-001",
+      elevationM: 0,
+      cellSizeM: 0.5,
+      radiusM: 0.6,
+      cellCount: 4,
+      rectangles: [{ minX: 0, maxX: 1, minZ: 0, maxZ: 1 }],
+    }],
+  };
+  const wall = (id, start, end) => ({ id, start, end, thicknessM: 0.2, heightM: 2.5 });
+  const planWith = (...walls) => ({
+    levels: [{ id: "level-001", elevationM: 0, rooms: [], walls }],
+  });
+
+  it("demotes a run standing wholly on walked floor", () => {
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan: planWith(wall("wall-inside", [0.2, 0.5], [0.8, 0.5])),
+      trajectoryEvidence: evidence,
+      mode: "walked-contact",
+    }), [{
+      levelId: "level-001",
+      wallId: "wall-inside",
+      mode: "walked-contact",
+      walkedFraction: 1,
+    }]);
+  });
+
+  it("leaves a run that never touches walked floor standing", () => {
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan: planWith(wall("wall-away", [5, 5], [6, 5])),
+      trajectoryEvidence: evidence,
+      mode: "walked-contact",
+    }), []);
+  });
+
+  it("separates the two thresholds on a run that only clips the walked floor", () => {
+    // A 2 m run with its first 0.4 m inside the walked square: contact takes
+    // it, majority does not.
+    const plan = planWith(wall("wall-clipping", [0.6, 0.5], [2.6, 0.5]));
+    const contact = trajectoryWalkedFloorDemotableWalls({
+      plan,
+      trajectoryEvidence: evidence,
+      mode: "walked-contact",
+    });
+    assert.equal(contact.length, 1);
+    assert.ok(contact[0].walkedFraction > 0 && contact[0].walkedFraction < 0.5);
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan,
+      trajectoryEvidence: evidence,
+      mode: "walked-majority",
+    }), []);
+  });
+
+  it("never demotes a wall a frozen human classification touched", () => {
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan: planWith(wall("wall-inside", [0.2, 0.5], [0.8, 0.5])),
+      trajectoryEvidence: evidence,
+      mode: "walked-contact",
+      resolutionCoveredWallIds: new Set(["wall-inside"]),
+    }), []);
+  });
+
+  it("fails closed on an unknown mode, absent walked floor, or foreign schema", () => {
+    const plan = planWith(wall("wall-inside", [0.2, 0.5], [0.8, 0.5]));
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan, trajectoryEvidence: evidence, mode: "pass-through",
+    }), []);
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan, trajectoryEvidence: evidence, mode: null,
+    }), []);
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan,
+      trajectoryEvidence: { schemaVersion: "trajectory-evidence-v1", visitedRoomIds: [] },
+      mode: "walked-contact",
+    }), []);
+    assert.deepEqual(trajectoryWalkedFloorDemotableWalls({
+      plan,
+      trajectoryEvidence: { ...evidence, schemaVersion: "something-else" },
+      mode: "walked-contact",
+    }), []);
+  });
+
+  it("only reads the storey the wall belongs to", () => {
+    const plan = {
+      levels: [
+        { id: "level-001", elevationM: 0, rooms: [], walls: [wall("wall-a", [0.2, 0.5], [0.8, 0.5])] },
+        { id: "level-002", elevationM: 3, rooms: [], walls: [wall("wall-b", [0.2, 0.5], [0.8, 0.5])] },
+      ],
+    };
+    const demoted = trajectoryWalkedFloorDemotableWalls({
+      plan, trajectoryEvidence: evidence, mode: "walked-contact",
+    });
+    assert.deepEqual(demoted.map((entry) => entry.wallId), ["wall-a"]);
   });
 });
