@@ -26,7 +26,6 @@
     "floorplanExtractionForm",
     "floorplanReviewForm",
     "routeForm",
-    "privacyCandidateForm",
     "measurementBriefForm",
     "checkPointForm",
     "geometryChangeForm",
@@ -592,24 +591,6 @@
       ]
     },
     {
-      "form": "privacyCandidateForm",
-      "idPrefix": "privacy_candidate",
-      "audience": "operator",
-      "stage": "privacy",
-      "requestPath": "privacyCandidate",
-      "persistencePath": "privacy_candidates",
-      "consumer": "recordPrivacyCandidateDecision",
-      "readback": "openPrivacyCandidateDialog",
-      "fields": [
-        "status",
-        "note"
-      ],
-      "required": [
-        "status",
-        "note"
-      ]
-    },
-    {
       "form": "measurementBriefForm",
       "idPrefix": "measurement_brief",
       "audience": "operator",
@@ -1016,18 +997,6 @@
       "persistencePath": "project_templates.delivery_template",
       "consumer": "saveProjectTemplate",
       "readback": "renderPortfolioTools"
-    },
-    {
-      "id": "template.privacy",
-      "form": "projectTemplateForm",
-      "name": "privacyReview",
-      "audience": "operator",
-      "stage": "portfolio",
-      "required": true,
-      "requestPath": "template.policy.privacyReview",
-      "persistencePath": "project_templates.policy_json",
-      "consumer": "saveProjectTemplate",
-      "readback": "editProjectTemplate"
     },
     {
       "id": "template.publication",

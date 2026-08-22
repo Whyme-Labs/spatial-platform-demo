@@ -1918,7 +1918,7 @@ const workflowStages: WorkflowStage[] = [
   {
     kicker: "Spatial semantics",
     title: "Give the place physical rules.",
-    body: "Review floors, walls, ceilings, doors, furniture groups, room anchors, privacy regions, and movement profiles independently from the splat.",
+    body: "Review floors, walls, ceilings, doors, furniture groups, room anchors, and movement profiles independently from the splat.",
     output: "Structural shell, Rapier collision, Detour navmesh, room graph",
   },
   {

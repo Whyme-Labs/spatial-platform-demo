@@ -74,16 +74,8 @@
       "allowed_sender_addresses": ["login@whymelabs.com"]
     }
   ],
-  "ai": {
-    "binding": "AI",
-    "remote": true
-  },
   "queues": {
     "producers": [
-      {
-        "binding": "PRIVACY_SCAN_QUEUE",
-        "queue": "spatial-privacy-scans-local"
-      },
       {
         "binding": "PROCESSING_DISPATCH_QUEUE",
         "queue": "spatial-processing-dispatch-local"
@@ -94,14 +86,6 @@
       }
     ],
     "consumers": [
-      {
-        "queue": "spatial-privacy-scans-local",
-        "max_batch_size": 1,
-        "max_batch_timeout": 2,
-        "max_retries": 2,
-        "dead_letter_queue": "spatial-privacy-scans-local-dlq",
-        "max_concurrency": 2
-      },
       {
         "queue": "spatial-portfolio-copies-local",
         "max_batch_size": 1,
@@ -188,15 +172,8 @@
           "allowed_sender_addresses": ["login@whymelabs.com"]
         }
       ],
-      "ai": {
-        "binding": "AI"
-      },
       "queues": {
         "producers": [
-          {
-            "binding": "PRIVACY_SCAN_QUEUE",
-            "queue": "spatial-privacy-scans-staging"
-          },
           {
             "binding": "PROCESSING_DISPATCH_QUEUE",
             "queue": "spatial-processing-dispatch-staging"
@@ -207,14 +184,6 @@
           }
         ],
         "consumers": [
-          {
-            "queue": "spatial-privacy-scans-staging",
-            "max_batch_size": 1,
-            "max_batch_timeout": 2,
-            "max_retries": 2,
-            "dead_letter_queue": "spatial-privacy-scans-staging-dlq",
-            "max_concurrency": 2
-          },
           {
             "queue": "spatial-portfolio-copies-staging",
             "max_batch_size": 1,
@@ -297,15 +266,8 @@
           "allowed_sender_addresses": ["login@whymelabs.com"]
         }
       ],
-      "ai": {
-        "binding": "AI"
-      },
       "queues": {
         "producers": [
-          {
-            "binding": "PRIVACY_SCAN_QUEUE",
-            "queue": "spatial-privacy-scans-production"
-          },
           {
             "binding": "PROCESSING_DISPATCH_QUEUE",
             "queue": "spatial-processing-dispatch-production"
@@ -316,14 +278,6 @@
           }
         ],
         "consumers": [
-          {
-            "queue": "spatial-privacy-scans-production",
-            "max_batch_size": 1,
-            "max_batch_timeout": 2,
-            "max_retries": 2,
-            "dead_letter_queue": "spatial-privacy-scans-production-dlq",
-            "max_concurrency": 2
-          },
           {
             "queue": "spatial-portfolio-copies-production",
             "max_batch_size": 1,

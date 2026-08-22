@@ -19,7 +19,6 @@ describe("behavior-driving project policies", () => {
     expect(policies).toEqual([
       {
         schemaVersion: "project-workflow-policy-v1",
-        privacyReview: "strict",
         publication: "public-after-approval",
         navigation: "visitor-walk",
         measurement: "hidden",
@@ -34,7 +33,6 @@ describe("behavior-driving project policies", () => {
       },
       {
         schemaVersion: "project-workflow-policy-v1",
-        privacyReview: "strict",
         publication: "public-after-approval",
         navigation: "visitor-walk",
         measurement: "indicative",
@@ -49,7 +47,6 @@ describe("behavior-driving project policies", () => {
       },
       {
         schemaVersion: "project-workflow-policy-v1",
-        privacyReview: "standard",
         publication: "private-review",
         navigation: "review-walk-and-fly",
         measurement: "hidden",
@@ -64,7 +61,6 @@ describe("behavior-driving project policies", () => {
       },
       {
         schemaVersion: "project-workflow-policy-v1",
-        privacyReview: "strict",
         publication: "private-review",
         navigation: "visitor-walk",
         measurement: "controlled",
@@ -82,7 +78,6 @@ describe("behavior-driving project policies", () => {
 
   it("keeps every policy dimension closed and machine-readable", () => {
     expect(projectWorkflowPolicyIds).toEqual({
-      privacyReview: ["standard", "strict"],
       publication: ["private-review", "public-after-approval"],
       navigation: ["visitor-walk", "review-walk-and-fly"],
       measurement: ["hidden", "indicative", "controlled"],
@@ -104,7 +99,6 @@ describe("behavior-driving project policies", () => {
   it("fills newly behavior-driving dimensions on valid legacy v1 policy rows", () => {
     expect(parseProjectWorkflowPolicy({
       schemaVersion: "project-workflow-policy-v1",
-      privacyReview: "strict",
       publication: "private-review",
       navigation: "visitor-walk",
       measurement: "hidden",

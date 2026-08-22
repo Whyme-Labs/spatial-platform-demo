@@ -60,32 +60,30 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.locator("#projectTable")).toBeHidden();
 
-  const privacyTab = page.getByRole("button", { name: "Privacy", exact: true });
-  await privacyTab.press("Enter");
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(privacyTab).toHaveAttribute("aria-current", "page");
-  await expect(page.locator(".project-journey-step").filter({ hasText: "Privacy" })).toHaveAttribute("aria-current", "step");
+  const publishTab = page.getByRole("button", { name: "Publish", exact: true });
+  await publishTab.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+  await expect(publishTab).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".project-journey-step").filter({ hasText: "Publish" })).toHaveAttribute("aria-current", "step");
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await page.goForward();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
 
   await page.getByRole("button", { name: "Back to projects", exact: true }).click();
   await expect(page).toHaveURL(/#projects$/);
   await expect(page.locator("#projectTable")).toBeVisible();
 });
 
-test("privacy, walk testing, expert evidence, and publication are first-class project tasks", async ({ page }) => {
+test("structure, expert evidence, and publication are first-class project tasks", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
 
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(page.getByRole("heading", {
-    name: "Automated candidates, human decisions",
-    exact: true,
-  })).toBeVisible();
+  // Automated privacy scanning was removed, so an unapproved version routes
+  // straight to Publish, where the operator records their own privacy review.
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
 
   // Routes and the walking profile are structural authoring; the walk stage
   // dissolved once it held neither a walk test nor its own viewer.
@@ -103,41 +101,6 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
-});
-
-test("privacy polling stays active on the Privacy stage until delayed evidence completes", async ({ page }) => {
-  await page.addInitScript(() => {
-    const originalSetTimeout = window.setTimeout.bind(window);
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      const duration = timeout ?? 0;
-      const acceleratePrivacyPolling = (window as Window & {
-        __spatialAcceleratePrivacyPolling?: boolean;
-      }).__spatialAcceleratePrivacyPolling;
-      const effectiveDuration = acceleratePrivacyPolling && [1_500, 3_000].includes(duration)
-        ? 25
-        : duration;
-      return originalSetTimeout(handler, effectiveDuration, ...args);
-    }) as typeof window.setTimeout;
-  });
-  const polling = { spatialReads: 0 };
-  await mockApprovedProject(page, () => undefined, { delayedPrivacyScan: polling });
-
-  await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await page.getByRole("button", { name: "Run automated privacy scan", exact: true }).click();
-
-  await expect(page.locator("#privacyAssuranceCard").getByText("Running", { exact: true })).toBeVisible();
-  await page.evaluate(() => {
-    (window as Window & { __spatialAcceleratePrivacyPolling?: boolean })
-      .__spatialAcceleratePrivacyPolling = true;
-  });
-  await expect(page.locator("#privacyAssuranceCard").getByText("Completed", { exact: true })).toBeVisible();
-  await expect(page.getByText(
-    "No privacy candidates were detected. The completed scan remains part of the QA evidence.",
-    { exact: true },
-  )).toBeVisible();
-  expect(polling.spatialReads).toBeGreaterThanOrEqual(3);
 });
 
 test("a novice can upload, inspect every stage, walk test, and publish using visible controls", async ({ page }) => {
@@ -203,23 +166,11 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await floorplanReview.getByRole("button", { name: "Save operator decision", exact: true }).click();
   await expect(floorplanReview).toBeHidden();
 
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Review candidate", exact: true }).click();
-  const privacyReview = page.locator("#privacyCandidateDialog");
-  await privacyReview.getByLabel("Evidence note", { exact: true }).fill(
-    "Verified as a reflection in the poster frame.",
-  );
-  await privacyReview.getByRole("button", { name: "Record privacy decision", exact: true }).click();
-  await expect(privacyReview).toBeHidden();
-  await expect(page.getByText("Privacy candidate dismissed", { exact: true })).toBeVisible();
-
   await expect(page.getByLabel("Recast cell size", { exact: true })).toBeHidden();
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
   const qa = page.locator("#qaDialog");
-  await expect(qa.getByText("Privacy evidence is ready", { exact: true })).toBeVisible();
   await expect(qa.locator("select[name='visualGrade'] option")).toHaveText([
     "A — Client-ready: no visible defects at the approved framing and quality preset",
     "B — Acceptable: minor defects do not distract from the intended experience",
@@ -258,20 +209,7 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   });
 });
 
-test("QA recovery opens the visible privacy task", async ({ page }) => {
-  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
-
-  await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
-  await page.getByRole("button", { name: "Open privacy evidence workspace", exact: true }).click();
-
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(page.locator("#privacyAssuranceCard")).toBeVisible();
-});
-
-test("comparison leaves Privacy and becomes its own stage only with a comparison-ready pair", async ({ page }) => {
+test("comparison becomes its own stage only with a comparison-ready pair", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, {
     auxiliaryQaVersion: true,
     comparisonReady: true,
@@ -281,8 +219,7 @@ test("comparison leaves Privacy and becomes its own stage only with a comparison
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Compare", exact: true }).click();
@@ -775,7 +712,6 @@ async function mockApprovedProject(
     walkingState?: "building" | "exception";
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
-    delayedPrivacyScan?: { spatialReads: number };
     startingViewFrameQuality?: Record<string, unknown>;
     publishResult?: { status: number; body: Record<string, unknown> };
   } = {},
@@ -784,9 +720,6 @@ async function mockApprovedProject(
   let noviceStage: "structure" | "privacy" | "approved" = options.noviceLifecycle
     ? "structure"
     : "approved";
-  let novicePrivacyResolved = false;
-  let noviceWalkTestCompleted = !options.noviceLifecycle;
-  let delayedPrivacyScanStatus: "RUNNING" | "COMPLETED" | null = null;
   const uploads = new Map<string, {
     assetId: string;
     fileName: string;
@@ -809,7 +742,6 @@ async function mockApprovedProject(
     activeReleaseSlug: null,
     workflowPolicy: {
       schemaVersion: "project-workflow-policy-v1",
-      privacyReview: "strict",
       publication: "public-after-approval",
       navigation: "visitor-walk",
       requiredFiles: "visual-and-registered-geometry",
@@ -897,18 +829,6 @@ async function mockApprovedProject(
     if (path === "/api/projects" && method === "GET") {
       return json(route, 200, { projects: projectCreated ? [project] : [] });
     }
-    if (
-      options.delayedPrivacyScan && method === "POST" &&
-      path === `/api/projects/${projectId}/privacy-scans`
-    ) {
-      delayedPrivacyScanStatus = "RUNNING";
-      return json(route, 202, {
-        scan: {
-          id: "60606060-6060-4060-8060-606060606060",
-          status: "QUEUED",
-        },
-      });
-    }
     if (path === `/api/projects/${projectId}/uploads` && method === "POST" && options.captureIntake) {
       const body = request.postDataJSON() as {
         fileName: string;
@@ -969,15 +889,6 @@ async function mockApprovedProject(
       });
     }
     if (
-      options.noviceLifecycle && method === "PATCH" &&
-      path === `/api/projects/${projectId}/privacy-candidates/61616161-6161-4161-8161-616161616161`
-    ) {
-      novicePrivacyResolved = true;
-      return json(route, 200, {
-        candidate: { id: "61616161-6161-4161-8161-616161616161", status: "dismissed" },
-      });
-    }
-    if (
       options.noviceLifecycle && method === "POST" &&
       path === `/api/versions/${versionId}/approve`
     ) {
@@ -989,7 +900,6 @@ async function mockApprovedProject(
       options.noviceLifecycle && method === "POST" &&
       path === `/api/projects/${projectId}/spatial/navigation-builds/dddddddd-dddd-4ddd-8ddd-dddddddddddd/walk-tests`
     ) {
-      noviceWalkTestCompleted = true;
       return json(route, 201, {
         walkTest: {
           id: "73737373-7373-4373-8373-737373737373",
@@ -1031,7 +941,7 @@ async function mockApprovedProject(
             size_bytes: 73_400_000,
             integrity_status: "verified",
           },
-          ...(options.noviceLifecycle || options.delayedPrivacyScan
+          ...(options.noviceLifecycle
             ? [
               {
                 id: "57575757-5757-4575-8575-575757575757",
@@ -1154,16 +1064,9 @@ async function mockApprovedProject(
             options.noviceLifecycle && noviceStage === "structure"
           ? []
           : [versionId],
-        walkTestReadyVersionIds: noviceWalkTestCompleted ? [versionId] : [],
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {
-      if (options.delayedPrivacyScan && delayedPrivacyScanStatus) {
-        options.delayedPrivacyScan.spatialReads += 1;
-        if (options.delayedPrivacyScan.spatialReads >= 3) {
-          delayedPrivacyScanStatus = "COMPLETED";
-        }
-      }
       const reviewedTransform = options.reviewedTransform
         ? [{
           id: "66666666-6666-4666-8666-666666666666",
@@ -1215,56 +1118,6 @@ async function mockApprovedProject(
           : [],
         routes: [],
         routeStops: [],
-        privacyRegions: [],
-        privacyScans: delayedPrivacyScanStatus
-          ? [{
-            id: "60606060-6060-4060-8060-606060606060",
-            status: delayedPrivacyScanStatus,
-            detector: "fixture-detector",
-            detector_version: "fixture/1",
-            attempt_count: 1,
-            max_attempts: 3,
-            input_count: 1,
-            candidate_count: 0,
-            evidence_json: delayedPrivacyScanStatus === "COMPLETED" ? "{}" : null,
-            error_json: null,
-            created_at: now,
-            completed_at: delayedPrivacyScanStatus === "COMPLETED" ? now : null,
-          }]
-          : options.noviceLifecycle && noviceStage !== "structure"
-          ? [{
-            id: "60606060-6060-4060-8060-606060606060",
-            status: "COMPLETED",
-            detector: "fixture-detector",
-            detector_version: "fixture/1",
-            attempt_count: 1,
-            max_attempts: 3,
-            input_count: 1,
-            candidate_count: 1,
-            evidence_json: "{}",
-            error_json: null,
-            created_at: now,
-            completed_at: now,
-          }]
-          : [],
-        privacyCandidates: options.noviceLifecycle && noviceStage !== "structure"
-          ? [{
-            id: "61616161-6161-4161-8161-616161616161",
-            scan_id: "60606060-6060-4060-8060-606060606060",
-            asset_id: "57575757-5757-4575-8575-575757575757",
-            asset_file_name: "private-evidence.png",
-            asset_mime_type: "image/png",
-            target: "poster",
-            label: "Possible face",
-            bbox_json: JSON.stringify({ xMin: 0.2, yMin: 0.2, xMax: 0.4, yMax: 0.5 }),
-            confidence: 0.82,
-            detector_metadata_json: "{}",
-            status: novicePrivacyResolved ? "dismissed" : "pending",
-            decision_note: novicePrivacyResolved ? "Verified as a poster reflection." : null,
-            created_at: now,
-            reviewed_at: novicePrivacyResolved ? now : null,
-          }]
-          : [],
         changeReports: [],
         captureCompletenessReports: [],
         rawChangeReports: [],
@@ -1395,17 +1248,7 @@ async function mockApprovedProject(
             },
           ]
           : [],
-        walkTests: noviceWalkTestCompleted
-          ? [{
-            id: "73737373-7373-4373-8373-737373737373",
-            navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            start_pose_json: JSON.stringify({ position: [1, 1.6, 2], target: [1, 1.6, 1] }),
-            end_pose_json: JSON.stringify({ position: [2, 1.6, 2], target: [2, 1.6, 1] }),
-            runtime_evidence_json: JSON.stringify({ movementObserved: true }),
-            completed_by: "44444444-4444-4444-8444-444444444444",
-            completed_at: now,
-          }]
-          : [],
+        walkTests: [],
         navigationArtifact: null,
       });
     }

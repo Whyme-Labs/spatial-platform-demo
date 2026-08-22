@@ -32,8 +32,7 @@ Portable FJD / XGRIDS / open Gaussian export
   -> short-lived scene session
   -> range-capable R2 delivery
   -> collision and navigation runtime
-  -> queued automated privacy evidence
-  -> mandatory human privacy disposition
+  -> operator-recorded privacy and publication review
   -> client review / synchronized immutable-version comparison
   -> approval / hosting lifecycle
   -> telemetry / revoke / rollback
@@ -67,8 +66,8 @@ automatic preview lane without portable exports. A processed version can be open
 after its immutable visual-to-structure registration receipt, v7+ collision,
 JSON report, Detour binary, and navigation artifact pass exact-version
 verification. The authenticated preview carries the same complete runtime
-contract as a published release; public or customer URLs still require privacy
-review and an explicit release. QA, comparison, and publication repeat the
+contract as a published release; public or customer URLs still require the
+operator's recorded privacy review and an explicit release. QA, comparison, and publication repeat the
 registration check, and publication freezes the verified transform and receipt
 with the walking artifacts rather than trusting a separately entered visual
 transform.
@@ -199,9 +198,8 @@ Implemented:
   exact checksum verification, durable progress, retry, cancellation, and
   explicit lifecycle-authority exclusions
 - KV-backed resend suppression that never replaces authoritative D1 auth state
-- isolated Cloudflare Queues plus Workers AI Moondream privacy detection over
-  verified private evidence frames, with bounded retries, exact detector/input
-  evidence, human-only disposition, and QA blocking
+- isolated Cloudflare Queues for processing dispatch and portfolio copies, with
+  bounded retries and dead-letter routing
 - operator-authored floor/room/doorway comparison across immutable versions,
   with declared coordinate assurance, metric deviation evidence, an XZ overlay,
   persistent idempotency, and human review
@@ -420,7 +418,9 @@ Intentionally outside the current production boundary:
   and served, never produced
 - scanner-native live coverage guidance and licensed-device threshold
   validation
-- full-scene privacy coverage beyond the explicitly supplied evidence frames
+- any automated privacy detection: it was removed after running a vision model
+  over poster images only, which samples a 2D render rather than the scene.
+  Privacy review is the operator's, recorded as their confirmation at QA
 - licensed scanner-origin validation and full 6DoF/control-point registration;
   the deployed raw-scene lane can estimate bounded same-scale,
   gravity-aligned yaw and translation, but does not certify survey accuracy
