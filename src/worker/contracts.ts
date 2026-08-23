@@ -928,34 +928,6 @@ export const navigationBuildReviewSchema = z.object({
   ).max(2_000).optional(),
 });
 
-export const navigationWalkTestSchema = z.object({
-  clientOperationId: z.string().uuid(),
-  versionId: z.string().uuid(),
-  startPose: z.object({
-    position: point3Schema,
-    target: point3Schema,
-  }),
-  endPose: z.object({
-    position: point3Schema,
-    target: point3Schema,
-  }),
-  runtimeEvidence: z.object({
-    movementObserved: z.literal(true),
-    collisionFailureReported: z.literal(false),
-    traversalBlockReported: z.literal(false),
-  }).strict(),
-}).strict().superRefine((value, context) => {
-  if (value.startPose.position.every((coordinate, axis) =>
-    coordinate === value.endPose.position[axis]
-  )) {
-    context.addIssue({
-      code: "custom",
-      path: ["endPose", "position"],
-      message: "Complete the walk test after moving away from the chosen start position",
-    });
-  }
-});
-
 const frozenNavigationAssetSchema = <Format extends "json" | "bin">(format: Format) =>
   z.object({
     assetId: z.string().uuid(),
@@ -2073,6 +2045,15 @@ const floorplanKeySchema = z.string().trim()
 // Re-running the automatic structure lane over evidence already attached to a
 // version. It names no asset: the server resolves the version's own verified
 // metric point cloud, so a rebuild can never quietly point at other geometry.
+// One recorded decision covering every machine change on an approved revision.
+// The count is echoed back by the caller so a stale UI cannot ratify a number
+// the operator never saw, and the note is the operator's own reasoning.
+export const machineChangeRatificationSchema = z.object({
+  clientOperationId: z.string().uuid(),
+  acknowledgedChangeCount: z.number().int().min(1).max(100_000),
+  note: z.string().trim().min(10).max(2000),
+}).strict();
+
 export const structureRebuildSchema = z.object({
   clientOperationId: z.string().uuid(),
 }).strict();

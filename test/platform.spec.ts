@@ -3897,26 +3897,6 @@ describe("Spatial Studio Worker", () => {
       ),
     ]);
 
-    const walkTestResponse = await exports.default.fetch(
-      `${origin}/api/projects/${project.id}/spatial/navigation-builds/${navigationBuildId}/walk-tests`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({
-          clientOperationId: crypto.randomUUID(),
-          versionId: completed.asset.versionId,
-          startPose: { position: [0.5, 1.6, 0.5], target: [0.5, 1.6, 0] },
-          endPose: { position: [0.7, 1.6, 0.7], target: [0.7, 1.6, 0.2] },
-          runtimeEvidence: {
-            movementObserved: true,
-            collisionFailureReported: false,
-            traversalBlockReported: false,
-          },
-        }),
-      },
-    );
-    expect(walkTestResponse.status).toBe(201);
-
     const unsupportedFlyRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,
       {

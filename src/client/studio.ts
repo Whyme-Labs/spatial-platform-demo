@@ -940,6 +940,9 @@ type SpatialWorkspace = {
     review_note: string;
     capture_agreement_json?: string | null;
     trajectory_evidence_json?: string | null;
+    machine_change_ratified_at?: string | null;
+    machine_change_ratified_count?: number | null;
+    machine_change_ratified_plan_hash?: string | null;
     approved_at: string;
     created_at: string;
   }>;
@@ -1033,15 +1036,6 @@ type SpatialWorkspace = {
     reviewed_at: string | null;
     created_at: string;
     updated_at: string;
-  }>;
-  walkTests: Array<{
-    id: string;
-    navigation_build_id: string;
-    start_pose_json: string;
-    end_pose_json: string;
-    runtime_evidence_json: string;
-    completed_by: string;
-    completed_at: string;
   }>;
   releaseRepublishIntents: Array<{
     id: string;
@@ -8041,6 +8035,88 @@ async function submitSceneAuthoringCorrections(): Promise<void> {
   await loadSpatialWorkspace(workspace.projectId, workspace.versionId);
 }
 
+// Machine trajectory evidence can open or remove tens of structural elements —
+// 87 on the first production capture. Public exposure asks an operator to take
+// responsibility for that, and the only way to do so used to be editing each
+// element by hand and re-approving. This is the same attestation as one
+// recorded decision: it names the exact count, carries the operator's reasoning,
+// and binds to the revision's plan hash, so any recook invalidates it.
+function machineChangeCount(revision: { trajectory_evidence_json?: string | null }): number {
+  if (!revision.trajectory_evidence_json) return 0;
+  try {
+    const frozen = JSON.parse(revision.trajectory_evidence_json) as {
+      qualifiedOpenings?: unknown[];
+      demotedWalls?: unknown[];
+      walkedFloorDemotedWalls?: unknown[];
+    };
+    return (frozen.qualifiedOpenings?.length ?? 0) + (frozen.demotedWalls?.length ?? 0) +
+      (frozen.walkedFloorDemotedWalls?.length ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
+function machineChangeRatificationControls(
+  project: Project,
+  revision: SpatialWorkspace["floorplanRevisions"][number],
+): HTMLElement[] {
+  const count = machineChangeCount(revision);
+  if (!count) return [];
+  const ratified = Boolean(
+    revision.machine_change_ratified_at &&
+      revision.machine_change_ratified_plan_hash === revision.plan_hash,
+  );
+  if (ratified) {
+    return [element(
+      "small",
+      "generated-readback",
+      `${revision.machine_change_ratified_count ?? count} machine change(s) ratified ${
+        parseTimestamp(revision.machine_change_ratified_at!).toLocaleString()
+      }. This walking map may publish at any exposure.`,
+    )];
+  }
+  const note = element(
+    "small",
+    "field-note",
+    `Public or unlisted exposure needs one recorded decision covering these ${count} machine change(s). Token and customer-authenticated releases publish without it.`,
+  );
+  const ratify = element("button", "quiet-button wide", `Ratify ${count} machine change(s)`);
+  ratify.addEventListener("click", () => {
+    const reason = window.prompt(
+      `Record why you accept these ${count} machine change(s) (minimum 10 characters).`,
+      "Reviewed the trajectory-evidenced openings and clutter demotions against the captured scene.",
+    );
+    if (reason === null) return;
+    void runAction({
+      key: `ratify-machine-changes:${revision.id}`,
+      trigger: ratify,
+      pendingLabel: "Recording…",
+    }, () => ratifyMachineChanges(project.id, revision.id, count, reason));
+  });
+  return [note, ratify];
+}
+
+async function ratifyMachineChanges(
+  projectId: string,
+  revisionId: string,
+  acknowledgedChangeCount: number,
+  note: string,
+): Promise<void> {
+  await api(
+    `/api/projects/${projectId}/spatial/floorplan-revisions/${revisionId}/machine-change-ratifications`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        acknowledgedChangeCount,
+        note,
+      }),
+    },
+  );
+  showToast("Machine changes ratified");
+  await loadSpatialWorkspace(projectId);
+}
+
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
   const workflow = element("article", "workspace-card-large floorplan-workflow-card");
   workflow.append(
@@ -8239,6 +8315,7 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
       for (const line of wayfinderRevisionSummaryLines(revision)) {
         card.append(element("small", line.tone === "machine" ? "field-note" : "muted-copy", line.text));
       }
+      card.append(...machineChangeRatificationControls(project, revision));
     }
     const exportsForRevision = (spatial.floorplanExports ?? []).filter(
       (item) => item.revision_id === revision.id,

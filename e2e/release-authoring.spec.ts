@@ -896,18 +896,6 @@ async function mockApprovedProject(
       project.status = "APPROVED";
       return json(route, 200, { version: { id: versionId, status: "APPROVED" } });
     }
-    if (
-      options.noviceLifecycle && method === "POST" &&
-      path === `/api/projects/${projectId}/spatial/navigation-builds/dddddddd-dddd-4ddd-8ddd-dddddddddddd/walk-tests`
-    ) {
-      return json(route, 201, {
-        walkTest: {
-          id: "73737373-7373-4373-8373-737373737373",
-          navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-          completed_at: now,
-        },
-      });
-    }
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
         project,
@@ -1248,7 +1236,6 @@ async function mockApprovedProject(
             },
           ]
           : [],
-        walkTests: [],
         navigationArtifact: null,
       });
     }

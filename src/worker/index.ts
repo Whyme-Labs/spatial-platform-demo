@@ -59,7 +59,6 @@ import {
   navigationProfileSchema,
   navigationBuildSchema,
   navigationBuildReviewSchema,
-  navigationWalkTestSchema,
   navigationTraversalCreateSchema,
   navigationTraversalUpdateSchema,
   navigationArtifactSchema,
@@ -68,6 +67,7 @@ import {
   semanticExtractionSchema,
   semanticExtractionReviewSchema,
   floorplanExtractionSchema,
+  machineChangeRatificationSchema,
   structureRebuildSchema,
   floorplanExtractionReviewSchema,
   floorplanCorrectionDraftSchema,
@@ -7233,7 +7233,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals: [],
     traversalEvidenceOptions: [],
     navigationBuilds: [],
-    walkTests: [],
     releaseRepublishIntents: [],
     navigationArtifact: null,
     deliveryPolicy: null,
@@ -7377,13 +7376,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE i.project_id = ? AND i.version_id = ? AND i.organisation_id = ?
       ORDER BY i.created_at DESC
     `).bind(access.project.id, version.id, access.auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT id, navigation_build_id, start_pose_json, end_pose_json,
-        runtime_evidence_json, completed_by, completed_at
-      FROM scene_navigation_walk_tests
-      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
-      ORDER BY completed_at DESC
-    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
   const navigationObstacles = requiredBatchResult(results, 12).results;
@@ -7436,7 +7428,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     traversalEvidenceOptions,
     navigationBuilds,
     releaseRepublishIntents: requiredBatchResult(results, 17).results,
-    walkTests: requiredBatchResult(results, 18).results,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
@@ -9303,91 +9294,6 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   return context.json({ build, republishIntent });
 });
 
-app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/walk-tests", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = navigationWalkTestSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const projectId = context.req.param("projectId");
-  const buildId = context.req.param("buildId");
-  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
-  const prior = await context.env.DB.prepare(`
-    SELECT id, navigation_build_id, request_hash, completed_at
-    FROM scene_navigation_walk_tests
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
-    id: string;
-    navigation_build_id: string;
-    request_hash: string;
-    completed_at: string;
-  }>();
-  if (prior) {
-    if (prior.navigation_build_id !== buildId || prior.request_hash !== requestHash) {
-      return conflict(context, "Operation ID was already used for a different walk-test receipt");
-    }
-    return context.json({ walkTest: prior, idempotent: true });
-  }
-  const build = await context.env.DB.prepare(`
-    SELECT id, version_id, status, artifact_json
-    FROM scene_navigation_builds
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-  `).bind(buildId, projectId, auth.organisationId).first<{
-    id: string;
-    version_id: string;
-    status: string;
-    artifact_json: string | null;
-  }>();
-  if (!build) return notFound(context, "Navigation build not found");
-  if (
-    build.status !== "APPROVED" || !build.artifact_json ||
-    build.version_id !== parsed.data.versionId
-  ) {
-    return conflict(
-      context,
-      "Walk-test completion requires the approved walking map for this exact immutable scene version",
-    );
-  }
-  const walkTestId = crypto.randomUUID();
-  await context.env.DB.prepare(`
-    INSERT INTO scene_navigation_walk_tests (
-      id, organisation_id, project_id, version_id, navigation_build_id,
-      client_operation_id, request_hash, start_pose_json, end_pose_json,
-      runtime_evidence_json, completed_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    walkTestId,
-    auth.organisationId,
-    projectId,
-    build.version_id,
-    build.id,
-    parsed.data.clientOperationId,
-    requestHash,
-    JSON.stringify(parsed.data.startPose),
-    JSON.stringify(parsed.data.endPose),
-    JSON.stringify(parsed.data.runtimeEvidence),
-    auth.userId,
-  ).run();
-  await audit(context, auth, "spatial.navigation_walk_test.complete", "scene_navigation_walk_test", walkTestId, {
-    navigationBuildId: build.id,
-    versionId: build.version_id,
-    runtimeEvidence: parsed.data.runtimeEvidence,
-  });
-  const republishIntent = await completeReleaseRepublishIntent(
-    context.env,
-    build.id,
-    context.get("requestId"),
-  );
-  return context.json({
-    walkTest: {
-      id: walkTestId,
-      navigation_build_id: build.id,
-      completed_at: new Date().toISOString(),
-    },
-    republishIntent,
-  }, 201);
-});
-
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
@@ -9851,6 +9757,111 @@ app.post("/api/projects/:projectId/spatial/semantic-extractions/:extractionId/re
 // wasteful and refused outright when the version carries a paired-capture
 // journey, so the operator can instead re-run that exact lane over the
 // evidence already on the version.
+app.post(
+  "/api/projects/:projectId/spatial/floorplan-revisions/:revisionId/machine-change-ratifications",
+  async (context) => {
+    const auth = await requireOperator(context);
+    if (auth instanceof Response) return auth;
+    if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
+    const parsed = machineChangeRatificationSchema.safeParse(await readJson(context));
+    if (!parsed.success) return validationError(context, parsed.error.flatten());
+    const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
+    if (!project) return notFound(context, "Project not found");
+    const revision = await context.env.DB.prepare(`
+      SELECT id, plan_hash, status, trajectory_evidence_json,
+        machine_change_ratified_at, machine_change_ratified_plan_hash
+      FROM floorplan_revisions
+      WHERE id = ? AND project_id = ? AND organisation_id = ?
+    `).bind(context.req.param("revisionId"), project.id, auth.organisationId)
+      .first<{
+        id: string;
+        plan_hash: string | null;
+        status: string;
+        trajectory_evidence_json: string | null;
+        machine_change_ratified_at: string | null;
+        machine_change_ratified_plan_hash: string | null;
+      }>();
+    if (!revision) return notFound(context, "Floor-plan revision not found");
+    // Only the live map can be ratified: attesting to a superseded revision
+    // would leave a receipt that never governs anything.
+    if (revision.status !== "approved") {
+      return conflict(context, "Only the current approved floor-plan revision can be ratified");
+    }
+    if (!revision.plan_hash) {
+      return conflict(context, "This revision has no frozen plan hash to bind a ratification to");
+    }
+    const frozen = parseFrozenTrajectoryAutoOpen(revision.trajectory_evidence_json);
+    if (frozen === null) {
+      return conflict(
+        context,
+        "This revision's trajectory evidence is unreadable, so its machine changes cannot be ratified",
+      );
+    }
+    const changeCount = frozen === undefined
+      ? 0
+      : frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0) +
+        (frozen.walkedFloorDemotedWalls?.length ?? 0);
+    if (changeCount === 0) {
+      return conflict(context, "This revision has no machine changes to ratify");
+    }
+    // The operator ratifies the number they were shown. A stale workspace that
+    // reports fewer changes than the revision actually froze must fail rather
+    // than quietly attest to work nobody saw.
+    if (parsed.data.acknowledgedChangeCount !== changeCount) {
+      return conflict(
+        context,
+        `This revision froze ${changeCount} machine change(s); the ratification acknowledged ` +
+          `${parsed.data.acknowledgedChangeCount}. Refresh the workspace and ratify the current count.`,
+      );
+    }
+    const alreadyRatified = revision.machine_change_ratified_at &&
+      revision.machine_change_ratified_plan_hash === revision.plan_hash;
+    if (alreadyRatified) {
+      return context.json({
+        ratification: {
+          revisionId: revision.id,
+          ratifiedAt: revision.machine_change_ratified_at,
+          changeCount,
+        },
+        idempotent: true,
+      });
+    }
+    const ratifiedAt = new Date().toISOString();
+    await context.env.DB.prepare(`
+      UPDATE floorplan_revisions
+      SET machine_change_ratified_at = ?, machine_change_ratified_by = ?,
+        machine_change_ratified_count = ?, machine_change_ratification_note = ?,
+        machine_change_ratified_plan_hash = ?
+      WHERE id = ? AND project_id = ? AND organisation_id = ?
+    `).bind(
+      ratifiedAt,
+      auth.userId,
+      changeCount,
+      parsed.data.note,
+      revision.plan_hash,
+      revision.id,
+      project.id,
+      auth.organisationId,
+    ).run();
+    await audit(
+      context,
+      auth,
+      "spatial.floorplan_revision.machine_changes_ratified",
+      "floorplan_revision",
+      revision.id,
+      {
+        projectId: project.id,
+        changeCount,
+        planHash: revision.plan_hash,
+        clientOperationId: parsed.data.clientOperationId,
+      },
+    );
+    return context.json({
+      ratification: { revisionId: revision.id, ratifiedAt, changeCount },
+    }, 201);
+  },
+);
+
 app.post("/api/projects/:projectId/spatial/versions/:versionId/structure-rebuilds", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
@@ -16171,27 +16182,28 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   // classify the auto-opened openings (Mark doorway) and re-approve, which
   // re-cooks the map as operator-attested and clears this gate naturally.
   if (parsed.data.accessPolicy === "public" || parsed.data.accessPolicy === "unlisted") {
-    const machineOpened = await trajectoryAutoOpenedOpeningCount(
+    const machineChanges = await approvedMachineChangeState(
       context.env.DB,
       auth.organisationId,
       project.id,
       approved.id,
     );
-    if (machineOpened === null) {
+    if (machineChanges === null) {
       return conflict(
         context,
         "Publication blocked: the approved walking map's trajectory auto-open evidence is unreadable. Re-review the floor plan to freeze a valid revision before public exposure.",
       );
     }
-    if (machineOpened > 0) {
+    if (machineChanges.count > 0 && !machineChanges.ratified) {
       return unprocessable(context, {
         accessPolicy: [
-          `Public exposure requires operator-ratified structure: ${machineOpened} ` +
+          `Public exposure requires operator-ratified structure: ${machineChanges.count} ` +
           `structural element(s) in the approved walking map were opened or removed ` +
-          `by machine trajectory evidence. Publish with token or ` +
-          `customer-authenticated access, or open a structure correction draft, ` +
-          `ratify the machine changes (mark doorways, remove clutter walls), and ` +
-          `re-approve to make the walking map operator-attested.`,
+          `by machine trajectory evidence. Ratify them on the approved revision — ` +
+          `one recorded decision covering all ${machineChanges.count} — or publish with ` +
+          `token or customer-authenticated access. Editing the structure and ` +
+          `re-approving also clears this, because the recooked map is then ` +
+          `operator-attested.`,
         ],
       });
     }
@@ -22484,24 +22496,42 @@ async function measurementPolicyBlockReason(
 // (or no walking map / feature off). null = a frozen blob exists but is
 // unreadable — callers must FAIL CLOSED. Reads the same latest-approved
 // revision the navigation authoring receipt is built from.
-async function trajectoryAutoOpenedOpeningCount(
+// Machine changes on the approved walking map, and whether an operator has
+// taken responsibility for them on this exact revision. Ratification is bound
+// to the frozen plan hash: re-cooking the map produces a new hash, the old
+// attestation stops matching, and the operator has to look again.
+async function approvedMachineChangeState(
   database: D1Database,
   organisationId: string,
   projectId: string,
   versionId: string,
-): Promise<number | null> {
+): Promise<{ count: number; ratified: boolean } | null> {
   const revision = await database.prepare(`
-    SELECT trajectory_evidence_json FROM floorplan_revisions
+    SELECT trajectory_evidence_json, plan_hash,
+      machine_change_ratified_at, machine_change_ratified_plan_hash
+    FROM floorplan_revisions
     WHERE organisation_id = ? AND project_id = ? AND version_id = ?
       AND status = 'approved'
     ORDER BY revision_number DESC, created_at DESC LIMIT 1
   `).bind(organisationId, projectId, versionId)
-    .first<{ trajectory_evidence_json: string | null }>();
+    .first<{
+      trajectory_evidence_json: string | null;
+      plan_hash: string | null;
+      machine_change_ratified_at: string | null;
+      machine_change_ratified_plan_hash: string | null;
+    }>();
   const frozen = parseFrozenTrajectoryAutoOpen(revision?.trajectory_evidence_json ?? null);
-  if (frozen === undefined) return 0;
+  if (frozen === undefined) return { count: 0, ratified: false };
   if (frozen === null) return null;
-  return frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0) +
+  const count = frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0) +
     (frozen.walkedFloorDemotedWalls?.length ?? 0);
+  const ratified = Boolean(
+    revision?.machine_change_ratified_at &&
+      revision.machine_change_ratified_plan_hash &&
+      revision.plan_hash &&
+      revision.machine_change_ratified_plan_hash === revision.plan_hash,
+  );
+  return { count, ratified };
 }
 
 async function sceneVersionUsesOperatorAttestation(

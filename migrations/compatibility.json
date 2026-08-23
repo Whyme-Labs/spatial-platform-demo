@@ -238,6 +238,18 @@
       "expandMigration": "0014_privacy_detection.sql",
       "oldestCompatibleAppRevision": "c2c6a6cd2a4bc0b98713813ba15507c54e683f83",
       "note": "Automated privacy detection removed: the Worker no longer references these tables, the AI binding and privacy scan queue are gone, and privacy review is recorded by the operator on the QA form. Production held 14 scan rows and 14 input rows with zero candidates and zero regions; the audit_events trail for those scans is unaffected."
+    },
+    "0067_drop_navigation_walk_tests.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_table scene_navigation_walk_tests"
+      ],
+      "expandMigration": "0056_navigation_walk_tests.sql",
+      "oldestCompatibleAppRevision": "c34608c878fd5339ca3e1367aeed5c2c2909155a",
+      "note": "The walk-test publication gate and its recording control were removed; no application revision from the pinned one onward reads or writes this table."
+    },
+    "0068_machine_change_ratification.sql": {
+      "phase": "expand"
     }
   }
 }

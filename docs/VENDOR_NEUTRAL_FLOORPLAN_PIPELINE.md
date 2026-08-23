@@ -178,10 +178,25 @@ Publishing a version whose latest approved revision froze one or more
 qualified openings is refused for `public` and `unlisted` access policies
 with a message naming the count and the ratification path; `token` and
 `customer-authenticated` releases pass. An unreadable frozen blob fails
-closed for public exposure. Ratification needs no new mechanism: open a
-structure correction draft, classify the auto-opened openings as doorways,
-and re-approve — the recook is operator-attested, the new revision freezes
-no machine qualification, and the gate clears.
+closed for public exposure.
+
+Ratification is one recorded decision covering every machine change on the
+approved revision
+(`POST .../floorplan-revisions/:revisionId/machine-change-ratifications`). The
+caller echoes the count it displayed, so a stale workspace cannot attest to
+work nobody saw, and the operator's note is stored with it. The attestation
+binds to the revision's frozen `plan_hash`: any recook produces a new hash, the
+ratification stops matching, and the gate closes again until an operator looks
+at the new map. Editing the structure and re-approving still clears the gate
+the original way, because the recooked map is operator-attested by
+construction.
+
+This replaced per-element ratification. That worked while machine evidence
+touched a handful of openings the operator could reclassify as doorways; with
+walked-floor clutter demotion a single capture froze 87 changes, and hand
+editing 87 elements to say "I accept these" is not review — it is attrition
+that pushes operators to token-only publication for reasons unrelated to the
+scene.
 
 ### Studio surfacing (issue #35)
 

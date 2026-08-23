@@ -78,7 +78,11 @@ function frozenAutoOpenBlob(): string {
 
 async function seedApprovedVersion(cookie: string, trajectoryEvidenceJson: string | null): Promise<{
   projectId: string;
+  revisionId: string;
+  planHash: string;
 }> {
+  const revisionId = crypto.randomUUID();
+  const planHash = "c".repeat(64);
   const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
@@ -167,18 +171,18 @@ async function seedApprovedVersion(cookie: string, trajectoryEvidenceJson: strin
           review_note, created_by, trajectory_evidence_json)
       VALUES (?, ?, ?, ?, ?, 1, '{}', ?, ?, 'Exposure gate fixture.', ?, ?)
     `).bind(
-      crypto.randomUUID(),
+      revisionId,
       stored!.organisation_id,
       project.id,
       versionId,
       extractionId,
-      "c".repeat(64),
+      planHash,
       "a".repeat(64),
       stored!.created_by,
       trajectoryEvidenceJson,
     ),
   ]);
-  return { projectId: project.id };
+  return { projectId: project.id, revisionId, planHash };
 }
 
 function publish(cookie: string, projectId: string, accessPolicy: string) {
@@ -256,5 +260,91 @@ describe("wayfinder exposure gate", () => {
     const attempt = await publish(cookie, seeded.projectId, "public");
     const body = JSON.stringify(await attempt.json());
     expect(body).not.toContain("machine trajectory evidence");
+  }, 120_000);
+});
+
+// Machine trajectory evidence routinely changes tens of structural elements, so
+// the gate has to be clearable by a decision an operator can actually make. One
+// recorded ratification stands for all of them; it is bound to the revision's
+// plan hash so a recook forces a fresh look.
+describe("machine-change ratification", () => {
+  function ratify(
+    cookie: string,
+    projectId: string,
+    revisionId: string,
+    body: Record<string, unknown>,
+  ) {
+    return exports.default.fetch(
+      `${origin}/api/projects/${projectId}/spatial/floorplan-revisions/${revisionId}/machine-change-ratifications`,
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ clientOperationId: crypto.randomUUID(), ...body }),
+      },
+    );
+  }
+
+  it("clears public exposure once the machine changes are ratified", async () => {
+    const cookie = await login();
+    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
+
+    const refused = await publish(cookie, seeded.projectId, "public");
+    expect(refused.status).toBe(422);
+
+    const accepted = await ratify(cookie, seeded.projectId, seeded.revisionId, {
+      acknowledgedChangeCount: 1,
+      note: "Reviewed the trajectory-evidenced opening against the captured scene.",
+    });
+    expect(accepted.status).toBe(201);
+
+    // The machine-attestation refusal is gone. Deeper walkable-evidence gates
+    // still apply, so this fixture stops there instead of publishing.
+    const afterRatification = await publish(cookie, seeded.projectId, "public");
+    const body = JSON.stringify(await afterRatification.json());
+    expect(body).not.toContain("machine trajectory evidence");
+  }, 120_000);
+
+  it("refuses a ratification that acknowledges the wrong count", async () => {
+    const cookie = await login();
+    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
+    const refused = await ratify(cookie, seeded.projectId, seeded.revisionId, {
+      acknowledgedChangeCount: 99,
+      note: "A stale workspace must never attest to work nobody saw.",
+    });
+    expect(refused.status).toBe(409);
+    const stillBlocked = await publish(cookie, seeded.projectId, "public");
+    expect(stillBlocked.status).toBe(422);
+  }, 120_000);
+
+  it("stops covering the map once the plan is recooked", async () => {
+    const cookie = await login();
+    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
+    expect((await ratify(cookie, seeded.projectId, seeded.revisionId, {
+      acknowledgedChangeCount: 1,
+      note: "Reviewed the trajectory-evidenced opening against the captured scene.",
+    })).status).toBe(201);
+
+    // A recook freezes a new plan hash; the old attestation no longer describes
+    // the map being published.
+    await env.DB.prepare("UPDATE floorplan_revisions SET plan_hash = ? WHERE id = ?")
+      .bind("d".repeat(64), seeded.revisionId).run();
+
+    const refused = await publish(cookie, seeded.projectId, "public");
+    expect(refused.status).toBe(422);
+    await expect(refused.json()).resolves.toMatchObject({
+      details: {
+        accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
+      },
+    });
+  }, 120_000);
+
+  it("refuses to ratify a revision with no machine changes", async () => {
+    const cookie = await login();
+    const seeded = await seedApprovedVersion(cookie, null);
+    const refused = await ratify(cookie, seeded.projectId, seeded.revisionId, {
+      acknowledgedChangeCount: 1,
+      note: "There is nothing here for an operator to take responsibility for.",
+    });
+    expect(refused.status).toBe(409);
   }, 120_000);
 });
