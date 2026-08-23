@@ -1268,29 +1268,25 @@ app.post("/api/auth/otp/verify", async (context) => {
     : null;
   auth ??= await memberForEmail(context.env.DB, email);
   if (!auth) {
-    // Organisation invitations are never accepted silently: under self-serve
-    // signup any workspace admin can invite an arbitrary email, so a silent
-    // first-login join would let an attacker capture a new account into their
-    // organisation. Every sign-in without an active membership provisions the
-    // account's OWN workspace; invitations stay pending and are answered
-    // through the explicit accept/decline endpoints.
-    const managed = await context.env.DB.prepare(`
-      SELECT 1 AS locked FROM users u
-      JOIN memberships m ON m.user_id = u.id
-      WHERE lower(u.email) = ? AND (m.revoked_at IS NOT NULL OR m.status != 'invited')
-      LIMIT 1
-    `).bind(email).first<{ locked: number }>();
-    if (managed) {
-      // A user whose membership was revoked, declined, or lapsed stays locked
-      // out: sign-up provisions new accounts and must not undo an
-      // administrator's revocation. A purely pending invitee is not locked —
-      // they get their own workspace and answer the invitation explicitly.
+    // Access is administrator-granted: an account exists because an
+    // administrator invited it, never because someone proved they own an
+    // inbox. Self-serve signup used to provision a personal workspace here,
+    // which quietly contradicted that and let anyone who could receive a code
+    // run processing jobs on this infrastructure.
+    //
+    // A pending invitation IS the administrator's grant, so first sign-in
+    // activates it rather than leaving the invitee stranded with no
+    // organisation to sign in to. Every other unknown email is refused and
+    // told who can let them in.
+    auth = await activatePendingOrganisationInvitation(context.env, email);
+    if (!auth) {
       await authSecurityEvent(context, "otp.no_membership", await sha256Hex(email), null, null);
-      return unauthorized(context, "This account is not authorised");
+      return unauthorized(
+        context,
+        "This email has no Spatial Studio access. Ask a workspace administrator to invite you, then sign in again.",
+      );
     }
-    auth = await provisionSelfServeWorkspace(context.env, email);
-    await audit(context, auth, "auth.signup", "organisation", auth.organisationId);
-    await authSecurityEvent(context, "auth.signup", await sha256Hex(email), auth.userId, null);
+    await audit(context, auth, "team.invitation_accept", "organisation", auth.organisationId);
   }
   await acceptPendingProjectInvitations(context.env.DB, auth);
   const tokens = await createAuthSession(context.env, auth, context.req.raw);
@@ -20617,37 +20613,38 @@ async function provisionAdministrator(env: Env, email: string): Promise<AuthCont
 // re-select lands both on one user row, and the org/membership batch guards
 // on the user having no ACTIVE membership yet — the loser's batch no-ops
 // atomically and the final re-select returns the winner's workspace.
-async function provisionSelfServeWorkspace(env: Env, email: string): Promise<AuthContext> {
-  const displayName = email.split("@")[0] || "Member";
-  await env.DB.prepare(
-    "INSERT INTO users (id, email, display_name) VALUES (?, ?, ?) ON CONFLICT(email) DO NOTHING",
-  ).bind(crypto.randomUUID(), email, displayName).run();
-  const user = await env.DB.prepare(
-    "SELECT id FROM users WHERE lower(email) = ? LIMIT 1",
-  ).bind(email).first<{ id: string }>();
-  if (!user) throw new Error("Self-serve user provisioning did not persist a user row");
-  const organisationId = crypto.randomUUID();
-  const workspaceName = `${displayName} workspace`;
+// Turns an administrator's pending invitation into an active membership on the
+// invitee's first verified sign-in, and returns the session they sign in with.
+// Returns null when nothing invited this email, which is the refusal path.
+async function activatePendingOrganisationInvitation(
+  env: Env,
+  email: string,
+): Promise<AuthContext | null> {
+  const now = new Date().toISOString();
+  const invitation = await env.DB.prepare(`
+    SELECT oi.id, oi.organisation_id AS organisationId, u.id AS userId
+    FROM organisation_invitations oi
+    JOIN users u ON lower(u.email) = lower(oi.email)
+    JOIN memberships m ON m.organisation_id = oi.organisation_id AND m.user_id = u.id
+    WHERE lower(oi.email) = ? AND oi.status = 'pending' AND oi.expires_at > ?
+      AND m.status = 'invited' AND m.revoked_at IS NULL
+    ORDER BY oi.invited_at ASC
+    LIMIT 1
+  `).bind(email, now).first<{ id: string; organisationId: string; userId: string }>();
+  if (!invitation) return null;
   await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO organisations (id, name, slug)
-       SELECT ?, ?, ?
-       WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = ? AND status = 'active')`,
-    ).bind(
-      organisationId,
-      workspaceName,
-      `${slugify(workspaceName)}-${organisationId.slice(0, 8)}`,
-      user.id,
-    ),
-    env.DB.prepare(
-      `INSERT INTO memberships (organisation_id, user_id, role, updated_at, revoked_at, status)
-       SELECT ?, ?, 'platform_admin', datetime('now'), NULL, 'active'
-       WHERE EXISTS (SELECT 1 FROM organisations WHERE id = ?)`,
-    ).bind(organisationId, user.id, organisationId),
+    env.DB.prepare(`
+      UPDATE memberships
+      SET status = 'active', updated_at = datetime('now'), revoked_at = NULL
+      WHERE organisation_id = ? AND user_id = ? AND status = 'invited'
+    `).bind(invitation.organisationId, invitation.userId),
+    env.DB.prepare(`
+      UPDATE organisation_invitations
+      SET status = 'accepted', accepted_by = ?, accepted_at = datetime('now')
+      WHERE id = ? AND status = 'pending' AND expires_at > ?
+    `).bind(invitation.userId, invitation.id, now),
   ]);
-  const auth = await memberForEmail(env.DB, email);
-  if (!auth) throw new Error("Self-serve workspace provisioning did not persist a membership");
-  return auth;
+  return memberForEmail(env.DB, email);
 }
 
 async function memberForEmail(database: D1Database, email: string): Promise<AuthContext | null> {

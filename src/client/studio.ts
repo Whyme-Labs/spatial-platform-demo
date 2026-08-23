@@ -2687,7 +2687,10 @@ async function requestSignInCode(email: string): Promise<void> {
   byId<HTMLButtonElement>("changeLoginEmail").hidden = false;
   byId<HTMLButtonElement>("resendLoginCode").hidden = false;
   byId("enterpriseLoginRegion").hidden = true;
-  byId("loginInstructions").textContent = `A code was sent if ${email} is authorised. It expires in ${Math.ceil(challenge.expiresInSeconds / 60)} minutes.`;
+  byId("loginInstructions").textContent =
+    `A code was sent if ${email} has been invited. It expires in ${
+      Math.ceil(challenge.expiresInSeconds / 60)
+    } minutes. If nothing arrives, ask a workspace administrator to invite this address.`;
   startOtpCooldown(challenge.retryAfterSeconds);
   byId<HTMLInputElement>("loginCode").focus();
 }
@@ -2707,7 +2710,8 @@ function resetLogin(): void {
   byId("enterpriseLoginRegion").hidden = false;
   byId("enterpriseProviderChoices").replaceChildren();
   byId("loginSubmit").textContent = "Email me a code";
-  byId("loginInstructions").innerHTML = "Enter your authorised email. We will send a one-time code from <strong>login@whymelabs.com</strong>.";
+  byId("loginInstructions").innerHTML =
+    "Spatial Studio is invite-only. Enter the email an administrator added, and we will send a one-time code from <strong>login@whymelabs.com</strong>. No access yet? Ask a workspace administrator to invite you.";
   byId("loginError").textContent = "";
   resetTurnstile("Complete the security check to request a code.");
   updateEnterpriseLoginAvailability();
