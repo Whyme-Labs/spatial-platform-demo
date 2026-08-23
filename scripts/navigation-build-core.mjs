@@ -928,25 +928,40 @@ function ensureInitialized() {
   return initialization;
 }
 
+// Recast erodes by a WHOLE number of voxels, so a cell size that does not
+// divide the agent radius rounds the erosion UP: at cs 0.1 a 0.25 m agent is
+// eroded 0.30 m and the walking map ends up stricter than the capsule it
+// exists to serve, closing aisles the walker physically fits through.
+//
+// Refining the cell to divide the radius exactly fixes that, but every other
+// Recast parameter here is ALSO denominated in voxels, so refining the cell
+// silently shrinks all of them in metres — tiles, edge length, and especially
+// the region-merge threshold, which stops merging small stair-tread regions
+// and splits a multi-level scene into unreachable components. Convert them by
+// the same factor so only the erosion changes and every other parameter keeps
+// the physical size the caller asked for.
 function recastConfigFor(agent, build) {
   const walkableRadius = Math.ceil(agent.radius / build.cellSize);
+  const cellSize = agent.radius / walkableRadius;
+  const voxelScale = build.cellSize / cellSize;
+  const perMetre = (voxels) => Math.max(1, Math.round(voxels * voxelScale));
   const minimumRegionSize = build.minimumRegionSizeVoxels ?? 8;
   const mergeRegionSize = build.mergeRegionSizeVoxels ?? 20;
   return {
-    cs: build.cellSize,
+    cs: cellSize,
     ch: build.cellHeight,
-    tileSize: build.tileSize,
+    tileSize: perMetre(build.tileSize),
     // Tiled Recast requires radius padding around every tile; zero creates
     // false seams and is especially destructive at narrow doorways.
-    borderSize: walkableRadius + 3,
+    borderSize: walkableRadius + perMetre(3),
     walkableSlopeAngle: agent.maxSlopeDegrees,
     walkableHeight: Math.ceil(agent.height / build.cellHeight),
     walkableClimb: Math.floor(agent.maxClimb / build.cellHeight),
     walkableRadius,
-    maxEdgeLen: build.maxEdgeLengthVoxels ?? 12,
+    maxEdgeLen: perMetre(build.maxEdgeLengthVoxels ?? 12),
     maxSimplificationError: build.maxSimplificationError ?? 1.3,
-    minRegionArea: minimumRegionSize * minimumRegionSize,
-    mergeRegionArea: mergeRegionSize * mergeRegionSize,
+    minRegionArea: Math.max(1, Math.round(minimumRegionSize * minimumRegionSize * voxelScale * voxelScale)),
+    mergeRegionArea: Math.max(1, Math.round(mergeRegionSize * mergeRegionSize * voxelScale * voxelScale)),
     maxVertsPerPoly: 6,
     detailSampleDist: 6,
     detailSampleMaxError: 1,
