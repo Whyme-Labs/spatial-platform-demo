@@ -18,13 +18,15 @@
       <nav class="studio-nav" aria-label="Studio">
         <button class="nav-item active" data-section="projects">Projects</button>
         <button class="nav-item" data-section="releases">Published previews</button>
+        <!-- Inviting is now the only way anyone gets access, so team management
+             is a primary destination rather than an advanced tool. -->
+        <button class="nav-item" data-section="team" hidden>Team access</button>
         <details class="studio-nav-advanced">
           <summary>Advanced tools</summary>
           <div>
             <button class="nav-item" data-section="jobs">Processing activity</button>
             <button class="nav-item" data-section="reviews">Client review</button>
             <button class="nav-item" data-section="hosting">Hosting & lifecycle</button>
-            <button class="nav-item" data-section="team" hidden>Team access</button>
           </div>
         </details>
       </nav>
