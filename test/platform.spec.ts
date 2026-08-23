@@ -1173,48 +1173,12 @@ describe("Spatial Studio Worker", () => {
       status: "pending",
     });
 
-    // First sign-in provisions the invitee's own workspace; the organisation
-    // invitation is never accepted silently and must be answered explicitly.
+    // Access is administrator-granted, so the invitation IS the grant: first
+    // sign-in activates it and the invitee lands in the inviting organisation
+    // with the role they were given. A production_operator cannot read the
+    // team roster, which is what proves the role came across intact.
     const teammate = await loginSession(teammateEmail);
-    const ownWorkspaceTeam = await exports.default.fetch(`${origin}/api/team`, {
-      headers: { cookie: teammate.accessCookie },
-    });
-    expect(ownWorkspaceTeam.status).toBe(200);
-    const ownTeam = await ownWorkspaceTeam.json<{ members: Array<Record<string, unknown>> }>();
-    expect(ownTeam.members).toHaveLength(1);
-    expect(ownTeam.members[0]).toMatchObject({ email: teammateEmail, role: "platform_admin" });
-    const beforeAcceptTeam = await exports.default.fetch(`${origin}/api/team`, {
-      headers: { cookie: administrator.accessCookie },
-    });
-    const beforeAccept = await beforeAcceptTeam.json<{
-      members: Array<Record<string, unknown>>;
-    }>();
-    expect(beforeAccept.members.find((member) => member.userId === invitation.invitation.userId)).toMatchObject({
-      status: "invited",
-    });
-
-    const acceptResponse = await exports.default.fetch(
-      `${origin}/api/team/invitations/${invitation.invitation.id}/accept`,
-      {
-        method: "POST",
-        headers: { cookie: teammate.accessCookie, origin },
-      },
-    );
-    expect(acceptResponse.status).toBe(200);
-
-    // Working inside the inviting organisation requires an explicit switch.
-    const memberSwitch = await exports.default.fetch(`${origin}/api/auth/organisations/switch`, {
-      method: "POST",
-      headers: {
-        cookie: teammate.accessCookie,
-        "content-type": "application/json",
-        origin,
-      },
-      body: JSON.stringify({ organisationId: "00000000-0000-4000-8000-000000000001" }),
-    });
-    expect(memberSwitch.status).toBe(200);
-    const memberAccess = (memberSwitch.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
-    const memberCookie = `spatial_access=${memberAccess}`;
+    const memberCookie = teammate.accessCookie;
     const operatorTeamAttempt = await exports.default.fetch(`${origin}/api/team`, {
       headers: { cookie: memberCookie },
     });
@@ -1293,12 +1257,10 @@ describe("Spatial Studio Worker", () => {
       headers: { cookie: promotedAdminCookie },
     });
     expect(revokedAccess.status).toBe(401);
-    // Organisation revocation removes that membership, not the platform
-    // account: the teammate keeps their personal workspace.
-    const revokedSignin = await verifyOtp(teammateEmail);
-    expect(revokedSignin.status).toBe(200);
-    const revokedBody = await revokedSignin.json<{ user: { organisationId: string } }>();
-    expect(revokedBody.user.organisationId).not.toBe("00000000-0000-4000-8000-000000000001");
+    // Revocation removes the only access this account had: there is no
+    // personal workspace to fall back on, and signing in again must not
+    // manufacture one behind the administrator's decision.
+    expect((await verifyOtp(teammateEmail)).status).toBe(401);
 
     const reinvite = await exports.default.fetch(`${origin}/api/team/invitations`, {
       method: "POST",
@@ -1314,7 +1276,13 @@ describe("Spatial Studio Worker", () => {
       }),
     });
     expect(reinvite.status).toBe(201);
-    expect((await verifyOtp(teammateEmail)).status).toBe(200);
+    // Re-inviting is how an administrator restores access, and the fresh
+    // invitation activates on the next sign-in.
+    const restored = await verifyOtp(teammateEmail);
+    expect(restored.status).toBe(200);
+    const restoredBody = await restored.json<{ user: { organisationId: string; role: string } }>();
+    expect(restoredBody.user.organisationId).toBe("00000000-0000-4000-8000-000000000001");
+    expect(restoredBody.user.role).toBe("production_operator");
 
     const selfRevoke = await exports.default.fetch(
       `${origin}/api/team/members/00000000-0000-4000-8000-000000000002`,
@@ -1358,128 +1326,93 @@ describe("Spatial Studio Worker", () => {
     expect((await verifyOtp(expiringEmail)).status).toBe(401);
   });
 
-  it("provisions a personal workspace on first OTP sign-in and reuses it after", async () => {
-    const email = `signup-${crypto.randomUUID().slice(0, 8)}@example.com`;
-    const first = await verifyOtp(email);
-    expect(first.status).toBe(200);
-    const access = (first.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
-    expect(access).toBeTruthy();
-    const firstBody = await first.json<{
-      user: { userId: string; organisationId: string; role: string };
-    }>();
-    expect(firstBody.user.role).toBe("platform_admin");
-    const workspace = await env.DB.prepare(`
-      SELECT m.role, m.status, o.name FROM memberships m
-      JOIN organisations o ON o.id = m.organisation_id
-      WHERE m.organisation_id = ? AND m.user_id = ?
-    `).bind(firstBody.user.organisationId, firstBody.user.userId).first<{
-      role: string;
-      status: string;
-      name: string;
-    }>();
-    expect(workspace).toMatchObject({ role: "platform_admin", status: "active" });
-    const projects = await exports.default.fetch(`${origin}/api/projects`, {
-      headers: { cookie: `spatial_access=${access}` },
+  // Access is administrator-granted. Self-serve signup used to provision a
+  // personal workspace for any email that could receive a code, which
+  // contradicted that and let anyone run processing jobs on this
+  // infrastructure.
+  it("refuses an email no administrator has invited", async () => {
+    const email = `stranger-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const response = await verifyOtp(email);
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringContaining("Ask a workspace administrator to invite you"),
     });
-    expect(projects.status).toBe(200);
-    // A second sign-in lands on the same account and workspace instead of
-    // provisioning again.
-    const second = await verifyOtp(email);
-    expect(second.status).toBe(200);
-    const secondBody = await second.json<{
-      user: { userId: string; organisationId: string };
-    }>();
-    expect(secondBody.user.userId).toBe(firstBody.user.userId);
-    expect(secondBody.user.organisationId).toBe(firstBody.user.organisationId);
-    const memberships = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM memberships WHERE user_id = ?",
-    ).bind(firstBody.user.userId).first<{ n: number }>();
-    expect(memberships?.n).toBe(1);
+    const provisioned = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE lower(email) = ?",
+    ).bind(email).first<{ n: number }>();
+    expect(provisioned?.n).toBe(0);
   });
 
-  it("converges two racing first sign-ins onto a single workspace", async () => {
-    // A resend leaves two live challenges for one email; verifying both
-    // concurrently must not provision two workspaces.
-    const email = `race-${crypto.randomUUID().slice(0, 8)}@example.com`;
-    const code = "161803";
-    const challenges = await Promise.all([1, 2].map(async () => {
-      const challengeId = crypto.randomUUID();
-      await env.DB.prepare(`
-        INSERT INTO auth_otp_challenges (id, email, code_hash, expires_at)
-        VALUES (?, ?, ?, ?)
-      `).bind(
-        challengeId,
-        email,
-        await otpHash(challengeId, email, code, env.OTP_PEPPER),
-        new Date(Date.now() + 60_000).toISOString(),
-      ).run();
-      return challengeId;
-    }));
-    const responses = await Promise.all(challenges.map((challengeId) =>
-      exports.default.fetch(`${origin}/api/auth/otp/verify`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "CF-Connecting-IP": nextTestClientAddress(),
-        },
-        body: JSON.stringify({ email, challengeId, code }),
-      })
-    ));
-    expect(responses.map((response) => response.status)).toEqual([200, 200]);
-    const bodies = await Promise.all(responses.map((response) =>
-      response.json<{ user: { userId: string; organisationId: string } }>()
-    ));
-    expect(bodies[1].user.userId).toBe(bodies[0].user.userId);
-    expect(bodies[1].user.organisationId).toBe(bodies[0].user.organisationId);
-    const rows = await env.DB.prepare(`
-      SELECT COUNT(*) AS memberships,
-        (SELECT COUNT(*) FROM users WHERE lower(email) = ?) AS users
-      FROM memberships WHERE user_id = ?
-    `).bind(email, bodies[0].user.userId).first<{ memberships: number; users: number }>();
-    expect(rows).toEqual({ memberships: 1, users: 1 });
-  });
-
-  it("gives an invited never-seen email its own workspace instead of the inviter's", async () => {
-    // Workspace-capture regression: under self-serve signup anyone can become
-    // a workspace admin and invite an arbitrary email. The invitee's first
-    // sign-in must land in their OWN workspace with the invitation left
-    // pending, never silently inside the inviter's organisation.
-    const inviterResponse = await verifyOtp(`inviter-${crypto.randomUUID().slice(0, 8)}@example.com`);
-    expect(inviterResponse.status).toBe(200);
-    const inviterAccess = (inviterResponse.headers.get("set-cookie") ?? "").match(/spatial_access=([^;,]+)/)?.[1];
-    const inviter = await inviterResponse.json<{ user: { organisationId: string } }>();
-    const victimEmail = `victim-${crypto.randomUUID().slice(0, 8)}@example.com`;
-    const invitationResponse = await exports.default.fetch(`${origin}/api/team/invitations`, {
+  it("activates an administrator's invitation on the invitee's first sign-in", async () => {
+    const administrator = await loginSession();
+    const administratorOrganisationId = "00000000-0000-4000-8000-000000000001";
+    const invitedEmail = `invited-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const invitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
       method: "POST",
       headers: {
-        cookie: `spatial_access=${inviterAccess}`,
+        cookie: administrator.accessCookie,
         "content-type": "application/json",
         origin,
       },
       body: JSON.stringify({
         clientOperationId: crypto.randomUUID(),
-        email: victimEmail,
-        role: "platform_admin",
+        email: invitedEmail,
+        role: "production_operator",
         expiresInDays: 7,
       }),
     });
-    expect(invitationResponse.status).toBe(201);
-    const victimResponse = await verifyOtp(victimEmail);
-    expect(victimResponse.status).toBe(200);
-    const victim = await victimResponse.json<{
-      user: { userId: string; organisationId: string };
-      pendingInvitations: Array<{ organisationId: string }>;
+    expect(invitation.status).toBe(201);
+
+    const first = await verifyOtp(invitedEmail);
+    expect(first.status).toBe(200);
+    const body = await first.json<{
+      user: { userId: string; organisationId: string; role: string };
     }>();
-    expect(victim.user.organisationId).not.toBe(inviter.user.organisationId);
-    expect(victim.pendingInvitations).toEqual([
-      expect.objectContaining({ organisationId: inviter.user.organisationId }),
-    ]);
-    const captiveMembership = await env.DB.prepare(
+    // The invitation is the grant, so the invitee lands in the inviting
+    // organisation with the role they were given — not a workspace of their own.
+    expect(body.user.organisationId).toBe(administratorOrganisationId);
+    expect(body.user.role).toBe("production_operator");
+    const membership = await env.DB.prepare(
       "SELECT status FROM memberships WHERE organisation_id = ? AND user_id = ?",
-    ).bind(inviter.user.organisationId, victim.user.userId).first<{ status: string }>();
-    expect(captiveMembership?.status).toBe("invited");
+    ).bind(administratorOrganisationId, body.user.userId).first<{ status: string }>();
+    expect(membership?.status).toBe("active");
+
+    // A second sign-in reuses the same account rather than re-activating.
+    const second = await verifyOtp(invitedEmail);
+    expect(second.status).toBe(200);
+    const again = await second.json<{ user: { userId: string; organisationId: string } }>();
+    expect(again.user.userId).toBe(body.user.userId);
+    expect(again.user.organisationId).toBe(administratorOrganisationId);
   });
 
+  it("keeps a revoked member locked out instead of re-admitting them", async () => {
+    const administrator = await loginSession();
+    const administratorOrganisationId = "00000000-0000-4000-8000-000000000001";
+    const email = `revoked-${crypto.randomUUID().slice(0, 8)}@example.com`;
+    const invitation = await exports.default.fetch(`${origin}/api/team/invitations`, {
+      method: "POST",
+      headers: { cookie: administrator.accessCookie, "content-type": "application/json", origin },
+      body: JSON.stringify({
+        clientOperationId: crypto.randomUUID(),
+        email,
+        role: "production_operator",
+        expiresInDays: 7,
+      }),
+    });
+    expect(invitation.status).toBe(201);
+    const joined = await verifyOtp(email);
+    expect(joined.status).toBe(200);
+    const member = await joined.json<{ user: { userId: string } }>();
+    await env.DB.prepare(`
+      UPDATE memberships SET status = 'revoked', revoked_at = datetime('now')
+      WHERE organisation_id = ? AND user_id = ?
+    `).bind(administratorOrganisationId, member.user.userId).run();
+
+    // Signing in again must not hand them a fresh workspace and undo the
+    // administrator's revocation.
+    const afterRevocation = await verifyOtp(email);
+    expect(afterRevocation.status).toBe(401);
+  });
   it("accepts memberships in multiple organisations and rotates the session when switching", async () => {
     const administrator = await loginSession();
     const administratorUserId = "00000000-0000-4000-8000-000000000002";

@@ -168,9 +168,12 @@ Implemented:
   storage, expiry, generation rotation, immediate revocation, last-use
   evidence, and an unattended local export-transfer agent that checkpoints
   exact-file SHA-256 plus committed multipart ETags before retry or restart
-- Turnstile-protected email OTP authentication with self-serve signup (a
-  first verified sign-in provisions a personal workspace; revoked accounts
-  stay locked out), ES256/JWKS access tokens, rotating refresh sessions,
+- Turnstile-protected email OTP authentication, invite-only: an administrator
+  invites an email, and that pending invitation activates on the invitee's
+  first verified sign-in, landing them in the inviting organisation with the
+  role they were granted. An email nobody invited is refused and told to ask
+  an administrator; a revoked member stays locked out and is readmitted only
+  by a fresh invitation. ES256/JWKS access tokens, rotating refresh sessions,
   immediate D1 revocation, role checks, and authoritative D1 rate limits with
   honest `Retry-After` windows across refresh, manifest, invitation,
   upload-session, and health endpoints
