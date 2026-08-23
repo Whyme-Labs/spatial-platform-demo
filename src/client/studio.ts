@@ -1750,9 +1750,9 @@ function bindInterface(): void {
   bindListContinuation("loadMoreJobs", "load-more-jobs", "Loading jobs…", loadMoreJobs);
   bindListContinuation("loadMoreReleases", "load-more-releases", "Loading releases…", loadMoreReleases);
   const deleteProjectViewButton = byId<HTMLButtonElement>("deleteProjectViewButton");
-  deleteProjectViewButton.addEventListener("click", () => {
+  deleteProjectViewButton.addEventListener("click", async () => {
     const view = state.projectViews.find((candidate) => candidate.id === state.activeProjectViewId);
-    if (!view || !confirm(`Delete the saved view “${view.name}”? Project data will not change.`)) return;
+    if (!view || !await confirmOperator(`Delete the saved view “${view.name}”? Project data will not change.`)) return;
     void runAction({
       key: `delete-project-view:${view.id}`,
       trigger: deleteProjectViewButton,
@@ -1838,9 +1838,9 @@ function bindInterface(): void {
       errorTarget: byId("portfolioImportError"),
     }, previewProjectPortfolioImport).finally(renderPortfolioImportActions);
   });
-  commitPortfolioImport.addEventListener("click", () => {
+  commitPortfolioImport.addEventListener("click", async () => {
     if (!portfolioImportPreview || !portfolioImportManifest) return;
-    if (!confirm(`Create ${portfolioImportPreview.summary.projects} new DRAFT project${portfolioImportPreview.summary.projects === 1 ? "" : "s"} from this validated file?`)) return;
+    if (!await confirmOperator(`Create ${portfolioImportPreview.summary.projects} new DRAFT project${portfolioImportPreview.summary.projects === 1 ? "" : "s"} from this validated file?`)) return;
     void runAction({
       key: "commit-project-import",
       trigger: commitPortfolioImport,
@@ -1865,9 +1865,9 @@ function bindInterface(): void {
       disable: [portfolioHandoffTarget, commitPortfolioHandoffButton],
     }, previewProjectPortfolioHandoff).finally(renderPortfolioHandoffActions);
   });
-  commitPortfolioHandoffButton.addEventListener("click", () => {
+  commitPortfolioHandoffButton.addEventListener("click", async () => {
     if (!portfolioHandoffPreview?.valid) return;
-    if (!confirm(
+    if (!await confirmOperator(
       `Create ${portfolioHandoffPreview.summary.projects} DRAFT project ${
         portfolioHandoffPreview.summary.projects === 1 ? "copy" : "copies"
       } in ${portfolioHandoffPreview.targetOrganisation.name}? No versions or assets will move.`,
@@ -1907,9 +1907,9 @@ function bindInterface(): void {
       disable: assetHandoffControls,
     }, previewProjectAssetHandoff).finally(renderAssetHandoffActions);
   });
-  commitAssetHandoff.addEventListener("click", () => {
+  commitAssetHandoff.addEventListener("click", async () => {
     if (!assetHandoffPreview?.valid) return;
-    if (!confirm(
+    if (!await confirmOperator(
       `Copy ${assetHandoffPreview.summary.assets} verified asset${
         assetHandoffPreview.summary.assets === 1 ? "" : "s"
       } (${formatBytes(assetHandoffPreview.summary.bytes)}) into ${
@@ -1942,8 +1942,8 @@ function bindInterface(): void {
       disable: assetHandoffControls,
     }, retryProjectAssetHandoff).finally(renderAssetHandoffActions);
   });
-  cancelAssetHandoff.addEventListener("click", () => {
-    if (!activeAssetHandoff || !confirm(
+  cancelAssetHandoff.addEventListener("click", async () => {
+    if (!activeAssetHandoff || !await confirmOperator(
       "Cancel this copy and remove all destination objects written by it? The source project is unaffected.",
     )) return;
     void runAction({
@@ -2008,9 +2008,9 @@ function bindInterface(): void {
     bulkLifecycleOperation = null;
     renderProjects();
   });
-  bulkArchiveProjects.addEventListener("click", () => {
+  bulkArchiveProjects.addEventListener("click", async () => {
     const count = selectedProjectsForAction("archive").length;
-    if (!count || !confirm(`Archive ${count} selected project${count === 1 ? "" : "s"}? Projects with active releases, jobs, or uploads will remain selected for recovery.`)) return;
+    if (!count || !await confirmOperator(`Archive ${count} selected project${count === 1 ? "" : "s"}? Projects with active releases, jobs, or uploads will remain selected for recovery.`)) return;
     void runAction({
       key: "bulk-project-archive",
       trigger: bulkArchiveProjects,
@@ -2018,9 +2018,9 @@ function bindInterface(): void {
       disable: [bulkRestoreProjects, clearProjectSelection],
     }, () => bulkChangeProjectLifecycle("archive")).finally(renderBulkProjectActions);
   });
-  bulkRestoreProjects.addEventListener("click", () => {
+  bulkRestoreProjects.addEventListener("click", async () => {
     const count = selectedProjectsForAction("restore").length;
-    if (!count || !confirm(`Restore ${count} selected archived project${count === 1 ? "" : "s"} to its previous lifecycle state?`)) return;
+    if (!count || !await confirmOperator(`Restore ${count} selected archived project${count === 1 ? "" : "s"} to its previous lifecycle state?`)) return;
     void runAction({
       key: "bulk-project-restore",
       trigger: bulkRestoreProjects,
@@ -3994,8 +3994,8 @@ function renderPortfolioTools(): void {
       const edit = element("button", "text-button", "Edit");
       edit.addEventListener("click", () => editProjectTemplate(template));
       const remove = element("button", "text-button", "Delete");
-      remove.addEventListener("click", () => {
-        if (!confirm(`Delete the template “${template.name}”? Existing projects keep their settings.`)) return;
+      remove.addEventListener("click", async () => {
+        if (!await confirmOperator(`Delete the template “${template.name}”? Existing projects keep their settings.`)) return;
         void runAction({
           key: `delete-project-template:${template.id}`,
           trigger: remove,
@@ -5019,8 +5019,8 @@ function renderPendingInvitations(): void {
         errorTarget: invitationError,
       }, () => acceptOrganisationInvitation(invitation));
     });
-    decline.addEventListener("click", () => {
-      if (!confirm(
+    decline.addEventListener("click", async () => {
+      if (!await confirmOperator(
         `Decline the invitation to ${invitation.organisationName}? An administrator must send a new invitation to restore it.`,
       )) return;
       void runAction({
@@ -5374,8 +5374,8 @@ function renderJobs(): void {
     const actions = element("div", "job-actions");
     if (["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) {
       const retry = element("button", "job-action", "Retry");
-      retry.addEventListener("click", () => {
-        if (!confirm(`Retry ${job.job_type} from a clean lease? The prior failure remains in the audit log.`)) return;
+      retry.addEventListener("click", async () => {
+        if (!await confirmOperator(`Retry ${job.job_type} from a clean lease? The prior failure remains in the audit log.`)) return;
         void runAction({
           key: `retry-job:${job.id}`,
           trigger: retry,
@@ -5385,8 +5385,8 @@ function renderJobs(): void {
       actions.append(retry);
     } else if (["QUEUED", "LEASED", "RUNNING"].includes(job.state)) {
       const cancel = element("button", "job-action", "Cancel");
-      cancel.addEventListener("click", () => {
-        if (!confirm(`Cancel ${job.job_type}? Any leased processor will lose permission to upload or complete it.`)) return;
+      cancel.addEventListener("click", async () => {
+        if (!await confirmOperator(`Cancel ${job.job_type}? Any leased processor will lose permission to upload or complete it.`)) return;
         void runAction({
           key: `cancel-job:${job.id}`,
           trigger: cancel,
@@ -5641,8 +5641,8 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
       row.append(element("div", "", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
       if (!reviewer.revoked_at && reviewer.invitation_status !== "revoked") {
         const revoke = element("button", "danger-button", "Revoke access");
-        revoke.addEventListener("click", () => {
-          if (!confirm(`Revoke ${reviewer.email} from ${project.name}?`)) return;
+        revoke.addEventListener("click", async () => {
+          if (!await confirmOperator(`Revoke ${reviewer.email} from ${project.name}?`)) return;
           void runAction({
             key: `revoke-reviewer:${reviewer.user_id}`,
             trigger: revoke,
@@ -5727,8 +5727,8 @@ function renderHosting(): void {
       !subscription.provider_cancel_at_period_end
     ) {
       const cancel = element("button", "danger-button", "Cancel at period end");
-      cancel.addEventListener("click", () => {
-        if (!confirm(`Cancel Stripe renewal for ${subscription.project_name} at the end of the paid period?`)) return;
+      cancel.addEventListener("click", async () => {
+        if (!await confirmOperator(`Cancel Stripe renewal for ${subscription.project_name} at the end of the paid period?`)) return;
         void runAction({
           key: `cancel-hosting:${subscription.project_id}`,
           trigger: cancel,
@@ -6023,8 +6023,8 @@ function manualInvoiceControls(invoice: HostingWorkspace["invoices"][number]): H
     event.preventDefault();
     paid.click();
   });
-  voidInvoice.addEventListener("click", () => {
-    if (!confirm(`Void the open invoice for ${invoice.project_name}? This does not activate hosting.`)) return;
+  voidInvoice.addEventListener("click", async () => {
+    if (!await confirmOperator(`Void the open invoice for ${invoice.project_name}? This does not activate hosting.`)) return;
     voidInvoice.dataset.operationId ||= crypto.randomUUID();
     void runAction({
       key: `manual-invoice-void:${invoice.id}:${voidInvoice.dataset.operationId}`,
@@ -6069,11 +6069,11 @@ function manualSubscriptionControls(subscription: HostingSubscription): HTMLElem
   for (const item of statuses) {
     const button = element("button", item.status === "past_due" ? "quiet-button" : "danger-button", item.label);
     button.type = "button";
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       if (!form.reportValidity()) return;
       if (
         ["cancelled", "expired"].includes(item.status) &&
-        !confirm(`${item.label} for ${subscription.project_name}? Public hosting access will stop.`)
+        !await confirmOperator(`${item.label} for ${subscription.project_name}? Public hosting access will stop.`)
       ) return;
       button.dataset.operationId ||= crypto.randomUUID();
       const clientOperationId = button.dataset.operationId;
@@ -6242,8 +6242,8 @@ function renderTeam(): void {
       actions.append(activate);
     } else {
       const disable = element("button", "danger-button", "Disable");
-      disable.addEventListener("click", () => {
-        if (!confirm(`Disable ${provider.name} and revoke every session issued through it?`)) return;
+      disable.addEventListener("click", async () => {
+        if (!await confirmOperator(`Disable ${provider.name} and revoke every session issued through it?`)) return;
         void runAction({
           key: `identity-provider-disable:${provider.id}`,
           trigger: disable,
@@ -6255,8 +6255,8 @@ function renderTeam(): void {
     }
     if (provider.status !== "active") {
       const remove = element("button", "text-button", "Delete");
-      remove.addEventListener("click", () => {
-        if (!confirm(`Delete the ${provider.name} draft? Providers with linked identities cannot be deleted.`)) return;
+      remove.addEventListener("click", async () => {
+        if (!await confirmOperator(`Delete the ${provider.name} draft? Providers with linked identities cannot be deleted.`)) return;
         void runAction({
           key: `identity-provider-delete:${provider.id}`,
           trigger: remove,
@@ -6325,8 +6325,8 @@ function renderTeam(): void {
       const rotate = element("button", "quiet-button", "Rotate token");
       rotate.addEventListener("click", () => openCaptureAgentDialog("rotate", credential));
       const revoke = element("button", "danger-button", "Revoke");
-      revoke.addEventListener("click", () => {
-        if (!confirm(
+      revoke.addEventListener("click", async () => {
+        if (!await confirmOperator(
           `Revoke ${credential.name}? The current token will stop working immediately and cannot be restored.`,
         )) return;
         void runAction({
@@ -6398,8 +6398,8 @@ function renderTeam(): void {
         }, () => changeTeamRole(member, role.value as TeamMember["role"]));
       });
       const revoke = element("button", "danger-button", "Revoke");
-      revoke.addEventListener("click", () => {
-        if (!confirm(`Revoke all Spatial Studio access for ${member.email}? Active sessions will stop immediately.`)) return;
+      revoke.addEventListener("click", async () => {
+        if (!await confirmOperator(`Revoke all Spatial Studio access for ${member.email}? Active sessions will stop immediately.`)) return;
         void runAction({
           key: `team-revoke:${member.userId}`,
           trigger: revoke,
@@ -6879,8 +6879,8 @@ function renderSpatial(): void {
       const edit = element("button", "quiet-button", "Edit");
       edit.addEventListener("click", () => openSpatialEntityDialog(entity));
       const remove = element("button", "danger-button", "Archive");
-      remove.addEventListener("click", () => {
-        if (!confirm(`Archive ${entity.label}? Routes using it may need revision.`)) return;
+      remove.addEventListener("click", async () => {
+        if (!await confirmOperator(`Archive ${entity.label}? Routes using it may need revision.`)) return;
         void runAction({
           key: `archive-entity:${entity.id}`,
           trigger: remove,
@@ -6902,8 +6902,8 @@ function renderSpatial(): void {
     const row = element("div", "semantic-row");
     row.append(element("span", "", obstacle.label));
     const remove = element("button", "danger-button", "Archive");
-    remove.addEventListener("click", () => {
-      if (!confirm(`Archive navigation obstacle ${obstacle.label}?`)) return;
+    remove.addEventListener("click", async () => {
+      if (!await confirmOperator(`Archive navigation obstacle ${obstacle.label}?`)) return;
       void runAction({
         key: `archive-navigation-obstacle:${obstacle.id}`,
         trigger: remove,
@@ -6975,8 +6975,8 @@ function renderSpatial(): void {
       extraction.status === "PROCESSING"
     ) {
       const cancel = element("button", "danger-button", "Cancel extraction");
-      cancel.addEventListener("click", () => {
-        if (!confirm("Cancel this semantic extraction job? Its verified source asset will be retained.")) return;
+      cancel.addEventListener("click", async () => {
+        if (!await confirmOperator("Cancel this semantic extraction job? Its verified source asset will be retained.")) return;
         void runAction({
           key: `cancel-semantic-extraction:${extraction.job_id}`,
           trigger: cancel,
@@ -7212,13 +7212,21 @@ function renderSpatial(): void {
       evidenceDetails?.addEventListener("toggle", () => {
         approve.disabled = !evidenceDetails?.open;
       });
-      approve.addEventListener("click", () => {
-        const note = window.prompt(
-          "Record what you reviewed (minimum 10 characters).",
-          "Reviewed whole-scene reachability and capsule-collision evidence.",
-        );
-        if (note === null) return;
-        const finalResolutions = collectFinalAgreementResolutions(build.artifact_json);
+      approve.addEventListener("click", async () => {
+        const answer = await askOperator({
+          eyebrow: "APPROVE NAVIGATION",
+          title: "Approve this walking map",
+          message: "Record what you reviewed in the frozen build evidence.",
+          confirmLabel: "Approve navigation",
+          note: {
+            label: "What you reviewed",
+            value: "Reviewed whole-scene reachability and capsule-collision evidence.",
+            minLength: 10,
+          },
+        });
+        if (!answer) return;
+        const note = answer.note;
+        const finalResolutions = await collectFinalAgreementResolutions(build.artifact_json);
         if (finalResolutions === null) return;
         void runAction({
           key: `approve-navigation-build:${build.id}`,
@@ -7227,9 +7235,19 @@ function renderSpatial(): void {
         }, () => reviewNavigationBuild(build.id, "approve", note, finalResolutions));
       });
       const reject = element("button", "danger-button", "Reject");
-      reject.addEventListener("click", () => {
-        const note = window.prompt("Explain the rejection (minimum 10 characters).", "Route evidence needs correction.");
-        if (note === null) return;
+      reject.addEventListener("click", async () => {
+        const answer = await askOperator({
+          eyebrow: "REJECT NAVIGATION",
+          title: "Reject this walking map",
+          confirmLabel: "Reject",
+          note: {
+            label: "Why you are rejecting it",
+            value: "Route evidence needs correction.",
+            minLength: 10,
+          },
+        });
+        if (!answer) return;
+        const note = answer.note;
         void runAction({
           key: `reject-navigation-build:${build.id}`,
           trigger: reject,
@@ -8081,12 +8099,22 @@ function machineChangeRatificationControls(
     `Public or unlisted exposure needs one recorded decision covering these ${count} machine change(s). Token and customer-authenticated releases publish without it.`,
   );
   const ratify = element("button", "quiet-button wide", `Ratify ${count} machine change(s)`);
-  ratify.addEventListener("click", () => {
-    const reason = window.prompt(
-      `Record why you accept these ${count} machine change(s) (minimum 10 characters).`,
-      "Reviewed the trajectory-evidenced openings and clutter demotions against the captured scene.",
-    );
-    if (reason === null) return;
+  ratify.addEventListener("click", async () => {
+    const answer = await askOperator({
+      eyebrow: "RATIFY MACHINE CHANGES",
+      title: `Accept ${count} machine change(s)`,
+      message:
+        "Trajectory evidence opened or removed these structural elements. Ratifying records that you take responsibility for them, and lets this walking map publish at any exposure. Rebuilding the map asks again.",
+      confirmLabel: `Ratify ${count} change(s)`,
+      note: {
+        label: "Why you accept them",
+        value:
+          "Reviewed the trajectory-evidenced openings and clutter demotions against the captured scene.",
+        minLength: 10,
+      },
+    });
+    if (!answer) return;
+    const reason = answer.note;
     void runAction({
       key: `ratify-machine-changes:${revision.id}`,
       trigger: ratify,
@@ -8115,6 +8143,73 @@ async function ratifyMachineChanges(
   );
   showToast("Machine changes ratified");
   await loadSpatialWorkspace(projectId);
+}
+
+// One modal for every operator question, replacing window.confirm and
+// window.prompt. Native popups are unstyled, unreadable on long text, cannot
+// carry a select, and on some browsers are suppressed entirely — which for a
+// confirm silently means "no" and for a prompt means the action just dies.
+// Resolves null when the operator backs out.
+// Plain yes/no, on the same modal as everything else.
+function confirmOperator(title: string, confirmLabel = "Confirm"): Promise<boolean> {
+  return askOperator({ title, confirmLabel }).then((answer) => answer !== null);
+}
+
+function askOperator(question: {
+  title: string;
+  message?: string;
+  confirmLabel?: string;
+  eyebrow?: string;
+  note?: { label: string; value?: string; minLength?: number };
+  choices?: { label: string; options: readonly string[] };
+}): Promise<{ note: string; choice: string } | null> {
+  const dialog = byId<HTMLDialogElement>("askDialog");
+  const form = byId<HTMLFormElement>("askForm");
+  const noteField = byId("askNoteField");
+  const noteInput = byId<HTMLTextAreaElement>("askNote");
+  const choiceField = byId("askChoiceField");
+  const choiceInput = byId<HTMLSelectElement>("askChoice");
+  const error = byId("askError");
+  byId("askEyebrow").textContent = question.eyebrow ?? "CONFIRM";
+  byId("askTitle").textContent = question.title;
+  byId("askMessage").textContent = question.message ?? "";
+  byId("askMessage").hidden = !question.message;
+  byId<HTMLButtonElement>("askConfirm").textContent = question.confirmLabel ?? "Confirm";
+  error.textContent = "";
+  noteField.hidden = !question.note;
+  if (question.note) {
+    byId("askNoteLabel").textContent = question.note.label;
+    noteInput.value = question.note.value ?? "";
+    noteInput.minLength = question.note.minLength ?? 0;
+  }
+  choiceField.hidden = !question.choices;
+  if (question.choices) {
+    byId("askChoiceLabel").textContent = question.choices.label;
+    choiceInput.replaceChildren(
+      ...question.choices.options.map((value) => new Option(humanStatus(value), value)),
+    );
+  }
+  return new Promise((resolve) => {
+    const finish = (value: { note: string; choice: string } | null) => {
+      form.removeEventListener("submit", onSubmit);
+      dialog.removeEventListener("close", onClose);
+      resolve(value);
+    };
+    const onSubmit = (event: Event) => {
+      const note = noteInput.value.trim();
+      const minimum = question.note?.minLength ?? 0;
+      if (question.note && note.length < minimum) {
+        event.preventDefault();
+        error.textContent = `Enter at least ${minimum} characters.`;
+        return;
+      }
+      finish({ note, choice: choiceInput.value });
+    };
+    const onClose = () => finish(null);
+    form.addEventListener("submit", onSubmit);
+    dialog.addEventListener("close", onClose);
+    dialog.showModal();
+  });
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
@@ -8202,8 +8297,8 @@ function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): H
     }
     if (run.status === "QUEUED" || run.status === "PROCESSING") {
       const cancel = element("button", "danger-button", "Cancel extraction");
-      cancel.addEventListener("click", () => {
-        if (!confirm("Cancel this floor-plan extraction? Its immutable source will be retained.")) return;
+      cancel.addEventListener("click", async () => {
+        if (!await confirmOperator("Cancel this floor-plan extraction? Its immutable source will be retained.")) return;
         void runAction({
           key: `cancel-floorplan-extraction:${run.job_id}`,
           trigger: cancel,
@@ -9820,9 +9915,9 @@ function finalAgreementFindingId(finding: CaptureAgreementFinding): string {
 // an empty answer defers to the classification frozen with the revision, and
 // the Worker decides whether that actually covers the span. Only the finding
 // id travels — the Worker copies the geometry from the frozen agreement.
-function collectFinalAgreementResolutions(
+async function collectFinalAgreementResolutions(
   artifactJson: string | null,
-): FinalAgreementResolution[] | null {
+): Promise<FinalAgreementResolution[] | null> {
   if (!artifactJson) return [];
   let crossings: CaptureAgreementFinding[] = [];
   try {
@@ -9838,28 +9933,32 @@ function collectFinalAgreementResolutions(
     return [];
   }
   const resolutions: FinalAgreementResolution[] = [];
-  const options = CAPTURE_AGREEMENT_CLASSIFICATIONS.map(([value]) => value).join(" / ");
+  // Classification and its evidence are one decision, so they are asked
+  // together: the old pair of native prompts let an operator classify a span
+  // and then abandon the note, losing the classification with it.
   for (const finding of crossings) {
-    const answer = window.prompt(
-      `Final capture check: ${finding.barrierId} still crosses open capture near [${
-        finding.from.join(", ")
-      }]→[${finding.to.join(", ")}]${
+    const answer = await askOperator({
+      eyebrow: "FINAL CAPTURE CHECK",
+      title: `${finding.barrierId} still crosses open capture`,
+      message: `Near [${finding.from.join(", ")}]→[${finding.to.join(", ")}]${
         typeof finding.elevationM === "number" ? ` at ${finding.elevationM} m` : ""
-      }.\nClassify it (${options}), or leave empty if the floor-plan review already classified this span.`,
-      "",
-    );
+      }. Classify it, or cancel if the floor-plan review already classified this span.`,
+      confirmLabel: "Record classification",
+      choices: {
+        label: "Classification",
+        options: CAPTURE_AGREEMENT_CLASSIFICATIONS.map(([value]) => value),
+      },
+      note: {
+        label: "What you verified",
+        value: "Verified against the registered render during navigation approval.",
+        minLength: 10,
+      },
+    });
     if (answer === null) return null;
-    const classification = answer.trim();
-    if (!classification) continue;
-    const note = window.prompt(
-      `Record what you verified about ${finding.barrierId} (minimum 10 characters).`,
-      "Verified against the registered render during navigation approval.",
-    );
-    if (note === null) return null;
     resolutions.push({
       findingId: finalAgreementFindingId(finding),
-      classification,
-      note,
+      classification: answer.choice,
+      note: answer.note,
     });
   }
   return resolutions;
@@ -11216,9 +11315,9 @@ function renderProjectDetail(): void {
     detail.project.status === "ARCHIVED" ? "quiet-button wide" : "danger-button wide",
     detail.project.status === "ARCHIVED" ? "Restore project" : "Archive project",
   );
-  lifecycleButton.addEventListener("click", () => {
+  lifecycleButton.addEventListener("click", async () => {
     const restoring = detail.project.status === "ARCHIVED";
-    if (!confirm(
+    if (!await confirmOperator(
       restoring
         ? `Restore ${detail.project.name} to ${humanStatus(detail.project.status === "ARCHIVED" ? "DRAFT" : detail.project.status)}?`
         : `Archive ${detail.project.name}? Active releases, jobs, and uploads must be resolved first.`,
@@ -12476,8 +12575,8 @@ function renderRecoverableUploads(projectId: string): void {
     }
     const discard = element("button", "danger-button", "Discard");
     discard.type = "button";
-    discard.addEventListener("click", () => {
-      if (!confirm(`Discard the interrupted upload for ${upload.fileName}? Uploaded parts will be removed from R2.`)) return;
+    discard.addEventListener("click", async () => {
+      if (!await confirmOperator(`Discard the interrupted upload for ${upload.fileName}? Uploaded parts will be removed from R2.`)) return;
       void runAction({
         key: `discard-upload:${upload.id}`,
         trigger: discard,
@@ -13786,8 +13885,8 @@ function renderCustomDomains(projectId: string): void {
 
     const remove = element("button", "danger-button", "Remove");
     remove.type = "button";
-    remove.addEventListener("click", () => {
-      if (!confirm(`Remove ${domain.hostname}? Its Cloudflare hostname and certificate will also be deleted when provisioned.`)) return;
+    remove.addEventListener("click", async () => {
+      if (!await confirmOperator(`Remove ${domain.hostname}? Its Cloudflare hostname and certificate will also be deleted when provisioned.`)) return;
       void runAction({
         key: `remove-domain:${domain.id}`,
         trigger: remove,

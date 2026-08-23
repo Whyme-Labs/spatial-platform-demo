@@ -303,8 +303,8 @@
   </dialog>
 
   <dialog id="newProjectDialog" class="dialog-card wide-dialog capture-intake-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="newProjectForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">NEW CAPTURE</span>
       <h2>Create a walkable scene.</h2>
       <p>Name the scene, add the two exports from one scan, then review what the platform will prepare.</p>
@@ -362,8 +362,8 @@
   </dialog>
 
   <dialog id="savedViewDialog" class="dialog-card">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="savedViewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">PORTFOLIO VIEW</span>
       <h2 id="savedViewTitle">Save the current filters.</h2>
       <p>Saved views belong to your operator account and never change project data.</p>
@@ -378,8 +378,8 @@
   </dialog>
 
   <dialog id="portfolioToolsDialog" class="dialog-card portfolio-dialog">
+    <button class="dialog-close" value="cancel" type="submit">×</button>
     <form method="dialog" class="portfolio-dialog-shell">
-      <button class="dialog-close" value="cancel" type="submit">×</button>
       <span class="eyebrow">PORTFOLIO OPERATIONS</span>
       <h2>Templates and portable metadata.</h2>
       <p>Templates and saved views stay in D1. Exports are explicit JSON downloads; importing always previews before it creates new DRAFT projects.</p>
@@ -494,8 +494,8 @@
   </dialog>
 
   <dialog id="teamInvitationDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="teamInvitationForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">TEAM INVITATION</span>
       <h2>Grant production access after email verification.</h2>
       <p>The invitation is accepted only after the recipient completes email OTP sign-in. Existing sessions are revoked whenever their role changes.</p>
@@ -510,8 +510,8 @@
   </dialog>
 
   <dialog id="identityProviderDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="identityProviderForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">ENTERPRISE IDENTITY</span>
       <h2>Register an OIDC provider.</h2>
       <p>The client secret is never submitted through this browser. Create the draft here, store its generated provider ID in the <code>OIDC_CLIENT_SECRETS</code> Worker secret, then activate after discovery succeeds.</p>
@@ -527,8 +527,8 @@
   </dialog>
 
   <dialog id="captureAgentDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="captureAgentForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">UNATTENDED CAPTURE TRANSFER</span>
       <h2 id="captureAgentTitle">Create a scoped transfer credential.</h2>
       <p id="captureAgentDescription">Assign only the projects this workstation may upload. The token is returned after this action and is never stored in plaintext.</p>
@@ -549,8 +549,8 @@
   </dialog>
 
   <dialog id="captureAgentTokenDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="submit">×</button>
     <form method="dialog">
-      <button class="dialog-close" value="cancel" type="submit">×</button>
       <span class="eyebrow">TOKEN ISSUED</span>
       <h2 id="captureAgentTokenTitle">Store this credential now.</h2>
       <p>This token is sufficient only for the assigned project upload APIs. Put it in <code>SPATIAL_CAPTURE_AGENT_TOKEN</code>; never commit it to source control.</p>
@@ -564,8 +564,8 @@
   </dialog>
 
   <dialog id="uploadDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="uploadForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">NEW REVISION</span>
       <h2>Upload another capture result.</h2>
       <p>Compatible Gaussian exports are preserved as immutable source, processed automatically, and added as a new project revision.</p>
@@ -593,8 +593,8 @@
   </dialog>
 
   <dialog id="captureBundleDialog" class="dialog-card capture-bundle-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="captureBundleForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">VENDOR-NEUTRAL CAPTURE CONTRACT</span>
       <h2>Register exactly what this capture can support.</h2>
       <p>Bind verified R2 assets to their evidence roles. The platform preserves a SHA-256-addressed manifest and evaluates rendering, metric, reconstruction, automation, and licence readiness independently.</p>
@@ -645,8 +645,8 @@
   </dialog>
 
   <dialog id="captureBundleReviewDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="captureBundleReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">CAPTURE CONTRACT REVIEW</span>
       <h2>Record whether this bundle is acceptable.</h2>
       <input name="manifestId" type="hidden" />
@@ -661,8 +661,8 @@
   </dialog>
 
   <dialog id="editProjectDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="editProjectForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">PROJECT SETTINGS</span>
       <h2>Update the project details people see.</h2>
       <div class="mock-form-grid">
@@ -685,8 +685,8 @@
   </dialog>
 
   <dialog id="qaDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="qaForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">QUALITY GATE</span>
       <h2>Approve a web derivative.</h2>
       <p>Only Spark RAD, SPZ, or SOG assets can be published. Privacy review happens outside the platform; your confirmation below is the record of it.</p>
@@ -703,8 +703,8 @@
   </dialog>
 
   <dialog id="releaseDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="releaseForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">PUBLISH RELEASE</span>
       <h2>Create or advance a release channel.</h2>
       <div class="mock-form-grid">
@@ -757,6 +757,26 @@
     </form>
   </dialog>
 
+  <dialog id="askDialog" class="dialog-card">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
+    <form id="askForm" method="dialog">
+      <span class="eyebrow" id="askEyebrow">CONFIRM</span>
+      <h2 id="askTitle"></h2>
+      <p id="askMessage"></p>
+      <label id="askChoiceField" hidden><span id="askChoiceLabel">Classification</span>
+        <select id="askChoice" name="choice"></select>
+      </label>
+      <label id="askNoteField" hidden><span id="askNoteLabel">Note</span>
+        <textarea id="askNote" name="note" rows="3" spellcheck="false"></textarea>
+      </label>
+      <div class="form-actions">
+        <button class="quiet-button" type="button" data-close-dialog>Cancel</button>
+        <button id="askConfirm" class="primary-button" type="submit">Confirm</button>
+      </div>
+      <p id="askError" class="form-error" role="alert"></p>
+    </form>
+  </dialog>
+
   <dialog id="publicationConfirmationDialog" class="dialog-card confirmation-dialog">
     <form method="dialog">
       <span class="eyebrow">PUBLICATION DECISION</span>
@@ -770,8 +790,8 @@
   </dialog>
 
   <dialog id="reviewerDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="reviewerForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">CLIENT ACCESS</span>
       <h2>Invite a reviewer to one project.</h2>
       <p>The invitation is project-scoped and expires automatically. Access can be revoked at any time.</p>
@@ -786,8 +806,8 @@
   </dialog>
 
   <dialog id="deliveryDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="deliveryForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">DELIVERY SETTINGS</span>
       <h2>Brand and retain this spatial asset.</h2>
       <div class="mock-form-grid">
@@ -810,8 +830,8 @@
   </dialog>
 
   <dialog id="domainDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="domainForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">CUSTOM DOMAIN</span>
       <h2>Provision a branded hostname.</h2>
       <p>Ownership, Cloudflare routing, and the TLS certificate are tracked separately. A hostname is active only after all three checks pass.</p>
@@ -834,8 +854,8 @@
   </dialog>
 
   <dialog id="entityDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="entityForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">SPATIAL ENTITY</span>
       <h2>Add structure to the current version.</h2>
       <div class="mock-form-grid">
@@ -853,8 +873,8 @@
   </dialog>
 
   <dialog id="navigationProfileDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="navigationProfileForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">WALKING PROFILE</span>
       <h2>Review walking clearance for this scene.</h2>
       <div id="navigationProfileSummary" class="notice-card"></div>
@@ -881,8 +901,8 @@
   </dialog>
 
   <dialog id="navigationBuildDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="navigationBuildForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">VERIFIED WALKING MAP</span>
       <h2>Build the verified walking map.</h2>
       <p>The platform derives the build envelope and starting point from approved structure, then proves every authored room route with the production movement controller.</p>
@@ -910,8 +930,8 @@
   </dialog>
 
   <dialog id="navigationTraversalDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="navigationTraversalForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">AUTHORED TRAVERSAL</span>
       <h2>Connect a real discontinuity.</h2>
       <p>Use this only when the registered capture proves an elevator, ladder, or moving platform that continuous floor geometry cannot represent.</p>
@@ -931,8 +951,8 @@
   </dialog>
 
   <dialog id="semanticExtractionDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="semanticExtractionForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">POINT-CLOUD SEMANTICS</span>
       <h2>Propose walkable regions for human review.</h2>
       <p>The processor normalizes a verified PLY through an authored source-to-world transform, then proposes horizontal occupancy for review. It creates candidates only, never authored rooms or measurement claims.</p>
@@ -960,8 +980,8 @@
   </dialog>
 
   <dialog id="semanticReviewDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="semanticReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">HUMAN SEMANTIC REVIEW</span>
       <h2>Choose which polygons become editable room seeds.</h2>
       <input name="extractionId" type="hidden" />
@@ -981,8 +1001,8 @@
   </dialog>
 
   <dialog id="floorplanExtractionDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="floorplanExtractionForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">VENDOR-NEUTRAL FLOOR PLAN</span>
       <h2>Derive rooms, walls, and opening candidates.</h2>
       <p>The processor normalizes a verified metric point cloud and produces an indicative proposal. PLY is read natively; E57, LAS, LAZ, and PTS are normalized through PDAL with recorded provenance.</p>
@@ -1016,8 +1036,8 @@
   </dialog>
 
   <dialog id="floorplanReviewDialog" class="dialog-card floorplan-review-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="floorplanReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">OPERATOR FLOOR-PLAN REVIEW</span>
       <h2>Correct topology before producing a revision.</h2>
       <input name="extractionId" type="hidden" />
@@ -1050,8 +1070,8 @@
   </dialog>
 
   <dialog id="routeDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="routeForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">GUIDED ROUTE</span>
       <h2>Connect authored places into a guided visit.</h2>
       <div class="mock-form-grid">
@@ -1067,8 +1087,8 @@
 
 
   <dialog id="measurementBriefDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="measurementBriefForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">MEASUREMENT BRIEF</span>
       <h2>Define reliance before producing drawings.</h2>
       <div class="mock-form-grid">
@@ -1085,8 +1105,8 @@
   </dialog>
 
   <dialog id="checkPointDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="checkPointForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">INDEPENDENT CHECK POINT</span>
       <h2>Compare reference and observed coordinates.</h2>
       <div class="mock-form-grid">
@@ -1101,8 +1121,8 @@
   </dialog>
 
   <dialog id="geometryChangeDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="geometryChangeForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">AUTHORED GEOMETRY EVIDENCE</span>
       <h2>Compare two registered spatial versions.</h2>
       <p>This comparison measures authored floor, room, and doorway footprints. It does not infer survey accuracy from Gaussian appearance.</p>
@@ -1120,8 +1140,8 @@
   </dialog>
 
   <dialog id="geometryChangeReviewDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="geometryChangeReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">HUMAN REVIEW</span>
       <h2>Record the disposition of this comparison.</h2>
       <input name="reportId" type="hidden" />
@@ -1136,8 +1156,8 @@
   </dialog>
 
   <dialog id="rawSceneChangeDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="rawSceneChangeForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">RAW-SCENE REGISTRATION + CHANGE EVIDENCE</span>
       <h2>Align and compare two immutable PLY assets.</h2>
       <p>The leased processor can estimate bounded yaw and translation before comparing voxel occupancy, centroids, and mean colour. Every transform remains quality-gated evidence for human review, not survey registration.</p>
@@ -1165,8 +1185,8 @@
   </dialog>
 
   <dialog id="rawSceneChangeReviewDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="rawSceneChangeReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">HUMAN RAW-SCENE REVIEW</span>
       <h2>Record what this registered comparison means operationally.</h2>
       <input name="reportId" type="hidden" />
@@ -1181,8 +1201,8 @@
   </dialog>
 
   <dialog id="captureCompletenessDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="captureCompletenessForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">CAPTURE COMPLETENESS EVIDENCE</span>
       <h2>Check a pose path against authored rooms.</h2>
       <p>Upload canonical Y-up trajectory JSON. The source is preserved privately in R2; D1 stores the bounded result and review history.</p>
@@ -1208,8 +1228,8 @@
   </dialog>
 
   <dialog id="captureCompletenessReviewDialog" class="dialog-card wide-dialog">
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="captureCompletenessReviewForm">
-      <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
       <span class="eyebrow">HUMAN CAPTURE REVIEW</span>
       <h2>Record whether this evidence is sufficient.</h2>
       <input name="reportId" type="hidden" />

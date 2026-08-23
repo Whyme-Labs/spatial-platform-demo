@@ -55,7 +55,7 @@ button.is-pending::before {
   content: "";
   animation: rotate .72s linear infinite;
 }
-form[aria-busy="true"] .dialog-close {
+.dialog-card:has(form[aria-busy="true"]) .dialog-close {
   pointer-events: none;
 }
 .mock-form-grid .auth-code-field { display:none; }
@@ -84,7 +84,7 @@ form[aria-busy="true"] .dialog-close {
 .brand-mark i:nth-child(3) { height: 21px; }
 .toast { position: fixed; z-index: 100; left: 50%; bottom: 26px; transform: translate(-50%, 25px); opacity: 0; pointer-events: none; background: var(--text); color: #141512; border-radius: 999px; padding: 11px 17px; font-size: 13px; font-weight: 700; transition: .25s ease; box-shadow: var(--shadow); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
-.dialog-card { width: min(540px, calc(100vw - 30px)); border: 1px solid var(--line-strong); border-radius: 28px; padding: 0; background: #171a17; color: var(--text); box-shadow: 0 30px 120px rgba(0,0,0,.72); }
+.dialog-card { position: relative; width: min(540px, calc(100vw - 30px)); border: 1px solid var(--line-strong); border-radius: 28px; padding: 0; background: #171a17; color: var(--text); box-shadow: 0 30px 120px rgba(0,0,0,.72); }
 .dialog-card::backdrop { background: rgba(4,6,5,.75); backdrop-filter: blur(8px); }
 .dialog-card form { padding: 32px; position: relative; }
 .dialog-card h2 { font: 400 34px/1.02 Georgia, serif; letter-spacing: -.035em; margin: 12px 0 14px; }

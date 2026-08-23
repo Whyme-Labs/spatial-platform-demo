@@ -1458,3 +1458,34 @@ function json(route: Route, status: number, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
 }
+
+// A tall dialog used to trap the operator: the close control was positioned
+// inside the scrolling form, so once you scrolled to the publish button at the
+// bottom the × was gone and nothing on screen dismissed the dialog.
+test("a scrolled dialog keeps its close control reachable", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  await expect(dialog).toBeVisible();
+  const close = dialog.locator(".dialog-close");
+
+  // Scroll the dialog's own scroller to the very bottom, where the publish
+  // action and any refusal message live.
+  await dialog.locator("form").evaluate((form) => {
+    form.scrollTop = form.scrollHeight;
+  });
+
+  const box = await close.boundingBox();
+  const dialogBox = await dialog.boundingBox();
+  if (!box || !dialogBox) throw new Error("close control is not measurable");
+  expect(box.y).toBeGreaterThanOrEqual(dialogBox.y - 1);
+  expect(box.y + box.height).toBeLessThanOrEqual(dialogBox.y + dialogBox.height + 1);
+
+  await close.click();
+  await expect(dialog).toBeHidden();
+});
