@@ -49,7 +49,6 @@ const projectDeliveryTemplateSchema = z.enum(projectDeliveryTemplateInputs)
   .transform(normalizeProjectDeliveryTemplate);
 export const projectWorkflowPolicySchema = z.object({
   schemaVersion: z.literal("project-workflow-policy-v1"),
-  privacyReview: z.enum(projectWorkflowPolicyIds.privacyReview),
   publication: z.enum(projectWorkflowPolicyIds.publication),
   navigation: z.enum(projectWorkflowPolicyIds.navigation),
   measurement: z.enum(projectWorkflowPolicyIds.measurement),
@@ -927,34 +926,6 @@ export const navigationBuildReviewSchema = z.object({
   finalCaptureAgreementResolutions: z.array(
     z.lazy(() => finalCaptureAgreementResolutionSchema),
   ).max(2_000).optional(),
-});
-
-export const navigationWalkTestSchema = z.object({
-  clientOperationId: z.string().uuid(),
-  versionId: z.string().uuid(),
-  startPose: z.object({
-    position: point3Schema,
-    target: point3Schema,
-  }),
-  endPose: z.object({
-    position: point3Schema,
-    target: point3Schema,
-  }),
-  runtimeEvidence: z.object({
-    movementObserved: z.literal(true),
-    collisionFailureReported: z.literal(false),
-    traversalBlockReported: z.literal(false),
-  }).strict(),
-}).strict().superRefine((value, context) => {
-  if (value.startPose.position.every((coordinate, axis) =>
-    coordinate === value.endPose.position[axis]
-  )) {
-    context.addIssue({
-      code: "custom",
-      path: ["endPose", "position"],
-      message: "Complete the walk test after moving away from the chosen start position",
-    });
-  }
 });
 
 const frozenNavigationAssetSchema = <Format extends "json" | "bin">(format: Format) =>
@@ -3238,38 +3209,6 @@ export const sceneRouteSchema = z.object({
     cameraPose: cameraPoseSchema.nullable().optional(),
     narration: z.string().trim().max(1000).nullable().optional(),
   })).min(1).max(100),
-});
-
-export const privacyRegionSchema = z.object({
-  versionId: z.string().uuid(),
-  label: z.string().trim().min(1).max(120),
-  geometry: z.object({ type: z.literal("polygon"), points: polygon3Schema }),
-  source: z.enum(["operator", "automated"]).default("operator"),
-  confidence: z.number().min(0).max(1).nullable().optional(),
-});
-
-export const privacyRegionDecisionSchema = z.object({
-  status: z.enum(["approved", "rejected", "applied"]),
-});
-
-export const privacyScanSchema = z.object({
-  clientOperationId: z.string().uuid(),
-  versionId: z.string().uuid(),
-  assetIds: z.array(z.string().uuid()).min(1).max(12)
-    .transform((assetIds) => [...new Set(assetIds)].sort()),
-});
-
-export const privacyCandidateDecisionSchema = z.object({
-  status: z.enum(["confirmed", "dismissed", "resolved"]),
-  note: z.string().trim().min(2).max(1000),
-}).superRefine((value, context) => {
-  if (value.status === "resolved" && value.note.length < 10) {
-    context.addIssue({
-      code: "custom",
-      path: ["note"],
-      message: "Resolution evidence must describe how the privacy issue was addressed",
-    });
-  }
 });
 
 export const changeDetectionSchema = z.object({

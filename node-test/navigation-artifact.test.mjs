@@ -253,12 +253,23 @@ describe("Unreal-equivalent navigation artifact", () => {
       nativeRecastCommit: "599fd0f023181c0a484df2a18cf1d75a3553852e",
       mode: "tiled",
     });
-    assert.equal(artifact.recastConfig.walkableRadius, 3);
     assert.equal(artifact.recastConfig.walkableHeight, 36);
     assert.equal(artifact.recastConfig.walkableClimb, 2);
-    assert.equal(artifact.recastConfig.borderSize, 6);
-    assert.equal(artifact.recastConfig.minRegionArea, 64);
-    assert.equal(artifact.recastConfig.mergeRegionArea, 400);
+    // Recast erodes by whole voxels, so the cell is refined until it divides
+    // the agent radius exactly: the walking map must never be stricter than the
+    // capsule it is built for.
+    const { cs, walkableRadius, borderSize, minRegionArea, mergeRegionArea } = artifact.recastConfig;
+    assert.ok(
+      Math.abs(walkableRadius * cs - artifact.agent.radius) < 1e-9,
+      `eroded ${walkableRadius * cs} for a ${artifact.agent.radius} agent`,
+    );
+    assert.ok(cs <= 0.1, "the cell may only be refined, never coarsened");
+    // Every other parameter is voxel-denominated too, so refining the cell must
+    // not shrink what they mean in metres — the merge threshold especially,
+    // which is what keeps small stair-tread regions attached to the scene.
+    assert.ok(Math.abs(borderSize * cs - (walkableRadius * cs + 0.3)) < 0.05);
+    assert.ok(Math.abs(minRegionArea * cs * cs - 64 * 0.01) < 0.02);
+    assert.ok(Math.abs(mergeRegionArea * cs * cs - 400 * 0.01) < 0.05);
     assert.equal(artifact.validation.passed, true);
     assert.equal(artifact.validation.componentCount, 1);
     assert.deepEqual(artifact.validation.unreachableDestinationIds, []);

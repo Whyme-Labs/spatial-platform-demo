@@ -171,24 +171,31 @@ coverage, and a mixture of modes in one approval. Walls already taken by
 pass-through evidence are not repeated. Like every machine change, these
 count toward the exposure gate.
 
-### Exposure gate (issue #34)
+### Public exposure (issue #34, gate removed)
 
-Machine-attested walkability caps a release at the credential-gated tier.
-Publishing a version whose latest approved revision froze one or more
-qualified openings is refused for `public` and `unlisted` access policies
-with a message naming the count and the ratification path; `token` and
-`customer-authenticated` releases pass. An unreadable frozen blob fails
-closed for public exposure. Ratification needs no new mechanism: open a
-structure correction draft, classify the auto-opened openings as doorways,
-and re-approve — the recook is operator-attested, the new revision freezes
-no machine qualification, and the gate clears.
+Machine-attested walkability used to cap a release at the credential-gated
+tier: `public` and `unlisted` were refused until an operator ratified the
+machine changes. That gate is gone. Trajectory evidence is trusted for public
+exposure like any other cook.
+
+The reasoning: the operator already makes this decision when they set the
+project's `trajectoryAutoOpen` and `trajectoryClutterDemotion` policy, and
+re-collecting it per revision taught operators to publish token-only instead.
+It also scaled badly — walked-floor demotion froze 87 changes on the first
+production capture, and re-approval re-derives them, so editing the structure
+never cleared the gate either; only touching all 87 elements would have.
+
+What remains is visibility, not obstruction: the machine changes stay on the
+approved revision card and in the `trajectory-auto-open-receipt-v1` fragment of
+the navigation authoring receipt, so any release can still be traced to the
+exact evidence that shaped it.
 
 ### Studio surfacing (issue #35)
 
 Approved revision cards in the Structure workflow render two lines from
 frozen data only: a machine-attestation line (trajectory digest, opened
 openings with their room pairs, demoted walls with pass-through counts, and
-the ratification path), and a sealed-cost line counting the unresolved
+what the machine changed), and a sealed-cost line counting the unresolved
 openings the conservative default keeps closed — the visibility whose absence
 let noisy proposals be approved untouched. An unreadable frozen blob is
 surfaced, never hidden. The walkable-area (m²) shadow-cook diff described in

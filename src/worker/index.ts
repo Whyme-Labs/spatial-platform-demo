@@ -59,7 +59,6 @@ import {
   navigationProfileSchema,
   navigationBuildSchema,
   navigationBuildReviewSchema,
-  navigationWalkTestSchema,
   navigationTraversalCreateSchema,
   navigationTraversalUpdateSchema,
   navigationArtifactSchema,
@@ -84,10 +83,6 @@ import {
   trajectoryEvidenceSchema,
   unresolvedCaptureAgreementCrossings,
   sceneRouteSchema,
-  privacyRegionSchema,
-  privacyRegionDecisionSchema,
-  privacyScanSchema,
-  privacyCandidateDecisionSchema,
   captureCompletenessSchema,
   captureCompletenessReviewSchema,
   captureBundleManifestSchema,
@@ -535,43 +530,12 @@ type PortfolioManifest = {
   }>;
 };
 
-type PrivacyScanRow = {
-  id: string;
-  organisation_id: string;
-  project_id: string;
-  version_id: string;
-  client_operation_id: string;
-  request_hash: string;
-  detector: string;
-  detector_version: string;
-  targets_json: string;
-  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "DEAD_LETTER";
-  attempt_count: number;
-  max_attempts: number;
-  input_count: number;
-  candidate_count: number;
-  evidence_json: string | null;
-  error_json: string | null;
-  created_at: string;
-  updated_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-};
-
-type PrivacyScanInputRow = AssetRow & {
-  scan_id: string;
-};
-
-type PrivacyScanQueueMessage = {
-  scanId: string;
-};
-
 type ProjectAssetCopyQueueMessage = {
   type: "project_asset_copy";
   itemId: string;
 };
 
-type SpatialQueueMessage = PrivacyScanQueueMessage | ProjectAssetCopyQueueMessage;
+type SpatialQueueMessage = ProjectAssetCopyQueueMessage;
 
 type UploadRow = {
   id: string;
@@ -993,18 +957,7 @@ const jobDispatchBackoffMinutes = 10;
 // path roughly an hour to deliver before the job dead-letters.
 const jobDispatchExhaustionLimit = 6;
 const maximumOperatorJobRetries = 5;
-const maximumPrivacyImageBytes = 10 * 1024 * 1024;
-const privacyDetector = "@cf/moondream/moondream3.1-9B-A2B";
-const privacyDetectorVersion = "moondream3.1-9B-A2B:2026-07";
 const workerJobIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const privacyTargets = [
-  { target: "human face", label: "Human face" },
-  { target: "vehicle license plate", label: "Vehicle license plate" },
-  { target: "document showing personal information", label: "Personal document" },
-  { target: "screen displaying readable personal or confidential information", label: "Sensitive screen" },
-  { target: "security keypad or written access code", label: "Access credential" },
-  { target: "personal photograph containing a person", label: "Personal photograph" },
-] as const;
 const allowedWebFormats = new Set(["rad", "spz", "sog"]);
 const workerOutputFormats = new Map<string, Set<string>>([
   ["master", new Set(["ply", "rad"])],
@@ -4979,24 +4932,12 @@ app.get("/api/projects/:projectId", async (context) => {
       ORDER BY created_at DESC
       LIMIT 50
     `).bind(projectId, auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT DISTINCT wt.version_id
-      FROM scene_navigation_walk_tests wt
-      JOIN scene_navigation_builds nb
-        ON nb.id = wt.navigation_build_id
-        AND nb.organisation_id = wt.organisation_id
-        AND nb.project_id = wt.project_id
-        AND nb.version_id = wt.version_id
-      WHERE wt.project_id = ? AND wt.organisation_id = ?
-        AND nb.status = 'APPROVED'
-    `).bind(projectId, auth.organisationId),
   ]);
   const versions = requiredBatchResult(detailResults, 0);
   const assets = requiredBatchResult(detailResults, 1);
   const jobs = requiredBatchResult(detailResults, 2);
   const releases = requiredBatchResult(detailResults, 3);
   const captureBundles = requiredBatchResult(detailResults, 4);
-  const walkTestVersions = requiredBatchResult(detailResults, 5);
   const previewCandidateVersion = versions.results.find((version) => {
     const versionId = version && typeof version === "object"
       ? readStringProperty(version, "id")
@@ -5062,12 +5003,6 @@ app.get("/api/projects/:projectId", async (context) => {
     captureBundles: captureBundles.results,
     comparisonReadiness: comparison,
     previewReadyVersionIds,
-    walkTestReadyVersionIds: walkTestVersions.results.flatMap((row) => {
-      const versionId = row && typeof row === "object"
-        ? readStringProperty(row, "version_id")
-        : null;
-      return versionId ? [versionId] : [];
-    }),
   });
 });
 
@@ -5623,25 +5558,9 @@ app.post("/api/review/projects/:projectId/versions/:versionId/comments", async (
     parsed.data.anchor ? JSON.stringify(parsed.data.anchor) : null,
     parsed.data.clientOperationId ?? null,
   ).run();
-  if (parsed.data.kind === "redaction") {
-    const geometry = parsed.data.anchor
-      ? { type: "sphere", point: parsed.data.anchor.point, radius: parsed.data.anchor.radius ?? 0.25 }
-      : { type: "camera-frustum", cameraPose: parsed.data.cameraPose };
-    await context.env.DB.prepare(`
-      INSERT INTO privacy_regions
-        (id, organisation_id, project_id, version_id, label, geometry_json,
-          source, confidence, review_comment_id)
-      VALUES (?, ?, ?, ?, ?, ?, 'client_review', 1, ?)
-    `).bind(
-      crypto.randomUUID(),
-      access.auth.organisationId,
-      access.project.id,
-      version.id,
-      parsed.data.body.slice(0, 120),
-      JSON.stringify(geometry),
-      commentId,
-    ).run();
-  }
+  // A "redaction" review comment stays exactly that: a reviewer's flag, held
+  // with the rest of their feedback. It no longer mirrors into a privacy
+  // region, because nothing consumes those any more.
   await audit(context, access.auth, "review.comment.create", "review_comment", commentId, {
     projectId: access.project.id,
     versionId: version.id,
@@ -7300,9 +7219,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     entities: [],
     routes: [],
     routeStops: [],
-    privacyRegions: [],
-    privacyScans: [],
-    privacyCandidates: [],
     changeReports: [],
     captureCompletenessReports: [],
     captureScanStructures: [],
@@ -7316,7 +7232,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals: [],
     traversalEvidenceOptions: [],
     navigationBuilds: [],
-    walkTests: [],
     releaseRepublishIntents: [],
     navigationArtifact: null,
     deliveryPolicy: null,
@@ -7342,22 +7257,6 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       SELECT rs.* FROM scene_route_stops rs JOIN scene_routes r ON r.id = rs.route_id
       WHERE r.version_id = ? AND r.project_id = ? ORDER BY rs.route_id, rs.sequence_number
     `).bind(version.id, access.project.id),
-    context.env.DB.prepare(`
-      SELECT * FROM privacy_regions WHERE version_id = ? AND project_id = ?
-      ORDER BY created_at DESC
-    `).bind(version.id, access.project.id),
-    context.env.DB.prepare(`
-      SELECT * FROM privacy_scans
-      WHERE version_id = ? AND project_id = ? AND organisation_id = ?
-      ORDER BY created_at DESC LIMIT 25
-    `).bind(version.id, access.project.id, access.auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT pc.*, a.file_name AS asset_file_name, a.mime_type AS asset_mime_type
-      FROM privacy_candidates pc
-      JOIN assets a ON a.id = pc.asset_id
-      WHERE pc.version_id = ? AND pc.project_id = ? AND pc.organisation_id = ?
-      ORDER BY pc.created_at DESC LIMIT 250
-    `).bind(version.id, access.project.id, access.auth.organisationId),
     context.env.DB.prepare(`
       SELECT * FROM change_detection_reports WHERE project_id = ? AND organisation_id = ?
       ORDER BY created_at DESC LIMIT 50
@@ -7476,19 +7375,12 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
       WHERE i.project_id = ? AND i.version_id = ? AND i.organisation_id = ?
       ORDER BY i.created_at DESC
     `).bind(access.project.id, version.id, access.auth.organisationId),
-    context.env.DB.prepare(`
-      SELECT id, navigation_build_id, start_pose_json, end_pose_json,
-        runtime_evidence_json, completed_by, completed_at
-      FROM scene_navigation_walk_tests
-      WHERE project_id = ? AND version_id = ? AND organisation_id = ?
-      ORDER BY completed_at DESC
-    `).bind(access.project.id, version.id, access.auth.organisationId),
   ]);
   const entities = requiredBatchResult(results, 0).results;
-  const navigationObstacles = requiredBatchResult(results, 15).results;
-  const navigationProfile = requiredBatchResult(results, 16).results[0];
-  const navigationBuilds = requiredBatchResult(results, 17).results;
-  const navigationTraversalRows = requiredBatchResult(results, 18).results;
+  const navigationObstacles = requiredBatchResult(results, 12).results;
+  const navigationProfile = requiredBatchResult(results, 13).results[0];
+  const navigationBuilds = requiredBatchResult(results, 14).results;
+  const navigationTraversalRows = requiredBatchResult(results, 15).results;
   const navigationTraversals = navigationTraversalRows.filter(
     (row) => row && typeof row === "object" && Reflect.get(row, "status") === "active",
   );
@@ -7512,23 +7404,20 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     entities,
     routes: requiredBatchResult(results, 1).results,
     routeStops: requiredBatchResult(results, 2).results,
-    privacyRegions: requiredBatchResult(results, 3).results,
-    privacyScans: requiredBatchResult(results, 4).results,
-    privacyCandidates: requiredBatchResult(results, 5).results,
-    changeReports: requiredBatchResult(results, 6).results,
-    captureCompletenessReports: requiredBatchResult(results, 7).results,
-    captureScanStructures: requiredBatchResult(results, 19).results.map(
+    changeReports: requiredBatchResult(results, 3).results,
+    captureCompletenessReports: requiredBatchResult(results, 4).results,
+    captureScanStructures: requiredBatchResult(results, 16).results.map(
       captureScanStructureApi,
     ),
-    rawChangeReports: requiredBatchResult(results, 8).results,
-    deliveryPolicy: requiredBatchResult(results, 9).results[0] ?? null,
-    semanticExtractions: requiredBatchResult(results, 10).results,
-    semanticCandidates: requiredBatchResult(results, 11).results.map(
+    rawChangeReports: requiredBatchResult(results, 5).results,
+    deliveryPolicy: requiredBatchResult(results, 6).results[0] ?? null,
+    semanticExtractions: requiredBatchResult(results, 7).results,
+    semanticCandidates: requiredBatchResult(results, 8).results.map(
       semanticCandidateApi,
     ),
-    floorplanExtractions: requiredBatchResult(results, 12).results,
-    floorplanRevisions: requiredBatchResult(results, 13).results,
-    floorplanExports: (requiredBatchResult(results, 14).results as Array<Record<string, unknown>>).map((row) => ({
+    floorplanExtractions: requiredBatchResult(results, 9).results,
+    floorplanRevisions: requiredBatchResult(results, 10).results,
+    floorplanExports: (requiredBatchResult(results, 11).results as Array<Record<string, unknown>>).map((row) => ({
       ...row,
       download_url:
         `/api/projects/${access.project.id}/spatial/floorplan-exports/${String(row.id)}/download`,
@@ -7537,8 +7426,7 @@ app.get("/api/projects/:projectId/spatial", async (context) => {
     navigationTraversals,
     traversalEvidenceOptions,
     navigationBuilds,
-    releaseRepublishIntents: requiredBatchResult(results, 20).results,
-    walkTests: requiredBatchResult(results, 21).results,
+    releaseRepublishIntents: requiredBatchResult(results, 17).results,
     navigationArtifact,
     collisionProxy: runtime.collisionProxy,
     navigationMesh: runtime.navigationMesh,
@@ -9405,91 +9293,6 @@ app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/review", a
   return context.json({ build, republishIntent });
 });
 
-app.post("/api/projects/:projectId/spatial/navigation-builds/:buildId/walk-tests", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = navigationWalkTestSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const projectId = context.req.param("projectId");
-  const buildId = context.req.param("buildId");
-  const requestHash = await sha256Hex(JSON.stringify(parsed.data));
-  const prior = await context.env.DB.prepare(`
-    SELECT id, navigation_build_id, request_hash, completed_at
-    FROM scene_navigation_walk_tests
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<{
-    id: string;
-    navigation_build_id: string;
-    request_hash: string;
-    completed_at: string;
-  }>();
-  if (prior) {
-    if (prior.navigation_build_id !== buildId || prior.request_hash !== requestHash) {
-      return conflict(context, "Operation ID was already used for a different walk-test receipt");
-    }
-    return context.json({ walkTest: prior, idempotent: true });
-  }
-  const build = await context.env.DB.prepare(`
-    SELECT id, version_id, status, artifact_json
-    FROM scene_navigation_builds
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-  `).bind(buildId, projectId, auth.organisationId).first<{
-    id: string;
-    version_id: string;
-    status: string;
-    artifact_json: string | null;
-  }>();
-  if (!build) return notFound(context, "Navigation build not found");
-  if (
-    build.status !== "APPROVED" || !build.artifact_json ||
-    build.version_id !== parsed.data.versionId
-  ) {
-    return conflict(
-      context,
-      "Walk-test completion requires the approved walking map for this exact immutable scene version",
-    );
-  }
-  const walkTestId = crypto.randomUUID();
-  await context.env.DB.prepare(`
-    INSERT INTO scene_navigation_walk_tests (
-      id, organisation_id, project_id, version_id, navigation_build_id,
-      client_operation_id, request_hash, start_pose_json, end_pose_json,
-      runtime_evidence_json, completed_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    walkTestId,
-    auth.organisationId,
-    projectId,
-    build.version_id,
-    build.id,
-    parsed.data.clientOperationId,
-    requestHash,
-    JSON.stringify(parsed.data.startPose),
-    JSON.stringify(parsed.data.endPose),
-    JSON.stringify(parsed.data.runtimeEvidence),
-    auth.userId,
-  ).run();
-  await audit(context, auth, "spatial.navigation_walk_test.complete", "scene_navigation_walk_test", walkTestId, {
-    navigationBuildId: build.id,
-    versionId: build.version_id,
-    runtimeEvidence: parsed.data.runtimeEvidence,
-  });
-  const republishIntent = await completeReleaseRepublishIntent(
-    context.env,
-    build.id,
-    context.get("requestId"),
-  );
-  return context.json({
-    walkTest: {
-      id: walkTestId,
-      navigation_build_id: build.id,
-      completed_at: new Date().toISOString(),
-    },
-    republishIntent,
-  }, 201);
-});
-
 app.post("/api/projects/:projectId/spatial/routes", async (context) => {
   const auth = await requireOperator(context);
   if (auth instanceof Response) return auth;
@@ -9526,251 +9329,6 @@ app.post("/api/projects/:projectId/spatial/routes", async (context) => {
   await context.env.DB.batch(statements);
   await audit(context, auth, "spatial.route.create", "scene_route", routeId, { versionId: parsed.data.versionId });
   return context.json({ route: { id: routeId, ...parsed.data } }, 201);
-});
-
-app.post("/api/projects/:projectId/privacy-scans", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = privacyScanSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
-  if (!project) return notFound(context, "Project not found");
-  const version = await context.env.DB.prepare(
-    "SELECT id FROM scene_versions WHERE id = ? AND project_id = ?",
-  ).bind(parsed.data.versionId, project.id).first<{ id: string }>();
-  if (!version) return notFound(context, "Scene version not found");
-
-  const requestHash = await sha256Hex(JSON.stringify({
-    versionId: parsed.data.versionId,
-    assetIds: parsed.data.assetIds,
-    detector: privacyDetectorVersion,
-    targets: privacyTargets.map(({ target }) => target),
-  }));
-  const existing = await context.env.DB.prepare(`
-    SELECT * FROM privacy_scans
-    WHERE organisation_id = ? AND client_operation_id = ?
-  `).bind(auth.organisationId, parsed.data.clientOperationId).first<PrivacyScanRow>();
-  if (existing) {
-    if (existing.request_hash !== requestHash || existing.project_id !== project.id) {
-      return conflict(context, "Operation ID was already used for a different privacy scan");
-    }
-    return context.json({ scan: privacyScanApi(existing), idempotent: true }, 202);
-  }
-
-  const placeholders = parsed.data.assetIds.map(() => "?").join(",");
-  const assets = await context.env.DB.prepare(`
-    SELECT * FROM assets
-    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-      AND id IN (${placeholders}) AND kind = 'poster'
-      AND integrity_status = 'verified' AND deleted_at IS NULL
-  `).bind(
-    auth.organisationId,
-    project.id,
-    version.id,
-    ...parsed.data.assetIds,
-  ).all<AssetRow>();
-  if (assets.results.length !== parsed.data.assetIds.length) {
-    return validationError(context, {
-      assetIds: ["Every privacy input must be a verified poster image in this scene version"],
-    });
-  }
-  for (const asset of assets.results) {
-    if (!asset.mime_type.startsWith("image/")) {
-      return validationError(context, { assetIds: [`${asset.file_name} is not an image`] });
-    }
-    if (asset.size_bytes > maximumPrivacyImageBytes) {
-      return validationError(context, {
-        assetIds: [`${asset.file_name} exceeds the 10 MiB privacy-input limit`],
-      });
-    }
-    if (!(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
-      return validationError(context, { assetIds: [`${asset.file_name} is missing from private storage`] });
-    }
-  }
-
-  const scanId = crypto.randomUUID();
-  const targetsJson = JSON.stringify(privacyTargets);
-  await context.env.DB.batch([
-    context.env.DB.prepare(`
-      INSERT INTO privacy_scans
-        (id, organisation_id, project_id, version_id, client_operation_id,
-          request_hash, detector, detector_version, targets_json, status,
-          input_count, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?)
-    `).bind(
-      scanId,
-      auth.organisationId,
-      project.id,
-      version.id,
-      parsed.data.clientOperationId,
-      requestHash,
-      privacyDetector,
-      privacyDetectorVersion,
-      targetsJson,
-      assets.results.length,
-      auth.userId,
-    ),
-    ...assets.results.map((asset) => context.env.DB.prepare(`
-      INSERT INTO privacy_scan_inputs
-        (scan_id, asset_id, asset_sha256, mime_type, size_bytes)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(scanId, asset.id, asset.sha256, asset.mime_type, asset.size_bytes)),
-  ]);
-  try {
-    await context.env.PRIVACY_SCAN_QUEUE.send({ scanId } satisfies PrivacyScanQueueMessage, {
-      contentType: "json",
-    });
-  } catch (error) {
-    await markPrivacyScanEnqueueFailure(context.env.DB, scanId, error);
-    return context.json({
-      error: "Privacy scan could not be queued",
-      scan: { id: scanId, status: "FAILED" },
-      retryable: true,
-      requestId: context.get("requestId"),
-    }, 503);
-  }
-  await audit(context, auth, "privacy.scan.queue", "privacy_scan", scanId, {
-    versionId: version.id,
-    assetIds: parsed.data.assetIds,
-    detector: privacyDetectorVersion,
-  });
-  const scan = await context.env.DB.prepare(
-    "SELECT * FROM privacy_scans WHERE id = ?",
-  ).bind(scanId).first<PrivacyScanRow>();
-  return context.json({ scan: privacyScanApi(scan!) }, 202);
-});
-
-app.post("/api/projects/:projectId/privacy-scans/:scanId/retry", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const scan = await context.env.DB.prepare(`
-    SELECT * FROM privacy_scans
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-  `).bind(
-    context.req.param("scanId"),
-    context.req.param("projectId"),
-    auth.organisationId,
-  ).first<PrivacyScanRow>();
-  if (!scan) return notFound(context, "Privacy scan not found");
-  if (scan.status === "COMPLETED") return conflict(context, "Completed privacy scans cannot be retried");
-  if (scan.status === "RUNNING") return conflict(context, "Privacy scan is already running");
-  await context.env.DB.prepare(`
-    UPDATE privacy_scans
-    SET status = 'QUEUED', error_json = NULL, completed_at = NULL,
-      updated_at = datetime('now')
-    WHERE id = ?
-  `).bind(scan.id).run();
-  try {
-    await context.env.PRIVACY_SCAN_QUEUE.send({ scanId: scan.id } satisfies PrivacyScanQueueMessage, {
-      contentType: "json",
-    });
-  } catch (error) {
-    await markPrivacyScanEnqueueFailure(context.env.DB, scan.id, error);
-    return context.json({
-      error: "Privacy scan could not be queued",
-      scan: { id: scan.id, status: "FAILED" },
-      retryable: true,
-      requestId: context.get("requestId"),
-    }, 503);
-  }
-  await audit(context, auth, "privacy.scan.retry", "privacy_scan", scan.id);
-  const queued = await context.env.DB.prepare(
-    "SELECT * FROM privacy_scans WHERE id = ?",
-  ).bind(scan.id).first<PrivacyScanRow>();
-  return context.json({ scan: privacyScanApi(queued!) }, 202);
-});
-
-app.get("/api/projects/:projectId/privacy-assets/:assetId", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  const asset = await context.env.DB.prepare(`
-    SELECT * FROM assets
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-      AND kind = 'poster' AND integrity_status = 'verified' AND deleted_at IS NULL
-  `).bind(
-    context.req.param("assetId"),
-    context.req.param("projectId"),
-    auth.organisationId,
-  ).first<AssetRow>();
-  if (!asset) return notFound(context, "Privacy input asset not found");
-  const response = await serveR2Object(context, asset.object_key);
-  response.headers.set("Content-Type", asset.mime_type);
-  response.headers.set("Cache-Control", "private, no-store");
-  return response;
-});
-
-app.patch("/api/projects/:projectId/privacy-candidates/:candidateId", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = privacyCandidateDecisionSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const result = await context.env.DB.prepare(`
-    UPDATE privacy_candidates
-    SET status = ?, decision_note = ?, reviewed_by = ?,
-      reviewed_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-    RETURNING id, status, decision_note, reviewed_at
-  `).bind(
-    parsed.data.status,
-    parsed.data.note,
-    auth.userId,
-    context.req.param("candidateId"),
-    context.req.param("projectId"),
-    auth.organisationId,
-  ).first();
-  if (!result) return notFound(context, "Privacy candidate not found");
-  await audit(
-    context,
-    auth,
-    "privacy.candidate.review",
-    "privacy_candidate",
-    context.req.param("candidateId"),
-    parsed.data,
-  );
-  return context.json({ privacyCandidate: result });
-});
-
-app.post("/api/projects/:projectId/spatial/privacy-regions", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = privacyRegionSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const project = await scopedProject(context.env.DB, auth.organisationId, context.req.param("projectId"));
-  if (!project) return notFound(context, "Project not found");
-  const id = crypto.randomUUID();
-  await context.env.DB.prepare(`
-    INSERT INTO privacy_regions
-      (id, organisation_id, project_id, version_id, label, geometry_json, source, confidence)
-    SELECT ?, ?, ?, id, ?, ?, ?, ? FROM scene_versions WHERE id = ? AND project_id = ?
-  `).bind(
-    id, auth.organisationId, project.id, parsed.data.label, JSON.stringify(parsed.data.geometry),
-    parsed.data.source, parsed.data.confidence ?? null, parsed.data.versionId, project.id,
-  ).run();
-  const created = await context.env.DB.prepare("SELECT id FROM privacy_regions WHERE id = ?").bind(id).first();
-  if (!created) return notFound(context, "Scene version not found");
-  await audit(context, auth, "privacy.region.create", "privacy_region", id);
-  return context.json({ privacyRegion: { id, status: "pending", ...parsed.data } }, 201);
-});
-
-app.patch("/api/projects/:projectId/spatial/privacy-regions/:regionId", async (context) => {
-  const auth = await requireOperator(context);
-  if (auth instanceof Response) return auth;
-  if (!(await isSameOrigin(context))) return forbidden(context, "Cross-origin request rejected");
-  const parsed = privacyRegionDecisionSchema.safeParse(await readJson(context));
-  if (!parsed.success) return validationError(context, parsed.error.flatten());
-  const result = await context.env.DB.prepare(`
-    UPDATE privacy_regions SET status = ?, reviewed_by = ?, reviewed_at = datetime('now'),
-      updated_at = datetime('now')
-    WHERE id = ? AND project_id = ? AND organisation_id = ?
-    RETURNING id, status
-  `).bind(parsed.data.status, auth.userId, context.req.param("regionId"), context.req.param("projectId"), auth.organisationId).first();
-  if (!result) return notFound(context, "Privacy region not found");
-  await audit(context, auth, "privacy.region.review", "privacy_region", context.req.param("regionId"), parsed.data);
-  return context.json({ privacyRegion: result });
 });
 
 app.post("/api/projects/:projectId/spatial/semantic-extractions", async (context) => {
@@ -16257,43 +15815,11 @@ app.post("/api/versions/:versionId/approve", async (context) => {
       });
     }
   }
-  const latestPrivacyScan = await context.env.DB.prepare(`
-    SELECT id, status, input_count FROM privacy_scans
-    WHERE version_id = ? AND project_id = ? AND organisation_id = ?
-    ORDER BY created_at DESC LIMIT 1
-  `).bind(version.id, version.project_id, auth.organisationId)
-    .first<{ id: string; status: string; input_count: number }>();
-  if (!latestPrivacyScan) {
-    return conflict(context, "A completed automated privacy scan is required before privacy approval");
-  }
-  if (latestPrivacyScan.status !== "COMPLETED") {
-    return conflict(
-      context,
-      `The latest automated privacy scan is ${latestPrivacyScan.status.toLowerCase()}; complete or retry it before privacy approval`,
-    );
-  }
-  if (latestPrivacyScan.input_count < 1) {
-    return conflict(context, "The completed privacy scan has no verified image evidence");
-  }
-  const privacyBlockers = await context.env.DB.batch([
-    context.env.DB.prepare(`
-      SELECT COUNT(*) AS count FROM privacy_candidates
-      WHERE scan_id = ? AND status IN ('pending', 'confirmed')
-    `).bind(latestPrivacyScan.id),
-    context.env.DB.prepare(`
-      SELECT COUNT(*) AS count FROM privacy_regions
-      WHERE version_id = ? AND project_id = ? AND organisation_id = ?
-        AND status IN ('pending', 'approved')
-    `).bind(version.id, version.project_id, auth.organisationId),
-  ]);
-  const unresolvedCandidates = scalarCount(requiredBatchResult(privacyBlockers, 0));
-  const unresolvedRegions = scalarCount(requiredBatchResult(privacyBlockers, 1));
-  if (unresolvedCandidates > 0 || unresolvedRegions > 0) {
-    return conflict(
-      context,
-      `Privacy review has ${unresolvedCandidates} unresolved automated candidate(s) and ${unresolvedRegions} unresolved spatial region(s)`,
-    );
-  }
+  // Automated privacy scanning was removed at the operator's direction: it ran
+  // a vision model over poster images only, which is a sample of a 2D render
+  // rather than the scene, and privacy review is handled outside the platform.
+  // Nothing here infers privacy state; the QA decision the operator records is
+  // the attestation.
   const walkingQualification = await qualifyNavigationPreview(
     context.env,
     auth.organisationId,
@@ -16544,37 +16070,12 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   if (Object.keys(navigationClearanceViolations).length) {
     return unprocessable(context, navigationClearanceViolations);
   }
-  // Wayfinder exposure gate (#34): walkable space opened by machine trajectory
-  // evidence is honest at the credential-gated tier, but public exposure is a
-  // human-attested claim. Ratification is the existing correction-draft lane —
-  // classify the auto-opened openings (Mark doorway) and re-approve, which
-  // re-cooks the map as operator-attested and clears this gate naturally.
-  if (parsed.data.accessPolicy === "public" || parsed.data.accessPolicy === "unlisted") {
-    const machineOpened = await trajectoryAutoOpenedOpeningCount(
-      context.env.DB,
-      auth.organisationId,
-      project.id,
-      approved.id,
-    );
-    if (machineOpened === null) {
-      return conflict(
-        context,
-        "Publication blocked: the approved walking map's trajectory auto-open evidence is unreadable. Re-review the floor plan to freeze a valid revision before public exposure.",
-      );
-    }
-    if (machineOpened > 0) {
-      return unprocessable(context, {
-        accessPolicy: [
-          `Public exposure requires operator-ratified structure: ${machineOpened} ` +
-          `structural element(s) in the approved walking map were opened or removed ` +
-          `by machine trajectory evidence. Publish with token or ` +
-          `customer-authenticated access, or open a structure correction draft, ` +
-          `ratify the machine changes (mark doorways, remove clutter walls), and ` +
-          `re-approve to make the walking map operator-attested.`,
-        ],
-      });
-    }
-  }
+  // Trajectory evidence is trusted for public exposure like any other cook.
+  // It used to cap machine-changed walking maps at the credential-gated tier,
+  // but the operator already makes that decision when they set the project's
+  // trajectory policy, and re-collecting it per revision only taught operators
+  // to publish token-only. The machine changes stay visible on the revision
+  // card and in the navigation authoring receipt either way.
   if (approvedPolicy.policy.hosting === "managed-required") {
     if (!(await projectHasActiveManagedHosting(context.env.DB, auth.organisationId, project.id))) {
       return conflict(
@@ -16726,29 +16227,14 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       "Publication blocked: the exact approved v7+ collision, navigation report, and Detour navmesh must all be present and verified",
     );
   }
-  const navigationAssets = Reflect.get(spatialSnapshot, "navigationAssets");
-  const approvedNavigationBuildId = navigationAssets && typeof navigationAssets === "object"
-    ? readNullableStringProperty(navigationAssets, "buildId")
-    : null;
-  const completedWalkTest = approvedNavigationBuildId
-    ? await context.env.DB.prepare(`
-      SELECT id FROM scene_navigation_walk_tests
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND navigation_build_id = ?
-      ORDER BY completed_at DESC LIMIT 1
-    `).bind(
-      auth.organisationId,
-      project.id,
-      approved.id,
-      approvedNavigationBuildId,
-    ).first<{ id: string }>()
-    : null;
-  if (!completedWalkTest) {
-    return conflict(
-      context,
-      "Publication blocked: complete and record the in-scene walk test for the exact approved walking map",
-    );
-  }
+  // The in-scene walk test used to gate publication here. Its whole assertion
+  // was that the end pose differed from the start pose — one millimetre passed
+  // — while the processor already proves room-anchor enclosure in six
+  // directions, both-direction capsule and sphere sweeps against every
+  // reviewed wall, corner slides, route replay, and Detour reachability, and
+  // an operator already approves the build with a typed review note. Binding
+  // the receipt to a build id (correctly) meant every rebuild retired it, so
+  // the gate degraded into rebuild-nudge-publish rather than assurance.
   if (
     hasNonIdentitySceneRotation(releaseViewerConfig.sceneRotationDegrees) &&
     hasAuthoredSpatialRuntime(spatialSnapshot)
@@ -22878,25 +22364,6 @@ async function measurementPolicyBlockReason(
 // (or no walking map / feature off). null = a frozen blob exists but is
 // unreadable — callers must FAIL CLOSED. Reads the same latest-approved
 // revision the navigation authoring receipt is built from.
-async function trajectoryAutoOpenedOpeningCount(
-  database: D1Database,
-  organisationId: string,
-  projectId: string,
-  versionId: string,
-): Promise<number | null> {
-  const revision = await database.prepare(`
-    SELECT trajectory_evidence_json FROM floorplan_revisions
-    WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-      AND status = 'approved'
-    ORDER BY revision_number DESC, created_at DESC LIMIT 1
-  `).bind(organisationId, projectId, versionId)
-    .first<{ trajectory_evidence_json: string | null }>();
-  const frozen = parseFrozenTrajectoryAutoOpen(revision?.trajectory_evidence_json ?? null);
-  if (frozen === undefined) return 0;
-  if (frozen === null) return null;
-  return frozen.qualifiedOpenings.length + (frozen.demotedWalls?.length ?? 0) +
-    (frozen.walkedFloorDemotedWalls?.length ?? 0);
-}
 
 async function sceneVersionUsesOperatorAttestation(
   database: D1Database,
@@ -23786,19 +23253,8 @@ export async function completeReleaseRepublishIntent(
         "Automatic republish stopped because the verified walking package is not the exact rebuilt navigation map",
       );
     }
-    const completedWalkTest = await env.DB.prepare(`
-      SELECT id FROM scene_navigation_walk_tests
-      WHERE organisation_id = ? AND project_id = ? AND version_id = ?
-        AND navigation_build_id = ?
-      ORDER BY completed_at DESC LIMIT 1
-    `).bind(
-      intent.organisation_id,
-      intent.project_id,
-      intent.version_id,
-      navigationBuildId,
-    ).first<{ id: string }>();
-    if (!completedWalkTest) return null;
-
+    // Automatic republish no longer waits on a walk-test receipt; see the
+    // publication path for why the gate was removed.
     const releaseId = crypto.randomUUID();
     const publishedAt = new Date().toISOString();
     const spatialSnapshotJson = JSON.stringify(spatialSnapshot);
@@ -26381,368 +25837,9 @@ function captureBundleApi(manifest: CaptureBundleRow): Record<string, unknown> {
   };
 }
 
-function privacyScanApi(scan: PrivacyScanRow): Record<string, unknown> {
-  return {
-    id: scan.id,
-    versionId: scan.version_id,
-    status: scan.status,
-    detector: scan.detector,
-    detectorVersion: scan.detector_version,
-    attemptCount: scan.attempt_count,
-    maxAttempts: scan.max_attempts,
-    inputCount: scan.input_count,
-    candidateCount: scan.candidate_count,
-    evidence: parseStoredObject(scan.evidence_json ?? "{}"),
-    error: parseStoredObject(scan.error_json ?? "null"),
-    createdAt: scan.created_at,
-    updatedAt: scan.updated_at,
-    startedAt: scan.started_at,
-    completedAt: scan.completed_at,
-  };
-}
 
-async function markPrivacyScanEnqueueFailure(
-  database: D1Database,
-  scanId: string,
-  error: unknown,
-): Promise<void> {
-  await database.prepare(`
-    UPDATE privacy_scans
-    SET status = 'FAILED', error_json = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `).bind(JSON.stringify({
-    code: "queue_unavailable",
-    message: errorMessage(error).slice(0, 1000),
-    retryable: true,
-    failedAt: new Date().toISOString(),
-  }), scanId).run();
-}
 
-type NormalisedPrivacyBox = {
-  xMin: number;
-  yMin: number;
-  xMax: number;
-  yMax: number;
-  confidence: number | null;
-  raw: Record<string, unknown>;
-};
 
-export function normalisePrivacyBoxes(response: unknown): NormalisedPrivacyBox[] {
-  if (!response || typeof response !== "object") return [];
-  const objects = Reflect.get(response, "objects");
-  if (!Array.isArray(objects)) return [];
-  const boxes: NormalisedPrivacyBox[] = [];
-  for (const candidate of objects) {
-    if (!candidate || typeof candidate !== "object") continue;
-    const raw = candidate as Record<string, unknown>;
-    const nested = (
-      Reflect.get(raw, "bbox") ??
-      Reflect.get(raw, "box") ??
-      Reflect.get(raw, "bounding_box")
-    );
-    let coordinates: number[] | null = null;
-    if (Array.isArray(nested) && nested.length >= 4) {
-      coordinates = nested.slice(0, 4).map(Number);
-    } else {
-      const source = nested && typeof nested === "object"
-        ? nested as Record<string, unknown>
-        : raw;
-      coordinates = [
-        numberFromProperties(source, ["x_min", "xmin", "xMin", "left", "x1"]),
-        numberFromProperties(source, ["y_min", "ymin", "yMin", "top", "y1"]),
-        numberFromProperties(source, ["x_max", "xmax", "xMax", "right", "x2"]),
-        numberFromProperties(source, ["y_max", "ymax", "yMax", "bottom", "y2"]),
-      ].map((value) => value ?? Number.NaN);
-    }
-    if (!coordinates.every(Number.isFinite)) continue;
-    const maximum = Math.max(...coordinates);
-    if (maximum > 1 && maximum <= 1000) {
-      coordinates = coordinates.map((value) => value / 1000);
-    }
-    let [xMin, yMin, xMax, yMax] = coordinates;
-    xMin = clampUnit(xMin!);
-    yMin = clampUnit(yMin!);
-    xMax = clampUnit(xMax!);
-    yMax = clampUnit(yMax!);
-    if (xMax <= xMin || yMax <= yMin || (xMax - xMin) * (yMax - yMin) < 0.00001) continue;
-    const confidenceValue = numberFromProperties(raw, ["confidence", "score", "probability"]);
-    boxes.push({
-      xMin: roundCoordinate(xMin),
-      yMin: roundCoordinate(yMin),
-      xMax: roundCoordinate(xMax),
-      yMax: roundCoordinate(yMax),
-      confidence: confidenceValue === null ? null : clampUnit(confidenceValue),
-      raw,
-    });
-  }
-  return deduplicatePrivacyBoxes(boxes);
-}
-
-async function processPrivacyScan(
-  env: Env,
-  scanId: string,
-  deliveryAttempt: number,
-): Promise<void> {
-  const scan = await env.DB.prepare(`
-    UPDATE privacy_scans
-    SET status = 'RUNNING', attempt_count = attempt_count + 1,
-      started_at = datetime('now'), completed_at = NULL, error_json = NULL,
-      updated_at = datetime('now')
-    WHERE id = ? AND status IN ('QUEUED', 'FAILED')
-    RETURNING *
-  `).bind(scanId).first<PrivacyScanRow>();
-  if (!scan) {
-    const existing = await env.DB.prepare(
-      "SELECT status FROM privacy_scans WHERE id = ?",
-    ).bind(scanId).first<{ status: string }>();
-    if (existing?.status === "COMPLETED" || existing?.status === "RUNNING") return;
-    throw new Error("Privacy scan is unavailable for processing");
-  }
-  const startedAt = Date.now();
-  try {
-    const inputs = await env.DB.prepare(`
-      SELECT a.*, psi.scan_id
-      FROM privacy_scan_inputs psi
-      JOIN assets a ON a.id = psi.asset_id
-      WHERE psi.scan_id = ? AND a.organisation_id = ? AND a.project_id = ?
-        AND a.version_id = ? AND a.integrity_status = 'verified'
-        AND a.deleted_at IS NULL
-      ORDER BY a.id
-    `).bind(
-      scan.id,
-      scan.organisation_id,
-      scan.project_id,
-      scan.version_id,
-    ).all<PrivacyScanInputRow>();
-    if (!inputs.results.length || inputs.results.length !== scan.input_count) {
-      throw new Error("Privacy scan inputs are missing or no longer verified");
-    }
-    await env.DB.prepare("DELETE FROM privacy_candidates WHERE scan_id = ?").bind(scan.id).run();
-    const candidates: Array<{
-      id: string;
-      asset: AssetRow;
-      target: string;
-      label: string;
-      box: NormalisedPrivacyBox;
-      bboxJson: string;
-      bboxHash: string;
-    }> = [];
-    let inferenceCount = 0;
-    let inferenceAttemptCount = 0;
-    let truncated = false;
-    const ai = env.AI as unknown as {
-      run(
-        model: string,
-        inputs: Record<string, unknown>,
-        options?: Record<string, unknown>,
-      ): Promise<unknown>;
-    };
-    for (const asset of inputs.results) {
-      if (!asset.mime_type.startsWith("image/") || asset.size_bytes > maximumPrivacyImageBytes) {
-        throw new Error(`Privacy input ${asset.file_name} is not a supported bounded image`);
-      }
-      const object = await env.SPATIAL_ASSETS.get(asset.object_key);
-      if (!object) throw new Error(`Privacy input ${asset.file_name} is missing from private storage`);
-      const bytes = new Uint8Array(await object.arrayBuffer());
-      if (!bytes.byteLength || bytes.byteLength > maximumPrivacyImageBytes) {
-        throw new Error(`Privacy input ${asset.file_name} has an invalid byte length`);
-      }
-      const dataUri = `data:${asset.mime_type};base64,${bytesToBase64(bytes)}`;
-      for (const targetDefinition of privacyTargets) {
-        const inference = await runPrivacyDetectionWithRetry(
-          ai,
-          {
-            task: "detect",
-            image: dataUri,
-            target: targetDefinition.target,
-            max_objects: 20,
-            stream: false,
-          },
-          {
-            tags: ["spatial-studio", "privacy-detection", scan.id.slice(0, 36)],
-          },
-        );
-        const output = inference.output;
-        inferenceAttemptCount += inference.attempts;
-        inferenceCount += 1;
-        for (const box of normalisePrivacyBoxes(output)) {
-          if (candidates.length >= 250) {
-            truncated = true;
-            break;
-          }
-          const bboxJson = JSON.stringify({
-            xMin: box.xMin,
-            yMin: box.yMin,
-            xMax: box.xMax,
-            yMax: box.yMax,
-          });
-          candidates.push({
-            id: crypto.randomUUID(),
-            asset,
-            target: targetDefinition.target,
-            label: targetDefinition.label,
-            box,
-            bboxJson,
-            bboxHash: await sha256Hex(bboxJson),
-          });
-        }
-      }
-    }
-    for (let offset = 0; offset < candidates.length; offset += 50) {
-      const chunk = candidates.slice(offset, offset + 50);
-      await env.DB.batch(chunk.map((candidate) => env.DB.prepare(`
-        INSERT INTO privacy_candidates
-          (id, scan_id, organisation_id, project_id, version_id, asset_id,
-            target, label, bbox_json, bbox_hash, confidence,
-            detector_metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(
-        candidate.id,
-        scan.id,
-        scan.organisation_id,
-        scan.project_id,
-        scan.version_id,
-        candidate.asset.id,
-        candidate.target,
-        candidate.label,
-        candidate.bboxJson,
-        candidate.bboxHash,
-        candidate.box.confidence,
-        JSON.stringify({
-          detector: privacyDetectorVersion,
-          modelConfidenceUnavailable: candidate.box.confidence === null,
-          raw: candidate.box.raw,
-        }),
-      )));
-    }
-    const completedAt = new Date().toISOString();
-    const evidence = {
-      detector: privacyDetector,
-      detectorVersion: privacyDetectorVersion,
-      targets: privacyTargets.map(({ target }) => target),
-      inputs: inputs.results.map((asset) => ({
-        assetId: asset.id,
-        sha256: asset.sha256,
-        mimeType: asset.mime_type,
-        sizeBytes: asset.size_bytes,
-      })),
-      inferenceCount,
-      inferenceAttemptCount,
-      inferenceRetryCount: inferenceAttemptCount - inferenceCount,
-      candidateCount: candidates.length,
-      truncated,
-      deliveryAttempt,
-      durationMs: Date.now() - startedAt,
-      completedAt,
-      humanReviewRequired: true,
-    };
-    await env.DB.prepare(`
-      UPDATE privacy_scans
-      SET status = 'COMPLETED', candidate_count = ?, evidence_json = ?,
-        error_json = NULL, completed_at = ?, updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(candidates.length, JSON.stringify(evidence), completedAt, scan.id).run();
-  } catch (error) {
-    const exhausted = deliveryAttempt >= scan.max_attempts;
-    await env.DB.prepare(`
-      UPDATE privacy_scans
-      SET status = ?, error_json = ?, completed_at = CASE WHEN ? THEN datetime('now') ELSE NULL END,
-        updated_at = datetime('now')
-      WHERE id = ?
-    `).bind(
-      exhausted ? "DEAD_LETTER" : "FAILED",
-      JSON.stringify({
-        code: "privacy_detection_failed",
-        message: errorMessage(error).slice(0, 1000),
-        retryable: !exhausted,
-        detector: privacyDetectorVersion,
-        deliveryAttempt,
-        failedAt: new Date().toISOString(),
-      }),
-      exhausted ? 1 : 0,
-      scan.id,
-    ).run();
-    throw error;
-  }
-}
-
-export async function runPrivacyDetectionWithRetry(
-  ai: {
-    run(
-      model: string,
-      inputs: Record<string, unknown>,
-      options?: Record<string, unknown>,
-    ): Promise<unknown>;
-  },
-  inputs: Record<string, unknown>,
-  options: Record<string, unknown>,
-  maximumAttempts = 3,
-): Promise<{ output: unknown; attempts: number }> {
-  const attempts = Math.min(3, Math.max(1, Math.trunc(maximumAttempts)));
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return {
-        output: await ai.run(privacyDetector, inputs, options),
-        attempts: attempt,
-      };
-    } catch (error) {
-      lastError = error;
-      if (attempt === attempts) break;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, Math.min(1_000, 250 * 2 ** (attempt - 1)));
-      });
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError));
-}
-
-function numberFromProperties(
-  object: Record<string, unknown>,
-  properties: string[],
-): number | null {
-  for (const property of properties) {
-    const value = Reflect.get(object, property);
-    const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function clampUnit(value: number): number {
-  return Math.min(1, Math.max(0, value));
-}
-
-function roundCoordinate(value: number): number {
-  return Math.round(value * 1_000_000) / 1_000_000;
-}
-
-function deduplicatePrivacyBoxes(boxes: NormalisedPrivacyBox[]): NormalisedPrivacyBox[] {
-  const retained: NormalisedPrivacyBox[] = [];
-  for (const candidate of boxes) {
-    if (retained.some((existing) => privacyBoxIou(existing, candidate) >= 0.9)) continue;
-    retained.push(candidate);
-  }
-  return retained;
-}
-
-function privacyBoxIou(left: NormalisedPrivacyBox, right: NormalisedPrivacyBox): number {
-  const intersectionWidth = Math.max(0, Math.min(left.xMax, right.xMax) - Math.max(left.xMin, right.xMin));
-  const intersectionHeight = Math.max(0, Math.min(left.yMax, right.yMax) - Math.max(left.yMin, right.yMin));
-  const intersection = intersectionWidth * intersectionHeight;
-  const leftArea = (left.xMax - left.xMin) * (left.yMax - left.yMin);
-  const rightArea = (right.xMax - right.xMin) * (right.yMax - right.yMin);
-  const union = leftArea + rightArea - intersection;
-  return union > 0 ? intersection / union : 0;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-}
 
 const worker = {
   async fetch(request: Request, env: Env, executionContext: ExecutionContext): Promise<Response> {
@@ -26788,27 +25885,9 @@ const worker = {
         }
         continue;
       }
-      if (
-        !message.body ||
-        !("scanId" in message.body) ||
-        typeof message.body.scanId !== "string" ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(message.body.scanId)
-      ) {
-        message.ack();
-        continue;
-      }
-      try {
-        await processPrivacyScan(env, message.body.scanId, message.attempts);
-        message.ack();
-      } catch (error) {
-        console.error(JSON.stringify({
-          event: "privacy.scan_failed",
-          scanId: message.body.scanId,
-          attempt: message.attempts,
-          error: errorMessage(error),
-        }));
-        message.retry({ delaySeconds: Math.min(300, 15 * 2 ** Math.max(0, message.attempts - 1)) });
-      }
+      // Automated privacy scanning was removed; drain anything still queued
+      // rather than retrying work no consumer performs.
+      message.ack();
     }
   },
 } satisfies ExportedHandler<Env, SpatialQueueMessage>;

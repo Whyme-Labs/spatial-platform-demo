@@ -1,5 +1,5 @@
 // Wayfinder (#35): the revision-card summary — machine-attested changes with
-// their ratification path, and the sealed-cost line that makes the
+// what they changed, and the sealed-cost line that makes the
 // conservative default's price visible.
 import { describe, expect, it } from "vitest";
 import { wayfinderRevisionSummaryLines } from "../src/client/wayfinder-summary";
@@ -17,7 +17,7 @@ const planWithUnknowns = JSON.stringify({
 });
 
 describe("wayfinderRevisionSummaryLines", () => {
-  it("reports machine changes with the ratification path and the sealed remainder", () => {
+  it("reports what the machine changed and the sealed remainder", () => {
     const lines = wayfinderRevisionSummaryLines({
       plan_json: planWithUnknowns,
       trajectory_evidence_json: JSON.stringify({
@@ -36,7 +36,7 @@ describe("wayfinderRevisionSummaryLines", () => {
     expect(lines[0]!.text).toContain("opening-002: room-001 ↔ room-002");
     expect(lines[0]!.text).toContain("1 clutter wall removed");
     expect(lines[0]!.text).toContain("passed through 2×");
-    expect(lines[0]!.text).toContain("structure correction draft");
+    expect(lines[0]!.text).toContain("structure draft");
     expect(lines[1]).toMatchObject({ tone: "sealed" });
     expect(lines[1]!.text).toContain("2 unresolved openings remain sealed");
   });

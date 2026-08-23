@@ -234,35 +234,8 @@ try {
   if (!webAsset || !posterAsset) {
     throw new Error("Processing produced no verified web asset and poster pair");
   }
-  const queuedScan = await api(`/api/projects/${projectId}/privacy-scans`, {
-    method: "POST",
-    body: {
-      clientOperationId: randomUUID(),
-      versionId,
-      assetIds: [posterAsset.id],
-    },
-  });
-  workspace = await waitForWorkspace("privacy scan", (candidate) => {
-    const scan = candidate.privacyScans.find((item) => item.id === queuedScan.scan.id);
-    return scan && ["COMPLETED", "FAILED", "DEAD_LETTER"].includes(scan.status)
-      ? scan
-      : null;
-  });
-  const scan = workspace.privacyScans.find((item) => item.id === queuedScan.scan.id);
-  if (scan?.status !== "COMPLETED") {
-    throw new Error(`Privacy scan ended ${scan?.status ?? "missing"}`);
-  }
-  for (const candidate of workspace.privacyCandidates.filter((item) =>
-    item.scan_id === scan.id && ["pending", "confirmed"].includes(item.status)
-  )) {
-    await api(`/api/projects/${projectId}/privacy-candidates/${candidate.id}`, {
-      method: "PATCH",
-      body: {
-        status: "dismissed",
-        note: "Deterministic synthetic staging canary poster contains no personal data.",
-      },
-    });
-  }
+  // Automated privacy scanning was removed; the QA approval below carries the
+  // operator's own privacy disposition, exactly as it does in production.
   await api(`/api/versions/${versionId}/approve`, {
     method: "POST",
     body: {

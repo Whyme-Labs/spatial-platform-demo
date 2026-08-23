@@ -1,7 +1,6 @@
-// Wayfinder (#34): machine-attested walkability caps releases at the
-// credential-gated tier. Public/unlisted exposure of a version whose approved
-// walking map contains trajectory-auto-opened openings is refused with the
-// ratification path in the message; an unreadable frozen blob fails closed.
+// Wayfinder (#34) capped machine-attested walkability at the credential-gated
+// tier. That gate is gone: trajectory evidence is trusted for public exposure
+// like any other cook. These pin the removal so it cannot creep back.
 import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -78,13 +77,17 @@ function frozenAutoOpenBlob(): string {
 
 async function seedApprovedVersion(cookie: string, trajectoryEvidenceJson: string | null): Promise<{
   projectId: string;
+  revisionId: string;
+  planHash: string;
 }> {
+  const revisionId = crypto.randomUUID();
+  const planHash = "c".repeat(64);
   const projectResponse = await exports.default.fetch(`${origin}/api/projects`, {
     method: "POST",
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({
       clientOperationId: crypto.randomUUID(),
-      name: `Exposure gate ${crypto.randomUUID().slice(0, 8)}`,
+      name: `Machine exposure ${crypto.randomUUID().slice(0, 8)}`,
       captureAdapter: "fjd-trion",
       deliveryTemplate: "Property showcase",
     }),
@@ -167,18 +170,18 @@ async function seedApprovedVersion(cookie: string, trajectoryEvidenceJson: strin
           review_note, created_by, trajectory_evidence_json)
       VALUES (?, ?, ?, ?, ?, 1, '{}', ?, ?, 'Exposure gate fixture.', ?, ?)
     `).bind(
-      crypto.randomUUID(),
+      revisionId,
       stored!.organisation_id,
       project.id,
       versionId,
       extractionId,
-      "c".repeat(64),
+      planHash,
       "a".repeat(64),
       stored!.created_by,
       trajectoryEvidenceJson,
     ),
   ]);
-  return { projectId: project.id };
+  return { projectId: project.id, revisionId, planHash };
 }
 
 function publish(cookie: string, projectId: string, accessPolicy: string) {
@@ -197,64 +200,30 @@ function publish(cookie: string, projectId: string, accessPolicy: string) {
   });
 }
 
-describe("wayfinder exposure gate", () => {
-  it("refuses public and unlisted exposure of machine-opened walking maps", async () => {
+// Trajectory evidence is trusted for public exposure like any other cook. The
+// gate that capped machine-changed walking maps at the credential-gated tier
+// was removed: the operator decides this once, when they set the project's
+// trajectory policy, and re-collecting it per revision only taught operators to
+// publish token-only.
+describe("machine-changed walking maps and public exposure", () => {
+  it("never refuses public exposure for machine trajectory changes", async () => {
     const cookie = await login();
     const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
     for (const accessPolicy of ["public", "unlisted"]) {
-      const refused = await publish(cookie, seeded.projectId, accessPolicy);
-      expect(refused.status).toBe(422);
-      await expect(refused.json()).resolves.toMatchObject({
-        details: {
-          accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
-        },
-      });
+      const attempt = await publish(cookie, seeded.projectId, accessPolicy);
+      const body = JSON.stringify(await attempt.json());
+      expect(body).not.toContain("machine trajectory evidence");
+      expect(body).not.toContain("operator-ratified structure");
     }
-    // The credential-gated tier passes this gate: a token publish proceeds to
-    // the deeper walkable-evidence gates and fails there for missing assets,
-    // never with the machine-attestation refusal.
-    const token = await publish(cookie, seeded.projectId, "token");
-    expect(token.status).not.toBe(201);
-    const tokenBody = JSON.stringify(await token.json());
-    expect(tokenBody).not.toContain("machine trajectory evidence");
   }, 120_000);
 
-  it("refuses public exposure for demotion-only machine changes too", async () => {
-    const cookie = await login();
-    const blob = JSON.parse(frozenAutoOpenBlob());
-    blob.qualifiedOpenings = [];
-    blob.evidence.wallCrossings = [{ wallId: "wall-009", crossingCount: 3 }];
-    blob.demotedWalls = [{
-      levelId: "level-001",
-      wallId: "wall-009",
-      crossingCount: 3,
-      roomId: "room-001",
-    }];
-    const seeded = await seedApprovedVersion(cookie, JSON.stringify(blob));
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(422);
-    await expect(refused.json()).resolves.toMatchObject({
-      details: {
-        accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
-      },
-    });
-  }, 120_000);
-
-  it("fails closed on an unreadable frozen auto-open blob", async () => {
+  it("does not refuse on an unreadable frozen blob either", async () => {
+    // Nothing reads the blob for an exposure decision any more, so a corrupt
+    // one can no longer block a release on its own.
     const cookie = await login();
     const seeded = await seedApprovedVersion(cookie, "{\"not\":\"a valid blob\"}");
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(409);
-    await expect(refused.json()).resolves.toMatchObject({
-      error: expect.stringContaining("trajectory auto-open evidence is unreadable"),
-    });
-  }, 120_000);
-
-  it("lets fully operator-attested versions through untouched", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, null);
     const attempt = await publish(cookie, seeded.projectId, "public");
     const body = JSON.stringify(await attempt.json());
-    expect(body).not.toContain("machine trajectory evidence");
+    expect(body).not.toContain("trajectory auto-open evidence is unreadable");
   }, 120_000);
 });

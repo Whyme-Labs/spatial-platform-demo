@@ -60,35 +60,35 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.locator("#projectTable")).toBeHidden();
 
-  const privacyTab = page.getByRole("button", { name: "Privacy", exact: true });
-  await privacyTab.press("Enter");
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(privacyTab).toHaveAttribute("aria-current", "page");
-  await expect(page.locator(".project-journey-step").filter({ hasText: "Privacy" })).toHaveAttribute("aria-current", "step");
+  const publishTab = page.getByRole("button", { name: "Publish", exact: true });
+  await publishTab.press("Enter");
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+  await expect(publishTab).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".project-journey-step").filter({ hasText: "Publish" })).toHaveAttribute("aria-current", "step");
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await page.goForward();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
 
   await page.getByRole("button", { name: "Back to projects", exact: true }).click();
   await expect(page).toHaveURL(/#projects$/);
   await expect(page.locator("#projectTable")).toBeVisible();
 });
 
-test("privacy, walk testing, expert evidence, and publication are first-class project tasks", async ({ page }) => {
+test("structure, expert evidence, and publication are first-class project tasks", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
 
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(page.getByRole("heading", {
-    name: "Automated candidates, human decisions",
-    exact: true,
-  })).toBeVisible();
+  // Automated privacy scanning was removed, so an unapproved version routes
+  // straight to Publish, where the operator records their own privacy review.
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
 
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/walk$`));
+  // Routes and the walking profile are structural authoring; the walk stage
+  // dissolved once it held neither a walk test nor its own viewer.
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await expect(page.getByRole("heading", { name: "Routes and movement runtime", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Expert", exact: true }).click();
@@ -101,41 +101,6 @@ test("privacy, walk testing, expert evidence, and publication are first-class pr
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
-});
-
-test("privacy polling stays active on the Privacy stage until delayed evidence completes", async ({ page }) => {
-  await page.addInitScript(() => {
-    const originalSetTimeout = window.setTimeout.bind(window);
-    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
-      const duration = timeout ?? 0;
-      const acceleratePrivacyPolling = (window as Window & {
-        __spatialAcceleratePrivacyPolling?: boolean;
-      }).__spatialAcceleratePrivacyPolling;
-      const effectiveDuration = acceleratePrivacyPolling && [1_500, 3_000].includes(duration)
-        ? 25
-        : duration;
-      return originalSetTimeout(handler, effectiveDuration, ...args);
-    }) as typeof window.setTimeout;
-  });
-  const polling = { spatialReads: 0 };
-  await mockApprovedProject(page, () => undefined, { delayedPrivacyScan: polling });
-
-  await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await page.getByRole("button", { name: "Run automated privacy scan", exact: true }).click();
-
-  await expect(page.locator("#privacyAssuranceCard").getByText("Running", { exact: true })).toBeVisible();
-  await page.evaluate(() => {
-    (window as Window & { __spatialAcceleratePrivacyPolling?: boolean })
-      .__spatialAcceleratePrivacyPolling = true;
-  });
-  await expect(page.locator("#privacyAssuranceCard").getByText("Completed", { exact: true })).toBeVisible();
-  await expect(page.getByText(
-    "No privacy candidates were detected. The completed scan remains part of the QA evidence.",
-    { exact: true },
-  )).toBeVisible();
-  expect(polling.spatialReads).toBeGreaterThanOrEqual(3);
 });
 
 test("a novice can upload, inspect every stage, walk test, and publish using visible controls", async ({ page }) => {
@@ -201,43 +166,11 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await floorplanReview.getByRole("button", { name: "Save operator decision", exact: true }).click();
   await expect(floorplanReview).toBeHidden();
 
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Review candidate", exact: true }).click();
-  const privacyReview = page.locator("#privacyCandidateDialog");
-  await privacyReview.getByLabel("Evidence note", { exact: true }).fill(
-    "Verified as a reflection in the poster frame.",
-  );
-  await privacyReview.getByRole("button", { name: "Record privacy decision", exact: true }).click();
-  await expect(privacyReview).toBeHidden();
-  await expect(page.getByText("Privacy candidate dismissed", { exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Walk test", exact: true })).toBeVisible();
   await expect(page.getByLabel("Recast cell size", { exact: true })).toBeHidden();
-  await expect(page.getByText(
-    "0 unreachable authored destinations · 0 failed physical routes in the approved processor receipt.",
-    { exact: true },
-  )).toBeVisible();
-  const walkFrame = page.frameLocator("#walkTestPreview");
-  await walkFrame.getByRole("button", { name: "Stand at safe start", exact: true }).click();
-  const setStartingPosition = page.getByRole("button", {
-    name: "Set test start here",
-    exact: true,
-  });
-  await expect(setStartingPosition).toBeEnabled();
-  await setStartingPosition.click();
-  await expect(page.locator("#walkTestStatus")).toContainText("Starting point set");
-  await walkFrame.getByRole("button", { name: "Walk to destination", exact: true }).click();
-  const completeWalkTest = page.getByRole("button", { name: "Complete walk test", exact: true });
-  await expect(completeWalkTest).toBeEnabled();
-  await completeWalkTest.click();
-  await expect(page.getByText("Walk test completed and recorded", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
   const qa = page.locator("#qaDialog");
-  await expect(qa.getByText("Privacy evidence is ready", { exact: true })).toBeVisible();
   await expect(qa.locator("select[name='visualGrade'] option")).toHaveText([
     "A — Client-ready: no visible defects at the approved framing and quality preset",
     "B — Acceptable: minor defects do not distract from the intended experience",
@@ -276,20 +209,7 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   });
 });
 
-test("QA recovery opens the visible privacy task", async ({ page }) => {
-  await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
-
-  await page.goto("/studio.html#projects");
-  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
-  await page.getByRole("button", { name: "Open privacy evidence workspace", exact: true }).click();
-
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/privacy$`));
-  await expect(page.locator("#privacyAssuranceCard")).toBeVisible();
-});
-
-test("comparison leaves Privacy and becomes its own stage only with a comparison-ready pair", async ({ page }) => {
+test("comparison becomes its own stage only with a comparison-ready pair", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, {
     auxiliaryQaVersion: true,
     comparisonReady: true,
@@ -299,8 +219,7 @@ test("comparison leaves Privacy and becomes its own stage only with a comparison
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Privacy", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Compare", exact: true }).click();
@@ -658,61 +577,47 @@ test("multi-level floor-plan review shows every level and vertical connector", a
   );
 });
 
-test("navigation authoring actions and review rows never touch or overlap", async ({ page }) => {
+const NAVIGATION_LAYOUT_VIEWPORTS = [
+  { width: 1280, height: 720 },
+  { width: 768, height: 1024 },
+  { width: 390, height: 844 },
+  { width: 320, height: 568 },
+];
+
+// Authoring and review no longer share a stage: routes and the walking profile
+// are structural authoring, build receipts are raw evidence Expert owns. Each
+// is checked where it now lives.
+test("navigation authoring controls never touch or overlap", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
     has: page.getByRole("heading", { name: "Routes and movement runtime" }),
   });
-  const reviewCard = page.locator("article.workspace-card-large").filter({
-    has: page.getByRole("heading", { name: "Build receipts and operator review" }),
-  });
   const createRoute = card.getByRole("button", { name: "Create guided route", exact: true });
   const tuneNavigation = card.getByRole("button", { name: "Walking profile", exact: true });
   const authorTraversal = card.getByRole("button", { name: "Author vertical traversal", exact: true });
   const buildNavigation = card.getByRole("button", { name: "Build verified navigation", exact: true });
-  const firstApprove = reviewCard.getByRole("button", { name: "Approve navigation", exact: true }).first();
-  const firstReject = reviewCard.getByRole("button", { name: "Reject", exact: true }).first();
-  const buildEvidence = reviewCard.getByText("Inspect build evidence", { exact: true }).first();
-  await expect(buildEvidence).toBeVisible();
-  await buildEvidence.click();
-  await expect(reviewCard.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
 
-  for (const viewport of [
-    { width: 1280, height: 720 },
-    { width: 768, height: 1024 },
-    { width: 390, height: 844 },
-    { width: 320, height: 568 },
-  ]) {
+  for (const viewport of NAVIGATION_LAYOUT_VIEWPORTS) {
     await page.setViewportSize(viewport);
     await card.scrollIntoViewIfNeeded();
-    await firstApprove.focus();
-
     const boxes = await Promise.all([
       createRoute.boundingBox(),
       tuneNavigation.boundingBox(),
       authorTraversal.boundingBox(),
       buildNavigation.boundingBox(),
-      firstApprove.boundingBox(),
-      firstReject.boundingBox(),
-      card.boundingBox(),
-      reviewCard.boundingBox(),
     ]);
-    const [createBox, tuneBox, traversalBox, buildBox, approveBox, rejectBox, routesCardBox, reviewCardBox] = boxes;
-    if (
-      !createBox || !tuneBox || !traversalBox || !buildBox || !approveBox || !rejectBox ||
-      !routesCardBox || !reviewCardBox
-    ) {
+    const [createBox, tuneBox, traversalBox, buildBox] = boxes;
+    if (!createBox || !tuneBox || !traversalBox || !buildBox) {
       throw new Error(`${viewport.width}px navigation controls are not measurable`);
     }
-
     for (const [label, gap] of [
       ["create/tune", tuneBox.y - (createBox.y + createBox.height)],
       ["tune/traversal", traversalBox.y - (tuneBox.y + tuneBox.height)],
@@ -720,18 +625,46 @@ test("navigation authoring actions and review rows never touch or overlap", asyn
     ] as const) {
       expect(gap, `${viewport.width}px ${label} controls overlap`).toBeGreaterThan(0);
     }
+    const horizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth,
+    );
+    expect(horizontalOverflow, `${viewport.width}px page overflows horizontally`).toBeLessThanOrEqual(1);
+  }
+});
 
-    // Authoring and review now live in sibling cards: they may sit side by side or
-    // stack, but they must never overlap and the review pair must stay separated.
-    const cardsSeparated = reviewCardBox.y >= routesCardBox.y + routesCardBox.height ||
-      reviewCardBox.x >= routesCardBox.x + routesCardBox.width ||
-      routesCardBox.y >= reviewCardBox.y + reviewCardBox.height ||
-      routesCardBox.x >= reviewCardBox.x + reviewCardBox.width;
-    expect(cardsSeparated, `${viewport.width}px authoring and review cards overlap`).toBe(true);
-    const reviewPairSeparated = rejectBox.x >= approveBox.x + approveBox.width ||
+test("navigation review rows never touch or overlap in Expert", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { navigationBuildHistory: true });
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByRole("button", { name: "Expert", exact: true }).click();
+
+  const reviewCard = page.locator("article.workspace-card-large").filter({
+    has: page.getByRole("heading", { name: "Build receipts and operator review" }),
+  });
+  const firstApprove = reviewCard.getByRole("button", { name: "Approve navigation", exact: true }).first();
+  const firstReject = reviewCard.getByRole("button", { name: "Reject", exact: true }).first();
+  const buildEvidence = reviewCard.getByText("Inspect build evidence", { exact: true }).first();
+  await expect(buildEvidence).toBeVisible();
+  await buildEvidence.click();
+  await expect(reviewCard.getByText('"schemaVersion": "spatial-navigation-v9"').first()).toBeVisible();
+
+  for (const viewport of NAVIGATION_LAYOUT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    await reviewCard.scrollIntoViewIfNeeded();
+    await firstApprove.focus();
+    const [approveBox, rejectBox] = await Promise.all([
+      firstApprove.boundingBox(),
+      firstReject.boundingBox(),
+    ]);
+    if (!approveBox || !rejectBox) {
+      throw new Error(`${viewport.width}px review controls are not measurable`);
+    }
+    const separated = rejectBox.x >= approveBox.x + approveBox.width ||
       rejectBox.y >= approveBox.y + approveBox.height;
-    expect(reviewPairSeparated, `${viewport.width}px approve and reject overlap`).toBe(true);
-
+    expect(separated, `${viewport.width}px approve and reject overlap`).toBe(true);
     const horizontalOverflow = await page.evaluate(
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
@@ -751,7 +684,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.getByRole("button", { name: "Edit scene", exact: true }).click();
-  await page.getByRole("button", { name: "Walk test", exact: true }).click();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
   const dialog = page.locator("#navigationTraversalDialog");
@@ -779,7 +712,6 @@ async function mockApprovedProject(
     walkingState?: "building" | "exception";
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
-    delayedPrivacyScan?: { spatialReads: number };
     startingViewFrameQuality?: Record<string, unknown>;
     publishResult?: { status: number; body: Record<string, unknown> };
   } = {},
@@ -788,9 +720,6 @@ async function mockApprovedProject(
   let noviceStage: "structure" | "privacy" | "approved" = options.noviceLifecycle
     ? "structure"
     : "approved";
-  let novicePrivacyResolved = false;
-  let noviceWalkTestCompleted = !options.noviceLifecycle;
-  let delayedPrivacyScanStatus: "RUNNING" | "COMPLETED" | null = null;
   const uploads = new Map<string, {
     assetId: string;
     fileName: string;
@@ -813,7 +742,6 @@ async function mockApprovedProject(
     activeReleaseSlug: null,
     workflowPolicy: {
       schemaVersion: "project-workflow-policy-v1",
-      privacyReview: "strict",
       publication: "public-after-approval",
       navigation: "visitor-walk",
       requiredFiles: "visual-and-registered-geometry",
@@ -901,18 +829,6 @@ async function mockApprovedProject(
     if (path === "/api/projects" && method === "GET") {
       return json(route, 200, { projects: projectCreated ? [project] : [] });
     }
-    if (
-      options.delayedPrivacyScan && method === "POST" &&
-      path === `/api/projects/${projectId}/privacy-scans`
-    ) {
-      delayedPrivacyScanStatus = "RUNNING";
-      return json(route, 202, {
-        scan: {
-          id: "60606060-6060-4060-8060-606060606060",
-          status: "QUEUED",
-        },
-      });
-    }
     if (path === `/api/projects/${projectId}/uploads` && method === "POST" && options.captureIntake) {
       const body = request.postDataJSON() as {
         fileName: string;
@@ -973,34 +889,12 @@ async function mockApprovedProject(
       });
     }
     if (
-      options.noviceLifecycle && method === "PATCH" &&
-      path === `/api/projects/${projectId}/privacy-candidates/61616161-6161-4161-8161-616161616161`
-    ) {
-      novicePrivacyResolved = true;
-      return json(route, 200, {
-        candidate: { id: "61616161-6161-4161-8161-616161616161", status: "dismissed" },
-      });
-    }
-    if (
       options.noviceLifecycle && method === "POST" &&
       path === `/api/versions/${versionId}/approve`
     ) {
       noviceStage = "approved";
       project.status = "APPROVED";
       return json(route, 200, { version: { id: versionId, status: "APPROVED" } });
-    }
-    if (
-      options.noviceLifecycle && method === "POST" &&
-      path === `/api/projects/${projectId}/spatial/navigation-builds/dddddddd-dddd-4ddd-8ddd-dddddddddddd/walk-tests`
-    ) {
-      noviceWalkTestCompleted = true;
-      return json(route, 201, {
-        walkTest: {
-          id: "73737373-7373-4373-8373-737373737373",
-          navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-          completed_at: now,
-        },
-      });
     }
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
@@ -1035,7 +929,7 @@ async function mockApprovedProject(
             size_bytes: 73_400_000,
             integrity_status: "verified",
           },
-          ...(options.noviceLifecycle || options.delayedPrivacyScan
+          ...(options.noviceLifecycle
             ? [
               {
                 id: "57575757-5757-4575-8575-575757575757",
@@ -1158,16 +1052,9 @@ async function mockApprovedProject(
             options.noviceLifecycle && noviceStage === "structure"
           ? []
           : [versionId],
-        walkTestReadyVersionIds: noviceWalkTestCompleted ? [versionId] : [],
       });
     }
     if (path === `/api/projects/${projectId}/spatial`) {
-      if (options.delayedPrivacyScan && delayedPrivacyScanStatus) {
-        options.delayedPrivacyScan.spatialReads += 1;
-        if (options.delayedPrivacyScan.spatialReads >= 3) {
-          delayedPrivacyScanStatus = "COMPLETED";
-        }
-      }
       const reviewedTransform = options.reviewedTransform
         ? [{
           id: "66666666-6666-4666-8666-666666666666",
@@ -1219,56 +1106,6 @@ async function mockApprovedProject(
           : [],
         routes: [],
         routeStops: [],
-        privacyRegions: [],
-        privacyScans: delayedPrivacyScanStatus
-          ? [{
-            id: "60606060-6060-4060-8060-606060606060",
-            status: delayedPrivacyScanStatus,
-            detector: "fixture-detector",
-            detector_version: "fixture/1",
-            attempt_count: 1,
-            max_attempts: 3,
-            input_count: 1,
-            candidate_count: 0,
-            evidence_json: delayedPrivacyScanStatus === "COMPLETED" ? "{}" : null,
-            error_json: null,
-            created_at: now,
-            completed_at: delayedPrivacyScanStatus === "COMPLETED" ? now : null,
-          }]
-          : options.noviceLifecycle && noviceStage !== "structure"
-          ? [{
-            id: "60606060-6060-4060-8060-606060606060",
-            status: "COMPLETED",
-            detector: "fixture-detector",
-            detector_version: "fixture/1",
-            attempt_count: 1,
-            max_attempts: 3,
-            input_count: 1,
-            candidate_count: 1,
-            evidence_json: "{}",
-            error_json: null,
-            created_at: now,
-            completed_at: now,
-          }]
-          : [],
-        privacyCandidates: options.noviceLifecycle && noviceStage !== "structure"
-          ? [{
-            id: "61616161-6161-4161-8161-616161616161",
-            scan_id: "60606060-6060-4060-8060-606060606060",
-            asset_id: "57575757-5757-4575-8575-575757575757",
-            asset_file_name: "private-evidence.png",
-            asset_mime_type: "image/png",
-            target: "poster",
-            label: "Possible face",
-            bbox_json: JSON.stringify({ xMin: 0.2, yMin: 0.2, xMax: 0.4, yMax: 0.5 }),
-            confidence: 0.82,
-            detector_metadata_json: "{}",
-            status: novicePrivacyResolved ? "dismissed" : "pending",
-            decision_note: novicePrivacyResolved ? "Verified as a poster reflection." : null,
-            created_at: now,
-            reviewed_at: novicePrivacyResolved ? now : null,
-          }]
-          : [],
         changeReports: [],
         captureCompletenessReports: [],
         rawChangeReports: [],
@@ -1398,17 +1235,6 @@ async function mockApprovedProject(
               updated_at: "2026-08-01T09:18:12.000Z",
             },
           ]
-          : [],
-        walkTests: noviceWalkTestCompleted
-          ? [{
-            id: "73737373-7373-4373-8373-737373737373",
-            navigation_build_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
-            start_pose_json: JSON.stringify({ position: [1, 1.6, 2], target: [1, 1.6, 1] }),
-            end_pose_json: JSON.stringify({ position: [2, 1.6, 2], target: [2, 1.6, 1] }),
-            runtime_evidence_json: JSON.stringify({ movementObserved: true }),
-            completed_by: "44444444-4444-4444-8444-444444444444",
-            completed_at: now,
-          }]
           : [],
         navigationArtifact: null,
       });
@@ -1632,3 +1458,34 @@ function json(route: Route, status: number, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
 }
+
+// A tall dialog used to trap the operator: the close control was positioned
+// inside the scrolling form, so once you scrolled to the publish button at the
+// bottom the × was gone and nothing on screen dismissed the dialog.
+test("a scrolled dialog keeps its close control reachable", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
+
+  const dialog = page.locator("#releaseDialog");
+  await expect(dialog).toBeVisible();
+  const close = dialog.locator(".dialog-close");
+
+  // Scroll the dialog's own scroller to the very bottom, where the publish
+  // action and any refusal message live.
+  await dialog.locator("form").evaluate((form) => {
+    form.scrollTop = form.scrollHeight;
+  });
+
+  const box = await close.boundingBox();
+  const dialogBox = await dialog.boundingBox();
+  if (!box || !dialogBox) throw new Error("close control is not measurable");
+  expect(box.y).toBeGreaterThanOrEqual(dialogBox.y - 1);
+  expect(box.y + box.height).toBeLessThanOrEqual(dialogBox.y + dialogBox.height + 1);
+
+  await close.click();
+  await expect(dialog).toBeHidden();
+});

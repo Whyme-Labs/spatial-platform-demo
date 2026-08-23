@@ -226,6 +226,43 @@
       "expandMigration": "0064_floorplan_trajectory_auto_open.sql",
       "oldestCompatibleAppRevision": "7616d5e121d605fcf78be3bf43446b3c81a15e9c",
       "note": "SQLite table rebuild to widen the upload_sessions.purpose CHECK to the full captureAssetPurposes vocabulary. Widening an enumerated CHECK is backward compatible, so every application revision since the 0051 shape (pinned above) keeps working against it."
+    },
+    "0066_drop_privacy_detection.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_table privacy_candidates",
+        "drop_table privacy_scan_inputs",
+        "drop_table privacy_scans",
+        "drop_table privacy_regions"
+      ],
+      "expandMigration": "0014_privacy_detection.sql",
+      "oldestCompatibleAppRevision": "c2c6a6cd2a4bc0b98713813ba15507c54e683f83",
+      "note": "Automated privacy detection removed: the Worker no longer references these tables, the AI binding and privacy scan queue are gone, and privacy review is recorded by the operator on the QA form. Production held 14 scan rows and 14 input rows with zero candidates and zero regions; the audit_events trail for those scans is unaffected."
+    },
+    "0067_drop_navigation_walk_tests.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_table scene_navigation_walk_tests"
+      ],
+      "expandMigration": "0056_navigation_walk_tests.sql",
+      "oldestCompatibleAppRevision": "c34608c878fd5339ca3e1367aeed5c2c2909155a",
+      "note": "The walk-test publication gate and its recording control were removed; no application revision from the pinned one onward reads or writes this table."
+    },
+    "0068_machine_change_ratification.sql": {
+      "phase": "expand"
+    },
+    "0069_drop_machine_change_ratification.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_column floorplan_revisions machine_change_ratified_at",
+        "drop_column floorplan_revisions machine_change_ratified_by",
+        "drop_column floorplan_revisions machine_change_ratified_count",
+        "drop_column floorplan_revisions machine_change_ratification_note",
+        "drop_column floorplan_revisions machine_change_ratified_plan_hash"
+      ],
+      "expandMigration": "0068_machine_change_ratification.sql",
+      "oldestCompatibleAppRevision": "95cd4bf35475e734ddec57edf53e00da6348a4df",
+      "note": "Removes the machine_change_ratified_* columns added by 0068. The exposure gate they served was dropped: trajectory evidence is trusted for public exposure like any other cook, so no application revision from the pinned one onward reads or writes them."
     }
   }
 }
