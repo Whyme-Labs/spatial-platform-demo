@@ -250,6 +250,19 @@
     },
     "0068_machine_change_ratification.sql": {
       "phase": "expand"
+    },
+    "0069_drop_machine_change_ratification.sql": {
+      "phase": "contract",
+      "declaredDestructive": [
+        "drop_column floorplan_revisions machine_change_ratified_at",
+        "drop_column floorplan_revisions machine_change_ratified_by",
+        "drop_column floorplan_revisions machine_change_ratified_count",
+        "drop_column floorplan_revisions machine_change_ratification_note",
+        "drop_column floorplan_revisions machine_change_ratified_plan_hash"
+      ],
+      "expandMigration": "0068_machine_change_ratification.sql",
+      "oldestCompatibleAppRevision": "95cd4bf35475e734ddec57edf53e00da6348a4df",
+      "note": "Removes the machine_change_ratified_* columns added by 0068. The exposure gate they served was dropped: trajectory evidence is trusted for public exposure like any other cook, so no application revision from the pinned one onward reads or writes them."
     }
   }
 }

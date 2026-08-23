@@ -240,15 +240,14 @@ Implemented:
   threshold floor in lockstep) and the navigation authoring receipt carries a
   machine-attestation fragment reproducible from the frozen row, failing
   closed on any unreadable blob; machine-attested walking maps publish at the
-  credential-gated tier only — public/unlisted exposure requires operator
-  ratification, either one recorded decision covering every machine change on
-  the approved revision (bound to its frozen plan hash, so any recook forces a
-  fresh look) or a structure correction draft that makes the recooked map
-  operator-attested by construction; short clutter walls the
+  any exposure tier — trajectory evidence is trusted for public release like
+  any other cook, because the operator makes that decision once in the
+  project's trajectory policy rather than per revision; the machine changes
+  stay visible on the revision card and in the authoring receipt; short clutter walls the
   trajectory provably passed through below their claimed height, wholly
   inside a visited room and untouched by human classification, demote out of
   the cook under the same frozen evidence and the same gate; Studio revision
-  cards surface the machine-attested changes with their ratification path and
+  cards surface the machine-attested changes and
   a sealed-cost line counting the unresolved openings the conservative
   default keeps closed
 - a stopped walker is told which authority refused the step: a reviewed barrier

@@ -1,7 +1,6 @@
-// Wayfinder (#34): machine-attested walkability caps releases at the
-// credential-gated tier. Public/unlisted exposure of a version whose approved
-// walking map contains trajectory-auto-opened openings is refused with the
-// ratification path in the message; an unreadable frozen blob fails closed.
+// Wayfinder (#34) capped machine-attested walkability at the credential-gated
+// tier. That gate is gone: trajectory evidence is trusted for public exposure
+// like any other cook. These pin the removal so it cannot creep back.
 import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -88,7 +87,7 @@ async function seedApprovedVersion(cookie: string, trajectoryEvidenceJson: strin
     headers: { cookie, "content-type": "application/json" },
     body: JSON.stringify({
       clientOperationId: crypto.randomUUID(),
-      name: `Exposure gate ${crypto.randomUUID().slice(0, 8)}`,
+      name: `Machine exposure ${crypto.randomUUID().slice(0, 8)}`,
       captureAdapter: "fjd-trion",
       deliveryTemplate: "Property showcase",
     }),
@@ -201,150 +200,30 @@ function publish(cookie: string, projectId: string, accessPolicy: string) {
   });
 }
 
-describe("wayfinder exposure gate", () => {
-  it("refuses public and unlisted exposure of machine-opened walking maps", async () => {
+// Trajectory evidence is trusted for public exposure like any other cook. The
+// gate that capped machine-changed walking maps at the credential-gated tier
+// was removed: the operator decides this once, when they set the project's
+// trajectory policy, and re-collecting it per revision only taught operators to
+// publish token-only.
+describe("machine-changed walking maps and public exposure", () => {
+  it("never refuses public exposure for machine trajectory changes", async () => {
     const cookie = await login();
     const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
     for (const accessPolicy of ["public", "unlisted"]) {
-      const refused = await publish(cookie, seeded.projectId, accessPolicy);
-      expect(refused.status).toBe(422);
-      await expect(refused.json()).resolves.toMatchObject({
-        details: {
-          accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
-        },
-      });
+      const attempt = await publish(cookie, seeded.projectId, accessPolicy);
+      const body = JSON.stringify(await attempt.json());
+      expect(body).not.toContain("machine trajectory evidence");
+      expect(body).not.toContain("operator-ratified structure");
     }
-    // The credential-gated tier passes this gate: a token publish proceeds to
-    // the deeper walkable-evidence gates and fails there for missing assets,
-    // never with the machine-attestation refusal.
-    const token = await publish(cookie, seeded.projectId, "token");
-    expect(token.status).not.toBe(201);
-    const tokenBody = JSON.stringify(await token.json());
-    expect(tokenBody).not.toContain("machine trajectory evidence");
   }, 120_000);
 
-  it("refuses public exposure for demotion-only machine changes too", async () => {
-    const cookie = await login();
-    const blob = JSON.parse(frozenAutoOpenBlob());
-    blob.qualifiedOpenings = [];
-    blob.evidence.wallCrossings = [{ wallId: "wall-009", crossingCount: 3 }];
-    blob.demotedWalls = [{
-      levelId: "level-001",
-      wallId: "wall-009",
-      crossingCount: 3,
-      roomId: "room-001",
-    }];
-    const seeded = await seedApprovedVersion(cookie, JSON.stringify(blob));
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(422);
-    await expect(refused.json()).resolves.toMatchObject({
-      details: {
-        accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
-      },
-    });
-  }, 120_000);
-
-  it("fails closed on an unreadable frozen auto-open blob", async () => {
+  it("does not refuse on an unreadable frozen blob either", async () => {
+    // Nothing reads the blob for an exposure decision any more, so a corrupt
+    // one can no longer block a release on its own.
     const cookie = await login();
     const seeded = await seedApprovedVersion(cookie, "{\"not\":\"a valid blob\"}");
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(409);
-    await expect(refused.json()).resolves.toMatchObject({
-      error: expect.stringContaining("trajectory auto-open evidence is unreadable"),
-    });
-  }, 120_000);
-
-  it("lets fully operator-attested versions through untouched", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, null);
     const attempt = await publish(cookie, seeded.projectId, "public");
     const body = JSON.stringify(await attempt.json());
-    expect(body).not.toContain("machine trajectory evidence");
-  }, 120_000);
-});
-
-// Machine trajectory evidence routinely changes tens of structural elements, so
-// the gate has to be clearable by a decision an operator can actually make. One
-// recorded ratification stands for all of them; it is bound to the revision's
-// plan hash so a recook forces a fresh look.
-describe("machine-change ratification", () => {
-  function ratify(
-    cookie: string,
-    projectId: string,
-    revisionId: string,
-    body: Record<string, unknown>,
-  ) {
-    return exports.default.fetch(
-      `${origin}/api/projects/${projectId}/spatial/floorplan-revisions/${revisionId}/machine-change-ratifications`,
-      {
-        method: "POST",
-        headers: { cookie, "content-type": "application/json" },
-        body: JSON.stringify({ clientOperationId: crypto.randomUUID(), ...body }),
-      },
-    );
-  }
-
-  it("clears public exposure once the machine changes are ratified", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
-
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(422);
-
-    const accepted = await ratify(cookie, seeded.projectId, seeded.revisionId, {
-      acknowledgedChangeCount: 1,
-      note: "Reviewed the trajectory-evidenced opening against the captured scene.",
-    });
-    expect(accepted.status).toBe(201);
-
-    // The machine-attestation refusal is gone. Deeper walkable-evidence gates
-    // still apply, so this fixture stops there instead of publishing.
-    const afterRatification = await publish(cookie, seeded.projectId, "public");
-    const body = JSON.stringify(await afterRatification.json());
-    expect(body).not.toContain("machine trajectory evidence");
-  }, 120_000);
-
-  it("refuses a ratification that acknowledges the wrong count", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
-    const refused = await ratify(cookie, seeded.projectId, seeded.revisionId, {
-      acknowledgedChangeCount: 99,
-      note: "A stale workspace must never attest to work nobody saw.",
-    });
-    expect(refused.status).toBe(409);
-    const stillBlocked = await publish(cookie, seeded.projectId, "public");
-    expect(stillBlocked.status).toBe(422);
-  }, 120_000);
-
-  it("stops covering the map once the plan is recooked", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, frozenAutoOpenBlob());
-    expect((await ratify(cookie, seeded.projectId, seeded.revisionId, {
-      acknowledgedChangeCount: 1,
-      note: "Reviewed the trajectory-evidenced opening against the captured scene.",
-    })).status).toBe(201);
-
-    // A recook freezes a new plan hash; the old attestation no longer describes
-    // the map being published.
-    await env.DB.prepare("UPDATE floorplan_revisions SET plan_hash = ? WHERE id = ?")
-      .bind("d".repeat(64), seeded.revisionId).run();
-
-    const refused = await publish(cookie, seeded.projectId, "public");
-    expect(refused.status).toBe(422);
-    await expect(refused.json()).resolves.toMatchObject({
-      details: {
-        accessPolicy: [expect.stringContaining("opened or removed by machine trajectory evidence")],
-      },
-    });
-  }, 120_000);
-
-  it("refuses to ratify a revision with no machine changes", async () => {
-    const cookie = await login();
-    const seeded = await seedApprovedVersion(cookie, null);
-    const refused = await ratify(cookie, seeded.projectId, seeded.revisionId, {
-      acknowledgedChangeCount: 1,
-      note: "There is nothing here for an operator to take responsibility for.",
-    });
-    expect(refused.status).toBe(409);
+    expect(body).not.toContain("trajectory auto-open evidence is unreadable");
   }, 120_000);
 });

@@ -2045,15 +2045,6 @@ const floorplanKeySchema = z.string().trim()
 // Re-running the automatic structure lane over evidence already attached to a
 // version. It names no asset: the server resolves the version's own verified
 // metric point cloud, so a rebuild can never quietly point at other geometry.
-// One recorded decision covering every machine change on an approved revision.
-// The count is echoed back by the caller so a stale UI cannot ratify a number
-// the operator never saw, and the note is the operator's own reasoning.
-export const machineChangeRatificationSchema = z.object({
-  clientOperationId: z.string().uuid(),
-  acknowledgedChangeCount: z.number().int().min(1).max(100_000),
-  note: z.string().trim().min(10).max(2000),
-}).strict();
-
 export const structureRebuildSchema = z.object({
   clientOperationId: z.string().uuid(),
 }).strict();

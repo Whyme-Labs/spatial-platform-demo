@@ -63,7 +63,7 @@ export function wayfinderRevisionSummaryLines(revision: {
       tone: "machine",
       text: `Machine-attested walkability · trajectory ${trajectorySha ? `${trajectorySha.slice(0, 12)}… ` : ""}— ${
         parts.join(" · ")
-      }. Public exposure requires ratifying these in a structure correction draft (mark the doorways, delete the clutter walls) and re-approving.`,
+      }. Correct any of these in a structure draft if the capture disagrees.`,
     });
   }
   const sealedRemaining = Math.max(0, unknownOpeningCount - autoOpened.length);

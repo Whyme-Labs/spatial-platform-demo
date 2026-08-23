@@ -171,39 +171,31 @@ coverage, and a mixture of modes in one approval. Walls already taken by
 pass-through evidence are not repeated. Like every machine change, these
 count toward the exposure gate.
 
-### Exposure gate (issue #34)
+### Public exposure (issue #34, gate removed)
 
-Machine-attested walkability caps a release at the credential-gated tier.
-Publishing a version whose latest approved revision froze one or more
-qualified openings is refused for `public` and `unlisted` access policies
-with a message naming the count and the ratification path; `token` and
-`customer-authenticated` releases pass. An unreadable frozen blob fails
-closed for public exposure.
+Machine-attested walkability used to cap a release at the credential-gated
+tier: `public` and `unlisted` were refused until an operator ratified the
+machine changes. That gate is gone. Trajectory evidence is trusted for public
+exposure like any other cook.
 
-Ratification is one recorded decision covering every machine change on the
-approved revision
-(`POST .../floorplan-revisions/:revisionId/machine-change-ratifications`). The
-caller echoes the count it displayed, so a stale workspace cannot attest to
-work nobody saw, and the operator's note is stored with it. The attestation
-binds to the revision's frozen `plan_hash`: any recook produces a new hash, the
-ratification stops matching, and the gate closes again until an operator looks
-at the new map. Editing the structure and re-approving still clears the gate
-the original way, because the recooked map is operator-attested by
-construction.
+The reasoning: the operator already makes this decision when they set the
+project's `trajectoryAutoOpen` and `trajectoryClutterDemotion` policy, and
+re-collecting it per revision taught operators to publish token-only instead.
+It also scaled badly — walked-floor demotion froze 87 changes on the first
+production capture, and re-approval re-derives them, so editing the structure
+never cleared the gate either; only touching all 87 elements would have.
 
-This replaced per-element ratification. That worked while machine evidence
-touched a handful of openings the operator could reclassify as doorways; with
-walked-floor clutter demotion a single capture froze 87 changes, and hand
-editing 87 elements to say "I accept these" is not review — it is attrition
-that pushes operators to token-only publication for reasons unrelated to the
-scene.
+What remains is visibility, not obstruction: the machine changes stay on the
+approved revision card and in the `trajectory-auto-open-receipt-v1` fragment of
+the navigation authoring receipt, so any release can still be traced to the
+exact evidence that shaped it.
 
 ### Studio surfacing (issue #35)
 
 Approved revision cards in the Structure workflow render two lines from
 frozen data only: a machine-attestation line (trajectory digest, opened
 openings with their room pairs, demoted walls with pass-through counts, and
-the ratification path), and a sealed-cost line counting the unresolved
+what the machine changed), and a sealed-cost line counting the unresolved
 openings the conservative default keeps closed — the visibility whose absence
 let noisy proposals be approved untouched. An unreadable frozen blob is
 surfaced, never hidden. The walkable-area (m²) shadow-cook diff described in
