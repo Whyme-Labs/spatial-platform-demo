@@ -411,7 +411,8 @@ test.describe("authenticated studio UI", () => {
       await page.getByRole("button", { name: "Published previews", exact: true }).click();
       await expectColumnsAligned(page, ".release-list-row");
 
-      await page.getByText("Advanced tools", { exact: true }).click();
+      // Team access is a primary nav destination now that inviting is the only
+      // way anyone gets access.
       await page.getByRole("button", { name: "Team access", exact: true }).click();
       await expectColumnsAligned(page, ".team-member-row");
 
