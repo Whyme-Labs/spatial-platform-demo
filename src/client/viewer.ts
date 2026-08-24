@@ -2007,6 +2007,12 @@ const workflowStages: WorkflowStage[] = [
 ];
 
 function initialiseMarketingPage(): void {
+  document.querySelectorAll<HTMLSourceElement>("[data-marketing-srcset]").forEach((source) => {
+    source.srcset = source.dataset.marketingSrcset ?? "";
+  });
+  document.querySelectorAll<HTMLImageElement>("img[data-marketing-src]").forEach((image) => {
+    image.src = image.dataset.marketingSrc ?? "";
+  });
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const revealElements = Array.from(document.querySelectorAll<HTMLElement>(".reveal"));
   if (!reducedMotion) document.body.classList.add("motion-ready");
