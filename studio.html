@@ -62,7 +62,7 @@
 
       <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
 
-      <section id="pendingInvitationsPanel" class="output-section" hidden>
+      <section id="pendingInvitationsPanel" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">ORGANISATION INVITATIONS</span><h2>Organisations waiting for your answer</h2></div>
           <span class="worker-status"><i></i>Explicit consent</span>
@@ -81,8 +81,16 @@
           </div>
           <span id="detailStatus" class="status-pill"></span>
         </div>
+        <div class="project-context-bar" aria-label="Current project task">
+          <dl class="project-context-state">
+            <div><dt>Current stage</dt><dd id="projectCurrentStage"></dd></div>
+            <div><dt>Blocker</dt><dd id="projectCurrentBlocker"></dd></div>
+          </dl>
+          <button id="projectCurrentAction" class="primary-button" type="button"></button>
+        </div>
         <nav class="project-section-nav" aria-label="Project workspace">
           <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
+          <button id="projectProcessTab" type="button" data-project-section="process">Process</button>
           <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
           <button id="projectCompareTab" type="button" data-project-section="compare" hidden>Compare</button>
           <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
@@ -92,14 +100,14 @@
       </section>
 
       <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
-        <article class="summary-card"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
-        <article class="summary-card"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
-        <article class="summary-card"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
-        <article class="summary-card accent"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
+        <article class="summary-card accent" data-surface-role="notice"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
       </section>
 
       <section id="studioGrid" class="studio-grid">
-        <div id="projectBoard" class="project-board">
+        <div id="projectBoard" class="project-board" data-surface-role="task">
           <div class="section-heading">
             <div><span class="eyebrow">PROJECTS</span><h2>Current production</h2></div>
             <div class="filter-group">
@@ -174,7 +182,7 @@
           </div>
         </div>
 
-        <aside id="queuePanel" class="queue-panel">
+        <aside id="queuePanel" class="queue-panel" data-surface-role="task">
           <div class="section-heading">
             <div><span class="eyebrow">DURABLE JOBS</span><h2>Processing queue</h2></div>
             <span class="worker-status"><i></i>Pull-agent contract</span>
@@ -184,7 +192,7 @@
             <span id="jobPaginationStatus"></span>
             <button id="loadMoreJobs" class="quiet-button" type="button">Load more jobs</button>
           </div>
-          <div class="worker-card">
+          <div class="worker-card" data-surface-role="notice">
             <span>Compute architecture</span>
             <strong>Local RTX now.<br />Elastic workers later.</strong>
             <small>Leases, heartbeats, idempotency keys, attempts and dead-letter states are persisted in D1.</small>
@@ -192,11 +200,22 @@
         </aside>
       </section>
 
-      <section id="projectDetail" class="output-section" tabindex="-1" hidden>
+      <section id="projectDetail" class="output-section" data-project-workflow="overview" data-surface-role="section" tabindex="-1" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">OVERVIEW</span><h2>Project overview and sharing</h2></div>
+        </div>
         <div id="detailBody" class="project-detail-grid"></div>
       </section>
 
-      <section id="releaseWorkspace" class="output-section" hidden>
+      <section id="processWorkspace" class="output-section" data-project-workflow="process" data-surface-role="section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">PROCESS</span><h2>Processing and qualification</h2></div>
+          <span class="worker-status"><i></i>Project-specific activity</span>
+        </div>
+        <div id="processOverview" class="workspace-grid"></div>
+      </section>
+
+      <section id="releaseWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">RELEASE INVENTORY</span><h2>Published history and active channels</h2></div>
           <span class="worker-status"><i></i>Immutable release records</span>
@@ -210,7 +229,7 @@
         </div>
       </section>
 
-      <section id="reviewWorkspace" class="output-section" hidden>
+      <section id="reviewWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">CLIENT REVIEW</span><h2>Scoped access, anchored feedback, and approval history</h2></div>
           <span class="worker-status"><i></i>Version-aware review</span>
@@ -220,7 +239,7 @@
         </div>
       </section>
 
-      <section id="hostingWorkspace" class="output-section" hidden>
+      <section id="hostingWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">COMMERCIAL HOSTING</span><h2>Plans, invoices, storage, renewals, and operational alerts</h2></div>
           <span class="worker-status"><i></i>Lifecycle controlled</span>
@@ -230,7 +249,7 @@
         </div>
       </section>
 
-      <section id="spatialWorkspace" class="output-section" hidden>
+      <section id="spatialWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span id="spatialWorkspaceEyebrow" class="eyebrow">STRUCTURE</span><h2 id="spatialWorkspaceTitle">Review reconstructed rooms and openings</h2></div>
           <span class="worker-status"><i></i>Vendor-neutral semantics</span>
@@ -240,7 +259,7 @@
         </div>
       </section>
 
-      <section id="measurementWorkspace" class="output-section" hidden>
+      <section id="measurementWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">MEASURED FLOOR PLAN / SCAN-TO-CAD</span><h2>Tolerances, independent checks, cost evidence, and professional boundaries</h2></div>
           <span class="worker-status"><i></i>Evidence before reliance</span>
@@ -250,7 +269,7 @@
         </div>
       </section>
 
-      <section id="publishWorkspace" class="output-section" hidden>
+      <section id="publishWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">RELEASE</span><h2>Review and publish</h2></div>
           <span class="worker-status"><i></i>Evidence-gated delivery</span>
@@ -260,7 +279,7 @@
         </div>
       </section>
 
-      <section id="teamWorkspace" class="output-section" hidden>
+      <section id="teamWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">ORGANISATION ACCESS</span><h2>Members, invitations, roles, and immediate revocation</h2></div>
           <div class="button-cluster">

@@ -353,8 +353,7 @@ function auditStudioWorkflow(html, source) {
   // The walk stage dissolved once its embedded viewer and its publication gate
   // were removed: routes and the walking profile are structural authoring, and
   // build receipts are raw evidence Expert already owns.
-  const mandatoryStages = ["structure", "publish"];
-  const journeyDestinations = projectJourneyDestinations(source);
+  const mandatoryStages = ["process", "structure", "publish"];
   const sectionValues = new Set(
     Array.from(html.matchAll(/data-project-section=["']([^"']+)["']/g), (match) => match[1]),
   );
@@ -362,13 +361,19 @@ function auditStudioWorkflow(html, source) {
     if (!sectionValues.has(stage)) {
       failures.push(`studio.html project navigation is missing mandatory ${stage} stage`);
     }
-    if (!journeyDestinations.has(stage)) {
-      failures.push(`src/client/studio.ts journey is missing a ${stage} destination`);
-    }
   }
-  if (!source.includes('step.dataset.projectJourneySection = target') ||
-    !source.includes('activateProjectSection(target, true, "push", true)')) {
-    failures.push("src/client/studio.ts journey steps do not expose routed keyboard buttons");
+  if (!html.includes('id="processWorkspace"') ||
+    !source.includes("renderProcessWorkspace(detail, model)")) {
+    failures.push("Process is not a dedicated routed project workspace");
+  }
+  if (!html.includes('id="projectCurrentStage"') ||
+    !html.includes('id="projectCurrentBlocker"') ||
+    !html.includes('id="projectCurrentAction"') ||
+    !source.includes("renderProjectContext(model)")) {
+    failures.push("project routes do not expose the stable stage, blocker, and next-action context");
+  }
+  if (!source.includes('activateProjectSection(section, true, "push", true)')) {
+    failures.push("project section controls do not use the canonical routed activation path");
   }
   if (html.includes("Advanced evidence and diagnostics") ||
     source.includes("Advanced evidence and diagnostics") ||
@@ -415,27 +420,6 @@ function findNativePublicationConfirmations(source) {
     confirmations.push(`src/client/studio.ts:${line}`);
   });
   return confirmations;
-}
-
-function projectJourneyDestinations(source) {
-  const sourceFile = ts.createSourceFile(
-    "src/client/studio.ts",
-    source,
-    ts.ScriptTarget.ESNext,
-    true,
-    ts.ScriptKind.TS,
-  );
-  const destinations = new Set();
-  visit(sourceFile, (node) => {
-    if (
-      !ts.isCallExpression(node) ||
-      !ts.isIdentifier(node.expression) ||
-      node.expression.text !== "projectJourneyStep"
-    ) return;
-    const destination = stringArgument(node.arguments.at(-1));
-    if (destination) destinations.add(destination);
-  });
-  return destinations;
 }
 
 // The upload dialog's purpose options are static markup, while the vocabulary

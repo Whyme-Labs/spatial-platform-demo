@@ -608,6 +608,52 @@ test.describe("authenticated studio UI", () => {
     }
   });
 
+  test("normal Studio actions stay within two bordered content surfaces", async ({ page }) => {
+    const expectSurfaceDepth = async (): Promise<void> => {
+      const depths = await page.locator(".studio-main button:visible, .studio-main a:visible")
+        .evaluateAll((actions) => actions.map((action) => {
+          let depth = 0;
+          let current = action.parentElement;
+          while (current && !current.classList.contains("studio-main")) {
+            const style = getComputedStyle(current);
+            if (
+              style.borderStyle !== "none" &&
+              Number.parseFloat(style.borderTopWidth) > 0
+            ) depth += 1;
+            current = current.parentElement;
+          }
+          return { label: action.textContent?.trim() ?? action.tagName, depth };
+        }));
+      expect(depths.length).toBeGreaterThan(0);
+      expect(depths.filter((entry) => entry.depth > 2)).toEqual([]);
+      const unownedSurfaces = await page.locator([
+        ".workspace-card-large:visible",
+        ".detail-card:visible",
+        ".project-detail-disclosure:visible",
+        ".worker-card:visible",
+        ".summary-card:visible",
+      ].join(", ")).evaluateAll((surfaces) => surfaces
+        .filter((surface) => !surface.getAttribute("data-surface-role"))
+        .map((surface) => surface.className));
+      expect(unownedSurfaces).toEqual([]);
+    };
+
+    await expectSurfaceDepth();
+    await page.getByText("Advanced tools", { exact: true }).click();
+    for (const name of [
+      "Processing activity",
+      "Client review",
+      "Hosting & lifecycle",
+    ]) {
+      await page.getByRole("button", { name, exact: true }).click();
+      await expectSurfaceDepth();
+    }
+    await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    await expectSurfaceDepth();
+    await page.getByRole("button", { name: "Team access", exact: true }).click();
+    await expectSurfaceDepth();
+  });
+
   test("traversal evidence download keeps the complete server digest visible", async ({ page }) => {
     await page.getByText("Advanced tools", { exact: true }).click();
     await page.getByRole("button", { name: "Published previews", exact: true }).click();

@@ -1202,6 +1202,54 @@ type ProjectSection =
   | "publish"
   | "measurement"
   | "expert";
+type JourneySection = "overview" | "process" | "structure" | "publish";
+type ProjectBlocker =
+  | { kind: "clear"; label: "No blocker" }
+  | { kind: "blocked"; label: string; detail: string };
+type ProjectWorkspaceCommand =
+  | { kind: "open-upload" }
+  | { kind: "restore-project"; projectId: string }
+  | { kind: "show-capture-correction"; message: string }
+  | { kind: "retry-job"; jobId: string }
+  | { kind: "refresh-project"; projectId: string }
+  | { kind: "review-structure"; projectId: string }
+  | { kind: "open-preview"; versionId: string }
+  | { kind: "review-privacy"; projectId: string }
+  | { kind: "publish"; projectId: string };
+type ProjectNextAction = {
+  label: string;
+  section: JourneySection;
+  command: ProjectWorkspaceCommand;
+};
+type ProcessWorkspaceModel =
+  | { kind: "empty"; title: "Waiting for processing"; detail: string }
+  | { kind: "working"; title: string; job: Job }
+  | { kind: "blocked"; title: "Processing needs attention"; detail: string }
+  | { kind: "complete"; title: "Visual scene prepared"; version: Version };
+type ProjectJourneyState = {
+  renderableVersion: Version | null;
+  activeJob: Job | null;
+  failedJob: Job | null;
+  captureQualification: ReturnType<typeof automaticCaptureQualification>;
+  hasCapture: boolean;
+  hasMetricGeometry: boolean;
+  floorplanJob: Job | null;
+  navigationJob: Job | null;
+  navigationReady: boolean;
+  structureReady: boolean;
+  privacyVersion: Version | null;
+  privacyApproved: boolean;
+  automaticWalkingWorkActive: boolean;
+  walkingExceptionReviewReady: boolean;
+};
+type ProjectWorkspaceModel = {
+  journey: ProjectJourneyState;
+  canonicalSection: JourneySection;
+  stageLabel: "Archived" | "Capture" | "Process" | "Structure" | "Publish" | "Complete";
+  blocker: ProjectBlocker;
+  nextAction: ProjectNextAction;
+  process: ProcessWorkspaceModel;
+};
 
 type ProjectStageCapability =
   | "structure-processing-poll"
@@ -2596,6 +2644,7 @@ function bindInterface(): void {
   byId<HTMLButtonElement>("backToProjects").addEventListener("click", () => activateView("projects", true, "push"));
   const projectSectionButtons: Array<[HTMLButtonElement, ProjectSection]> = [
     [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
+    [byId<HTMLButtonElement>("projectProcessTab"), "process"],
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
     [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
     [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
@@ -3071,7 +3120,7 @@ function focusProjectSectionHeading(section: ProjectSection): void {
   const selector = section === "overview"
     ? "#detailTitle"
     : section === "process"
-      ? "#detailBody .project-journey h3"
+      ? "#processWorkspace h2"
       : section === "publish"
         ? "#publishWorkspace h2"
         : section === "measurement"
@@ -3114,12 +3163,6 @@ function activateView(
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-project-journey-section]").forEach((button) => {
-    const active = view === "project" &&
-      button.dataset.projectJourneySection === state.projectSection;
-    if (active) button.setAttribute("aria-current", "step");
-    else button.removeAttribute("aria-current");
-  });
   const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
   if (advancedNavigation) advancedNavigation.open = !["projects", "project", "releases"].includes(view);
   const projectsVisible = view === "projects";
@@ -3131,7 +3174,8 @@ function activateView(
   byId("studioGrid").hidden = !["projects", "jobs"].includes(view);
   byId("projectBoard").hidden = jobsVisible;
   byId("queuePanel").hidden = !jobsVisible;
-  byId("projectDetail").hidden = !projectVisible || !["overview", "process"].includes(state.projectSection);
+  byId("projectDetail").hidden = !projectVisible || state.projectSection !== "overview";
+  byId("processWorkspace").hidden = !projectVisible || state.projectSection !== "process";
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
   byId("spatialWorkspace").hidden = !projectVisible ||
@@ -10648,20 +10692,10 @@ async function selectProject(
 }
 
 function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
-  const journey = projectJourneyState(detail);
-  if (!journey.hasCapture) return "overview";
-  if (journey.captureQualification?.status === "blocked") return "process";
-  if (!journey.renderableVersion) return "process";
-  if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
-  if (!journey.structureReady) return "structure";
-  if (!journey.navigationReady) return "publish";
-  if (journey.privacyVersion?.status === "QA_REQUIRED") return "publish";
-  if (!journey.privacyApproved) return "publish";
-  if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
-  return "overview";
+  return projectWorkspaceModel(detail).canonicalSection;
 }
 
-function projectJourneyState(detail: ProjectDetail) {
+function projectJourneyState(detail: ProjectDetail): ProjectJourneyState {
   const renderableVersion = detail.versions.find((version) =>
     detail.assets.some((asset) =>
       asset.version_id === version.id &&
@@ -10726,6 +10760,229 @@ function projectJourneyState(detail: ProjectDetail) {
     privacyApproved,
     automaticWalkingWorkActive,
     walkingExceptionReviewReady,
+  };
+}
+
+function projectWorkspaceModel(detail: ProjectDetail): ProjectWorkspaceModel {
+  const journey = projectJourneyState(detail);
+  const archived = detail.project.status === "ARCHIVED";
+  const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
+  const canonicalSection: JourneySection = archived || !journey.hasCapture
+    ? "overview"
+    : journey.captureQualification?.status === "blocked" ||
+        !journey.renderableVersion ||
+        !journey.navigationReady && journey.automaticWalkingWorkActive
+      ? "process"
+      : !journey.structureReady
+        ? "structure"
+        : !journey.navigationReady ||
+            journey.privacyVersion?.status === "QA_REQUIRED" ||
+            !journey.privacyApproved ||
+            !activeRelease
+          ? "publish"
+          : "overview";
+
+  const blocker: ProjectBlocker = archived
+    ? {
+      kind: "blocked",
+      label: "Project archived",
+      detail: "Restore this project before changing its capture, structure, or publication.",
+    }
+    : journey.captureQualification?.status === "blocked"
+    ? {
+      kind: "blocked",
+      label: "Capture compatibility",
+      detail: journey.captureQualification.reason ?? "The shared capture frame was not verified.",
+    }
+    : journey.failedJob
+      ? {
+        kind: "blocked",
+        label: "Processing failed",
+        detail: journey.failedJob.progress_message ?? humanStatus(journey.failedJob.state),
+      }
+      : journey.walkingExceptionReviewReady
+        ? {
+          kind: "blocked",
+          label: "Structural review",
+          detail: "Automatic reconstruction found structural exceptions that need review.",
+        }
+        : canonicalSection === "structure" && !journey.hasMetricGeometry
+          ? {
+            kind: "blocked",
+            label: "Registered geometry",
+            detail: "A registered metric point cloud is required to build structure and walking evidence.",
+          }
+        : canonicalSection === "publish" && !journey.navigationReady
+          ? {
+            kind: "blocked",
+            label: "Walking map",
+            detail: "Verified collision and navigation evidence is required before publication.",
+          }
+          : canonicalSection === "publish" && !journey.privacyApproved
+            ? {
+              kind: "blocked",
+              label: "Privacy approval",
+              detail: "The newest immutable version needs operator privacy approval.",
+            }
+            : { kind: "clear", label: "No blocker" };
+
+  const stageLabel = archived
+    ? "Archived"
+    : canonicalSection === "overview"
+      ? journey.hasCapture ? "Complete" : "Capture"
+      : canonicalSection === "process"
+        ? "Process"
+        : canonicalSection === "structure"
+          ? "Structure"
+          : "Publish";
+  const nextAction = projectNextAction(detail, journey, canonicalSection);
+  const process: ProcessWorkspaceModel = journey.captureQualification?.status === "blocked"
+    ? {
+      kind: "blocked",
+      title: "Processing needs attention",
+      detail: journey.captureQualification.reason ?? "The capture frame could not be verified.",
+    }
+    : journey.activeJob
+      ? {
+        kind: "working",
+        title: humanStatus(journey.activeJob.job_type),
+        job: journey.activeJob,
+      }
+      : journey.failedJob
+        ? {
+          kind: "blocked",
+          title: "Processing needs attention",
+          detail: journey.failedJob.progress_message ?? humanStatus(journey.failedJob.state),
+        }
+        : journey.renderableVersion
+          ? {
+            kind: "complete",
+            title: "Visual scene prepared",
+            version: journey.renderableVersion,
+          }
+          : {
+            kind: "empty",
+            title: "Waiting for processing",
+            detail: journey.hasCapture
+              ? "The capture is preserved. Refresh this project to check processing activity."
+              : "Upload a capture result to start browser-scene preparation.",
+          };
+
+  return { journey, canonicalSection, stageLabel, blocker, nextAction, process };
+}
+
+function projectNextAction(
+  detail: ProjectDetail,
+  journey: ProjectJourneyState,
+  canonicalSection: JourneySection,
+): ProjectNextAction {
+  if (detail.project.status === "ARCHIVED") {
+    return {
+      label: "Restore project",
+      section: "overview",
+      command: { kind: "restore-project", projectId: detail.project.id },
+    };
+  }
+  if (!journey.hasCapture) {
+    return { label: "Upload capture result", section: "overview", command: { kind: "open-upload" } };
+  }
+  if (journey.captureQualification?.status === "blocked") {
+    return journey.failedJob
+      ? {
+        label: "Retry automatic qualification",
+        section: "process",
+        command: { kind: "retry-job", jobId: journey.failedJob.id },
+      }
+      : {
+        label: "Show correction steps",
+        section: "process",
+        command: {
+          kind: "show-capture-correction",
+          message: `${journey.captureQualification.reason ?? "The shared capture frame was not verified."} Export the visual and geometry files again from the same unchanged Y-up metre frame, then start a replacement immutable capture.`,
+        },
+      };
+  }
+  if (canonicalSection === "process") {
+    if (journey.failedJob) {
+      return {
+        label: "Retry automatic processing",
+        section: "process",
+        command: { kind: "retry-job", jobId: journey.failedJob.id },
+      };
+    }
+    return {
+      label: "Refresh processing status",
+      section: "process",
+      command: { kind: "refresh-project", projectId: detail.project.id },
+    };
+  }
+  if (canonicalSection === "structure") {
+    if (!journey.hasMetricGeometry) {
+      return {
+        label: "Upload registered geometry",
+        section: "overview",
+        command: { kind: "open-upload" },
+      };
+    }
+    if (!journey.walkingExceptionReviewReady) {
+      return {
+        label: "Refresh processing status",
+        section: "process",
+        command: { kind: "refresh-project", projectId: detail.project.id },
+      };
+    }
+    return {
+      label: "Review structural exceptions",
+      section: "structure",
+      command: { kind: "review-structure", projectId: detail.project.id },
+    };
+  }
+  if (canonicalSection === "publish") {
+    if (!journey.navigationReady) {
+      if (journey.walkingExceptionReviewReady) {
+        return {
+          label: "Review structural exceptions",
+          section: "structure",
+          command: { kind: "review-structure", projectId: detail.project.id },
+        };
+      }
+      if (journey.failedJob) {
+        return {
+          label: "Retry automatic processing",
+          section: "process",
+          command: { kind: "retry-job", jobId: journey.failedJob.id },
+        };
+      }
+      return {
+        label: "Refresh processing status",
+        section: "process",
+        command: { kind: "refresh-project", projectId: detail.project.id },
+      };
+    }
+    if (!journey.privacyApproved || journey.privacyVersion?.status === "QA_REQUIRED") {
+      return {
+        label: "Review privacy and approve",
+        section: "publish",
+        command: { kind: "review-privacy", projectId: detail.project.id },
+      };
+    }
+    return {
+      label: "Publish shareable URL",
+      section: "publish",
+      command: { kind: "publish", projectId: detail.project.id },
+    };
+  }
+  if (journey.renderableVersion) {
+    return {
+      label: "Open private preview",
+      section: "overview",
+      command: { kind: "open-preview", versionId: journey.renderableVersion.id },
+    };
+  }
+  return {
+    label: "Refresh processing status",
+    section: "process",
+    command: { kind: "refresh-project", projectId: detail.project.id },
   };
 }
 
@@ -10891,6 +11148,129 @@ function revealAccessLinkButton(
   return reveal;
 }
 
+function renderProjectContext(model: ProjectWorkspaceModel): void {
+  byId("projectCurrentStage").textContent = model.stageLabel;
+  const blocker = byId("projectCurrentBlocker");
+  blocker.textContent = model.blocker.kind === "blocked"
+    ? `${model.blocker.label}: ${model.blocker.detail}`
+    : model.blocker.label;
+  blocker.dataset.blocked = String(model.blocker.kind === "blocked");
+  const action = byId<HTMLButtonElement>("projectCurrentAction");
+  action.textContent = model.nextAction.label;
+  action.disabled = false;
+  action.onclick = () => executeProjectWorkspaceCommand(model.nextAction.command, action);
+}
+
+function renderProcessWorkspace(detail: ProjectDetail, model: ProjectWorkspaceModel): void {
+  const container = byId("processOverview");
+  const task = element("article", "workspace-card-large process-task");
+  task.dataset.surfaceRole = "task";
+  task.append(element("span", "eyebrow", "CURRENT PROCESSING STATE"));
+  task.append(element("h3", "", model.process.title));
+  if (model.process.kind === "working") {
+    task.append(element(
+      "p",
+      "muted-copy",
+      model.process.job.progress_message ?? `${model.process.job.progress}% complete`,
+    ));
+    const progress = element("div", "mini-progress");
+    const fill = element("i");
+    fill.style.width = `${model.process.job.progress}%`;
+    progress.append(fill);
+    task.append(progress);
+  } else if (model.process.kind === "complete") {
+    task.append(element(
+      "p",
+      "muted-copy",
+      `Version ${model.process.version.version_number} has a verified browser scene. Structure and publication checks continue in their own workspaces.`,
+    ));
+  } else {
+    task.append(element("p", "muted-copy", model.process.detail));
+  }
+
+  const history = element("details", "project-detail-disclosure process-history");
+  history.append(element("summary", "", "Processing history"));
+  const rows = element("div", "process-history-rows");
+  for (const job of detail.jobs) {
+    rows.append(element(
+      "div",
+      "detail-line",
+      `${humanStatus(job.job_type)} · ${humanStatus(job.state)} · ${job.progress_message ?? `${job.progress}% complete`}`,
+    ));
+  }
+  if (!detail.jobs.length) rows.append(element("p", "muted-copy", "No project processing jobs are recorded yet."));
+  history.append(rows);
+  container.replaceChildren(task, history);
+}
+
+function executeProjectWorkspaceCommand(
+  command: ProjectWorkspaceCommand,
+  trigger: HTMLButtonElement,
+): void {
+  switch (command.kind) {
+    case "open-upload":
+      openUploadDialog();
+      return;
+    case "restore-project":
+      requestProjectLifecycleChange("restore", trigger, command.projectId);
+      return;
+    case "show-capture-correction":
+      showNotice(command.message, "error");
+      return;
+    case "retry-job": {
+      const job = state.selected?.jobs.find((candidate) => candidate.id === command.jobId);
+      if (!job) {
+        showNotice("The processing job changed. Refresh the project and try again.", "error");
+        return;
+      }
+      void runAction({
+        key: `retry-job:${job.id}`,
+        trigger,
+        pendingLabel: "Queueing retry…",
+      }, () => retryJob(job));
+      return;
+    }
+    case "refresh-project":
+      void runAction({
+        key: `refresh-project:${command.projectId}`,
+        trigger,
+        pendingLabel: "Refreshing…",
+      }, async () => {
+        await refreshAll();
+        await selectProject(command.projectId, false, false);
+      });
+      return;
+    case "review-structure":
+      openSceneEditor(command.projectId, trigger);
+      return;
+    case "open-preview":
+      void runAction({
+        key: `open-preview:${command.versionId}`,
+        trigger,
+        pendingLabel: "Preparing preview…",
+      }, () => openVersionPreview(command.versionId));
+      return;
+    case "review-privacy":
+      void runAction({
+        key: `open-qa:${command.projectId}`,
+        trigger,
+        pendingLabel: "Checking evidence…",
+      }, openQaDialog);
+      return;
+    case "publish":
+      void runAction({
+        key: `open-release:${command.projectId}`,
+        trigger,
+        pendingLabel: "Loading release evidence…",
+      }, openReleaseDialog);
+      return;
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
+  }
+}
+
 function renderProjectDetail(): void {
   const detail = state.selected;
   if (!detail) return;
@@ -10901,208 +11281,15 @@ function renderProjectDetail(): void {
   body.className = "project-detail-flow";
   body.replaceChildren();
 
+  const model = projectWorkspaceModel(detail);
   const {
     renderableVersion,
-    activeJob,
-    failedJob,
-    captureQualification,
-    hasCapture,
-    hasMetricGeometry,
-    floorplanJob,
     navigationReady,
-    structureReady,
     privacyVersion: latestVersion,
-    privacyApproved,
-    automaticWalkingWorkActive,
-    walkingExceptionReviewReady,
-  } = projectJourneyState(detail);
+  } = model.journey;
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
-
-  const journey = element("section", "project-journey");
-  const journeyHeading = element("div", "project-journey-heading");
-  const journeyCopy = element("div");
-  journeyCopy.append(
-    element("span", "eyebrow", "CAPTURE JOURNEY"),
-    element(
-      "h3",
-      "",
-      renderableVersion
-        ? captureQualification?.status === "blocked"
-          ? "Capture compatibility needs correction."
-          : navigationReady
-          ? "Your walkable splat preview is ready."
-          : automaticWalkingWorkActive
-            ? "Building and verifying the walking map."
-            : walkingExceptionReviewReady
-              ? "Structural exceptions need review."
-              : hasMetricGeometry
-                ? "Walking-map processing needs attention."
-                : "Registered structural geometry is required."
-        : "From capture result to browser preview.",
-    ),
-    element(
-      "p",
-      "muted-copy",
-      renderableVersion
-        ? captureQualification?.status === "blocked"
-          ? `${captureQualification.reason ?? "Automatic qualification could not verify the shared capture frame."} Return to the capture source, export both files again from one unchanged Y-up metre frame, and upload them as a new immutable capture.`
-          : navigationReady
-          ? "The visual splat, verified collision, and approved walking map are ready for review."
-          : automaticWalkingWorkActive
-            ? `${humanStatus(activeJob!.job_type)} is ${humanStatus(activeJob!.state).toLowerCase()}: ${activeJob!.progress_message ?? `${activeJob!.progress}% complete`}. No routine navigation setup is required.`
-            : walkingExceptionReviewReady
-              ? "Automatic reconstruction found structure that cannot be accepted from geometry alone. Inspect only the highlighted gaps or connectors on the render; collision and walking proof rebuild automatically after correction."
-              : failedJob
-                ? `Automatic walking-map processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
-                : "The visual is preserved, but it has no registered structural source from which collision and walking proof can be generated safely."
-        : activeJob
-          ? `${humanStatus(activeJob.job_type)} is ${humanStatus(activeJob.state).toLowerCase()}: ${activeJob.progress_message ?? `${activeJob.progress}% complete`}.`
-          : failedJob
-            ? `Processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
-            : hasCapture
-              ? "The capture is preserved. Refresh processing activity if a browser derivative has not been queued."
-              : "Upload the portable splat and registered metric geometry together. The platform handles browser conversion, floor-plan extraction, structural collision, and navigation generation.",
-    ),
-  );
-  const journeyActions = element("div", "project-journey-actions");
-  if (!hasCapture) {
-    const upload = element("button", "primary-button", "Upload capture result");
-    upload.disabled = detail.project.status === "ARCHIVED";
-    upload.addEventListener("click", openUploadDialog);
-    journeyActions.append(upload);
-  } else if (captureQualification?.status === "blocked") {
-    if (failedJob) {
-      const retry = element("button", "primary-button", "Retry automatic qualification");
-      retry.addEventListener("click", () => {
-        void runAction({
-          key: `retry-job:${failedJob.id}`,
-          trigger: retry,
-          pendingLabel: "Queueing retry…",
-        }, () => retryJob(failedJob));
-      });
-      journeyActions.append(retry);
-    } else {
-      const correction = element("button", "quiet-button", "Show correction steps");
-      correction.addEventListener("click", () => showNotice(
-        `${captureQualification.reason ?? "The shared capture frame was not verified."} Export the visual and geometry PLY files again from the same unchanged Y-up metre coordinate frame, then start a replacement immutable capture.`,
-        "error",
-      ));
-      journeyActions.append(correction);
-    }
-  } else if (renderableVersion && navigationReady) {
-    const preview = element("button", "primary-button", "Open private preview");
-    preview.addEventListener("click", () => {
-      void runAction({
-        key: `open-preview:${renderableVersion.id}`,
-        trigger: preview,
-        pendingLabel: "Preparing preview…",
-      }, () => openVersionPreview(renderableVersion.id));
-    });
-    const copy = element("button", "quiet-button", "Copy preview URL");
-    copy.addEventListener("click", () => {
-      void runAction({
-        key: `copy-preview:${renderableVersion.id}`,
-        trigger: copy,
-        pendingLabel: "Creating link…",
-      }, () => copyVersionPreviewUrl(renderableVersion.id));
-    });
-    const editScene = element("button", "quiet-button", "Edit scene");
-    editScene.addEventListener("click", () => openSceneEditor(detail.project.id, editScene));
-    journeyActions.append(preview, copy, editScene);
-  } else if (renderableVersion && automaticWalkingWorkActive) {
-    const refresh = element("button", "quiet-button", "Refresh walking-map progress");
-    refresh.addEventListener("click", () => {
-      void runAction({
-        key: `refresh-project:${detail.project.id}`,
-        trigger: refresh,
-        pendingLabel: "Refreshing…",
-      }, async () => {
-        await refreshAll();
-        await selectProject(detail.project.id, false, false);
-      });
-    });
-    journeyActions.append(refresh);
-  } else if (renderableVersion && walkingExceptionReviewReady) {
-    const reviewExceptions = element("button", "primary-button", "Review structural exceptions");
-    reviewExceptions.addEventListener("click", () => {
-      openSceneEditor(detail.project.id, reviewExceptions);
-    });
-    journeyActions.append(reviewExceptions);
-  } else if (renderableVersion && failedJob) {
-    const retry = element("button", "primary-button", "Retry automatic processing");
-    retry.addEventListener("click", () => {
-      void runAction({
-        key: `retry-job:${failedJob.id}`,
-        trigger: retry,
-        pendingLabel: "Queueing retry…",
-      }, () => retryJob(failedJob));
-    });
-    journeyActions.append(retry);
-  } else {
-    const refresh = element("button", "quiet-button", "Refresh processing status");
-    refresh.addEventListener("click", () => {
-      void runAction({
-        key: `refresh-project:${detail.project.id}`,
-        trigger: refresh,
-        pendingLabel: "Refreshing…",
-      }, async () => {
-        await refreshAll();
-        await selectProject(detail.project.id, false, false);
-      });
-    });
-    journeyActions.append(refresh);
-  }
-  journeyHeading.append(journeyCopy, journeyActions);
-  const steps = element("div", "project-journey-steps");
-  steps.append(
-    projectJourneyStep("1", "Capture", hasCapture ? "complete" : "current", hasCapture ? "Source preserved" : "Upload files", "overview"),
-    projectJourneyStep(
-      "2",
-      "Process",
-      captureQualification?.status === "blocked"
-        ? "blocked"
-        : renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
-      captureQualification?.status === "blocked"
-        ? "Capture frame not verified"
-        : renderableVersion ? "Visual scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
-      "process",
-    ),
-    projectJourneyStep(
-      "3",
-      "Structure",
-      captureQualification?.status === "blocked"
-        ? "blocked"
-        : structureReady
-        ? "complete"
-        : walkingExceptionReviewReady || floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
-          ? "current"
-          : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
-      captureQualification?.status === "blocked"
-        ? "Correct capture exports first"
-        : structureReady
-        ? "Rooms and openings approved"
-        : walkingExceptionReviewReady
-          ? "Review structural exceptions"
-          : floorplanJob ? humanStatus(floorplanJob.state) : hasMetricGeometry ? "Starts automatically" : "Geometry required",
-      "structure",
-    ),
-    projectJourneyStep(
-      "4",
-      "Publish",
-      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
-      activeRelease
-        ? `Live at /${activeRelease.slug}`
-        : !privacyApproved
-          ? "Privacy approval required"
-          : navigationReady
-            ? "Choose audience and publish"
-            : walkingExceptionReviewReady
-              ? "Review structural exceptions"
-              : "Verified walking map required",
-      "publish",
-    ),
-  );
-  journey.append(journeyHeading, steps);
+  renderProjectContext(model);
+  renderProcessWorkspace(detail, model);
 
   const sharing = detailCard("Preview and sharing");
   sharing.classList.add("project-sharing-card");
@@ -11112,6 +11299,15 @@ function renderProjectDetail(): void {
       "muted-copy",
       "Private preview URLs are short-lived operator sessions. Public or customer-facing URLs are created only after privacy review and publication.",
     ));
+    const copyPreview = element("button", "quiet-button wide", "Copy private preview URL");
+    copyPreview.addEventListener("click", () => {
+      void runAction({
+        key: `copy-preview:${renderableVersion.id}`,
+        trigger: copyPreview,
+        pendingLabel: "Creating link…",
+      }, () => copyVersionPreviewUrl(renderableVersion.id));
+    });
+    sharing.append(copyPreview);
   } else if (renderableVersion) {
     sharing.append(element(
       "p",
@@ -11138,7 +11334,11 @@ function renderProjectDetail(): void {
     }
   }
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
-  if (latestVersion?.status === "QA_REQUIRED" && navigationReady) {
+  if (
+    latestVersion?.status === "QA_REQUIRED" &&
+    navigationReady &&
+    model.nextAction.command.kind !== "review-privacy"
+  ) {
     const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
     qaButton.addEventListener("click", () => {
       void runAction({
@@ -11149,7 +11349,11 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion && navigationReady) {
+  if (
+    releasableVisualVersion &&
+    navigationReady &&
+    model.nextAction.command.kind !== "publish"
+  ) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({
@@ -11207,18 +11411,12 @@ function renderProjectDetail(): void {
     detail.project.status === "ARCHIVED" ? "quiet-button wide" : "danger-button wide",
     detail.project.status === "ARCHIVED" ? "Restore project" : "Archive project",
   );
-  lifecycleButton.addEventListener("click", async () => {
-    const restoring = detail.project.status === "ARCHIVED";
-    if (!await confirmOperator(
-      restoring
-        ? `Restore ${detail.project.name} to ${humanStatus(detail.project.status === "ARCHIVED" ? "DRAFT" : detail.project.status)}?`
-        : `Archive ${detail.project.name}? Active releases, jobs, and uploads must be resolved first.`,
-    )) return;
-    void runAction({
-      key: `${restoring ? "restore" : "archive"}-project:${detail.project.id}`,
-      trigger: lifecycleButton,
-      pendingLabel: restoring ? "Restoring…" : "Archiving…",
-    }, () => changeProjectLifecycle(restoring ? "restore" : "archive"));
+  lifecycleButton.addEventListener("click", () => {
+    requestProjectLifecycleChange(
+      detail.project.status === "ARCHIVED" ? "restore" : "archive",
+      lifecycleButton,
+      detail.project.id,
+    );
   });
   overview.append(lifecycleButton);
 
@@ -11391,27 +11589,7 @@ function renderProjectDetail(): void {
   optionalGrid.append(optionalTools);
   optionalDetails.append(optionalGrid);
 
-  body.append(journey, sharing, technicalDetails, optionalDetails);
-}
-
-function projectJourneyStep(
-  number: string,
-  label: string,
-  status: "complete" | "current" | "available" | "waiting" | "blocked",
-  detail: string,
-  target: ProjectSection,
-): HTMLElement {
-  const step = element("button", `project-journey-step ${status}`);
-  step.type = "button";
-  step.dataset.projectJourneySection = target;
-  step.addEventListener("click", () => activateProjectSection(target, true, "push", true));
-  if (state.projectSection === target) step.setAttribute("aria-current", "step");
-  step.append(
-    element("span", "project-journey-number", number),
-    element("strong", "", label),
-    element("small", "", detail),
-  );
-  return step;
+  body.append(sharing, technicalDetails, optionalDetails);
 }
 
 function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
@@ -12235,6 +12413,36 @@ async function bulkChangeProjectLifecycle(action: "archive" | "restore"): Promis
     + `${result.summary.unchanged ? `; ${result.summary.unchanged} already matched the requested state` : ""}.`,
     "success",
   );
+}
+
+function requestProjectLifecycleChange(
+  action: "archive" | "restore",
+  trigger: HTMLButtonElement,
+  projectId: string,
+): void {
+  const project = state.selected?.project;
+  if (!project || project.id !== projectId) {
+    showNotice("The selected project changed. Open it again before changing its lifecycle.", "error");
+    return;
+  }
+  void (async () => {
+    const restoring = action === "restore";
+    const confirmed = await confirmOperator(
+      restoring
+        ? `Restore ${project.name} to ${humanStatus("DRAFT")}?`
+        : `Archive ${project.name}? Active releases, jobs, and uploads must be resolved first.`,
+      restoring ? "Restore project" : "Archive project",
+    );
+    if (!confirmed) return;
+    void runAction({
+      key: `${action}-project:${project.id}`,
+      trigger,
+      pendingLabel: restoring ? "Restoring…" : "Archiving…",
+      idleLabel: () => state.selected?.project.id === project.id
+        ? projectWorkspaceModel(state.selected).nextAction.label
+        : restoring ? "Restore project" : "Archive project",
+    }, () => changeProjectLifecycle(action));
+  })();
 }
 
 async function changeProjectLifecycle(action: "archive" | "restore"): Promise<void> {
@@ -13948,11 +14156,30 @@ function element<K extends keyof HTMLElementTagNameMap>(
   const node = document.createElement(tag);
   node.className = className;
   node.textContent = text;
+  const classes = new Set(className.split(/\s+/).filter(Boolean));
+  if (
+    classes.has("workspace-card-large") ||
+    classes.has("detail-card") ||
+    classes.has("project-detail-disclosure")
+  ) {
+    node.dataset.surfaceRole = "task";
+  } else if (classes.has("notice-card")) {
+    node.dataset.surfaceRole = "notice";
+  } else if (
+    classes.has("plan-card") ||
+    classes.has("domain-row") ||
+    classes.has("semantic-extraction-run") ||
+    classes.has("release-row") ||
+    classes.has("detail-line")
+  ) {
+    node.dataset.surfaceRole = "record";
+  }
   return node;
 }
 
 function detailCard(title: string): HTMLElement {
   const card = element("article", "detail-card");
+  card.dataset.surfaceRole = "task";
   card.append(element("span", "eyebrow", title.toUpperCase()));
   return card;
 }

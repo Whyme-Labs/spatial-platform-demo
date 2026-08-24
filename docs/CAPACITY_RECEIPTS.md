@@ -717,6 +717,32 @@ The immutable FJD LAS replay receipt is recorded in
 its selected floor has an 85-cell clear component against the production
 32-cell requirement, while the ceiling is rejected for zero wall support.
 
+## Studio project-canvas width
+
+Last measured: 2026-08-24
+
+Command:
+
+```bash
+npx playwright test e2e/release-authoring.spec.ts \
+  --grep 'flattened project sections reclaim' --reporter=json
+```
+
+The test opens the authenticated project fixture and measures `#detailBody`.
+It then replays the removed `.output-section` border and responsive padding on
+the same DOM before measuring again. This isolates the width consumed by the
+extra section card without comparing different project data.
+
+| Viewport | Nested section width | Flat section width | Reclaimed width |
+| ---: | ---: | ---: | ---: |
+| 1024 px | 655.53125 px | 698.46875 px | 42.9375 px |
+| 768 px | 698 px | 732 px | 34 px |
+
+The regression requires the flat width to exceed the replayed nested width at
+both viewports. It does not turn either observed width into a minimum or a
+budget. Re-run the receipt when the Studio shell, page padding, or project
+workspace composition changes.
+
 ## Starting-view first-frame quality thresholds
 
 Last measured: 2026-08-19
