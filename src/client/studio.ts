@@ -13,6 +13,10 @@ import {
 } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
 import {
+  actionFailureMessage as errorMessage,
+  bindFormFeedback,
+} from "./feedback";
+import {
   parseSceneRotationDegrees,
   SCENE_ROTATION_MAX_DEGREES,
   SCENE_ROTATION_MIN_DEGREES,
@@ -1640,6 +1644,8 @@ function bindInterface(): void {
     navigationBuildForm,
     semanticExtractionForm,
     semanticReviewForm,
+    floorplanExtractionForm,
+    floorplanReviewForm,
     routeForm,
     measurementBriefForm,
     checkPointForm,
@@ -1656,7 +1662,7 @@ function bindInterface(): void {
     identityProviderForm,
     captureAgentForm,
   ]) {
-    bindConstraintFeedback(form);
+    bindFormFeedback(form);
   }
   byId("newProjectButton").addEventListener("click", () => {
     projectOperationId = crypto.randomUUID();
@@ -2604,26 +2610,6 @@ function bindInterface(): void {
   window.addEventListener("hashchange", () => void navigateFromHash());
   window.addEventListener("popstate", () => void navigateFromHash());
   activateView(viewFromHash(), false);
-}
-
-function bindConstraintFeedback(form: HTMLFormElement): void {
-  const errorTarget = form.querySelector<HTMLElement>(".form-error");
-  if (!errorTarget) return;
-  form.addEventListener("invalid", (event) => {
-    const field = event.target;
-    if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement)) return;
-    errorTarget.textContent = field.validationMessage || "Review the highlighted field and try again.";
-  }, true);
-  form.addEventListener("input", (event) => {
-    const field = event.target;
-    if (
-      field instanceof HTMLInputElement ||
-      field instanceof HTMLSelectElement ||
-      field instanceof HTMLTextAreaElement
-    ) {
-      if (field.validity.valid) errorTarget.textContent = "";
-    }
-  });
 }
 
 async function handleSignIn(form: FormData): Promise<void> {
@@ -13978,47 +13964,6 @@ function emptyState(message: string, compact = false): HTMLElement {
 function optionalString(value: FormDataEntryValue | null): string | undefined {
   const stringValue = typeof value === "string" ? value.trim() : "";
   return stringValue || undefined;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    const retry = error.status === 429 && error.retryAfterSeconds
-      ? ` Try again in ${error.retryAfterSeconds} seconds.`
-      : error.retryable
-        ? " You can retry this action."
-        : "";
-    const request = error.requestId ? ` Reference: ${error.requestId}.` : "";
-    // A bare "Validation failed" hides the field message that says what to
-    // change; the server always sends it in details.
-    const fields = validationFieldMessages(error.details);
-    const detail = fields.length ? ` ${fields.join(" ")}` : "";
-    return `${error.message}.${detail}${retry}${request}`.replace("..", ".");
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-function validationFieldMessages(payload: unknown): string[] {
-  if (!payload || typeof payload !== "object") return [];
-  const details = Reflect.get(payload, "details");
-  if (!details || typeof details !== "object") return [];
-  const messages: string[] = [];
-  const collect = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      messages.push(value.endsWith(".") ? value : `${value}.`);
-      return;
-    }
-    if (Array.isArray(value)) value.forEach(collect);
-  };
-  // Field maps arrive either directly or in zod's { fieldErrors, formErrors }.
-  const fieldErrors = Reflect.get(details, "fieldErrors");
-  const formErrors = Reflect.get(details, "formErrors");
-  if (fieldErrors && typeof fieldErrors === "object") {
-    Object.values(fieldErrors).forEach(collect);
-    collect(formErrors);
-  } else {
-    Object.values(details).forEach(collect);
-  }
-  return messages.slice(0, 3);
 }
 
 function humanStatus(status: string): string {

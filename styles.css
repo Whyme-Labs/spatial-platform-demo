@@ -311,7 +311,6 @@ button.is-pending::before {
 .access-code-form label { display:grid; gap:6px; color:var(--muted); font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
 .access-code-form input { width:100%; border:1px solid var(--line); border-radius:11px; background:rgba(9,11,9,.82); color:var(--text); padding:10px 12px; font:inherit; font-size:13px; letter-spacing:.01em; text-transform:none; outline:0; }
 .access-code-form input:focus-visible { border-color:var(--line-strong); }
-.access-code-form .form-error { margin:0; }
 .viewer-hud { position:absolute; z-index:9; right:18px; bottom:110px; width:min(360px,calc(100% - 36px)); pointer-events:none; transition:bottom .2s ease,opacity .16s ease; }
 .viewer-hud > * { pointer-events:auto; }
 .viewport.renderer-help-open .viewer-hud { bottom:calc(126px + var(--renderer-help-height,0px)); }
@@ -472,8 +471,12 @@ button.is-pending::before {
 .job-action { border-color:var(--line); color:var(--muted); }.job-action:disabled { opacity:.45; cursor:default; }
 .job-actions { display:flex; align-items:center; gap:6px; }
 .queue-item .job-error { color:var(--clay); }
-.form-error { min-height:18px; color:var(--clay) !important; font-size:11px; }
+.form-error { min-height:0; color:var(--clay) !important; font-size:11px; }
+.form-error:empty { display:none; }
 .form-error:not(:empty) { margin-top: 12px; }
+.field-message { display:block;color:var(--clay);font-size:11px;line-height:1.45;overflow-wrap:anywhere; }
+.action-feedback { min-width:0;max-width:100%;border:1px solid rgba(207,119,93,.42);border-radius:12px;background:rgba(207,119,93,.09);padding:10px 12px;line-height:1.45;overflow-wrap:anywhere; }
+.action-feedback:empty,.action-feedback[hidden] { display:none; }
 .field-note { margin:-2px 0 14px; color:var(--muted); font-size:11px; line-height:1.55; }
 .form-advanced-settings { margin:18px 0 4px;border:1px solid var(--line);border-radius:13px;background:rgba(255,255,255,.018); }
 .form-advanced-settings > summary { min-height:46px;padding:0 14px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;list-style:none;color:var(--text);font-size:11px;font-weight:600; }

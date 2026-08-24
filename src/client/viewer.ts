@@ -3,6 +3,11 @@ import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-600.css";
 import { api, ApiError } from "./api";
 import { runAction, SingleFlight } from "./action-state";
+import {
+  bindFormFeedback,
+  clearActionFeedback,
+  showActionFailure,
+} from "./feedback";
 import { resolveDeviceProfile } from "./device-profile";
 import {
   buildFloorPlans,
@@ -406,6 +411,7 @@ if (activeReleaseSlug || activePrivatePreview) {
     }, loadPublishedRelease);
   });
   const accessCodeForm = byId<HTMLFormElement>("accessCodeForm");
+  bindFormFeedback(accessCodeForm);
   accessCodeForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const submitted = new FormData(accessCodeForm).get("accessCode");
@@ -501,10 +507,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
       // A stored token can lapse when the release is republished with a fresh
       // token; drop it so the next attempt prompts instead of looping.
       if (storedToken && slug) clearStoredAccessToken(slug);
-      showAccessRequired(
-        releaseAccessPolicy(error),
-        Boolean(urlToken ?? typedCode),
-      );
+      showAccessRequired(error, Boolean(urlToken ?? typedCode));
       return;
     }
     showError("This spatial release is unavailable.", error instanceof Error ? error.message : "The release could not be authorised.");
@@ -1531,6 +1534,7 @@ function sendSpatialRuntime(): void {
 
 function bindReviewInterface(): void {
   const form = byId<HTMLFormElement>("sceneReviewForm");
+  bindFormFeedback(form);
   const submit = form.querySelector<HTMLButtonElement>("[type='submit']")!;
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1691,7 +1695,8 @@ function showError(title: string, message: string): void {
 // releases prompt for the access code inline, customer-authenticated releases
 // route to the existing sign-in. A wrong code re-prompts with an inline error
 // instead of dead-ending; the entered code itself is never logged or reported.
-function showAccessRequired(accessPolicy: string | null, rejectedCode: boolean): void {
+function showAccessRequired(error: ApiError, rejectedCode: boolean): void {
+  const accessPolicy = releaseAccessPolicy(error);
   showError(
     "This scene requires access",
     accessPolicy === "customer-authenticated"
@@ -1699,18 +1704,33 @@ function showAccessRequired(accessPolicy: string | null, rejectedCode: boolean):
       : "Paste the access code from your invitation.",
   );
   const accessCodeForm = byId<HTMLFormElement>("accessCodeForm");
+  const accessCodeSubmit = byId<HTMLButtonElement>("accessCodeSubmit");
+  const accessCodeError = byId<HTMLElement>("accessCodeError");
   const signInLink = byId<HTMLAnchorElement>("accessSignInLink");
   const retryButton = byId<HTMLButtonElement>("retryButton");
   if (accessPolicy === "customer-authenticated") {
+    clearActionFeedback(accessCodeError, {
+      form: accessCodeForm,
+      trigger: accessCodeSubmit,
+    });
     signInLink.hidden = false;
     return;
   }
   accessCodeForm.hidden = false;
   // The tokenless Retry would repeat the same denied request forever.
   retryButton.hidden = true;
-  byId("accessCodeError").textContent = rejectedCode
-    ? "That access code was not accepted. Check it against your invitation and try again."
-    : "";
+  if (rejectedCode) {
+    showActionFailure(accessCodeError, error, {
+      form: accessCodeForm,
+      trigger: accessCodeSubmit,
+      message: "That access code was not accepted. Check it against your invitation and try again.",
+    });
+  } else {
+    clearActionFeedback(accessCodeError, {
+      form: accessCodeForm,
+      trigger: accessCodeSubmit,
+    });
+  }
   const codeInput = accessCodeForm.elements.namedItem("accessCode");
   if (codeInput instanceof HTMLInputElement) codeInput.focus();
 }

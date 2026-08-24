@@ -19,11 +19,22 @@ test("bare token links recover through the access-code form and keep access for 
   await expect(page.locator("#retryButton")).toBeHidden();
 
   // A wrong code re-prompts inline instead of dead-ending.
-  await page.locator("#accessCodeForm input[name='accessCode']").fill("0".repeat(64));
+  const accessCode = page.locator("#accessCodeForm input[name='accessCode']");
   await page.locator("#accessCodeSubmit").click();
-  await expect(page.locator("#accessCodeError")).toHaveText(
+  await expect(accessCode).toHaveAttribute("aria-invalid", "true");
+  const clientErrorId = await accessCode.getAttribute("aria-errormessage");
+  expect(clientErrorId).toBeTruthy();
+  await expect(page.locator(`#${clientErrorId}`)).toBeVisible();
+  await expect(page.locator("#accessCodeError")).toBeHidden();
+
+  await accessCode.fill("0".repeat(64));
+  await page.locator("#accessCodeSubmit").click();
+  const accessError = page.locator("#accessCodeError");
+  await expect(accessError).toContainText(
     "That access code was not accepted. Check it against your invitation and try again.",
   );
+  await expect(accessError).toContainText("Reference: e2e-access-denied.");
+  await expect(accessError).toHaveAttribute("data-feedback-kind", "failure");
   await expect(page.locator("#accessCodeForm")).toBeVisible();
 
   // The correct code loads the scene exactly as a tokenized URL would.
@@ -51,6 +62,39 @@ test("bare token links recover through the access-code form and keep access for 
   await expect(freshPage.locator("#accessCodeForm")).toBeVisible();
   await expect(freshPage.locator("#rendererFrame")).toBeHidden();
   await freshContext.close();
+});
+
+test("access-code action feedback stays contained at every supported width", async ({ page }) => {
+  await routeGatedRelease(page, []);
+
+  for (const width of [320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: width <= 390 ? 844 : 800 });
+    await page.goto("/s/gated-room", { waitUntil: "commit" });
+    await page.locator("#accessCodeForm input[name='accessCode']").fill("0".repeat(64));
+    await page.locator("#accessCodeSubmit").click();
+    const geometry = await page.locator("#accessCodeError").evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const parent = element.parentElement?.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        borderStyle: style.borderStyle,
+        paddingTop: Number.parseFloat(style.paddingTop),
+        left: bounds.left,
+        right: bounds.right,
+        parentLeft: parent?.left ?? 0,
+        parentRight: parent?.right ?? 0,
+        overflowWrap: style.overflowWrap,
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+      };
+    });
+    expect(geometry.borderStyle, `${width}px action border`).not.toBe("none");
+    expect(geometry.paddingTop, `${width}px action padding`).toBeGreaterThan(0);
+    expect(geometry.left, `${width}px action left edge`).toBeGreaterThanOrEqual(geometry.parentLeft - 1);
+    expect(geometry.right, `${width}px action right edge`).toBeLessThanOrEqual(geometry.parentRight + 1);
+    expect(geometry.overflowWrap, `${width}px action wrapping`).toBe("anywhere");
+    expect(geometry.documentWidth, `${width}px document width`).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  }
 });
 
 test("a tokenized URL stores its token before stripping it from the address bar", async ({ page }) => {
@@ -88,7 +132,7 @@ test("an expired stored token clears and re-prompts instead of looping", async (
     STORAGE_KEY,
   )).toBeNull();
   // A stored-token lapse is not the visitor's typo: the prompt opens clean.
-  await expect(page.locator("#accessCodeError")).toHaveText("");
+  await expect(page.locator("#accessCodeError")).toBeHidden();
 });
 
 test("customer-authenticated releases offer sign-in instead of an access-code form", async ({ page }) => {

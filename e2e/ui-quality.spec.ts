@@ -237,6 +237,124 @@ test.describe("authenticated studio UI", () => {
     await expectResponsiveSurface(page, "#newProjectDialog");
   });
 
+  test("constraint feedback stays with the invalid field and clears after correction", async ({ page }) => {
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    const dialog = page.locator("#newProjectDialog");
+    const field = dialog.locator("#newCaptureName");
+    const fieldLabel = dialog.locator('label[for="newCaptureName"]');
+
+    await dialog.getByRole("button", { name: "Continue to files", exact: true }).click();
+
+    await expect(field).toHaveAttribute("aria-invalid", "true");
+    const errorId = await field.getAttribute("aria-errormessage");
+    expect(errorId).toBeTruthy();
+    const fieldMessage = fieldLabel.locator(`#${errorId}`);
+    await expect(fieldMessage).toBeVisible();
+    await expect(fieldMessage).not.toBeEmpty();
+    await expect(dialog.locator("#projectError")).toBeEmpty();
+
+    await field.fill("Atrium walkthrough");
+    await expect(field).not.toHaveAttribute("aria-invalid");
+    await expect(field).not.toHaveAttribute("aria-errormessage");
+    await expect(fieldMessage).toBeHidden();
+  });
+
+  test("server field failures stay inline while action evidence remains singular", async ({ page }) => {
+    let saveAttempts = 0;
+    await page.route("**/api/project-views", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      saveAttempts += 1;
+      if (saveAttempts > 1) {
+        await json(route, 200, {
+          view: {
+            id: "94949494-9494-4494-8494-949494949494",
+            name: "Recovered view",
+            filter: {
+              query: "",
+              statuses: [],
+              captureAdapters: [],
+              deliveryTemplates: [],
+              sort: "updated_desc",
+            },
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        headers: { "x-request-id": "request-saved-view" },
+        body: JSON.stringify({
+          error: "Validation failed",
+          details: {
+            fieldErrors: { name: ["A saved view already uses this name"] },
+            formErrors: [],
+          },
+        }),
+      });
+    });
+    await page.locator("#projectAdvancedFilters").getByText("Filters and saved views", {
+      exact: true,
+    }).click();
+    await page.getByRole("button", { name: "Save view", exact: true }).click();
+
+    const dialog = page.locator("#savedViewDialog");
+    const name = dialog.getByLabel("View name", { exact: true });
+    const submit = dialog.getByRole("button", { name: "Save project view", exact: true });
+    await name.fill("Duplicate view");
+    await submit.click();
+
+    await expect(name).toHaveAttribute("aria-invalid", "true");
+    await expect(name).toBeFocused();
+    const errorId = await name.getAttribute("aria-errormessage");
+    expect(errorId).toBeTruthy();
+    await expect(dialog.locator(`#${errorId}`)).toHaveText("A saved view already uses this name.");
+    const actionFeedback = dialog.locator("#savedViewError");
+    await expect(actionFeedback).toContainText("Validation failed.");
+    await expect(actionFeedback).toContainText("Reference: request-saved-view.");
+    await expect(actionFeedback).not.toContainText("A saved view already uses this name");
+    await expect(dialog.locator('[role="alert"]:visible')).toHaveCount(1);
+    await expect(submit).toHaveAttribute("aria-describedby", /savedViewError/);
+
+    await name.fill("");
+    await submit.click();
+    await expect(actionFeedback).toBeHidden();
+    await expect(submit).not.toHaveAttribute("aria-describedby");
+    await expect(name).toBeFocused();
+
+    await name.fill("Recovered view");
+    await submit.click();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator("#toast")).toHaveText("Project view saved");
+    expect(saveAttempts).toBe(2);
+
+    await page.getByRole("button", { name: "Save view", exact: true }).click();
+    await expect(name).not.toHaveAttribute("aria-invalid");
+    await expect(name).not.toHaveAttribute("aria-errormessage");
+    await expect(actionFeedback).toBeHidden();
+  });
+
+  test("record workspaces do not own or nest live announcements", async ({ page }) => {
+    for (const id of [
+      "projectTable",
+      "releaseList",
+      "reviewInbox",
+      "hostingOverview",
+      "spatialOverview",
+      "measurementOverview",
+      "publishOverview",
+      "teamOverview",
+      "comparisonGrid",
+    ]) {
+      await expect(page.locator(`#${id}`)).not.toHaveAttribute("aria-live");
+    }
+    await expect(page.locator('[aria-live] [role="alert"], [role="alert"] [aria-live]'))
+      .toHaveCount(0);
+  });
+
   test("capture intake keeps required organisation metadata visible", async ({ page }) => {
     await page.route("**/api/project-fields", async (route) => {
       await json(route, 200, {

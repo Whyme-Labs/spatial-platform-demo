@@ -67,7 +67,7 @@
           <div><span class="eyebrow">ORGANISATION INVITATIONS</span><h2>Organisations waiting for your answer</h2></div>
           <span class="worker-status"><i></i>Explicit consent</span>
         </div>
-        <div id="pendingInvitationList" class="workspace-grid" aria-live="polite">
+        <div id="pendingInvitationList" class="workspace-grid">
           <div class="empty-state">No organisation invitation is awaiting your response.</div>
         </div>
       </section>
@@ -165,7 +165,7 @@
               <button id="bulkArchiveProjects" class="danger-button" type="button">Archive selected</button>
             </div>
           </div>
-          <div id="projectTable" class="project-table" aria-live="polite">
+          <div id="projectTable" class="project-table">
             <div class="empty-state">Sign in to load production projects.</div>
           </div>
           <div id="projectPagination" class="project-pagination" hidden>
@@ -201,7 +201,7 @@
           <div><span class="eyebrow">RELEASE INVENTORY</span><h2>Published history and active channels</h2></div>
           <span class="worker-status"><i></i>Immutable release records</span>
         </div>
-        <div id="releaseList" class="release-table" aria-live="polite">
+        <div id="releaseList" class="release-table">
           <div class="empty-state">No releases loaded.</div>
         </div>
         <div id="releasePagination" class="list-pagination" hidden>
@@ -215,7 +215,7 @@
           <div><span class="eyebrow">CLIENT REVIEW</span><h2>Scoped access, anchored feedback, and approval history</h2></div>
           <span class="worker-status"><i></i>Version-aware review</span>
         </div>
-        <div id="reviewInbox" class="workspace-grid" aria-live="polite">
+        <div id="reviewInbox" class="workspace-grid">
           <div class="empty-state">No review projects loaded.</div>
         </div>
       </section>
@@ -225,7 +225,7 @@
           <div><span class="eyebrow">COMMERCIAL HOSTING</span><h2>Plans, invoices, storage, renewals, and operational alerts</h2></div>
           <span class="worker-status"><i></i>Lifecycle controlled</span>
         </div>
-        <div id="hostingOverview" class="workspace-grid" aria-live="polite">
+        <div id="hostingOverview" class="workspace-grid">
           <div class="empty-state">No hosting data loaded.</div>
         </div>
       </section>
@@ -235,7 +235,7 @@
           <div><span id="spatialWorkspaceEyebrow" class="eyebrow">STRUCTURE</span><h2 id="spatialWorkspaceTitle">Review reconstructed rooms and openings</h2></div>
           <span class="worker-status"><i></i>Vendor-neutral semantics</span>
         </div>
-        <div id="spatialOverview" class="workspace-grid" aria-live="polite">
+        <div id="spatialOverview" class="workspace-grid">
           <div class="empty-state">Open a project to author its latest immutable version.</div>
         </div>
       </section>
@@ -245,7 +245,7 @@
           <div><span class="eyebrow">MEASURED FLOOR PLAN / SCAN-TO-CAD</span><h2>Tolerances, independent checks, cost evidence, and professional boundaries</h2></div>
           <span class="worker-status"><i></i>Evidence before reliance</span>
         </div>
-        <div id="measurementOverview" class="workspace-grid" aria-live="polite">
+        <div id="measurementOverview" class="workspace-grid">
           <div class="empty-state">Open a project to define its measurement brief.</div>
         </div>
       </section>
@@ -255,7 +255,7 @@
           <div><span class="eyebrow">RELEASE</span><h2>Review and publish</h2></div>
           <span class="worker-status"><i></i>Evidence-gated delivery</span>
         </div>
-        <div id="publishOverview" class="workspace-grid" aria-live="polite">
+        <div id="publishOverview" class="workspace-grid">
           <div class="empty-state">Open a project to review its publication readiness.</div>
         </div>
       </section>
@@ -269,7 +269,7 @@
             <button id="inviteTeamButton" class="primary-button" type="button">+ Invite teammate</button>
           </div>
         </div>
-        <div id="teamOverview" class="workspace-grid" aria-live="polite">
+        <div id="teamOverview" class="workspace-grid">
           <div class="empty-state">Team access is available to platform administrators.</div>
         </div>
       </section>
@@ -298,7 +298,7 @@
       <div id="enterpriseLoginRegion" class="enterprise-login-region">
         <span class="auth-divider">or</span>
         <button id="enterpriseLoginButton" class="quiet-button wide" type="button">Continue with enterprise SSO</button>
-        <div id="enterpriseProviderChoices" class="enterprise-provider-choices" aria-live="polite"></div>
+        <div id="enterpriseProviderChoices" class="enterprise-provider-choices"></div>
       </div>
       <p id="loginError" class="form-error" role="alert"></p>
     </form>
@@ -320,7 +320,7 @@
         <div class="mock-form-grid">
           <label for="newCaptureName"><span>Scene name</span><input id="newCaptureName" name="name" required minlength="3" maxlength="120" placeholder="Ground floor showroom" /></label>
         </div>
-        <section id="newProjectRequiredInformation" class="custom-field-form-section" aria-live="polite" hidden>
+        <section id="newProjectRequiredInformation" class="custom-field-form-section" hidden>
           <h3>Required organisation information</h3>
           <p>Complete the fields governed by this workspace before uploading.</p>
           <div id="newProjectRequiredCustomFields" class="custom-field-grid"></div>
@@ -333,7 +333,7 @@
             <label><span>Customer contact email</span><input name="customerEmail" type="email" /></label>
             <label class="full"><span>Notes</span><textarea name="notes" maxlength="4000" placeholder="Optional context for the capture or team"></textarea></label>
           </div>
-          <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+          <section id="newProjectCustomFields" class="custom-field-form-section"></section>
         </details>
       </section>
       <section class="capture-intake-step" data-capture-intake-step="2" aria-labelledby="captureIntakeFilesTitle" hidden>
@@ -349,7 +349,7 @@
       </section>
       <section class="capture-intake-step" data-capture-intake-step="3" aria-labelledby="captureIntakeReviewTitle" hidden>
         <h3 id="captureIntakeReviewTitle">Review and process</h3>
-        <div id="newCaptureReview" class="capture-intake-review" aria-live="polite"></div>
+        <div id="newCaptureReview" class="capture-intake-review"></div>
         <p class="field-note">The source files remain immutable. Machine-generated structure and walking evidence still require the stage-specific checks shown after processing.</p>
       </section>
       <div class="upload-progress"><i id="newProjectUploadProgress"></i></div>
@@ -391,7 +391,7 @@
         <div class="section-heading">
           <div><span class="eyebrow">TEMPLATES</span><h3>Reusable project defaults</h3></div>
         </div>
-        <div id="projectTemplateList" class="compact-record-list" aria-live="polite"></div>
+        <div id="projectTemplateList" class="compact-record-list"></div>
         <div id="projectTemplatePagination" class="list-pagination" hidden>
           <span id="projectTemplatePaginationStatus"></span>
           <button id="loadMoreProjectTemplates" class="quiet-button" type="button">Load more templates</button>
@@ -445,7 +445,7 @@
         <span class="eyebrow">PROJECT SCHEMA</span>
         <h3>Organisation-defined metadata</h3>
         <p>Typed fields are validated by the API and travel with a direct portfolio handoff. Field keys and types remain immutable.</p>
-        <div id="projectFieldList" class="compact-record-list" aria-live="polite"></div>
+        <div id="projectFieldList" class="compact-record-list"></div>
         <form id="projectFieldForm" class="inline-tool-form">
           <input name="fieldId" type="hidden" />
           <div class="mock-form-grid">
@@ -543,7 +543,7 @@
       <section id="captureAgentProjectField" class="capture-agent-project-field">
         <span class="field-label">Assigned projects</span>
         <p>Removing a project stops new parts and completion immediately. Existing immutable R2 objects are not deleted.</p>
-        <div id="captureAgentProjectChoices" class="capture-agent-project-choices" aria-live="polite"></div>
+        <div id="captureAgentProjectChoices" class="capture-agent-project-choices"></div>
       </section>
       <button id="captureAgentSubmit" class="primary-button wide" type="submit">Create scoped token</button>
       <p id="captureAgentError" class="form-error" role="alert"></p>
@@ -628,7 +628,7 @@
           <div><span class="eyebrow">IMMUTABLE INPUTS</span><h3 id="captureBundleAssetsTitle">Assign evidence roles</h3></div>
         </div>
         <p class="field-note">Only verified assets on the selected version appear. Select an asset, then choose every role it genuinely evidences.</p>
-        <div id="captureBundleAssets" class="capture-bundle-assets" aria-live="polite"></div>
+        <div id="captureBundleAssets" class="capture-bundle-assets"></div>
       </section>
       <section class="capture-bundle-section">
         <span class="eyebrow">COMMERCIAL RIGHTS</span>
@@ -680,7 +680,7 @@
         <p id="editProjectTrajectoryClutterDemotionNote" class="field-note full" hidden>Extraction reads stacked goods as full-height wall. Pass-through evidence only clears what the scanner walked straight through, never the clutter it walked around, which can strand most of the captured floor. The walked options also demote runs standing on ground the scanner was carried over; walked contact reaches furthest and may also clear a real wall the scanner passed close beside. Neither can enlarge the walkable space, because floor is only ever laid under rooms, thresholds, and walked ground.</p>
         <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
       </div>
-      <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+      <section id="editProjectCustomFields" class="custom-field-form-section"></section>
       <button class="primary-button wide" type="submit">Save project settings</button>
       <p id="editProjectError" class="form-error" role="alert"></p>
     </form>
@@ -849,7 +849,7 @@
             <h3 id="domainInventoryTitle">Registered domains</h3>
           </div>
         </div>
-        <div id="domainInventory" class="domain-inventory" aria-live="polite"></div>
+        <div id="domainInventory" class="domain-inventory"></div>
       </section>
       <p id="domainError" class="form-error" role="alert"></p>
     </form>
@@ -1271,7 +1271,7 @@
         <i></i><span>Preparing signed comparison sessions…</span>
       </div>
 
-      <div id="comparisonGrid" class="comparison-grid" aria-live="polite">
+      <div id="comparisonGrid" class="comparison-grid">
         <article class="comparison-card" data-comparison-side="left">
           <header><div><span class="eyebrow">LEFT</span><h3 id="compareLeftTitle">Select a version</h3></div><span id="compareLeftStatus" class="comparison-status">Waiting</span></header>
           <div class="comparison-frame-stage">
