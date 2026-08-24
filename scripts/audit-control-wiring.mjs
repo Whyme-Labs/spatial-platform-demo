@@ -8,6 +8,8 @@ const entryPoints = [
     scripts: [
       "src/client/studio.ts",
       "src/client/studio/stages/compare.ts",
+      "src/client/studio/stages/process.ts",
+      "src/client/studio/ui/dom.ts",
     ],
   },
   {
@@ -362,8 +364,12 @@ function auditStudioWorkflow(html, source) {
       failures.push(`studio.html project navigation is missing mandatory ${stage} stage`);
     }
   }
-  if (!html.includes('id="processWorkspace"') ||
-    !source.includes("renderProcessWorkspace(detail, model)")) {
+  if (
+    !html.includes('id="processWorkspace"')
+    || !source.includes('from "./studio/stages/process"')
+    || !source.includes("renderProcessWorkspace({")
+    || !source.includes("container.replaceChildren(task, history)")
+  ) {
     failures.push("Process is not a dedicated routed project workspace");
   }
   if (!html.includes('id="projectCurrentStage"') ||

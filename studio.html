@@ -204,7 +204,7 @@
         </aside>
       </section>
 
-      <section id="projectDetail" class="output-section" data-project-workflow="overview" data-surface-role="section" tabindex="-1" hidden>
+      <section id="projectDetail" class="output-section project-detail" data-project-workflow="overview" data-surface-role="section" tabindex="-1" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">OVERVIEW</span><h2>Project overview and sharing</h2></div>
         </div>
@@ -579,7 +579,7 @@
       <span class="eyebrow">TOKEN ISSUED</span>
       <h2 id="captureAgentTokenTitle">Store this credential now.</h2>
       <p>This token is sufficient only for the assigned project upload APIs. Put it in <code>SPATIAL_CAPTURE_AGENT_TOKEN</code>; never commit it to source control.</p>
-      <label class="full"><span>Capture-agent token</span><textarea id="captureAgentTokenValue" readonly rows="4" spellcheck="false"></textarea></label>
+      <label class="full"><span>Capture-agent token</span><textarea id="captureAgentTokenValue" class="capture-agent-token-value" readonly rows="4" spellcheck="false"></textarea></label>
       <div class="form-actions">
         <button id="copyCaptureAgentToken" class="primary-button" type="button">Copy token</button>
         <button class="quiet-button" value="cancel" type="submit">I stored it safely</button>
@@ -864,7 +864,7 @@
         <label class="full"><span>Hostname</span><input name="hostname" placeholder="tour.customer.com" required /></label>
       </div>
       <button class="primary-button wide" type="submit">Create verification record</button>
-      <div id="domainInstructions" class="notice-card" hidden></div>
+      <div id="domainInstructions" class="notice-card domain-instructions" hidden></div>
       <section class="domain-inventory-section" aria-labelledby="domainInventoryTitle">
         <div class="workspace-section-heading">
           <div>

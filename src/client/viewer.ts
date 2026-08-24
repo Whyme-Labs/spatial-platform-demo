@@ -26,7 +26,7 @@ import type {
   RendererOverlayLayoutMessage,
   RendererOverlayModeMessage,
 } from "../shared/overlay-layout";
-import "../../styles.css";
+import "./styles/viewer-entry.css";
 
 const VIEWER_MOVEMENT_KEYS = new Set([
   "KeyW",

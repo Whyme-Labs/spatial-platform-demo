@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const now = "2026-07-31T13:30:00.000Z";
@@ -23,6 +24,14 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.locator("#projectCurrentStage")).toHaveText("Publish");
   await expect(page.locator("#projectCurrentBlocker")).toHaveText("No blocker");
   await expect(page.locator("#projectCurrentAction")).toHaveText("Publish shareable URL");
+
+  await page.getByRole("button", { name: "Process", exact: true }).click();
+  await expect(page.locator("#processWorkspace")).toBeVisible();
+  const processAccessibility = await new AxeBuilder({ page })
+    .exclude("#turnstileWidget")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(processAccessibility.violations, "Project process").toEqual([]);
 
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));

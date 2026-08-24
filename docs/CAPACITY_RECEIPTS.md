@@ -1,6 +1,39 @@
 # Capacity receipts
 
-Last measured: 2026-08-13
+Last measured: 2026-08-24
+
+## Frontend CSS ownership receipt
+
+Last measured: 2026-08-24
+
+The UI audit baseline was measured from `styles.css` at commit `0d20ec1`
+with a PostCSS AST inventory:
+
+| Source | Bytes | Lines | Rules | Selectors | Declarations | `!important` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| mixed baseline | 160,868 | 3,757 | 1,450 | 1,666 | 4,655 | 24 |
+| owned sources | 141,587 | 3,692 | 1,315 | 1,461 | 4,090 | 15 |
+| measured change | -19,281 | -65 | -135 | -205 | -565 | -9 |
+
+The reduction is a receipt, not a target. It came from deleting source-proved
+dead prototype families, consolidating the authoritative shell/feedback/
+record/dialog contracts, and removing accidental important declarations.
+The remaining important declarations are limited to hidden and screen-reader
+content, reduced motion, and forced-color focus/state handling.
+
+Reproduce the owned-source measurement and enforce the ownership contract from
+the repository root:
+
+```bash
+npm run audit:css -- --json
+```
+
+The command fails for unlayered rules, a changed entry graph, cross-owner core
+selectors, duplicate core selector/property declarations in one condition,
+undefined static custom properties, ID selectors, page-root overflow masks,
+unscoped viewer rules, or important declarations outside accessibility
+exceptions. Re-run the browser UI matrix whenever a rule moves between owners;
+a lower byte count alone is not evidence that the migration preserved layout.
 
 ## Staging lifecycle canary budgets
 

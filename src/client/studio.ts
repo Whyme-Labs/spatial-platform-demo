@@ -31,6 +31,21 @@ import {
   type GeometryChangeReport,
   type RegisteredSceneChangeReport,
 } from "./studio/stages/compare";
+import {
+  renderProcessWorkspace,
+  type ProcessWorkspaceModel,
+} from "./studio/stages/process";
+import {
+  detailLine,
+  detailTask,
+  element,
+  emptyState,
+  noticeSurface,
+  recordRow,
+  recordSurface,
+  taskDisclosure,
+  workspaceTask,
+} from "./studio/ui/dom";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
   parseStartingViewQualityMetrics,
@@ -88,7 +103,7 @@ import {
   navigationClearancePresetSummary,
   type NavigationClearancePresetId,
 } from "../shared/navigation-clearance-presets";
-import "../../styles.css";
+import "./styles/studio-entry.css";
 
 type TurnstileWidgetOptions = {
   sitekey: string;
@@ -1221,11 +1236,6 @@ type ProjectNextAction = {
   section: JourneySection;
   command: ProjectWorkspaceCommand;
 };
-type ProcessWorkspaceModel =
-  | { kind: "empty"; title: "Waiting for processing"; detail: string }
-  | { kind: "working"; title: string; job: Job }
-  | { kind: "blocked"; title: "Processing needs attention"; detail: string }
-  | { kind: "complete"; title: "Visual scene prepared"; version: Version };
 type ProjectJourneyState = {
   renderableVersion: Version | null;
   activeJob: Job | null;
@@ -5227,7 +5237,7 @@ function renderPendingInvitations(): void {
     return;
   }
   panel.hidden = false;
-  const card = element("article", "workspace-card-large");
+  const card = workspaceTask();
   const invitationError = element("p", "form-error");
   invitationError.id = "pendingInvitationError";
   invitationError.setAttribute("role", "alert");
@@ -5246,7 +5256,7 @@ function renderPendingInvitations(): void {
     invitationError,
   );
   for (const invitation of state.pendingInvitations) {
-    const row = element("div", "team-member-row record-row");
+    const row = recordRow("div", "team-member-row");
     row.dataset.recordKind = "organisation-invitation";
     const identity = element("div", "team-member-identity record-primary");
     identity.append(
@@ -5396,7 +5406,7 @@ function renderProjects(): void {
   for (const cell of header.children) cell.setAttribute("role", "columnheader");
   container.append(header);
   for (const project of projects) {
-    const row = element("div", "project-row record-row");
+    const row = recordRow("div", "project-row");
     row.dataset.recordKind = "project";
     row.setAttribute("role", "row");
     if (state.selectedProjectIds.has(project.id)) row.classList.add("selected");
@@ -5612,7 +5622,7 @@ function renderJobs(): void {
   }
   const visibleJobs = state.view === "jobs" ? state.jobs : state.jobs.slice(0, 12);
   for (const [index, job] of visibleJobs.entries()) {
-    const row = element("div", "queue-item record-row");
+    const row = recordRow("div", "queue-item");
     row.dataset.recordKind = "job";
     const order = element("span", "queue-order", String(index + 1).padStart(2, "0"));
     const body = element("div", "record-primary");
@@ -5699,7 +5709,7 @@ function renderReleases(): void {
   container.setAttribute("aria-label", "Published release history");
   container.append(header);
   for (const release of state.releases) {
-    const row = element("div", "release-list-row record-row");
+    const row = recordRow("div", "release-list-row");
     row.dataset.recordKind = "release";
     row.setAttribute("role", "row");
     const project = element("span", "record-primary");
@@ -5812,7 +5822,7 @@ function renderReviews(): void {
     return;
   }
   for (const project of state.reviewProjects) {
-    const card = element("article", "workspace-card-large");
+    const card = workspaceTask();
     const heading = element("div", "workspace-card-heading");
     const title = element("div");
     title.append(
@@ -5875,7 +5885,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     activity.append(element("p", "muted-copy", "No review activity has been recorded."));
   }
   for (const comment of detail.comments.slice(0, 12)) {
-    const row = element("div", "review-line record-row");
+    const row = recordRow("div", "review-line");
     row.dataset.recordKind = "review-comment";
     const copy = element("div", "record-primary");
     copy.append(
@@ -5911,7 +5921,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
   }
   if (!isReviewer() && detail.reviewers?.length) {
     for (const reviewer of detail.reviewers) {
-      const row = element("div", "review-line record-row");
+      const row = recordRow("div", "review-line");
       row.dataset.recordKind = "reviewer";
       row.append(element("div", "record-primary", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
       if (!reviewer.revoked_at && reviewer.invitation_status !== "revoked") {
@@ -5942,7 +5952,7 @@ function renderHosting(): void {
     container.append(emptyState("Hosting information is unavailable."));
     return;
   }
-  const plans = element("article", "workspace-card-large");
+  const plans = workspaceTask();
   plans.append(
     element("span", "eyebrow", "AVAILABLE PLANS"),
     element("h3", "", "Productised recurring hosting"),
@@ -5954,7 +5964,7 @@ function renderHosting(): void {
   );
   const planGrid = element("div", "plan-grid");
   for (const plan of state.hosting.plans) {
-    const card = element("div", "plan-card");
+    const card = recordSurface("div", "plan-card");
     card.append(
       element("strong", "", plan.name),
       element("b", "", plan.monthly_price_cents ? `${formatMoney(plan.monthly_price_cents, "MYR")} / mo` : "Custom"),
@@ -5964,11 +5974,11 @@ function renderHosting(): void {
   }
   plans.append(planGrid);
 
-  const subscriptions = element("article", "workspace-card-large");
+  const subscriptions = workspaceTask();
   subscriptions.append(element("span", "eyebrow", "ACTIVE SERVICES"), element("h3", "", "Project subscriptions"));
   if (!state.hosting.subscriptions.length) subscriptions.append(element("p", "muted-copy", "No hosting subscription configured."));
   for (const subscription of state.hosting.subscriptions) {
-    const row = element("div", "hosting-row record-row");
+    const row = recordRow("div", "hosting-row");
     row.dataset.recordKind = "hosting-subscription";
     const copy = element("div", "record-primary");
     const usage = subscription.included_storage_bytes > 0
@@ -6020,10 +6030,10 @@ function renderHosting(): void {
     subscriptions.append(row);
   }
 
-  const finance = element("article", "workspace-card-large");
+  const finance = workspaceTask();
   finance.append(element("span", "eyebrow", "BILLING & ALERTS"), element("h3", "", "Invoice and recovery ledger"));
   for (const invoice of state.hosting.invoices.slice(0, 8)) {
-    const row = element("div", "hosting-row billing-invoice-row record-row");
+    const row = recordRow("div", "hosting-row billing-invoice-row");
     row.dataset.recordKind = "invoice";
     const copy = element("div", "record-primary");
     copy.append(
@@ -6052,7 +6062,7 @@ function renderHosting(): void {
     finance.append(row);
   }
   for (const checkout of state.hosting.checkouts.slice(0, 8)) {
-    const row = element("div", "hosting-row record-row");
+    const row = recordRow("div", "hosting-row");
     row.dataset.recordKind = "checkout";
     const copy = element("div", "record-primary");
     copy.append(
@@ -6082,7 +6092,7 @@ function renderHosting(): void {
     finance.append(element("p", "muted-copy", "No invoices or operational alerts."));
   }
 
-  const lifecycle = element("article", "workspace-card-large");
+  const lifecycle = workspaceTask();
   lifecycle.append(
     element("span", "eyebrow", "ENFORCED LIFECYCLE"),
     element("h3", "", "Expiry, retention, and restore evidence"),
@@ -6127,7 +6137,7 @@ function renderHosting(): void {
 }
 
 function renderManualBillingPanel(): HTMLElement {
-  const card = element("article", "workspace-card-large manual-billing-card");
+  const card = workspaceTask("manual-billing-card");
   const hosting = state.hosting;
   card.append(
     element("span", "eyebrow", "MERCHANT BILLING"),
@@ -6470,7 +6480,7 @@ function renderTeam(): void {
     return;
   }
 
-  const identityProviders = element("article", "workspace-card-large identity-provider-card");
+  const identityProviders = workspaceTask("identity-provider-card");
   const identityError = element("p", "form-error");
   identityError.id = "identityProviderWorkspaceError";
   identityError.setAttribute("role", "alert");
@@ -6488,7 +6498,7 @@ function renderTeam(): void {
     identityProviders.append(emptyState("No enterprise identity provider is configured. Email OTP remains available."));
   }
   for (const provider of state.identityProviders) {
-    const row = element("div", "team-member-row record-row");
+    const row = recordRow("div", "team-member-row");
     row.dataset.recordKind = "identity-provider";
     const copy = element("div", "team-member-identity record-primary");
     const readiness = provider.secretConfigured ? "secret configured" : "secret required";
@@ -6557,7 +6567,7 @@ function renderTeam(): void {
     identityProviders.append(row);
   }
 
-  const captureAgents = element("article", "workspace-card-large capture-agent-card");
+  const captureAgents = workspaceTask("capture-agent-card");
   const captureAgentWorkspaceError = element("p", "form-error");
   captureAgentWorkspaceError.id = "captureAgentWorkspaceError";
   captureAgentWorkspaceError.setAttribute("role", "alert");
@@ -6580,7 +6590,7 @@ function renderTeam(): void {
     captureAgents.append(emptyState("No unattended transfer credential has been issued."));
   }
   for (const credential of state.captureAgents) {
-    const row = element("div", `team-member-row record-row ${credential.status}`);
+    const row = recordRow("div", `team-member-row ${credential.status}`);
     row.dataset.recordKind = "capture-agent";
     const identity = element("div", "team-member-identity record-primary");
     const projectNames = credential.projectIds.map((projectId) => (
@@ -6633,7 +6643,7 @@ function renderTeam(): void {
     captureAgents.append(row);
   }
 
-  const members = element("article", "workspace-card-large team-members-card");
+  const members = workspaceTask("team-members-card");
   const activeCount = state.team.members.filter((member) => member.status === "active").length;
   members.append(
     element("span", "eyebrow", "LEAST-PRIVILEGE MEMBERSHIP"),
@@ -6642,7 +6652,7 @@ function renderTeam(): void {
   );
   if (!state.team.members.length) members.append(emptyState("No production team members found."));
   for (const member of state.team.members) {
-    const row = element("div", `team-member-row record-row ${member.status}`);
+    const row = recordRow("div", `team-member-row ${member.status}`);
     row.dataset.recordKind = "team-member";
     const identity = element("div", "team-member-identity record-primary");
     identity.append(
@@ -6702,7 +6712,7 @@ function renderTeam(): void {
     members.append(row);
   }
 
-  const invitations = element("article", "workspace-card-large");
+  const invitations = workspaceTask();
   invitations.append(
     element("span", "eyebrow", "INVITATION LEDGER"),
     element("h3", "", "Recent invitation lifecycle"),
@@ -6711,7 +6721,7 @@ function renderTeam(): void {
     invitations.append(element("p", "muted-copy", "No team invitations have been issued."));
   }
   for (const invitation of state.team.invitations) {
-    const row = element("div", "hosting-row record-row");
+    const row = recordRow("div", "hosting-row");
     row.dataset.recordKind = "team-invitation";
     const copy = element("div", "record-primary");
     copy.append(
@@ -7107,10 +7117,7 @@ function renderSpatial(): void {
     container.append(emptyState("Upload and process an immutable scene version before authoring semantics."));
     return;
   }
-  const versionControl = element(
-    "article",
-    "workspace-card-large spatial-version-control",
-  );
+  const versionControl = workspaceTask("spatial-version-control");
   const versionSelect = document.createElement("select");
   versionSelect.setAttribute("aria-label", "Spatial version");
   for (const version of state.selected?.versions ?? []) {
@@ -7150,7 +7157,7 @@ function renderSpatial(): void {
   if (state.projectSection === "structure") {
     container.append(renderSceneAuthoringWorkspace(project, spatial));
   }
-  const hierarchy = element("article", "workspace-card-large");
+  const hierarchy = workspaceTask();
   hierarchy.append(
     element("span", "eyebrow", `VERSION ${spatial.version.version_number}`),
     element("h3", "", "Place structure"),
@@ -7210,7 +7217,7 @@ function renderSpatial(): void {
   add.addEventListener("click", () => openSpatialEntityDialog(null));
   hierarchy.append(add);
 
-  const semanticExtraction = element("article", "workspace-card-large semantic-extraction-card");
+  const semanticExtraction = workspaceTask("semantic-extraction-card");
   semanticExtraction.append(
     element("span", "eyebrow", "POINT-CLOUD SEMANTICS"),
     element("h3", "", "Machine candidates, human-authored structure"),
@@ -7228,7 +7235,7 @@ function renderSpatial(): void {
     );
   }
   for (const extraction of extractionRuns.slice(0, 8)) {
-    const card = element("section", "semantic-extraction-run");
+    const card = recordSurface("section", "semantic-extraction-run");
     const heading = element("div", "semantic-extraction-heading");
     heading.append(
       element("strong", "", extraction.input_file_name),
@@ -7337,7 +7344,7 @@ function renderSpatial(): void {
     ),
   );
 
-  const routes = element("article", "workspace-card-large");
+  const routes = workspaceTask();
   routes.append(
     element("span", "eyebrow", "GUIDED NAVIGATION"),
     element("h3", "", "Routes and movement runtime"),
@@ -7571,14 +7578,14 @@ function renderSpatial(): void {
     if (actions.childElementCount) row.append(actions);
     navigationBuildHistory.append(row);
   }
-  const navigationBuildsCard = element("article", "workspace-card-large navigation-builds-card");
+  const navigationBuildsCard = workspaceTask("navigation-builds-card");
   navigationBuildsCard.append(
     element("span", "eyebrow", "VERIFIED NAVIGATION"),
     element("h3", "", "Build receipts and operator review"),
     navigationBuildHistory,
   );
 
-  const captureEvidence = element("article", "workspace-card-large capture-assurance");
+  const captureEvidence = workspaceTask("capture-assurance");
   captureEvidence.append(
     element("span", "eyebrow", "CAPTURE COMPLETENESS"),
     element("h3", "", "Pose-path coverage, explicit recapture evidence"),
@@ -7644,7 +7651,7 @@ function renderSpatial(): void {
     readiness: state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   });
 
-  const delivery = element("article", "workspace-card-large");
+  const delivery = workspaceTask();
   delivery.append(
     element("span", "eyebrow", "ADAPTIVE DELIVERY"),
     element("h3", "", "Measured device policy"),
@@ -7701,7 +7708,7 @@ function renderPublish(): void {
     return;
   }
 
-  const card = element("article", "workspace-card-large publication-readiness-card");
+  const card = workspaceTask("publication-readiness-card");
   const latestVersion = detail.versions[0] ?? null;
   const releasableVersion = auxiliaryCollisionTargetVersion();
   const navigationReady = Boolean(
@@ -7792,7 +7799,7 @@ function renderSceneAuthoringWorkspace(
   project: Project,
   spatial: SpatialWorkspace,
 ): HTMLElement {
-  const card = element("article", "workspace-card-large scene-authoring-workspace");
+  const card = workspaceTask("scene-authoring-workspace");
   const heading = element("div", "scene-authoring-heading");
   const copy = element("div");
   copy.append(
@@ -8413,7 +8420,7 @@ function askOperator(question: {
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
-  const workflow = element("article", "workspace-card-large floorplan-workflow-card");
+  const workflow = workspaceTask("floorplan-workflow-card");
   workflow.append(
     element("span", "eyebrow", "VENDOR-NEUTRAL FLOOR PLAN"),
     element("h3", "", "Metric capture → operator revision → portable drawings"),
@@ -10426,7 +10433,7 @@ function renderCaptureScanStructure(structure: CaptureScanStructure): HTMLElemen
     );
     card.append(metrics);
     if (structure.vendorFieldNames.length) {
-      const fields = element("div", "notice-card capture-evidence-issues");
+      const fields = noticeSurface("div", "capture-evidence-issues");
       fields.append(element("strong", "", "Vendor extension fields recorded verbatim"));
       const list = document.createElement("ul");
       for (const name of structure.vendorFieldNames) list.append(element("li", "", name));
@@ -10492,7 +10499,7 @@ function renderCaptureCompletenessReport(report: CaptureCompletenessReport): HTM
   card.append(header, metrics, renderCaptureCompletenessOverlay(summary));
 
   if (summary.blockers.length) {
-    const blockers = element("div", "notice-card capture-evidence-issues");
+    const blockers = noticeSurface("div", "capture-evidence-issues");
     blockers.append(element("strong", "", "Conclusion blocked"));
     const list = document.createElement("ul");
     for (const blocker of summary.blockers) list.append(element("li", "", blocker));
@@ -10529,9 +10536,9 @@ function renderCaptureCompletenessReport(report: CaptureCompletenessReport): HTM
     element("p", "field-note", summary.limitation),
   );
   if (report.status === "reviewed") {
-    card.append(element(
+    card.append(noticeSurface(
       "div",
-      "notice-card",
+      "",
       `${humanStatus(report.review_decision ?? "reviewed")}: ${report.review_note ?? "Review recorded."}`,
     ));
   }
@@ -10704,7 +10711,7 @@ function renderMeasurement(): void {
     container.append(emptyState("Open a project from Projects before defining its measurement evidence."));
     return;
   }
-  const briefs = element("article", "workspace-card-large");
+  const briefs = workspaceTask();
   briefs.append(
     element("span", "eyebrow", "ACCEPTANCE CONTRACT"),
     element("h3", "", "Measurement briefs"),
@@ -10801,7 +10808,7 @@ function renderMeasurement(): void {
   });
   briefs.append(create);
 
-  const economics = element("article", "workspace-card-large");
+  const economics = workspaceTask();
   economics.append(
     element("span", "eyebrow", "UNIT ECONOMICS"),
     element("h3", "", "Measured delivery cost"),
@@ -10809,7 +10816,7 @@ function renderMeasurement(): void {
     projectFact("Cost records", String(workspace.costs.length)),
     element("p", "muted-copy", "Capture, compute, cleanup, QA, and professional partner costs are recorded separately so pricing can be validated from real jobs."),
   );
-  const boundaries = element("article", "workspace-card-large");
+  const boundaries = workspaceTask();
   boundaries.append(
     element("span", "eyebrow", "PROFESSIONAL BOUNDARY"),
     element("h3", "", "Certification cannot be self-declared"),
@@ -11424,48 +11431,6 @@ function renderProjectContext(model: ProjectWorkspaceModel): void {
   action.onclick = () => executeProjectWorkspaceCommand(model.nextAction.command, action);
 }
 
-function renderProcessWorkspace(detail: ProjectDetail, model: ProjectWorkspaceModel): void {
-  const container = byId("processOverview");
-  const task = element("article", "workspace-card-large process-task");
-  task.dataset.surfaceRole = "task";
-  task.append(element("span", "eyebrow", "CURRENT PROCESSING STATE"));
-  task.append(element("h3", "", model.process.title));
-  if (model.process.kind === "working") {
-    task.append(element(
-      "p",
-      "muted-copy",
-      model.process.job.progress_message ?? `${model.process.job.progress}% complete`,
-    ));
-    const progress = element("div", "mini-progress");
-    const fill = element("i");
-    fill.style.width = `${model.process.job.progress}%`;
-    progress.append(fill);
-    task.append(progress);
-  } else if (model.process.kind === "complete") {
-    task.append(element(
-      "p",
-      "muted-copy",
-      `Version ${model.process.version.version_number} has a verified browser scene. Structure and publication checks continue in their own workspaces.`,
-    ));
-  } else {
-    task.append(element("p", "muted-copy", model.process.detail));
-  }
-
-  const history = element("details", "project-detail-disclosure process-history");
-  history.append(element("summary", "", "Processing history"));
-  const rows = element("div", "process-history-rows");
-  for (const job of detail.jobs) {
-    rows.append(element(
-      "div",
-      "detail-line",
-      `${humanStatus(job.job_type)} · ${humanStatus(job.state)} · ${job.progress_message ?? `${job.progress}% complete`}`,
-    ));
-  }
-  if (!detail.jobs.length) rows.append(element("p", "muted-copy", "No project processing jobs are recorded yet."));
-  history.append(rows);
-  container.replaceChildren(task, history);
-}
-
 function executeProjectWorkspaceCommand(
   command: ProjectWorkspaceCommand,
   trigger: HTMLButtonElement,
@@ -11552,7 +11517,12 @@ function renderProjectDetail(): void {
   } = model.journey;
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
   renderProjectContext(model);
-  renderProcessWorkspace(detail, model);
+  renderProcessWorkspace({
+    container: byId("processOverview"),
+    jobs: detail.jobs,
+    process: model.process,
+    humanStatus,
+  });
 
   const sharing = detailCard("Preview and sharing");
   sharing.classList.add("project-sharing-card");
@@ -11686,11 +11656,11 @@ function renderProjectDetail(): void {
   const versions = detailCard("Version history");
   if (!detail.versions.length) versions.append(element("p", "muted-copy", "No immutable scene version yet."));
   for (const version of detail.versions) {
-    versions.append(element("div", "detail-line", `v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleString()}`));
+    versions.append(detailLine(`v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleString()}`));
     if (version.workflow_policy_classification_status === "legacy_unknown") {
-      versions.append(element(
+      versions.append(noticeSurface(
         "p",
-        "notice-card",
+        "",
         `Version ${version.version_number} predates classified workflow-policy receipts. Existing releases remain historical evidence; create a new immutable version under an administrator-classified policy before publishing again.`,
       ));
     }
@@ -11708,7 +11678,7 @@ function renderProjectDetail(): void {
   const assets = detailCard("Assets");
   if (!detail.assets.length) assets.append(element("p", "muted-copy", "No assets stored."));
   for (const asset of detail.assets) {
-    assets.append(element("div", "detail-line", `${asset.format.toUpperCase()} · ${asset.file_name} · ${formatBytes(asset.size_bytes)} · ${asset.integrity_status}`));
+    assets.append(detailLine(`${asset.format.toUpperCase()} · ${asset.file_name} · ${formatBytes(asset.size_bytes)} · ${asset.integrity_status}`));
   }
 
   const captureBundles = detailCard("Capture contracts");
@@ -11737,7 +11707,7 @@ function renderProjectDetail(): void {
 
   const releaseHistory = detailCard("Release history");
   for (const release of detail.releases) {
-    const releaseRow = element("div", "release-row");
+    const releaseRow = recordSurface("div", "release-row");
     const link = document.createElement("a");
     link.href = `/s/${release.slug}`;
     link.target = "_blank";
@@ -11840,13 +11810,13 @@ function renderProjectDetail(): void {
   if (effectiveProjectWorkflowPolicy(detail.project).measurement !== "hidden") optionalTools.append(measurementButton);
   optionalTools.append(inviteButton, reviewButton, deliveryButton, domainButton);
 
-  const technicalDetails = element("details", "project-detail-disclosure");
+  const technicalDetails = taskDisclosure();
   technicalDetails.append(element("summary", "", "Technical details and source history"));
   const technicalGrid = element("div", "project-detail-grid");
   technicalGrid.append(overview, versions, assets, captureBundles, releaseHistory);
   technicalDetails.append(technicalGrid);
 
-  const optionalDetails = element("details", "project-detail-disclosure");
+  const optionalDetails = taskDisclosure();
   optionalDetails.append(element("summary", "", "Optional editing, evidence, and delivery tools"));
   const optionalGrid = element("div", "project-detail-grid");
   optionalGrid.append(optionalTools);
@@ -11867,7 +11837,7 @@ function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
 }
 
 function projectFact(label: string, value: string): HTMLElement {
-  const line = element("div", "detail-line");
+  const line = detailLine();
   line.append(element("strong", "", label), element("span", "", value));
   return line;
 }
@@ -14157,7 +14127,7 @@ function renderCustomDomains(projectId: string): void {
     return;
   }
   for (const domain of workspace.domains) {
-    const row = element("article", "domain-row record-row");
+    const row = recordRow("article", "domain-row");
     row.dataset.recordKind = "domain";
     const heading = element("div", "domain-row-heading");
     const title = element("div", "record-primary");
@@ -14412,44 +14382,10 @@ function showToast(message: string): void {
   window.setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className = "",
-  text = "",
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  node.textContent = text;
-  const classes = new Set(className.split(/\s+/).filter(Boolean));
-  if (
-    classes.has("workspace-card-large") ||
-    classes.has("detail-card") ||
-    classes.has("project-detail-disclosure")
-  ) {
-    node.dataset.surfaceRole = "task";
-  } else if (classes.has("notice-card")) {
-    node.dataset.surfaceRole = "notice";
-  } else if (
-    classes.has("plan-card") ||
-    classes.has("domain-row") ||
-    classes.has("semantic-extraction-run") ||
-    classes.has("release-row") ||
-    classes.has("detail-line")
-  ) {
-    node.dataset.surfaceRole = "record";
-  }
-  return node;
-}
-
 function detailCard(title: string): HTMLElement {
-  const card = element("article", "detail-card");
-  card.dataset.surfaceRole = "task";
+  const card = detailTask();
   card.append(element("span", "eyebrow", title.toUpperCase()));
   return card;
-}
-
-function emptyState(message: string, compact = false): HTMLElement {
-  return element("div", `empty-state${compact ? " compact" : ""}`, message);
 }
 
 function optionalString(value: FormDataEntryValue | null): string | undefined {

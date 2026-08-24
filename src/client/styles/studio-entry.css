@@ -1,0 +1,7 @@
+/* Studio owns a separate cascade so viewer and marketing selectors cannot
+   participate in operational layout decisions. */
+@layer primitives, studio, exceptions;
+
+@import url("./primitives.css");
+@import url("./studio.css");
+@import url("./exceptions.css");

@@ -1,0 +1,9 @@
+/* The public entry hosts both the marketing page and published viewer.
+   Viewer rules remain rooted at .viewer-page so the runtime body-class switch
+   cannot leak full-viewport behavior into marketing. */
+@layer primitives, marketing, viewer, exceptions;
+
+@import url("./primitives.css");
+@import url("./marketing.css");
+@import url("./viewer.css");
+@import url("./exceptions.css");
