@@ -53,7 +53,9 @@
 .viewer-page .release-info-summary strong { overflow:hidden; color:var(--text); font:650 13px/1.25 Manrope,sans-serif; letter-spacing:-.015em; text-overflow:ellipsis; white-space:nowrap; }
 .viewer-page .release-info-state { display:flex; align-items:center; justify-content:flex-end; gap:7px; min-width:0; color:var(--muted); font-size:9px; font-weight:650; white-space:nowrap; }
 .viewer-page .release-info-state .status-dot { width:6px; height:6px; }
-.viewer-page .release-info-chevron { display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line); border-radius:50%; color:var(--text); font-size:14px; line-height:1; transition:transform .2s ease; }
+.viewer-page .release-info-chevron { position:relative; display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line); border-radius:50%; color:var(--text); font-size:0; line-height:1; transition:transform .2s ease; }
+.viewer-page .release-info-chevron::after,
+.viewer-page .navigator-trigger-chevron::after { width:5px;height:5px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;content:"";transform:translateY(-1px) rotate(45deg); }
 .viewer-page .release-info-toggle[aria-expanded="true"] .release-info-chevron { transform:rotate(180deg); }
 .viewer-page .release-info.is-expanded .release-info-summary strong { overflow:visible; font-size:15px; white-space:normal; }
 .viewer-page .release-info-details { max-height:min(520px,calc(100dvh - 260px)); overflow:auto; padding:14px 16px 16px; border-top:1px solid var(--line); }
@@ -81,7 +83,7 @@
 .viewer-page .navigator-trigger { position:relative; width:100%; min-height:44px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:0 14px 0 15px; border:0; border-top:1px solid var(--line); border-radius:0; background:rgba(255,255,255,.018); color:var(--text); font-size:var(--type-label); font-weight:720; text-align:left; cursor:pointer; }
 .viewer-page .navigator-trigger:hover,
 .viewer-page .navigator-trigger:focus-visible { background:rgba(255,255,255,.055); outline:none; }
-.viewer-page .navigator-trigger-chevron { display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line); border-radius:50%; color:var(--accent); font-size:14px; line-height:1; transition:transform .2s ease; }
+.viewer-page .navigator-trigger-chevron { position:relative; display:grid; width:20px; height:20px; place-items:center; border:1px solid var(--line); border-radius:50%; color:var(--accent); font-size:0; line-height:1; transition:transform .2s ease; }
 .viewer-page .navigator-trigger[aria-expanded="true"] { background:rgba(212,255,88,.055); color:var(--accent); }
 .viewer-page .navigator-trigger[aria-expanded="true"] .navigator-trigger-chevron { transform:rotate(180deg); }
 .viewer-page .floor-plan-section { margin:2px 0 12px; border:1px solid var(--line); border-radius:14px; padding:12px; background:rgba(8,10,8,.54); }

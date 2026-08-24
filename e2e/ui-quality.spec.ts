@@ -441,6 +441,7 @@ test.describe("authenticated studio UI", () => {
       return message.top - control.bottom;
     });
     expect(validationGap).toBeGreaterThan(0);
+    await field.evaluate((input) => input.blur());
     await expectReviewedScreenshot(page, "studio-inline-validation-phone.png");
 
     await field.fill("Atrium walkthrough");

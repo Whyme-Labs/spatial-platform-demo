@@ -12,8 +12,8 @@ with a PostCSS AST inventory:
 | Source | Bytes | Lines | Rules | Selectors | Declarations | `!important` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mixed baseline | 160,868 | 3,757 | 1,450 | 1,666 | 4,655 | 24 |
-| owned sources | 141,187 | 3,663 | 1,312 | 1,458 | 4,072 | 15 |
-| measured change | -19,681 | -94 | -138 | -208 | -583 | -9 |
+| owned sources | 141,464 | 3,665 | 1,313 | 1,460 | 4,080 | 15 |
+| measured change | -19,404 | -92 | -137 | -206 | -575 | -9 |
 
 The reduction is a receipt, not a target. It came from deleting source-proved
 dead prototype families, consolidating the authoritative shell/feedback/
@@ -40,7 +40,7 @@ a lower byte count alone is not evidence that the migration preserved layout.
 Last measured: 2026-08-24
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
-1,554,944 bytes against `e2e/visual-baselines.sha256`. The images were
+1,551,351 bytes against `e2e/visual-baselines.sha256`. The images were
 generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
 digest
 `sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
