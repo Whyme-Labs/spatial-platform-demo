@@ -112,15 +112,22 @@ components:
     textColor: "{colors.evidence-muted}"
     typography: "{typography.label}"
     rounded: "{rounded.control}"
-    padding: "0 14px"
-    height: "42px"
+    padding: "0 12px"
+    height: "44px"
   section-nav-item-active:
+    backgroundColor: "rgba(255, 255, 255, 0.055)"
+    textColor: "{colors.archive-ivory}"
+    typography: "{typography.label}"
+    rounded: "{rounded.control}"
+    padding: "0 12px"
+    height: "44px"
+  journey-nav-item-active:
     backgroundColor: "{colors.survey-lime}"
     textColor: "{colors.accent-ink}"
     typography: "{typography.label}"
     rounded: "{rounded.control}"
     padding: "0 14px"
-    height: "42px"
+    height: "44px"
   status-badge:
     backgroundColor: "transparent"
     textColor: "{colors.evidence-muted}"
@@ -291,7 +298,7 @@ Portfolio health is a flat definition list inside the Current production surface
 
 ### Navigation
 
-Studio navigation uses 44px rows, 10px corners, restrained Manrope labels, and horizontal scrolling when compact. Active global navigation uses a small lime dot; active project-section navigation uses a lime-filled control. Below 900px, project-section tabs become a labeled select rather than an overcompressed tab row.
+Studio navigation uses 44px rows, 10px corners, and restrained Manrope labels. A project exposes three primary journey lanes—Work, Evidence, and Publish—with Survey Lime marking the active lane. Work and Evidence reveal a quieter local section row; Publish opens directly. Expert tools sit in a separate advanced disclosure and never compete as a fourth journey. Below 900px, one labeled select preserves the same Work, Evidence, Publish, and Advanced grouping rather than compressing the controls.
 
 ### Progressive Disclosure
 

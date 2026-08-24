@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-24T18:44:09Z",
+  "generatedAt": "2026-08-24T19:04:35Z",
   "title": "Design System: Spatial Studio",
   "extensions": {
     "colorMeta": {
@@ -91,12 +91,12 @@
       "css": ".ds-field { display: grid; gap: 8px; color: var(--muted, #aaa99e); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; font-size: 12px; line-height: 1.4; } .ds-field > span { color: #c4c9c1; font-weight: 630; } .ds-field input { width: 100%; min-height: 44px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 10px; background: #0f120f; color: var(--text, #f4efe1); padding: 10px 12px; font: 480 13px/1.35 \"Manrope Variable\", \"Avenir Next\", sans-serif; outline: 0; transition: border-color 160ms ease, box-shadow 160ms ease; } .ds-field input:hover { border-color: var(--line-strong, rgba(244, 239, 225, 0.24)); } .ds-field input:focus { border-color: rgba(212, 255, 88, 0.72); box-shadow: 0 0 0 3px rgba(212, 255, 88, 0.10); }"
     },
     {
-      "name": "Project Section Navigation",
+      "name": "Project Journey Navigation",
       "kind": "nav",
-      "refersTo": "section-nav-item-active",
-      "description": "Compact section switching with one unmistakable active path.",
-      "html": "<nav class=\"ds-section-nav\" aria-label=\"Project sections\"><button class=\"ds-section-active\">Overview</button><button>Scene</button><button>Measurement</button></nav>",
-      "css": ".ds-section-nav { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 14px; background: #0e100f; overflow-x: auto; } .ds-section-nav button { min-height: 42px; border: 0; border-radius: 10px; background: transparent; color: var(--muted, #aaa99e); padding: 0 14px; font: 600 12px/1.2 \"Manrope Variable\", \"Avenir Next\", sans-serif; white-space: nowrap; cursor: pointer; } .ds-section-nav button:hover { color: var(--text, #f4efe1); background: rgba(255, 255, 255, 0.04); } .ds-section-nav button.ds-section-active { background: var(--accent, #d4ff58); color: var(--accent-ink, #11150b); } .ds-section-nav button:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: 2px; }"
+      "refersTo": "journey-nav-item-active",
+      "description": "Three lifecycle lanes with one unmistakable active path; local sections and Expert remain subordinate.",
+      "html": "<nav class=\"ds-journey-nav\" aria-label=\"Project journey\"><button class=\"ds-journey-active\">Work</button><button>Evidence</button><button>Publish</button></nav>",
+      "css": ".ds-journey-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 14px; background: #0e100f; } .ds-journey-nav button { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--muted, #aaa99e); padding: 0 14px; font: 650 12px/1.2 \"Manrope Variable\", \"Avenir Next\", sans-serif; white-space: nowrap; cursor: pointer; } .ds-journey-nav button:hover { color: var(--text, #f4efe1); background: rgba(255, 255, 255, 0.04); } .ds-journey-nav button.ds-journey-active { background: var(--accent, #d4ff58); color: var(--accent-ink, #11150b); } .ds-journey-nav button:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: 2px; }"
     },
     {
       "name": "Verified Status Badge",

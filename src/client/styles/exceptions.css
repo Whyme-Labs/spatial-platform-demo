@@ -5,7 +5,7 @@ html [hidden] { display: none !important; }
 @media (forced-colors:active) {
   body.studio-page :is(button,a,input,select,textarea,summary):focus-visible,
 body.viewer-page :is(button,a,input,select,textarea,summary):focus-visible { outline:3px solid Highlight!important;outline-offset:2px; }
-  body.studio-page :is(.nav-item.active,.filter-chip.active,.project-section-nav button.active,[aria-current="page"],.status-pill,.status-badge) { border:2px solid ButtonText; }
+  body.studio-page :is(.nav-item.active,.filter-chip.active,.project-journey-nav button.active,.project-section-nav button.active,.project-expert-navigation.active > summary,[aria-current="page"],.status-pill,.status-badge) { border:2px solid ButtonText; }
   body.viewer-page :is([aria-pressed="true"],[aria-expanded="true"],.release-state) { border:2px solid ButtonText; }
   body.studio-page :is(button,input,select,textarea):disabled,
 body.viewer-page :is(button,input,select,textarea):disabled { color:GrayText;border-color:GrayText;opacity:1; }

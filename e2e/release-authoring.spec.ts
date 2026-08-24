@@ -24,8 +24,18 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.locator("#projectCurrentStage")).toHaveText("Publish");
   await expect(page.locator("#projectCurrentBlocker")).toHaveText("No blocker");
   await expect(page.locator("#projectCurrentAction")).toHaveText("Publish shareable URL");
+  await expect(page.locator(".project-journey-nav").getByRole("button")).toHaveText([
+    "Work",
+    "Evidence",
+    "Publish",
+  ]);
+  await expect(page.getByRole("button", { name: "Publish", exact: true })).toHaveAttribute(
+    "aria-current",
+    "step",
+  );
+  await expect(page.locator(".project-section-nav")).toBeHidden();
 
-  await page.getByRole("button", { name: "Process", exact: true }).click();
+  await openProjectWorkSection(page, "Process");
   await expect(page.locator("#processWorkspace")).toBeVisible();
   const processAccessibility = await new AxeBuilder({ page })
     .exclude("#turnstileWidget")
@@ -33,9 +43,10 @@ test("project rows open a dedicated project workspace with nested tools", async 
     .analyze();
   expect(processAccessibility.violations, "Project process").toEqual([]);
 
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
   await expect(page.getByRole("heading", { name: "Project overview and sharing", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Work", exact: true })).toHaveAttribute("aria-current", "step");
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
 
   for (const viewport of [
@@ -49,10 +60,10 @@ test("project rows open a dedicated project workspace with nested tools", async 
     const layout = await page.evaluate(() => {
       const heading = document.querySelector<HTMLElement>(".project-page-heading")?.getBoundingClientRect();
       const context = document.querySelector<HTMLElement>(".project-context-bar")?.getBoundingClientRect();
-      const sectionNav = document.querySelector<HTMLElement>(".project-section-nav");
+      const projectNavigation = document.querySelector<HTMLElement>(".project-navigation");
       const compactPicker = document.querySelector<HTMLElement>(".project-section-picker");
-      const navigation = sectionNav && getComputedStyle(sectionNav).display !== "none"
-        ? sectionNav.getBoundingClientRect()
+      const navigation = projectNavigation && getComputedStyle(projectNavigation).display !== "none"
+        ? projectNavigation.getBoundingClientRect()
         : compactPicker?.getBoundingClientRect();
       const action = document.querySelector<HTMLElement>("#projectCurrentAction")?.getBoundingClientRect();
       const workspace = document.querySelector<HTMLElement>('[data-project-workflow="overview"]')?.getBoundingClientRect();
@@ -75,10 +86,11 @@ test("project rows open a dedicated project workspace with nested tools", async 
     if (viewport.width <= 900) {
       await expect(page.locator("#projectSectionPicker")).toBeVisible();
       await expect(page.locator("#projectSectionPicker")).toHaveValue("overview");
-      await expect(page.locator(".project-section-nav")).toBeHidden();
+      await expect(page.locator(".project-navigation")).toBeHidden();
     } else {
       await expect(page.locator("#projectSectionPicker")).toBeHidden();
-      await expect(page.locator(".project-section-nav")).toBeVisible();
+      await expect(page.locator(".project-navigation")).toBeVisible();
+      await expect(page.locator(".project-journey-nav").getByRole("button")).toHaveCount(3);
     }
   }
 
@@ -88,6 +100,7 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expectProjectSurfaceDepth(page);
   await page.getByText("Technical details and source history", { exact: true }).click();
 
+  await page.getByRole("button", { name: "Work", exact: true }).click();
   const processStep = page.getByRole("button", { name: "Process", exact: true });
   await processStep.click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
@@ -102,7 +115,7 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
   await expect(page.getByRole("heading", { name: "Processing and qualification", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.locator("#projectTable")).toBeHidden();
@@ -110,7 +123,7 @@ test("project rows open a dedicated project workspace with nested tools", async 
   const publishTab = page.getByRole("button", { name: "Publish", exact: true });
   await publishTab.press("Enter");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
-  await expect(publishTab).toHaveAttribute("aria-current", "page");
+  await expect(publishTab).toHaveAttribute("aria-current", "step");
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await page.goForward();
@@ -132,17 +145,20 @@ test("the compact project section picker preserves routes and browser history", 
     await page.setViewportSize(viewport);
     await page.goto(`/studio.html#project/${projectId}`);
     const picker = page.locator("#projectSectionPicker");
-    const tabs = page.locator(".project-section-nav");
+    const navigation = page.locator(".project-navigation");
 
     if (viewport.width === 1024) {
-      await expect(tabs).toBeVisible();
+      await expect(navigation).toBeVisible();
       await expect(picker).toBeHidden();
-      await page.getByRole("button", { name: "Process", exact: true }).click();
+      await openProjectWorkSection(page, "Process");
     } else {
       await expect(picker).toBeVisible();
-      await expect(tabs).toBeHidden();
+      await expect(navigation).toBeHidden();
       await expect(picker).toHaveValue("overview");
       await expect(picker.locator("option[value='compare']")).toHaveAttribute("disabled", "");
+      expect(await picker.locator("optgroup").evaluateAll((groups) =>
+        groups.map((group) => group.getAttribute("label"))
+      )).toEqual(["Work", "Evidence", "Publish", "Advanced"]);
       await picker.selectOption("process");
     }
     await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
@@ -157,7 +173,15 @@ test("the compact project section picker preserves routes and browser history", 
     if (viewport.width !== 1024) await expect(picker).toHaveValue("process");
     await page.goBack();
     await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
-    if (viewport.width !== 1024) await expect(picker).toHaveValue("overview");
+    if (viewport.width !== 1024) {
+      await expect(picker).toHaveValue("overview");
+      await picker.selectOption("publish");
+      await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+      await expect(picker).toHaveValue("publish");
+      await picker.selectOption("expert");
+      await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
+      await expect(picker).toHaveValue("expert");
+    }
   }
 });
 
@@ -226,7 +250,7 @@ test("flattened project sections reclaim the active canvas width", async ({ page
   await mockApprovedProject(page, () => undefined);
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   const receipt: Array<{ viewport: number; nestedWidth: number; flatWidth: number }> = [];
 
   for (const viewport of [1024, 768]) {
@@ -273,13 +297,13 @@ test("structure, expert evidence, and publication are first-class project tasks"
 
   // Routes and the walking profile are structural authoring; the walk stage
   // dissolved once it held neither a walk test nor its own viewer.
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await expectProjectContext();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime", exact: true })).toBeVisible();
   await expectProjectSurfaceDepth(page);
 
-  await page.getByRole("button", { name: "Expert", exact: true }).click();
+  await openProjectExpert(page);
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
   await expectProjectContext();
   await expect(page.getByRole("heading", {
@@ -336,13 +360,13 @@ test("a novice can upload, inspect the project workflow, and publish using visib
   await intake.getByRole("button", { name: "Create and process scene", exact: true }).click();
   await expect(intake).toBeHidden();
 
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Process", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
+  await openProjectWorkSection(page, "Process");
   await expect(page.getByRole("heading", { name: "Processing and qualification", exact: true })).toBeVisible();
   await expect(page.locator("#projectCurrentStage")).toHaveText("Structure");
   await expect(page.locator("#projectCurrentBlocker")).toContainText("Structural review");
   await expect(page.locator("#projectCurrentAction")).toHaveText("Review structural exceptions");
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add structure or navigation obstacle", exact: true })).toHaveCount(0);
   await expect(page.locator("input[name='position']:visible")).toHaveCount(0);
@@ -409,12 +433,13 @@ test("comparison becomes its own stage only with a comparison-ready pair", async
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Evidence", exact: true }).click();
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Compare", exact: true }).click();
+  await openProjectEvidenceSection(page, "Compare");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/compare$`));
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Visual version comparison", exact: true })).toBeVisible();
@@ -428,12 +453,20 @@ test("a one-version project keeps comparison in Expert and canonicalizes a Compa
   await page.goto(`/studio.html#project/${projectId}/compare`);
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
   await expect(page.getByRole("button", { name: "Compare", exact: true })).toBeHidden();
+  await expect(page.locator("#projectExpertNavigation > summary")).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compare scenes side by side", exact: true })).toBeDisabled();
   await expect(page.getByText(
     "Two versions need reviewed metric structure before authored geometry can be compared.",
     { exact: true },
   )).toBeVisible();
+
+  await page.getByRole("button", { name: "Evidence", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/measurement$`));
+  await expect(page.getByRole("heading", {
+    name: "Tolerances, independent checks, cost evidence, and professional boundaries",
+    exact: true,
+  })).toBeVisible();
 });
 
 test("publication keeps technical overrides behind an expert disclosure", async ({ page }) => {
@@ -473,7 +506,7 @@ test("a captured starting view publishes with its measured quality receipt", asy
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -534,7 +567,7 @@ test("a mostly-black captured starting view warns at capture and surfaces the pu
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -570,7 +603,7 @@ test("release authoring resets project-specific fields and submits scene rotatio
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await expect(page.getByRole("heading", { name: "Corrected Spark room" })).toBeVisible();
 
   const openRelease = page.getByRole("button", { name: "Publish shareable URL", exact: true });
@@ -613,7 +646,7 @@ test("release authoring loads spatial guards before enabling visual rotation", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -628,7 +661,7 @@ test("release authoring makes visual rotation and reviewed transforms mutually e
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");
@@ -659,7 +692,7 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
   await expect(page.locator("#releaseDialog")).toBeVisible();
@@ -677,9 +710,9 @@ test("processed splats stay blocked until their walking map is approved", async 
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Upload registered geometry", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page.getByRole("heading", {
     name: "Metric capture → operator revision → portable drawings",
     exact: true,
@@ -725,7 +758,7 @@ test("multi-level floor-plan review shows every level and vertical connector", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page.getByRole("heading", {
     name: "Inspect and correct the reconstructed structure in place",
   })).toBeVisible();
@@ -783,7 +816,7 @@ test("navigation authoring controls never touch or overlap", async ({ page }) =>
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
   const card = page.locator("article.workspace-card-large").filter({
@@ -826,7 +859,7 @@ test("navigation review rows never touch or overlap in Expert", async ({ page })
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Expert", exact: true }).click();
+  await openProjectExpert(page);
 
   const reviewCard = page.locator("article.workspace-card-large").filter({
     has: page.getByRole("heading", { name: "Build receipts and operator review" }),
@@ -869,7 +902,7 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Structure", exact: true }).click();
+  await openProjectWorkSection(page, "Structure");
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
   const dialog = page.locator("#navigationTraversalDialog");
@@ -881,6 +914,28 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
     /lift-proof\.ply · XGRIDS Lixel \/ LCC capture · registration cccccccccccc…/,
   );
 });
+
+async function openProjectWorkSection(
+  page: Page,
+  section: "Overview" | "Process" | "Structure",
+): Promise<void> {
+  await page.getByRole("button", { name: "Work", exact: true }).click();
+  await page.getByRole("button", { name: section, exact: true }).click();
+}
+
+async function openProjectEvidenceSection(
+  page: Page,
+  section: "Compare" | "Measurement evidence",
+): Promise<void> {
+  await page.getByRole("button", { name: "Evidence", exact: true }).click();
+  await page.getByRole("button", { name: section, exact: true }).click();
+}
+
+async function openProjectExpert(page: Page): Promise<void> {
+  const navigation = page.locator("#projectExpertNavigation");
+  await navigation.locator("summary").click();
+  await navigation.getByRole("button", { name: "Open technical evidence", exact: true }).click();
+}
 
 async function expectProjectSurfaceDepth(page: Page): Promise<void> {
   const depths = await page.locator(
@@ -1712,7 +1767,7 @@ test("a scrolled dialog keeps its close control reachable", async ({ page }) => 
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  await openProjectWorkSection(page, "Overview");
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
 
   const dialog = page.locator("#releaseDialog");

@@ -355,13 +355,21 @@ function auditStudioWorkflow(html, source) {
   // The walk stage dissolved once its embedded viewer and its publication gate
   // were removed: routes and the walking profile are structural authoring, and
   // build receipts are raw evidence Expert already owns.
-  const mandatoryStages = ["process", "structure", "publish"];
+  const mandatorySections = ["process", "structure"];
   const sectionValues = new Set(
     Array.from(html.matchAll(/data-project-section=["']([^"']+)["']/g), (match) => match[1]),
   );
-  for (const stage of mandatoryStages) {
-    if (!sectionValues.has(stage)) {
-      failures.push(`studio.html project navigation is missing mandatory ${stage} stage`);
+  for (const section of mandatorySections) {
+    if (!sectionValues.has(section)) {
+      failures.push(`studio.html project navigation is missing mandatory ${section} section`);
+    }
+  }
+  const journeyValues = new Set(
+    Array.from(html.matchAll(/data-project-journey=["']([^"']+)["']/g), (match) => match[1]),
+  );
+  for (const journey of ["work", "evidence", "publish"]) {
+    if (!journeyValues.has(journey)) {
+      failures.push(`studio.html project navigation is missing primary ${journey} journey`);
     }
   }
   if (
@@ -380,8 +388,13 @@ function auditStudioWorkflow(html, source) {
   }
   if (!html.includes('id="projectSectionPicker"') ||
     !source.includes("projectSectionPicker.replaceChildren") ||
+    !source.includes('projectSectionPickerGroup("Work"') ||
+    !source.includes('projectSectionPickerGroup("Evidence"') ||
+    !source.includes('projectSectionPickerGroup("Publish"') ||
+    !source.includes('projectSectionPickerGroup("Advanced"') ||
     !source.includes('projectSectionPicker.addEventListener("change"') ||
-    !source.includes("activateProjectSection(selected[1], true, \"push\", true)")) {
+    !source.includes("projectSectionPicker.value in projectSectionLabels") ||
+    !source.includes("activateProjectSection(projectSectionPicker.value as ProjectSection, true, \"push\", true)")) {
     failures.push("compact project navigation does not share the canonical routed section controls");
   }
   if (!source.includes("bindDialogShells();") ||
