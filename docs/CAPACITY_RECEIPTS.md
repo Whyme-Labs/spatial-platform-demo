@@ -1,6 +1,6 @@
 # Capacity receipts
 
-Last measured: 2026-08-24
+Last measured: 2026-08-25
 
 ## Frontend CSS ownership receipt
 
@@ -37,10 +37,10 @@ a lower byte count alone is not evidence that the migration preserved layout.
 
 ## Responsive visual-baseline receipt
 
-Last measured: 2026-08-24
+Last measured: 2026-08-25
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
-1,551,351 bytes against `e2e/visual-baselines.sha256`. The images were
+1,497,187 bytes against `e2e/visual-baselines.sha256`. The images were
 generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
 digest
 `sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
@@ -54,6 +54,16 @@ validation, a short-height long error, viewer loading, access failure, and the
 short-landscape navigator. The long fixtures use the contract maxima of 120
 characters for project/viewer titles, 255 characters for upload filenames, and
 80 characters for release slugs.
+
+The portfolio-health readout has its own geometry receipt at the exact compact
+boundary. The browser contract resolves four contained columns at 641 × 800 and
+two contained columns at 640 × 800, with no per-fact radius or shadow. Reproduce
+that boundary receipt with:
+
+```bash
+npx playwright test e2e/ui-quality.spec.ts \
+  --grep "portfolio health is one integrated readout"
+```
 
 The pixel-by-pixel Studio transition receipt is produced by:
 

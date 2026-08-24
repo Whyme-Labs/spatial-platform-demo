@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-24T18:44:09Z",
+  "title": "Design System: Spatial Studio",
+  "extensions": {
+    "colorMeta": {
+      "survey-lime": { "role": "primary", "displayName": "Survey Lime", "canonical": "#d4ff58", "tonalRamp": ["oklch(15% 0.1942 122.6)", "oklch(25% 0.1942 122.6)", "oklch(35% 0.1942 122.6)", "oklch(45% 0.1942 122.6)", "oklch(58% 0.1942 122.6)", "oklch(72% 0.1942 122.6)", "oklch(85% 0.1942 122.6)", "oklch(95% 0.1942 122.6)"] },
+      "accent-ink": { "role": "neutral", "displayName": "Accent Ink", "canonical": "#11150b", "tonalRamp": ["oklch(15% 0.0203 126.0)", "oklch(25% 0.0203 126.0)", "oklch(35% 0.0203 126.0)", "oklch(45% 0.0203 126.0)", "oklch(58% 0.0203 126.0)", "oklch(72% 0.0203 126.0)", "oklch(85% 0.0203 126.0)", "oklch(95% 0.0203 126.0)"] },
+      "field-black": { "role": "neutral", "displayName": "Field Black", "canonical": "#0d0f0e", "tonalRamp": ["oklch(15% 0.0039 164.5)", "oklch(25% 0.0039 164.5)", "oklch(35% 0.0039 164.5)", "oklch(45% 0.0039 164.5)", "oklch(58% 0.0039 164.5)", "oklch(72% 0.0039 164.5)", "oklch(85% 0.0039 164.5)", "oklch(95% 0.0039 164.5)"] },
+      "work-surface": { "role": "neutral", "displayName": "Work Surface", "canonical": "#101210", "tonalRamp": ["oklch(15% 0.0051 145.4)", "oklch(25% 0.0051 145.4)", "oklch(35% 0.0051 145.4)", "oklch(45% 0.0051 145.4)", "oklch(58% 0.0051 145.4)", "oklch(72% 0.0051 145.4)", "oklch(85% 0.0051 145.4)", "oklch(95% 0.0051 145.4)"] },
+      "field-panel": { "role": "neutral", "displayName": "Field Panel", "canonical": "#151815", "tonalRamp": ["oklch(15% 0.0075 145.3)", "oklch(25% 0.0075 145.3)", "oklch(35% 0.0075 145.3)", "oklch(45% 0.0075 145.3)", "oklch(58% 0.0075 145.3)", "oklch(72% 0.0075 145.3)", "oklch(85% 0.0075 145.3)", "oklch(95% 0.0075 145.3)"] },
+      "field-glass": { "role": "neutral", "displayName": "Field Glass", "canonical": "rgba(19, 22, 20, 0.88)", "tonalRamp": ["oklch(15% 0.0061 156.6 / 0.88)", "oklch(25% 0.0061 156.6 / 0.88)", "oklch(35% 0.0061 156.6 / 0.88)", "oklch(45% 0.0061 156.6 / 0.88)", "oklch(58% 0.0061 156.6 / 0.88)", "oklch(72% 0.0061 156.6 / 0.88)", "oklch(85% 0.0061 156.6 / 0.88)", "oklch(95% 0.0061 156.6 / 0.88)"] },
+      "control-surface": { "role": "neutral", "displayName": "Control Surface", "canonical": "#0f120f", "tonalRamp": ["oklch(15% 0.0077 145.2)", "oklch(25% 0.0077 145.2)", "oklch(35% 0.0077 145.2)", "oklch(45% 0.0077 145.2)", "oklch(58% 0.0077 145.2)", "oklch(72% 0.0077 145.2)", "oklch(85% 0.0077 145.2)", "oklch(95% 0.0077 145.2)"] },
+      "archive-ivory": { "role": "neutral", "displayName": "Archive Ivory", "canonical": "#f4efe1", "tonalRamp": ["oklch(15% 0.0193 90.5)", "oklch(25% 0.0193 90.5)", "oklch(35% 0.0193 90.5)", "oklch(45% 0.0193 90.5)", "oklch(58% 0.0193 90.5)", "oklch(72% 0.0193 90.5)", "oklch(85% 0.0193 90.5)", "oklch(95% 0.0193 90.5)"] },
+      "evidence-muted": { "role": "neutral", "displayName": "Evidence Muted", "canonical": "#aaa99e", "tonalRamp": ["oklch(15% 0.0156 102.6)", "oklch(25% 0.0156 102.6)", "oklch(35% 0.0156 102.6)", "oklch(45% 0.0156 102.6)", "oklch(58% 0.0156 102.6)", "oklch(72% 0.0156 102.6)", "oklch(85% 0.0156 102.6)", "oklch(95% 0.0156 102.6)"] },
+      "field-line": { "role": "neutral", "displayName": "Field Line", "canonical": "rgba(244, 239, 225, 0.13)", "tonalRamp": ["oklch(15% 0.0193 90.5 / 0.13)", "oklch(25% 0.0193 90.5 / 0.13)", "oklch(35% 0.0193 90.5 / 0.13)", "oklch(45% 0.0193 90.5 / 0.13)", "oklch(58% 0.0193 90.5 / 0.13)", "oklch(72% 0.0193 90.5 / 0.13)", "oklch(85% 0.0193 90.5 / 0.13)", "oklch(95% 0.0193 90.5 / 0.13)"] },
+      "field-line-strong": { "role": "neutral", "displayName": "Field Line Strong", "canonical": "rgba(244, 239, 225, 0.24)", "tonalRamp": ["oklch(15% 0.0193 90.5 / 0.24)", "oklch(25% 0.0193 90.5 / 0.24)", "oklch(35% 0.0193 90.5 / 0.24)", "oklch(45% 0.0193 90.5 / 0.24)", "oklch(58% 0.0193 90.5 / 0.24)", "oklch(72% 0.0193 90.5 / 0.24)", "oklch(85% 0.0193 90.5 / 0.24)", "oklch(95% 0.0193 90.5 / 0.24)"] },
+      "verified-mint": { "role": "secondary", "displayName": "Verified Mint", "canonical": "#8ecbb7", "tonalRamp": ["oklch(15% 0.0689 172.1)", "oklch(25% 0.0689 172.1)", "oklch(35% 0.0689 172.1)", "oklch(45% 0.0689 172.1)", "oklch(58% 0.0689 172.1)", "oklch(72% 0.0689 172.1)", "oklch(85% 0.0689 172.1)", "oklch(95% 0.0689 172.1)"] },
+      "decision-clay": { "role": "tertiary", "displayName": "Decision Clay", "canonical": "#cf775d", "tonalRamp": ["oklch(15% 0.1171 37.3)", "oklch(25% 0.1171 37.3)", "oklch(35% 0.1171 37.3)", "oklch(45% 0.1171 37.3)", "oklch(58% 0.1171 37.3)", "oklch(72% 0.1171 37.3)", "oklch(85% 0.1171 37.3)", "oklch(95% 0.1171 37.3)"] },
+      "daylight-paper": { "role": "neutral", "displayName": "Daylight Paper", "canonical": "#eef0ec", "tonalRamp": ["oklch(15% 0.0057 128.5)", "oklch(25% 0.0057 128.5)", "oklch(35% 0.0057 128.5)", "oklch(45% 0.0057 128.5)", "oklch(58% 0.0057 128.5)", "oklch(72% 0.0057 128.5)", "oklch(85% 0.0057 128.5)", "oklch(95% 0.0057 128.5)"] },
+      "daylight-surface": { "role": "neutral", "displayName": "Daylight Surface", "canonical": "#e4e7e2", "tonalRamp": ["oklch(15% 0.0074 132.4)", "oklch(25% 0.0074 132.4)", "oklch(35% 0.0074 132.4)", "oklch(45% 0.0074 132.4)", "oklch(58% 0.0074 132.4)", "oklch(72% 0.0074 132.4)", "oklch(85% 0.0074 132.4)", "oklch(95% 0.0074 132.4)"] },
+      "daylight-surface-strong": { "role": "neutral", "displayName": "Daylight Surface Strong", "canonical": "#d9ddd7", "tonalRamp": ["oklch(15% 0.0092 134.9)", "oklch(25% 0.0092 134.9)", "oklch(35% 0.0092 134.9)", "oklch(45% 0.0092 134.9)", "oklch(58% 0.0092 134.9)", "oklch(72% 0.0092 134.9)", "oklch(85% 0.0092 134.9)", "oklch(95% 0.0092 134.9)"] },
+      "daylight-ink": { "role": "neutral", "displayName": "Daylight Ink", "canonical": "#121511", "tonalRamp": ["oklch(15% 0.0092 137.8)", "oklch(25% 0.0092 137.8)", "oklch(35% 0.0092 137.8)", "oklch(45% 0.0092 137.8)", "oklch(58% 0.0092 137.8)", "oklch(72% 0.0092 137.8)", "oklch(85% 0.0092 137.8)", "oklch(95% 0.0092 137.8)"] },
+      "daylight-muted": { "role": "neutral", "displayName": "Daylight Muted", "canonical": "#555d55", "tonalRamp": ["oklch(15% 0.0162 145.3)", "oklch(25% 0.0162 145.3)", "oklch(35% 0.0162 145.3)", "oklch(45% 0.0162 145.3)", "oklch(58% 0.0162 145.3)", "oklch(72% 0.0162 145.3)", "oklch(85% 0.0162 145.3)", "oklch(95% 0.0162 145.3)"] },
+      "daylight-lime": { "role": "primary", "displayName": "Daylight Survey Lime", "canonical": "#a8d61f", "tonalRamp": ["oklch(15% 0.1955 124.2)", "oklch(25% 0.1955 124.2)", "oklch(35% 0.1955 124.2)", "oklch(45% 0.1955 124.2)", "oklch(58% 0.1955 124.2)", "oklch(72% 0.1955 124.2)", "oklch(85% 0.1955 124.2)", "oklch(95% 0.1955 124.2)"] },
+      "daylight-line": { "role": "neutral", "displayName": "Daylight Line", "canonical": "rgba(18, 21, 17, 0.17)", "tonalRamp": ["oklch(15% 0.0092 137.8 / 0.17)", "oklch(25% 0.0092 137.8 / 0.17)", "oklch(35% 0.0092 137.8 / 0.17)", "oklch(45% 0.0092 137.8 / 0.17)", "oklch(58% 0.0092 137.8 / 0.17)", "oklch(72% 0.0092 137.8 / 0.17)", "oklch(85% 0.0092 137.8 / 0.17)", "oklch(95% 0.0092 137.8 / 0.17)"] }
+    },
+    "typographyMeta": {
+      "marketing-display": { "displayName": "Marketing Display", "purpose": "Compressed first-viewport and section claims on the daylight public surface." },
+      "studio-headline": { "displayName": "Studio Headline", "purpose": "Project and workflow orientation in the operational Studio." },
+      "section-title": { "displayName": "Section Title", "purpose": "Operational regions, dialogs, and grouped evidence." },
+      "viewer-title": { "displayName": "Viewer Narrative Title", "purpose": "Small place-oriented headings inside immersive viewer overlays only." },
+      "ui": { "displayName": "UI", "purpose": "Default operational interface text." },
+      "body": { "displayName": "Body", "purpose": "Compact explanatory copy, controls, and table content." },
+      "label": { "displayName": "Label", "purpose": "Control labels and compact actions." },
+      "caption-mono": { "displayName": "Evidence Caption", "purpose": "Provenance, indices, technical labels, and machine-readable state." }
+    },
+    "shadows": [
+      { "name": "field-float", "value": "0 18px 70px rgba(0, 0, 0, 0.38)", "purpose": "Viewer glass, toasts, and rare floating operational surfaces." },
+      { "name": "dialog-isolation", "value": "0 30px 120px rgba(0, 0, 0, 0.72)", "purpose": "Modal work detached from the Studio working plane." },
+      { "name": "compact-popover", "value": "0 18px 50px rgba(0, 0, 0, 0.36)", "purpose": "Small anchored menus and transient detail panels." },
+      { "name": "focus-halo", "value": "0 0 0 3px rgba(212, 255, 88, 0.10)", "purpose": "Restrained focus support for fields after the border changes to Survey Lime." },
+      { "name": "signal-glow", "value": "0 0 18px rgba(199, 239, 69, 0.72)", "purpose": "Tiny live indicators only." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Public reveals and responsive entrance motion." },
+      { "name": "ease-in", "value": "cubic-bezier(0.4, 0, 1, 1)", "purpose": "Elements leaving the public surface." },
+      { "name": "state-quick", "value": "160ms ease", "purpose": "Color, border, and compact interactive state changes." },
+      { "name": "control", "value": "200ms ease", "purpose": "Operational control hover and disclosure transitions." },
+      { "name": "reveal", "value": "600ms cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Marketing section reveals when reduced motion is not requested." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "480px" },
+      { "name": "compact", "value": "640px" },
+      { "name": "mobile", "value": "760px" },
+      { "name": "studio-rail", "value": "960px" },
+      { "name": "marketing-layout", "value": "1080px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Studio Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single consequential action in an operational region.",
+      "html": "<button class=\"ds-btn-primary\">Upload capture</button>",
+      "css": ".ds-btn-primary { min-height: 42px; border: 1px solid transparent; border-radius: 10px; background: var(--accent, #d4ff58); color: var(--accent-ink, #11150b); padding: 0 16px; font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; font-size: 13px; font-weight: 680; line-height: 1; cursor: pointer; transition: transform 200ms ease, filter 200ms ease; } .ds-btn-primary:hover { transform: translateY(-1px); filter: brightness(1.04); } .ds-btn-primary:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: 3px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Studio Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "A secondary action that remains subordinate to the current task.",
+      "html": "<button class=\"ds-btn-quiet\">Refresh</button>",
+      "css": ".ds-btn-quiet { min-height: 42px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 10px; background: rgba(255, 255, 255, 0.035); color: var(--text, #f4efe1); padding: 0 16px; font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; font-size: 13px; font-weight: 680; line-height: 1; cursor: pointer; transition: background 200ms ease, border-color 200ms ease, transform 200ms ease; } .ds-btn-quiet:hover { border-color: var(--line-strong, rgba(244, 239, 225, 0.24)); background: rgba(255, 255, 255, 0.07); } .ds-btn-quiet:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: 3px; } .ds-btn-quiet:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Marketing Primary CTA",
+      "kind": "button",
+      "refersTo": "marketing-cta",
+      "description": "The daylight public surface's singular conversion action.",
+      "html": "<a class=\"ds-marketing-cta\" href=\"#\">Start a capture</a>",
+      "css": ".ds-marketing-cta { min-height: 46px; border: 1px solid transparent; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: #a8d61f; color: #10140b; padding: 0 20px; font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; font-size: 13px; font-weight: 760; line-height: 1; text-decoration: none; transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1), background-color 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-marketing-cta:hover { transform: translateY(-2px); background: #b5e52b; } .ds-marketing-cta:focus-visible { outline: 3px solid #a8d61f; outline-offset: 3px; } .ds-marketing-cta:active { transform: scale(0.98); }"
+    },
+    {
+      "name": "Operational Text Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "A compact field for names, identifiers, and evidence-bound operational values.",
+      "html": "<label class=\"ds-field\"><span>Project name</span><input type=\"text\" value=\"Gallery capture\"></label>",
+      "css": ".ds-field { display: grid; gap: 8px; color: var(--muted, #aaa99e); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; font-size: 12px; line-height: 1.4; } .ds-field > span { color: #c4c9c1; font-weight: 630; } .ds-field input { width: 100%; min-height: 44px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 10px; background: #0f120f; color: var(--text, #f4efe1); padding: 10px 12px; font: 480 13px/1.35 \"Manrope Variable\", \"Avenir Next\", sans-serif; outline: 0; transition: border-color 160ms ease, box-shadow 160ms ease; } .ds-field input:hover { border-color: var(--line-strong, rgba(244, 239, 225, 0.24)); } .ds-field input:focus { border-color: rgba(212, 255, 88, 0.72); box-shadow: 0 0 0 3px rgba(212, 255, 88, 0.10); }"
+    },
+    {
+      "name": "Project Section Navigation",
+      "kind": "nav",
+      "refersTo": "section-nav-item-active",
+      "description": "Compact section switching with one unmistakable active path.",
+      "html": "<nav class=\"ds-section-nav\" aria-label=\"Project sections\"><button class=\"ds-section-active\">Overview</button><button>Scene</button><button>Measurement</button></nav>",
+      "css": ".ds-section-nav { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 14px; background: #0e100f; overflow-x: auto; } .ds-section-nav button { min-height: 42px; border: 0; border-radius: 10px; background: transparent; color: var(--muted, #aaa99e); padding: 0 14px; font: 600 12px/1.2 \"Manrope Variable\", \"Avenir Next\", sans-serif; white-space: nowrap; cursor: pointer; } .ds-section-nav button:hover { color: var(--text, #f4efe1); background: rgba(255, 255, 255, 0.04); } .ds-section-nav button.ds-section-active { background: var(--accent, #d4ff58); color: var(--accent-ink, #11150b); } .ds-section-nav button:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: 2px; }"
+    },
+    {
+      "name": "Verified Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "A compact semantic state label using evidence color rather than decorative color.",
+      "html": "<span class=\"ds-status-verified\">Verified</span>",
+      "css": ".ds-status-verified { width: max-content; border: 1px solid rgba(142, 203, 183, 0.46); border-radius: 999px; display: inline-flex; align-items: center; padding: 5px 8px; color: var(--mint, #8ecbb7); font: 600 11px/1 \"IBM Plex Mono\", monospace; letter-spacing: 0.05em; text-transform: uppercase; }"
+    },
+    {
+      "name": "Portfolio Overview",
+      "kind": "custom",
+      "refersTo": "portfolio-overview",
+      "description": "One flat portfolio-health readout integrated into the Current production surface.",
+      "html": "<dl class=\"ds-portfolio-overview\" aria-label=\"Portfolio health\"><div><dt>Active projects</dt><dd><strong>—</strong><span>Immutable version history</span></dd></div><div><dt>Processing queue</dt><dd><strong>—</strong><span>Leased by local or cloud agents</span></dd></div><div><dt>Hosted assets</dt><dd><strong>—</strong><span>Private R2 storage</span></dd></div><div class=\"ds-portfolio-release\"><dt>Active releases</dt><dd><strong>—</strong><span>Revocable in one operation</span></dd></div></dl>",
+      "css": ".ds-portfolio-overview { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-bottom: 1px solid var(--line, rgba(244, 239, 225, 0.13)); color: var(--text, #f4efe1); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; } .ds-portfolio-overview > div { min-width: 0; padding: 14px 16px; border-inline-start: 1px solid var(--line, rgba(244, 239, 225, 0.13)); } .ds-portfolio-overview > div:first-child { border-inline-start: 0; padding-inline-start: 0; } .ds-portfolio-overview > div:last-child { padding-inline-end: 0; } .ds-portfolio-overview dt, .ds-portfolio-overview dd > span { color: var(--muted, #aaa99e); font-size: 12px; line-height: 1.4; } .ds-portfolio-overview dd { margin: 7px 0 0; display: grid; gap: 3px; } .ds-portfolio-overview strong { font-size: 24px; font-variation-settings: \"wght\" 620; font-variant-numeric: tabular-nums; line-height: 1; } .ds-portfolio-release strong { color: var(--accent, #d4ff58); }"
+    },
+    {
+      "name": "Evidence Disclosure",
+      "kind": "custom",
+      "refersTo": "disclosure-surface",
+      "description": "Progressive disclosure for secondary evidence and diagnostics, never blocking prerequisites.",
+      "html": "<details class=\"ds-disclosure\"><summary>Advanced evidence and diagnostics</summary><div>Version-bound evidence appears here.</div></details>",
+      "css": ".ds-disclosure { border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 16px; background: #111311; color: var(--text, #f4efe1); overflow: hidden; font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; } .ds-disclosure summary { min-height: 54px; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; list-style: none; font-size: 12px; font-weight: 650; } .ds-disclosure summary::-webkit-details-marker { display: none; } .ds-disclosure summary::after { color: var(--muted, #aaa99e); font-size: 17px; content: \"+\"; } .ds-disclosure[open] summary::after { content: \"−\"; } .ds-disclosure > div { margin: 0 12px 12px; border-radius: 14px; background: #0e100f; color: var(--muted, #aaa99e); padding: 16px; font-size: 13px; line-height: 1.5; } .ds-disclosure summary:focus-visible { outline: 2px solid var(--accent, #d4ff58); outline-offset: -3px; }"
+    },
+    {
+      "name": "Viewer Glass Panel",
+      "kind": "custom",
+      "refersTo": "viewer-glass",
+      "description": "A translucent, safe-area-aware overlay that preserves spatial context beneath it.",
+      "html": "<aside class=\"ds-viewer-glass\"><span>SCENE INFORMATION</span><strong>Spatial Gallery</strong><p>Reviewed structure drives navigation.</p></aside>",
+      "css": ".ds-viewer-glass { width: min(350px, calc(100% - 36px)); border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 20px; background: var(--panel, rgba(19, 22, 20, 0.88)); color: var(--text, #f4efe1); padding: 20px; box-shadow: 0 18px 70px rgba(0, 0, 0, 0.38); backdrop-filter: blur(22px); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; } .ds-viewer-glass > span { color: var(--muted, #aaa99e); font: 600 11px/1.4 \"IBM Plex Mono\", monospace; letter-spacing: 0.1em; } .ds-viewer-glass strong { display: block; margin-top: 8px; font: 400 23px/1.06 Georgia, serif; } .ds-viewer-glass p { margin: 14px 0 0; border-top: 1px solid var(--line, rgba(244, 239, 225, 0.13)); padding-top: 14px; color: var(--muted, #aaa99e); font-size: 12px; line-height: 1.55; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Spatial Fieldbook",
+    "overview": "Spatial Studio behaves like a field notebook that moves between two working conditions. The public surface is the daylight brief: mineral paper, architectural scale, exact captions, and spatial imagery. The Studio and viewer are the dark instrument: warm black-green planes, fine evidence lines, compact controls, and signals that remain quiet until a decision matters.\n\nThe system is precise, architectural, and quietly confident. Spatial artifacts are allowed to command attention; interface chrome frames, labels, and verifies them. It rejects the generic rounded-card SaaS dashboard: containment is earned by a workflow, state boundary, or spatial overlay rather than applied uniformly to every section.",
+    "keyCharacteristics": [
+      "One identity expressed under daylight and field-dark conditions.",
+      "Acidic lime reserved for primary action, active state, and live process.",
+      "Warm mineral neutrals instead of pure black, white, or blue-gray.",
+      "Manrope for contemporary structure, IBM Plex Mono for evidence, and Georgia only for restrained viewer narration.",
+      "Fine rules and tonal layers at rest; shadow and blur appear only when an element genuinely floats."
+    ],
+    "rules": [
+      { "name": "The Two Light Conditions Rule", "body": "Public storytelling uses the daylight palette; production work and immersive viewing use the field-dark palette. Preserve the shared typography, lime signal, warm neutrals, and linework instead of forcing both contexts into one background.", "section": "colors" },
+      { "name": "The Evidence Color Rule", "body": "Lime means active or next, mint means verified or complete, and clay means attention or blocked. Never use these three colors interchangeably.", "section": "colors" },
+      { "name": "The Signal Rarity Rule", "body": "Give Survey Lime to the single consequential action, active path, or focal proof surface in a region; equal lime emphasis across neighboring controls destroys its meaning.", "section": "colors" },
+      { "name": "The Mono-as-Evidence Rule", "body": "Use IBM Plex Mono only where the text behaves like a label, measurement, index, file fact, or provenance record; never use it for ordinary paragraphs.", "section": "typography" },
+      { "name": "The Compressed-Claim Rule", "body": "Large public headlines may be tightly tracked and closely led because they are short; operational instructions and evidence copy retain comfortable line-height and ordinary tracking.", "section": "typography" },
+      { "name": "The Working Plane Rule", "body": "Marketing pages may use expansive editorial whitespace, but operational pages must keep the next action, current state, and blocking evidence within one scannable working plane.", "section": "layout" },
+      { "name": "The Line-Before-Shadow Rule", "body": "Use a tonal shift or one-pixel boundary before introducing elevation; shadow is reserved for an actual change in plane.", "section": "elevation" },
+      { "name": "The Scene-Through-Glass Rule", "body": "Blur belongs to immersive viewer controls that sit over spatial content, not to ordinary Studio cards or marketing sections.", "section": "elevation" },
+      { "name": "The Pill Exception Rule", "body": "Full pills are reserved for statuses, compact filters, and public calls to action. Do not turn ordinary operational buttons, inputs, panels, or every card into capsules.", "section": "shapes" }
+    ],
+    "dos": [
+      "Do preserve the daylight-versus-field-dark division while keeping the lime signal, warm neutrals, and typography recognizably shared.",
+      "Do reserve Survey Lime for the current path, primary action, live process, or one focal proof surface.",
+      "Do use mono captions to identify evidence and provenance, then return to Manrope for explanations and actions.",
+      "Do use one-pixel boundaries, tonal shifts, and spacing before adding shadow.",
+      "Do keep controls at least 44px tall for coarse pointers and preserve forced-colors and reduced-motion behavior."
+    ],
+    "donts": [
+      "Don't distribute every section into interchangeable rounded cards; containment must correspond to a real workflow, state, or overlay boundary.",
+      "Don't introduce blue-gray SaaS neutrals, neon sci-fi glows, or arbitrary rainbow status colors.",
+      "Don't use mint, clay, and lime as decorative accents outside their evidence meanings.",
+      "Don't apply viewer glass and backdrop blur to ordinary Studio panels or public content sections.",
+      "Don't shrink operational metadata below the established caption scale or use mono text for ordinary paragraphs."
+    ]
+  }
+}

@@ -174,7 +174,7 @@ test.describe("authenticated studio UI", () => {
     await mockAuthenticatedStudio(page);
     await page.goto("/studio.html#projects");
     await expect(page.getByRole("heading", {
-      name: "Upload once. Preview the processed splat. Edit only when needed.",
+      name: "Your spatial portfolio, at a glance.",
     })).toBeVisible();
   });
 
@@ -195,6 +195,52 @@ test.describe("authenticated studio UI", () => {
     await page.getByRole("button", { name: "Projects", exact: true }).click();
     await page.getByRole("button", { name: "Upload capture", exact: true }).click();
     await expectAxeClean("Capture dialog");
+  });
+
+  test("portfolio health is one integrated readout inside Current production", async ({ page }) => {
+    const board = page.locator("#projectBoard");
+    const overview = page.locator("#summaryGrid");
+
+    await expect(board).toBeVisible();
+    await expect(overview).toBeVisible();
+    await expect(overview.locator("dt")).toHaveCount(4);
+    expect(await overview.evaluate((element) => element.parentElement?.id)).toBe("projectBoard");
+
+    for (const viewport of [
+      viewports[0],
+      { name: "portfolio-pre-collapse", width: 641, height: 800 },
+      { name: "portfolio-collapse", width: 640, height: 800 },
+      viewports[3],
+    ]) {
+      await page.setViewportSize(viewport);
+      const contract = await overview.evaluate((element) => {
+        const style = getComputedStyle(element);
+        const board = element.parentElement?.getBoundingClientRect();
+        const bounds = element.getBoundingClientRect();
+        const facts = [...element.children].map((fact) => {
+          const factStyle = getComputedStyle(fact);
+          return {
+            borderRadius: factStyle.borderRadius,
+            boxShadow: factStyle.boxShadow,
+          };
+        });
+        return {
+          columns: style.gridTemplateColumns.trim().split(/\s+/).length,
+          contained: Boolean(board) && bounds.left >= board!.left - 1 && bounds.right <= board!.right + 1,
+          facts,
+        };
+      });
+
+      expect(contract.columns, viewport.name).toBe(viewport.width <= 640 ? 2 : 4);
+      expect(contract.contained, viewport.name).toBe(true);
+      expect(contract.facts, viewport.name).toEqual([
+        { borderRadius: "0px", boxShadow: "none" },
+        { borderRadius: "0px", boxShadow: "none" },
+        { borderRadius: "0px", boxShadow: "none" },
+        { borderRadius: "0px", boxShadow: "none" },
+      ]);
+      await expectResponsiveSurface(page, "#projectBoard");
+    }
   });
 
   test("Studio names icon controls and preserves targets, focus, and doubled text", async ({ page }) => {
@@ -1191,7 +1237,6 @@ test.describe("authenticated studio UI", () => {
         ".detail-card:visible",
         ".project-detail-disclosure:visible",
         ".worker-card:visible",
-        ".summary-card:visible",
       ].join(", ")).evaluateAll((surfaces) => surfaces
         .filter((surface) => !surface.getAttribute("data-surface-role"))
         .map((surface) => surface.className));
@@ -1485,7 +1530,7 @@ test("coarse-pointer Studio controls expose full 44px targets", async ({ browser
     await mockAuthenticatedStudio(page);
     await page.goto("/studio.html#projects");
     await expect(page.getByRole("heading", {
-      name: "Upload once. Preview the processed splat. Edit only when needed.",
+      name: "Your spatial portfolio, at a glance.",
     })).toBeVisible();
     expect(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches)).toBe(true);
 
@@ -1574,7 +1619,7 @@ test.describe("studio authentication lifecycle", () => {
     await page.goto("/studio.html#projects");
 
     await expect(page.getByRole("heading", {
-      name: "Upload once. Preview the processed splat. Edit only when needed.",
+      name: "Your spatial portfolio, at a glance.",
     })).toBeVisible();
     await expect.poll(() => sessionRequests).toBe(2);
     await expect.poll(() => refreshRequests).toBe(1);
@@ -1610,7 +1655,7 @@ test.describe("studio authentication lifecycle", () => {
     await page.goto("/studio.html#projects");
 
     await expect(page.getByRole("heading", {
-      name: "Upload once. Preview the processed splat. Edit only when needed.",
+      name: "Your spatial portfolio, at a glance.",
     })).toBeVisible();
     await expect.poll(() => refreshRequests).toBe(3);
     await expect(page.locator("#loginDialog")).not.toBeVisible();
