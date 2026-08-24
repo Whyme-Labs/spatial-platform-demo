@@ -533,9 +533,7 @@ test.describe("authenticated studio UI", () => {
         }),
       });
     });
-    await page.locator("#projectAdvancedFilters").getByText("Filters and saved views", {
-      exact: true,
-    }).click();
+    await openProjectRefine(page);
     await page.getByRole("button", { name: "Save view", exact: true }).click();
 
     const dialog = page.locator("#savedViewDialog");
@@ -712,9 +710,7 @@ test.describe("authenticated studio UI", () => {
   test("portfolio administration and saved project filters are reachable", async ({ page }) => {
     await expect(page.getByRole("button", { name: "Portfolio tools", exact: true })).toBeVisible();
     await expect(page.locator("#projectAdvancedFilters")).toBeVisible();
-    await page.locator("#projectAdvancedFilters").getByText("Filters and saved views", {
-      exact: true,
-    }).click();
+    await openProjectRefine(page);
     await expect(page.locator("#savedProjectView")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save view", exact: true })).toBeVisible();
 
@@ -722,6 +718,152 @@ test.describe("authenticated studio UI", () => {
     await expect(page.getByRole("dialog").filter({
       has: page.getByRole("heading", { name: "Templates and portable metadata." }),
     })).toBeVisible();
+  });
+
+  test("project refinements keep Current and search primary without losing filter controls", async ({ page }) => {
+    const refinements = page.locator("#projectAdvancedFilters");
+    const summary = refinements.locator("summary");
+    const search = page.locator("#projectSearch");
+
+    await expect(page.getByRole("button", { name: "Current", exact: true })).toBeVisible();
+    await expect(search).toBeVisible();
+    await expect(summary).toBeVisible();
+    await expect(page.getByRole("button", { name: "Processing", exact: true })).toBeHidden();
+    await expect(page.locator("#projectSort")).toBeHidden();
+
+    const firstProject = page.locator("#projectTable .project-select").nth(1);
+    await firstProject.check();
+    await expect(page.locator("#projectSelectionCount")).toHaveText("1 project selected");
+
+    await openProjectRefine(page);
+    await page.getByRole("button", { name: "QA", exact: true }).click();
+    await page.locator("#projectAdapterFilter").selectOption("fjd-trion");
+    await page.locator("#projectSort").selectOption("name_asc");
+    await summary.click();
+    await expect(page.locator("#projectRefineSummary")).toContainText("QA");
+    await expect(page.locator("#projectRefineSummary")).toContainText("FJD Trion");
+    await expect(page.locator("#projectRefineSummary")).toContainText("Name A-Z");
+    await expect(page.locator("#projectResultsStatus")).toContainText(
+      "Refined by QA · FJD Trion · Name A-Z.",
+    );
+
+    await search.fill("museum");
+    await page.getByRole("button", { name: "Current", exact: true }).click();
+    await expect(search).toHaveValue("");
+    await expect(page.locator("#projectSort")).toHaveValue("updated_desc");
+    await expect(page.locator("#projectAdapterFilter")).toHaveValue("");
+    await expect(page.locator("#projectRefineSummary")).toHaveText("Current");
+    await expect(page.locator("#projectResultsStatus")).toContainText("Current portfolio.");
+    await expect(refinements).not.toHaveAttribute("open", "");
+    await expect(firstProject).toBeChecked();
+    await expect(page.locator("#projectSelectionCount")).toHaveText("1 project selected");
+
+    await openProjectRefine(page);
+    await page.keyboard.press("Escape");
+    await expect(refinements).not.toHaveAttribute("open", "");
+    await expect(summary).toBeFocused();
+
+    for (const viewport of [viewports[3], viewports[4]]) {
+      await page.setViewportSize(viewport);
+      await openProjectRefine(page);
+      await expectResponsiveSurface(page, "#projectBoard");
+      await summary.click();
+    }
+
+    await page.setViewportSize(viewports[3]);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    await openProjectRefine(page);
+    await expectResponsiveSurface(page, "#projectBoard");
+    const scaledLabels = await refinements.locator(
+      "summary, .project-status-refinements legend, .project-advanced-filter-controls label > span",
+    ).evaluateAll((labels) => labels.map((label) => Number.parseFloat(getComputedStyle(label).fontSize)));
+    expect(scaledLabels.length).toBeGreaterThan(0);
+    expect(scaledLabels.every((size) => size >= 24)).toBe(true);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+  });
+
+  test("default and paginated saved views remain reachable through Refine", async ({ page }) => {
+    const defaultViewId = "94949494-9494-4494-8494-949494949491";
+    const continuedViewId = "94949494-9494-4494-8494-949494949492";
+    let continuationRequests = 0;
+    await page.route("**/api/project-views**", async (route) => {
+      const cursor = new URL(route.request().url()).searchParams.get("cursor");
+      if (cursor) {
+        continuationRequests += 1;
+        return json(route, 200, {
+          views: [{
+            id: continuedViewId,
+            name: "Archived FJD",
+            filter: {
+              query: "",
+              statuses: ["ARCHIVED"],
+              captureAdapters: ["fjd-trion"],
+              deliveryTemplates: [],
+              sort: "updated_asc",
+            },
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now,
+          }],
+          nextCursor: null,
+        });
+      }
+      return json(route, 200, {
+        views: [{
+          id: defaultViewId,
+          name: "Published first",
+          filter: {
+            query: "",
+            statuses: ["PUBLISHED"],
+            captureAdapters: [],
+            deliveryTemplates: [],
+            sort: "name_desc",
+          },
+          isDefault: true,
+          createdAt: now,
+          updatedAt: now,
+        }],
+        nextCursor: "views-page-2",
+      });
+    });
+    await page.reload();
+
+    await openProjectRefine(page);
+    const saved = page.locator("#savedProjectView");
+    await expect(saved).toHaveValue(defaultViewId);
+    await expect(page.getByRole("button", { name: "Published", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.locator("#projectRefineSummary")).toContainText("Saved: Published first");
+
+    const selectedProject = page.getByRole("checkbox", {
+      name: `Select ${maximumProjectName}`,
+      exact: true,
+    });
+    await selectedProject.check();
+    await page.getByRole("button", { name: "Load more views", exact: true }).click();
+    await expect.poll(() => continuationRequests).toBe(1);
+    await expect(saved.locator(`option[value='${continuedViewId}']`)).toHaveText("Archived FJD");
+    await expect(page.getByRole("button", { name: "Load more views", exact: true })).toBeHidden();
+
+    await saved.selectOption(continuedViewId);
+    await expect(saved).toHaveValue(continuedViewId);
+    await expect(page.locator("#projectRefineSummary")).toContainText("Saved: Archived FJD");
+    await expect(page.getByRole("button", { name: "Archived", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await page.getByRole("button", { name: "Current", exact: true }).click();
+    await expect(saved).toHaveValue("");
+    await expect(page.locator("#projectRefineSummary")).toHaveText("Current");
+    await expect(page.locator("#projectSelectionCount")).toHaveText("1 project selected");
+    await expect(selectedProject).toBeChecked();
   });
 
   test("saved project defaults configure a new capture", async ({ page }) => {
@@ -779,8 +921,10 @@ test.describe("authenticated studio UI", () => {
 
   test("studio shell uses the shared type system and responsive control layout", async ({ page }) => {
     const sort = page.locator("#projectSort");
+    await openProjectRefine(page);
     await sort.selectOption("name_asc");
     await expect(sort).toHaveValue("name_asc");
+    await page.locator("#projectAdvancedFilters > summary").click();
 
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
@@ -832,7 +976,9 @@ test.describe("authenticated studio UI", () => {
     expect(maximumReleaseSlug).toHaveLength(80);
     await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
     await page.emulateMedia({ reducedMotion: "reduce" });
+    await openProjectRefine(page);
     await page.locator("#projectSort").selectOption("name_asc");
+    await page.locator("#projectAdvancedFilters > summary").click();
     await page.evaluate(() => document.fonts.ready);
 
     for (const viewport of RESPONSIVE_VISUAL_VIEWPORTS) {
@@ -1271,6 +1417,7 @@ test.describe("authenticated studio UI", () => {
   test("archived projects stay out of current production and remain recoverable", async ({ page }) => {
     const projects = page.locator("#projectTable");
     await expect(projects.getByText("Archived alignment fixture", { exact: true })).toHaveCount(0);
+    await openProjectRefine(page);
     await page.getByRole("button", { name: "Archived", exact: true }).click();
     await expect(projects.getByText("Archived alignment fixture", { exact: true })).toBeVisible();
     await expect(projects.getByText("Responsive indoor scene", { exact: true })).toHaveCount(0);
@@ -1539,6 +1686,19 @@ test("coarse-pointer Studio controls expose full 44px targets", async ({ browser
     expect(projectTarget).not.toBeNull();
     expect(projectTarget!.width).toBeGreaterThanOrEqual(44);
     expect(projectTarget!.height).toBeGreaterThanOrEqual(44);
+
+    const currentTarget = await page.getByRole("button", { name: "Current", exact: true }).boundingBox();
+    const refineTarget = await page.locator("#projectAdvancedFilters > summary").boundingBox();
+    expect(currentTarget).not.toBeNull();
+    expect(currentTarget!.height).toBeGreaterThanOrEqual(44);
+    expect(refineTarget).not.toBeNull();
+    expect(refineTarget!.height).toBeGreaterThanOrEqual(44);
+    await openProjectRefine(page);
+    for (const status of ["Processing", "QA", "Published", "Archived"]) {
+      const target = await page.getByRole("button", { name: status, exact: true }).boundingBox();
+      expect(target, status).not.toBeNull();
+      expect(target!.height, status).toBeGreaterThanOrEqual(44);
+    }
 
     await page.locator("#captureBundleDialog").evaluate((dialog) =>
       (dialog as HTMLDialogElement).showModal()
@@ -2400,6 +2560,14 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
     }
     return json(route, 404, { error: `Unmocked route: ${method} ${path}` });
   });
+}
+
+async function openProjectRefine(page: Page): Promise<void> {
+  const refinements = page.locator("#projectAdvancedFilters");
+  if (await refinements.getAttribute("open") === null) {
+    await refinements.locator("summary").click();
+  }
+  await expect(refinements).toHaveAttribute("open", "");
 }
 
 async function expectColumnsAligned(page: Page, selector: string): Promise<void> {

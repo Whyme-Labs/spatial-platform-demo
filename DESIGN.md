@@ -138,6 +138,13 @@ components:
     backgroundColor: "transparent"
     textColor: "{colors.archive-ivory}"
     padding: "14px 16px"
+  portfolio-refinement:
+    backgroundColor: "rgba(255, 255, 255, 0.018)"
+    textColor: "{colors.archive-ivory}"
+    typography: "{typography.label}"
+    rounded: "{rounded.control}"
+    padding: "0 12px"
+    height: "44px"
   disclosure-surface:
     backgroundColor: "{colors.control-surface}"
     textColor: "{colors.archive-ivory}"
@@ -290,6 +297,10 @@ Components remain quiet until consequential: neutral controls recede into the wo
 
 Portfolio health is a flat definition list inside the Current production surface, not a separate metric-card tier. Four facts share one ruled row on wider screens and a compact two-column grid below 640px. Individual facts have no radius, shadow, or independent surface treatment; only the Active releases value receives Survey Lime.
 
+### Portfolio Refinement
+
+The default project list exposes Current, search, and one Refine disclosure. Secondary statuses, sort order, capture source, delivery classification, and saved views share that single surface. The closed summary names active refinements; Current resets the complete filter state without discarding bulk selection.
+
 ### Inputs / Fields
 
 - **Style:** Control Surface, a one-pixel Field Line border, 10px corners, 44px minimum height, and 10px by 12px internal padding.
@@ -302,7 +313,7 @@ Studio navigation uses 44px rows, 10px corners, and restrained Manrope labels. A
 
 ### Progressive Disclosure
 
-Advanced evidence, diagnostics, and secondary details use bordered 16px disclosures with a 54px summary row and a simple plus/minus indicator. Disclosure is a hierarchy tool, not a hiding place for prerequisites or blocking work.
+Advanced evidence, diagnostics, and secondary details use bordered disclosures with a simple plus/minus indicator. Dense routine refinement may use the 44px control height; evidence disclosures retain a 54px summary row. Disclosure is a hierarchy tool, not a hiding place for prerequisites or blocking work.
 
 ### Viewer Glass Panel
 

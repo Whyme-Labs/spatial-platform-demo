@@ -1799,6 +1799,7 @@ function bindInterface(): void {
   const projectAdapterFilter = byId<HTMLSelectElement>("projectAdapterFilter");
   const projectDeliveryFilter = byId<HTMLSelectElement>("projectDeliveryFilter");
   const projectSort = byId<HTMLSelectElement>("projectSort");
+  const projectAdvancedFilters = byId<HTMLDetailsElement>("projectAdvancedFilters");
   projectSearch.addEventListener("input", () => {
     state.projectQuery = projectSearch.value.trim();
     markProjectViewDirty();
@@ -1821,6 +1822,12 @@ function bindInterface(): void {
       markProjectViewDirty();
       renderProjects();
     }
+  });
+  projectAdvancedFilters.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !projectAdvancedFilters.open) return;
+    event.preventDefault();
+    projectAdvancedFilters.open = false;
+    projectAdvancedFilters.querySelector<HTMLElement>("summary")?.focus();
   });
   byId<HTMLSelectElement>("savedProjectView").addEventListener("change", (event) => {
     const select = event.currentTarget;
@@ -2676,7 +2683,12 @@ function bindInterface(): void {
   document.querySelectorAll<HTMLButtonElement>(".filter-chip").forEach((button) => {
     button.addEventListener("click", () => {
       const filter = button.dataset.filter ?? "all";
-      state.projectStatuses = filter === "all" ? [] : [filter];
+      if (filter === "all") {
+        resetProjectRefinements();
+        projectAdvancedFilters.open = false;
+        return;
+      }
+      state.projectStatuses = [filter];
       markProjectViewDirty();
       renderProjects();
     });
@@ -4207,6 +4219,44 @@ function markProjectViewDirty(): void {
   renderProjectControls();
 }
 
+function resetProjectRefinements(): void {
+  state.activeProjectViewId = null;
+  state.projectStatuses = [];
+  state.projectQuery = "";
+  state.projectAdapter = "";
+  state.projectDelivery = "";
+  state.projectSort = "updated_desc";
+  renderProjectControls();
+  renderProjects();
+}
+
+function projectPortfolioIsCurrent(): boolean {
+  return state.activeProjectViewId === null &&
+    state.projectStatuses.length === 0 &&
+    state.projectQuery === "" &&
+    state.projectAdapter === "" &&
+    state.projectDelivery === "" &&
+    state.projectSort === "updated_desc";
+}
+
+function projectRefinementSummary(
+  adapter: HTMLSelectElement,
+  delivery: HTMLSelectElement,
+  sort: HTMLSelectElement,
+): string {
+  const activeView = state.projectViews.find((view) => view.id === state.activeProjectViewId);
+  const refinements = [
+    ...(activeView ? [`Saved: ${activeView.name}`] : []),
+    ...state.projectStatuses.map((status) => status === "QA_REQUIRED" ? "QA" : humanStatus(status)),
+    ...(state.projectAdapter ? [adapter.selectedOptions[0]?.textContent?.trim() || state.projectAdapter] : []),
+    ...(state.projectDelivery ? [delivery.selectedOptions[0]?.textContent?.trim() || state.projectDelivery] : []),
+    ...(state.projectSort === "updated_desc"
+      ? []
+      : [sort.selectedOptions[0]?.textContent?.trim() || humanStatus(state.projectSort)]),
+  ];
+  return refinements.length ? refinements.join(" · ") : "Current";
+}
+
 function renderProjectControls(): void {
   const search = byId<HTMLInputElement>("projectSearch");
   const adapter = byId<HTMLSelectElement>("projectAdapterFilter");
@@ -4235,12 +4285,18 @@ function renderProjectControls(): void {
   const activeView = state.projectViews.find((view) => view.id === state.activeProjectViewId);
   byId("saveProjectViewButton").textContent = activeView ? "Update view" : "Save view";
   byId("deleteProjectViewButton").hidden = !activeView;
+  const refineSummary = byId("projectRefineSummary");
+  const refineSummaryText = projectRefinementSummary(adapter, delivery, sort);
+  refineSummary.textContent = refineSummaryText;
+  refineSummary.title = refineSummaryText;
+  byId<HTMLDetailsElement>("projectAdvancedFilters").dataset.active = String(refineSummaryText !== "Current");
   document.querySelectorAll<HTMLButtonElement>(".filter-chip").forEach((chip) => {
     const filter = chip.dataset.filter ?? "all";
-    chip.classList.toggle(
-      "active",
-      filter === "all" ? state.projectStatuses.length === 0 : state.projectStatuses.includes(filter),
-    );
+    const active = filter === "all"
+      ? projectPortfolioIsCurrent()
+      : state.projectStatuses.includes(filter);
+    chip.classList.toggle("active", active);
+    chip.setAttribute("aria-pressed", String(active));
   });
 }
 
@@ -5493,6 +5549,11 @@ function renderProjects(): void {
   container.setAttribute("role", "table");
   container.setAttribute("aria-label", "Production projects");
   const projects = visibleProjects();
+  const refinement = byId("projectRefineSummary").textContent?.trim() || "Current";
+  const count = `${projects.length} ${projects.length === 1 ? "project" : "projects"} shown.`;
+  const scope = refinement === "Current" ? "Current portfolio." : `Refined by ${refinement}.`;
+  const search = state.projectQuery ? ` Search: ${state.projectQuery}.` : "";
+  byId("projectResultsStatus").textContent = `${count} ${scope}${search}`;
   if (!projects.length) {
     renderBulkProjectActions();
     container.append(emptyState("No projects match this filter."));
