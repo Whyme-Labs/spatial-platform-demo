@@ -511,6 +511,12 @@ button {
   font-size: 1rem;
 }
 
+.spark-viewport:is([data-outer-overlay-mode="navigator"],[data-outer-overlay-mode="review"])
+  :is(.spark-movement-pad,.spark-flight-altitude,.spark-look-hint) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 @keyframes spark-spin {
   to {
     transform: rotate(360deg);

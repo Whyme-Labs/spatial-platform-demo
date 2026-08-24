@@ -317,6 +317,12 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
                   message: event.data.barrierId + " is now " + (event.data.active ? "closed" : "open"),
                 }, location.origin);
               }
+              if (event.data?.type === "set-outer-overlay-mode") {
+                window.outerOverlayModes = [
+                  ...(window.outerOverlayModes ?? []),
+                  event.data.mode
+                ];
+              }
             });
             setTimeout(() => {
               parent.postMessage({
@@ -444,7 +450,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(page.locator("#scaleStatus")).toHaveText(
     "Provisional scene units (SU)",
   );
-  const exploreRooms = page.getByRole("button", { name: "Explore rooms" });
+  const exploreRooms = page.locator("#openNavigator");
   const qualityStatus = page.frameLocator("#rendererFrame").locator("#quality-status");
   await expect(exploreRooms).toBeVisible();
   await expect(qualityStatus).toBeVisible();
@@ -483,11 +489,13 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
   await toggleControls();
   await expect(controlsHelp).toBeVisible();
+  await expect(viewerHud).toBeHidden();
   await expect(page.locator("#releaseInfoDetails")).toBeHidden();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
   await expectHudAndHelpSeparated();
   await toggleControls();
   await expect(controlsHelp).toBeHidden();
+  await expect(viewerHud).toBeVisible();
 
   await exploreRooms.click();
   await expect(page.locator("#toggleReleaseInfo")).toHaveAttribute("aria-expanded", "false");
@@ -528,11 +536,13 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "true");
   await toggleControls();
   await expect(controlsHelp).toBeVisible();
+  await expect(viewerHud).toBeHidden();
   await expect(page.locator("#spatialNavigator")).toBeHidden();
   await expect(exploreRooms).toHaveAttribute("aria-expanded", "false");
   await expectHudAndHelpSeparated();
   await toggleControls();
   await expect(controlsHelp).toBeHidden();
+  await expect(viewerHud).toBeVisible();
 
   await exploreRooms.click();
   await expect(page.locator("#spatialNavigator")).toBeVisible();
@@ -557,7 +567,7 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect(controlsHelp).toBeHidden();
   await expect(viewerHud).toBeVisible();
 
-  await expect(exploreRooms).toBeHidden();
+  await expect(exploreRooms).toBeVisible();
   await expect(qualityStatus).toBeVisible();
   await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
     () => Reflect.get(window, "runtimeMessage"),
@@ -613,16 +623,176 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
 
   const viewport = page.locator("#viewport");
   await expect(viewport).toHaveClass(/mobile-free-roam-active/);
-  await expect(exploreRooms).toBeHidden();
+  await expect(exploreRooms).toBeVisible();
 
   for (const viewportSize of [
     { width: 700, height: 760 },
     { width: 390, height: 844 },
   ]) {
     await page.setViewportSize(viewportSize);
-    await expect(exploreRooms).toBeHidden();
+    await expect(exploreRooms).toBeVisible();
     await expect(qualityStatus).toBeVisible();
   }
+
+  for (const viewportSize of [
+    { width: 1440, height: 1000 },
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewportSize);
+    await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+      const width = innerWidth;
+      const height = innerHeight;
+      const compact = width <= 640;
+      parent.postMessage({
+        source: "spatial-spark",
+        type: "overlay-layout",
+        viewport: { width, height },
+        zones: {
+          toolbar: compact
+            ? { left: width - 244, right: width - 10, top: 10, bottom: 62 }
+            : { left: width - 244, right: width - 10, top: height - 62, bottom: height - 10 },
+          status: compact
+            ? { left: width - 244, right: width - 10, top: 70, bottom: 100 }
+            : { left: width - 244, right: width - 10, top: height - 100, bottom: height - 70 },
+          help: null,
+          movement: null,
+          altitude: null,
+        },
+      }, location.origin);
+    });
+    await expect(exploreRooms).toBeVisible();
+    const layout = await page.locator("#viewport").evaluate((root) => {
+      const release = root.querySelector<HTMLElement>("#releaseInfo");
+      const review = root.querySelector<HTMLElement>("#reviewPanel");
+      if (!release || !review) return null;
+      const releaseBounds = release.getBoundingClientRect();
+      const reviewBounds = review.getBoundingClientRect();
+      const rootBounds = root.getBoundingClientRect();
+      const overlaps = releaseBounds.left < reviewBounds.right && releaseBounds.right > reviewBounds.left &&
+        releaseBounds.top < reviewBounds.bottom && releaseBounds.bottom > reviewBounds.top;
+      return {
+        overlaps,
+        releaseContained: releaseBounds.left >= rootBounds.left - 1 &&
+          releaseBounds.right <= rootBounds.right + 1 &&
+          releaseBounds.top >= rootBounds.top - 1 &&
+          releaseBounds.bottom <= rootBounds.bottom + 1,
+        reviewContained: reviewBounds.left >= rootBounds.left - 1 &&
+          reviewBounds.right <= rootBounds.right + 1 &&
+          reviewBounds.top >= rootBounds.top - 1 &&
+          reviewBounds.bottom <= rootBounds.bottom + 1,
+      };
+    });
+    expect(layout, `${viewportSize.width}x${viewportSize.height}`).toEqual({
+      overlaps: false,
+      releaseContained: true,
+      reviewContained: true,
+    });
+  }
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.locator("#viewport").evaluate((root) => {
+    (root as HTMLElement).style.setProperty("--viewer-safe-top", "32px");
+    (root as HTMLElement).style.setProperty("--viewer-safe-right", "24px");
+    (root as HTMLElement).style.setProperty("--viewer-safe-bottom", "18px");
+    (root as HTMLElement).style.setProperty("--viewer-safe-left", "20px");
+  });
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    const width = innerWidth;
+    const height = innerHeight;
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "overlay-layout",
+      viewport: { width, height },
+      zones: {
+        toolbar: { left: width - 244, right: width - 10, top: 10, bottom: 62 },
+        status: { left: width - 244, right: width - 10, top: 70, bottom: 100 },
+        help: null,
+        movement: { left: 18, right: 150, top: height - 150, bottom: height - 18 },
+        altitude: null,
+      },
+    }, location.origin);
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "movement-blocked",
+      message: "Main West is closed · route blocked",
+      cause: { kind: "doorway", id: "door-main-west" },
+      position: [1, 0, 1],
+    }, location.origin);
+  });
+  await expect(page.locator("#viewerBlockedReason")).toHaveText(
+    "Main West is closed · route blocked",
+  );
+  await exploreRooms.click();
+  await expect(page.locator("#spatialNavigator")).toBeVisible();
+  await expect(page.locator("#reviewPanel")).toBeHidden();
+  await expect(page.locator("#closeNavigator")).toBeVisible();
+  await expect(page.locator(".navigator-item").first()).toBeVisible();
+  const protectedLayout = await page.locator("#viewport").evaluate((root) => {
+    const rect = (selector: string) => {
+      const element = root.querySelector<HTMLElement>(selector);
+      if (!element) throw new Error(`Missing ${selector}`);
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
+    };
+    const overlaps = (
+      first: { left: number; right: number; top: number; bottom: number },
+      second: { left: number; right: number; top: number; bottom: number },
+    ) => first.left < second.right && first.right > second.left &&
+      first.top < second.bottom && first.bottom > second.top;
+    const hud = rect("#viewerHud");
+    const rootBounds = root.getBoundingClientRect();
+    const toolbar = {
+      left: rootBounds.right - 244,
+      right: rootBounds.right - 10,
+      top: rootBounds.top + 10,
+      bottom: rootBounds.top + 62,
+    };
+    const movement = {
+      left: rootBounds.left + 18,
+      right: rootBounds.left + 150,
+      top: rootBounds.bottom - 150,
+      bottom: rootBounds.bottom - 18,
+    };
+    const navigator = rect("#spatialNavigator");
+    return {
+      hudToolbarOverlap: overlaps(hud, toolbar),
+      hudMovementOverlap: overlaps(hud, movement),
+      navigatorContained: navigator.top >= hud.top - 1 && navigator.bottom <= hud.bottom + 1,
+      navigatorHeight: navigator.bottom - navigator.top,
+      navigatorTop: navigator.top,
+      navigatorBottom: navigator.bottom,
+      viewportHeight: rootBounds.bottom,
+      viewportWidth: rootBounds.right,
+      hudRight: hud.right,
+      hudTop: hud.top,
+      viewportTop: rootBounds.top,
+      hudBottom: hud.bottom,
+    };
+  });
+  expect(protectedLayout.hudToolbarOverlap).toBe(false);
+  expect(protectedLayout.hudMovementOverlap).toBe(false);
+  expect(protectedLayout.navigatorContained, JSON.stringify(protectedLayout)).toBe(true);
+  expect(protectedLayout.navigatorHeight).toBeGreaterThan(0);
+  expect(protectedLayout.hudRight).toBeLessThanOrEqual(protectedLayout.viewportWidth - 24 + 1);
+  expect(protectedLayout.hudTop).toBeGreaterThanOrEqual(protectedLayout.viewportTop + 32 + 100);
+  expect(protectedLayout.hudBottom).toBeLessThanOrEqual(protectedLayout.viewportHeight + 1);
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => (Reflect.get(window, "outerOverlayModes") ?? []).at(-1),
+  )).toBe("navigator");
+  await page.locator("#closeNavigator").click();
+  await expect(page.locator("#reviewPanel")).toBeVisible();
+  const reviewSafeArea = await page.locator("#reviewPanel").evaluate((panel) => {
+    const bounds = panel.getBoundingClientRect();
+    return { right: bounds.right, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  expect(reviewSafeArea.right).toBeLessThanOrEqual(reviewSafeArea.viewportWidth - 24 + 1);
+  expect(reviewSafeArea.bottom).toBeLessThanOrEqual(reviewSafeArea.viewportHeight - 18 + 1);
+  await expect.poll(() => page.frameLocator("#rendererFrame").locator("html").evaluate(
+    () => (Reflect.get(window, "outerOverlayModes") ?? []).at(-1),
+  )).toBe("review");
 
   simulateActivationChange = true;
   await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {

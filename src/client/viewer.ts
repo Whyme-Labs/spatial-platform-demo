@@ -20,6 +20,12 @@ import {
   type PlanRoom,
 } from "./floor-plan";
 import type { SourceToWorldTransform } from "../shared/navigation-runtime";
+import type {
+  OverlayRect,
+  RendererOuterOverlayMode,
+  RendererOverlayLayoutMessage,
+  RendererOverlayModeMessage,
+} from "../shared/overlay-layout";
 import "../../styles.css";
 
 const VIEWER_MOVEMENT_KEYS = new Set([
@@ -205,6 +211,7 @@ type SceneReview = {
 };
 
 type SparkRendererMessage =
+  | RendererOverlayLayoutMessage
   | {
       source: "spatial-spark";
       type: "progress";
@@ -464,6 +471,8 @@ async function loadPublishedReleaseOnce(): Promise<void> {
   setNavigatorReady(false);
   byId("viewport").classList.remove("mobile-free-roam-active");
   byId("viewport").classList.remove("renderer-help-open");
+  byId("viewport").classList.remove("viewer-navigator-open");
+  byId("viewport").classList.toggle("viewer-review-mode", reviewMode);
   byId<HTMLElement>("viewport").style.removeProperty("--renderer-help-height");
   errorPanel.hidden = true;
   setViewerHudMode("collapsed");
@@ -519,6 +528,7 @@ frame.addEventListener("load", () => {
   if (rendererReady) return;
   byId("rendererStatus").textContent = "Preparing scene";
   sendSpatialRuntime();
+  sendRendererOverlayMode(reviewMode ? "review" : "none");
 });
 
 frame.addEventListener("error", () => {
@@ -537,6 +547,10 @@ function handleRendererMessage(event: MessageEvent<unknown>): void {
     rendererLivenessAtMs = Date.now() + RENDERER_LIVENESS_TIMEOUT_MS;
   }
   if (message.type === "heartbeat") return;
+  if (message.type === "overlay-layout") {
+    applyRendererOverlayLayout(message);
+    return;
+  }
   if (message.type === "camera") {
     const pending = cameraRequests.get(message.requestId);
     if (!pending) return;
@@ -666,8 +680,48 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   return source === "spatial-spark" &&
     (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
-      type === "control-help" || type === "heartbeat" ||
+      type === "control-help" || type === "heartbeat" || type === "movement-blocked" ||
+      type === "overlay-layout" ||
       type === "authored-traversal-state" || type === "dynamic-barrier-state");
+}
+
+function applyRendererOverlayLayout(message: RendererOverlayLayoutMessage): void {
+  const width = finiteOverlayDimension(message.viewport.width, innerWidth);
+  const height = finiteOverlayDimension(message.viewport.height, innerHeight);
+  const chrome = [message.zones.toolbar, message.zones.status, message.zones.help]
+    .filter(validOverlayRect);
+  let topReserved = 0;
+  let bottomReserved = 0;
+  let rightReserved = 0;
+  for (const rect of chrome) {
+    if ((rect.top + rect.bottom) / 2 < height / 2) topReserved = Math.max(topReserved, rect.bottom);
+    else bottomReserved = Math.max(bottomReserved, height - rect.top);
+    rightReserved = Math.max(rightReserved, width - rect.left);
+  }
+  const movement = [message.zones.movement, message.zones.altitude].filter(validOverlayRect);
+  let leftReserved = 0;
+  for (const rect of movement) {
+    bottomReserved = Math.max(bottomReserved, height - rect.top);
+    leftReserved = Math.max(leftReserved, rect.right);
+  }
+  topReserved = Math.min(height, Math.max(0, topReserved));
+  bottomReserved = Math.min(height, Math.max(0, bottomReserved));
+  leftReserved = Math.min(width, Math.max(0, leftReserved));
+  rightReserved = Math.min(width, Math.max(0, rightReserved));
+  const viewport = byId<HTMLElement>("viewport");
+  viewport.style.setProperty("--renderer-top-reserved", `${Math.ceil(topReserved)}px`);
+  viewport.style.setProperty("--renderer-bottom-reserved", `${Math.ceil(bottomReserved)}px`);
+  viewport.style.setProperty("--renderer-left-reserved", `${Math.ceil(leftReserved)}px`);
+  viewport.style.setProperty("--renderer-right-reserved", `${Math.ceil(rightReserved)}px`);
+}
+
+function finiteOverlayDimension(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function validOverlayRect(value: OverlayRect | null): value is OverlayRect {
+  return Boolean(value) && [value!.left, value!.right, value!.top, value!.bottom]
+    .every(Number.isFinite) && value!.right >= value!.left && value!.bottom >= value!.top;
 }
 
 function bindViewerLifecycle(): void {
@@ -1032,6 +1086,17 @@ function setViewerHudMode(mode: "collapsed" | "release" | "navigator"): void {
   byId<HTMLElement>("spatialNavigator").hidden = !navigatorExpanded;
   releaseInfo.classList.toggle("is-expanded", mode !== "collapsed");
   releaseInfo.classList.toggle("is-navigating", navigatorExpanded);
+  byId("viewport").classList.toggle("viewer-navigator-open", navigatorExpanded);
+  sendRendererOverlayMode(navigatorExpanded ? "navigator" : reviewMode ? "review" : "none");
+}
+
+function sendRendererOverlayMode(mode: RendererOuterOverlayMode): void {
+  const message: RendererOverlayModeMessage = {
+    source: "spatial-host",
+    type: "set-outer-overlay-mode",
+    mode,
+  };
+  frame.contentWindow?.postMessage(message, location.origin);
 }
 
 function bindSpatialNavigator(): void {

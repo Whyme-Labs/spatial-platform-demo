@@ -126,6 +126,91 @@ test.describe("touch-first Spark controls", () => {
     await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
   });
 
+  test("yields the movement zone while an outer navigator owns it", async ({ page }) => {
+    const scene = await minimalSpz();
+    await page.route("**/asset/test-scene.spz", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/octet-stream",
+      body: Buffer.from(scene),
+    }));
+    await page.goto("/");
+    await page.evaluate(() => {
+      Reflect.set(window, "rendererMessages", []);
+      window.addEventListener("message", (event) => {
+        if (event.data?.source === "spatial-spark") {
+          Reflect.get(window, "rendererMessages").push(event.data);
+        }
+      });
+      const frame = document.createElement("iframe");
+      frame.id = "overlay-renderer";
+      frame.src = "/renderer/index.html?content=/asset/test-scene.spz&format=spz";
+      document.body.append(frame);
+    });
+    const renderer = page.frameLocator("#overlay-renderer");
+    await expect(renderer.locator("#resetView")).toBeEnabled({ timeout: 15_000 });
+    await renderer.locator("body").evaluate(() => {
+      window.dispatchEvent(new Event("spatial:e2e-mobile-controls-ready"));
+    });
+    const joystick = renderer.getByRole("group", { name: "Movement joystick" });
+    await expect(joystick).toBeVisible();
+    await expect.poll(() => page.evaluate(() =>
+      Reflect.get(window, "rendererMessages").findLast(
+        (message: { type?: string; zones?: { movement?: unknown } }) =>
+          message.type === "overlay-layout" && message.zones?.movement,
+      )
+    )).toMatchObject({ type: "overlay-layout", zones: { movement: expect.any(Object) } });
+
+    await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>("#overlay-renderer");
+      frame?.contentWindow?.postMessage({
+          source: "spatial-host",
+          type: "set-outer-overlay-mode",
+          mode: "navigator",
+      }, location.origin);
+    });
+    await expect(renderer.locator("#sparkViewport")).toHaveAttribute("data-outer-overlay-mode", "navigator");
+    await expect(joystick).toBeHidden();
+    await expect(renderer.locator(".spark-controls")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => {
+      const receipts = Reflect.get(window, "rendererMessages").filter(
+        (message: { type?: string }) => message.type === "overlay-layout",
+      );
+      return receipts.at(-1)?.zones;
+    })).toMatchObject({ movement: null, altitude: null });
+
+    await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>("#overlay-renderer");
+      frame?.contentWindow?.postMessage({
+          source: "spatial-host",
+          type: "set-outer-overlay-mode",
+          mode: "review",
+      }, location.origin);
+    });
+    await expect(renderer.locator("#sparkViewport")).toHaveAttribute("data-outer-overlay-mode", "review");
+    await expect.poll(() => page.evaluate(() => {
+      const receipts = Reflect.get(window, "rendererMessages").filter(
+        (message: { type?: string }) => message.type === "overlay-layout",
+      );
+      return receipts.at(-1)?.zones;
+    })).toMatchObject({ movement: null, altitude: null });
+
+    await page.evaluate(() => {
+      const frame = document.querySelector<HTMLIFrameElement>("#overlay-renderer");
+      frame?.contentWindow?.postMessage({
+        source: "spatial-host",
+        type: "set-outer-overlay-mode",
+        mode: "none",
+      }, location.origin);
+    });
+    await expect(joystick).toBeVisible();
+    await expect.poll(() => page.evaluate(() => {
+      const receipts = Reflect.get(window, "rendererMessages").filter(
+        (message: { type?: string }) => message.type === "overlay-layout",
+      );
+      return receipts.at(-1)?.zones?.movement ?? null;
+    })).not.toBeNull();
+  });
+
   test("blocks releases without the required walking map", async ({
     page,
   }) => {
@@ -225,6 +310,19 @@ test("hides the diagnostic runtime badge when the renderer is embedded", async (
     type: "control-help",
     visible: true,
     height: expect.any(Number),
+  });
+  await expect.poll(() => page.evaluate(() =>
+    Reflect.get(window, "rendererMessages").findLast(
+      (message: { type?: string; zones?: { help?: unknown } }) =>
+        message.type === "overlay-layout" && message.zones?.help,
+    )
+  )).toMatchObject({
+    type: "overlay-layout",
+    viewport: { width: expect.any(Number), height: expect.any(Number) },
+    zones: {
+      toolbar: expect.objectContaining({ top: expect.any(Number), bottom: expect.any(Number) }),
+      help: expect.objectContaining({ top: expect.any(Number), bottom: expect.any(Number) }),
+    },
   });
 });
 

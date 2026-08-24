@@ -159,11 +159,6 @@ test("coarse-pointer viewer navigation keeps 44px controls and forced-color focu
     await page.goto(`/s/gated-room?access_token=${CORRECT_ACCESS_CODE}`, { waitUntil: "commit" });
     const navigator = page.locator("#openNavigator");
     await expect(navigator).not.toHaveAttribute("hidden", "");
-    // Issue #68 owns mobile overlay reachability. Remove its current free-roam
-    // suppression here so this test isolates the #66 target/focus contract.
-    await page.locator("#viewport").evaluate((viewport) =>
-      viewport.classList.remove("mobile-free-roam-active")
-    );
     await expect(navigator).toBeVisible();
     await navigator.click();
     const roomTarget = await page.locator(".navigator-item").first().boundingBox();
