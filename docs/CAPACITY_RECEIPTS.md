@@ -862,8 +862,8 @@ npm run check
 The complete local production gate passed with 451 Worker/domain tests across
 78 Vitest files, 134 navigation and migration contracts across 16 node-test
 files, and 129 Playwright scenarios across 12 browser specs. Instrumented
-coverage measured 73.01% statements, 63.48% branches, 86.18% functions, and
-79.29% lines. The same command also passed generated types, TypeScript, CSS and
+coverage measured 72.99% statements, 63.42% branches, 86.18% functions, and
+79.26% lines. The same command also passed generated types, TypeScript, CSS and
 visual-baseline ownership audits, the action-state audit for 2 client entry
 points, the control-wiring audit (151 static and 111 dynamic buttons, 23 static
 and 10 dynamic links, 37 interactive forms, 246 governed lifecycle fields),
