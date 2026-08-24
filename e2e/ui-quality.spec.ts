@@ -623,6 +623,7 @@ test.describe("authenticated studio UI", () => {
       });
     });
     await page.getByRole("button", { name: "Open Responsive indoor scene" }).click();
+    await page.getByRole("button", { name: "Work", exact: true }).click();
     await page.getByRole("button", { name: "Overview", exact: true }).click();
     await page.getByText("Technical details and source history", { exact: true }).click();
     await expect(page.getByRole("button", { name: "Edit project settings" })).toBeVisible();

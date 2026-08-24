@@ -14,7 +14,7 @@ const runtimeCustomProperties = new Set([
   "--handoff-progress",
   "--renderer-help-height",
 ]);
-const coreStudioFamily = /\.(?:studio-shell|studio-grid|studio-sidebar|studio-nav(?:-advanced)?|project-section-nav|project-section-picker|dialog-card|dialog-shell(?:-[\w-]+)?|record-(?:row|primary|status|evidence|actions))\b/;
+const coreStudioFamily = /\.(?:studio-shell|studio-grid|studio-sidebar|studio-nav(?:-advanced)?|project-(?:navigation(?:-primary)?|journey-nav|section-nav|section-picker|expert-navigation)|dialog-card|dialog-shell(?:-[\w-]+)?|record-(?:row|primary|status|evidence|actions))\b/;
 const feedbackBase = /^\.(?:form-error|field-message|action-feedback)(?::|$)/;
 const errors = [];
 const reports = [];

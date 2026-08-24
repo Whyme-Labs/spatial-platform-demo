@@ -1218,6 +1218,30 @@ type ProjectSection =
   | "publish"
   | "measurement"
   | "expert";
+type ProjectJourney = "work" | "evidence" | "publish";
+const projectSectionLabels: Record<ProjectSection, string> = {
+  overview: "Overview",
+  process: "Process",
+  structure: "Structure",
+  compare: "Compare",
+  publish: "Publish",
+  measurement: "Measurement evidence",
+  expert: "Expert tools",
+};
+const projectSectionJourneys: Record<ProjectSection, ProjectJourney | "expert"> = {
+  overview: "work",
+  process: "work",
+  structure: "work",
+  compare: "evidence",
+  measurement: "evidence",
+  publish: "publish",
+  expert: "expert",
+};
+const projectJourneySections: Record<ProjectJourney, readonly ProjectSection[]> = {
+  work: ["overview", "process", "structure"],
+  evidence: ["compare", "measurement"],
+  publish: ["publish"],
+};
 type JourneySection = "overview" | "process" | "structure" | "publish";
 type ProjectBlocker =
   | { kind: "clear"; label: "No blocker" }
@@ -2671,28 +2695,50 @@ function bindInterface(): void {
     [byId<HTMLButtonElement>("projectProcessTab"), "process"],
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
     [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
-    [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
     [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
   ];
+  const projectJourneyButtons: Array<[HTMLButtonElement, ProjectJourney]> = [
+    [byId<HTMLButtonElement>("projectWorkJourney"), "work"],
+    [byId<HTMLButtonElement>("projectEvidenceJourney"), "evidence"],
+    [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
+  ];
   const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
-  projectSectionPicker.replaceChildren(...projectSectionButtons.map(([button, section]) =>
-    new Option(button.textContent?.trim() ?? humanStatus(section), section)
-  ));
+  projectSectionPicker.replaceChildren(
+    projectSectionPickerGroup("Work", projectJourneySections.work),
+    projectSectionPickerGroup("Evidence", projectJourneySections.evidence),
+    projectSectionPickerGroup("Publish", projectJourneySections.publish),
+    projectSectionPickerGroup("Advanced", ["expert"]),
+  );
   projectSectionButtons.forEach(([button, section]) => {
     button.addEventListener("click", () => {
       activateProjectSection(section, true, "push", true);
     });
   });
+  projectJourneyButtons.forEach(([button, journey]) => {
+    button.addEventListener("click", () => {
+      activateProjectSection(preferredProjectSectionForJourney(journey), true, "push", true);
+    });
+  });
   projectSectionPicker.addEventListener("change", () => {
-    const selected = projectSectionButtons.find(([, section]) =>
-      section === projectSectionPicker.value
-    );
-    if (selected) activateProjectSection(selected[1], true, "push", true);
+    if (!(projectSectionPicker.value in projectSectionLabels)) return;
+    activateProjectSection(projectSectionPicker.value as ProjectSection, true, "push", true);
   });
   window.addEventListener("hashchange", () => void navigateFromHash());
   window.addEventListener("popstate", () => void navigateFromHash());
   activateView(viewFromHash(), false);
+}
+
+function projectSectionPickerGroup(
+  label: string,
+  sections: readonly ProjectSection[],
+): HTMLOptGroupElement {
+  const group = document.createElement("optgroup");
+  group.label = label;
+  group.replaceChildren(...sections.map((section) =>
+    new Option(projectSectionLabels[section], section)
+  ));
+  return group;
 }
 
 function bindDialogSemantics(): void {
@@ -3329,6 +3375,24 @@ function projectSectionFromHash(): ProjectSection {
   return "overview";
 }
 
+function projectJourneyForSection(section: ProjectSection): ProjectJourney | null {
+  const journey = projectSectionJourneys[section];
+  return journey === "expert" ? null : journey;
+}
+
+function preferredProjectSectionForJourney(journey: ProjectJourney): ProjectSection {
+  if (projectJourneyForSection(state.projectSection) === journey) {
+    return state.projectSection;
+  }
+  if (journey === "evidence") {
+    const readiness = state.selected?.comparisonReadiness ?? emptyComparisonReadiness;
+    return comparisonWorkspaceAvailable(readiness)
+      ? "compare"
+      : "measurement";
+  }
+  return journey === "work" ? "overview" : "publish";
+}
+
 async function navigateFromHash(): Promise<void> {
   const view = viewFromHash();
   const projectId = projectIdFromHash();
@@ -3396,7 +3460,6 @@ function activateView(
   const comparisonAvailable = comparisonWorkspaceAvailable(
     state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   );
-  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonAvailable;
   const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
   projectSectionPicker.value = state.projectSection;
   const compareOption = Array.from(projectSectionPicker.options).find((option) =>
@@ -3409,12 +3472,45 @@ function activateView(
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
   });
+  const activeJourney = projectJourneyForSection(state.projectSection);
+  document.querySelectorAll<HTMLButtonElement>("[data-project-journey]").forEach((button) => {
+    const active = view === "project" && button.dataset.projectJourney === activeJourney;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  });
+  const sectionNavigation = document.querySelector<HTMLElement>(".project-section-nav");
+  const sectionNavigationVisible = view === "project" && activeJourney !== null && activeJourney !== "publish";
+  if (sectionNavigation) {
+    sectionNavigation.hidden = !sectionNavigationVisible;
+    if (activeJourney) {
+      sectionNavigation.setAttribute(
+        "aria-label",
+        `${activeJourney === "work" ? "Work" : "Evidence"} sections`,
+      );
+    }
+  }
   document.querySelectorAll<HTMLButtonElement>("[data-project-section]").forEach((button) => {
-    const active = view === "project" && button.dataset.projectSection === state.projectSection;
+    const section = button.dataset.projectSection as ProjectSection;
+    const active = view === "project" && section === state.projectSection;
+    const journey = button.dataset.projectJourneySection;
+    if (journey !== "expert") {
+      button.hidden = !sectionNavigationVisible || journey !== activeJourney ||
+        (section === "compare" && !comparisonAvailable);
+    }
     button.classList.toggle("active", active);
     if (active) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
   });
+  const expertNavigation = byId<HTMLDetailsElement>("projectExpertNavigation");
+  const expertSummary = expertNavigation.querySelector<HTMLElement>("summary");
+  const expertActive = view === "project" && state.projectSection === "expert";
+  expertNavigation.open = false;
+  expertNavigation.classList.toggle("active", expertActive);
+  if (expertSummary) {
+    if (expertActive) expertSummary.setAttribute("aria-current", "page");
+    else expertSummary.removeAttribute("aria-current");
+  }
   const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
   if (advancedNavigation) advancedNavigation.open = !["projects", "project", "releases"].includes(view);
   const projectsVisible = view === "projects";

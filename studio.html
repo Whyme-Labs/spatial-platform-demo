@@ -88,17 +88,31 @@
           </dl>
           <button id="projectCurrentAction" class="primary-button" type="button"></button>
         </div>
-        <nav class="project-section-nav" aria-label="Project workspace">
-          <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
-          <button id="projectProcessTab" type="button" data-project-section="process">Process</button>
-          <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
-          <button id="projectCompareTab" type="button" data-project-section="compare" hidden>Compare</button>
-          <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
-          <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
-          <button id="projectExpertTab" type="button" data-project-section="expert">Expert</button>
-        </nav>
+        <div class="project-navigation">
+          <div class="project-navigation-primary">
+            <nav class="project-journey-nav" aria-label="Project journey">
+              <button id="projectWorkJourney" type="button" data-project-journey="work">Work</button>
+              <button id="projectEvidenceJourney" type="button" data-project-journey="evidence">Evidence</button>
+              <button id="projectPublishTab" type="button" data-project-journey="publish">Publish</button>
+            </nav>
+            <details id="projectExpertNavigation" class="project-expert-navigation">
+              <summary>Expert tools</summary>
+              <div>
+                <p>Technical evidence, recovery controls, and specialist authoring.</p>
+                <button id="projectExpertTab" class="quiet-button" type="button" data-project-section="expert" data-project-journey-section="expert">Open technical evidence</button>
+              </div>
+            </details>
+          </div>
+          <nav class="project-section-nav" aria-label="Work sections">
+            <button id="projectOverviewTab" type="button" data-project-section="overview" data-project-journey-section="work">Overview</button>
+            <button id="projectProcessTab" type="button" data-project-section="process" data-project-journey-section="work">Process</button>
+            <button id="projectStructureTab" type="button" data-project-section="structure" data-project-journey-section="work">Structure</button>
+            <button id="projectCompareTab" type="button" data-project-section="compare" data-project-journey-section="evidence" data-reachable-when="a comparison-ready pair is available" hidden>Compare</button>
+            <button id="projectMeasurementTab" type="button" data-project-section="measurement" data-project-journey-section="evidence">Measurement evidence</button>
+          </nav>
+        </div>
         <label class="project-section-picker" for="projectSectionPicker">
-          <span>Project section</span>
+          <span>Project destination</span>
           <select id="projectSectionPicker"></select>
         </label>
       </section>
