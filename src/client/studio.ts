@@ -3440,8 +3440,8 @@ function activateView(
   byId<HTMLButtonElement>("portfolioToolsButton").hidden = !projectsVisible || state.user?.role !== "platform_admin";
   const headings = {
     projects: {
-      eyebrow: "CAPTURE TO PREVIEW",
-      title: "Upload once. Preview the processed splat. Edit only when needed.",
+      eyebrow: "PORTFOLIO",
+      title: "Your spatial portfolio, at a glance.",
     },
     project: {
       eyebrow: "PROJECT",

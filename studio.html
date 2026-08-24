@@ -50,8 +50,8 @@
     <main class="studio-main">
       <header id="studioHeader" class="studio-header">
         <div>
-          <span id="viewEyebrow" class="eyebrow">CAPTURE TO PREVIEW</span>
-          <h1 id="viewTitle">Upload once. Preview the processed splat. Edit only when needed.</h1>
+          <span id="viewEyebrow" class="eyebrow">PORTFOLIO</span>
+          <h1 id="viewTitle">Your spatial portfolio, at a glance.</h1>
         </div>
         <div class="header-actions">
           <button class="quiet-button" id="refreshButton" type="button">Refresh</button>
@@ -103,13 +103,6 @@
         </label>
       </section>
 
-      <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
-        <article class="summary-card" data-surface-role="record"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
-        <article class="summary-card" data-surface-role="record"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
-        <article class="summary-card" data-surface-role="record"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
-        <article class="summary-card accent" data-surface-role="notice"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
-      </section>
-
       <section id="studioGrid" class="studio-grid">
         <div id="projectBoard" class="project-board" data-surface-role="task">
           <div class="section-heading">
@@ -122,6 +115,24 @@
               <button class="filter-chip" data-filter="ARCHIVED">Archived</button>
             </div>
           </div>
+          <dl id="summaryGrid" class="portfolio-overview" aria-label="Portfolio health">
+            <div>
+              <dt>Active projects</dt>
+              <dd><strong id="activeProjects">-</strong><span>Immutable version history</span></dd>
+            </div>
+            <div>
+              <dt>Processing queue</dt>
+              <dd><strong id="processingJobs">-</strong><span>Leased by local or cloud agents</span></dd>
+            </div>
+            <div>
+              <dt>Hosted assets</dt>
+              <dd><strong id="hostedAssets">-</strong><span id="hostedBytes">Private R2 storage</span></dd>
+            </div>
+            <div data-status="release">
+              <dt>Active releases</dt>
+              <dd><strong id="activeReleases">-</strong><span>Revocable in one operation</span></dd>
+            </div>
+          </dl>
           <div class="project-command-bar">
             <label class="project-search">
               <span class="sr-only">Search projects</span>
