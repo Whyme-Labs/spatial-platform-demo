@@ -3143,8 +3143,6 @@ function activateView(
   byId("projectWorkspaceHeader").hidden = !projectVisible;
   byId("summaryGrid").hidden = !projectsVisible;
   byId("studioGrid").hidden = !["projects", "jobs"].includes(view);
-  byId("studioGrid").classList.toggle("jobs-only", jobsVisible);
-  byId("studioGrid").classList.toggle("projects-only", projectsVisible);
   byId("projectBoard").hidden = jobsVisible;
   byId("queuePanel").hidden = !jobsVisible;
   byId("projectDetail").hidden = !projectVisible || !["overview", "process"].includes(state.projectSection);

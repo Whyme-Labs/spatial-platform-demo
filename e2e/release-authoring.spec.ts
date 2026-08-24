@@ -36,13 +36,22 @@ test("project rows open a dedicated project workspace with nested tools", async 
     const layout = await page.evaluate(() => {
       const heading = document.querySelector<HTMLElement>(".project-page-heading")?.getBoundingClientRect();
       const navigation = document.querySelector<HTMLElement>(".project-section-nav")?.getBoundingClientRect();
+      const journey = document.querySelector<HTMLElement>(".project-journey-steps");
       return {
         documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
         navigationGap: heading && navigation ? navigation.top - heading.bottom : -1,
+        journeyStepCount: journey?.childElementCount ?? 0,
+        journeyTrackCount: journey
+          ? getComputedStyle(journey).gridTemplateColumns.trim().split(/\s+/).length
+          : 0,
       };
     });
     expect(layout.documentOverflow, `${viewport.width}px project page overflows`).toBeLessThanOrEqual(1);
     expect(layout.navigationGap, `${viewport.width}px project navigation overlaps its heading`).toBeGreaterThan(0);
+    if (viewport.width >= 768) {
+      expect(layout.journeyTrackCount, `${viewport.width}px journey leaves empty tracks`)
+        .toBe(layout.journeyStepCount);
+    }
   }
 
   const processStep = page.locator(".project-journey-step").filter({ hasText: "Process" });

@@ -17,7 +17,6 @@
 * { box-sizing: border-box; }
 html [hidden] { display: none !important; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
-body { overflow-x: hidden; }
 button, input, textarea, select { font: inherit; }
 button, a, label { -webkit-tap-highlight-color: transparent; }
 button { color: inherit; }
@@ -241,11 +240,8 @@ button.is-pending::before {
 .pipeline-step > span { color:var(--muted);font-size:9px; }.pipeline-step strong,.pipeline-step small{display:block}.pipeline-step strong{font-size:11px;margin-bottom:6px}.pipeline-step small{color:var(--muted);font-size:9px;line-height:1.35}.pipeline-step > i{font-style:normal;color:var(--muted)}
 .pipeline-step.done { border-color:rgba(142,203,183,.35); }.pipeline-step.done > i{color:var(--mint)}.pipeline-step.active{border-color:rgba(212,255,88,.5);box-shadow:inset 0 0 0 1px rgba(212,255,88,.08)}
 .spinner { width:14px;height:14px;border:2px solid rgba(212,255,88,.25);border-top-color:var(--accent);border-radius:50%;animation:rotate 1s linear infinite; }
-.studio-grid { min-width:0;display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:14px; }
+.studio-grid { min-width:0;display:grid;grid-template-columns:minmax(0,1fr);gap:16px;align-items:start; }
 .studio-grid > *,.project-board,.project-table { min-width:0; }
-.studio-grid.jobs-only { grid-template-columns:minmax(0,1fr); }
-.studio-grid.jobs-only .queue-panel { max-width:none; }
-.studio-grid.projects-only { grid-template-columns:minmax(0,1fr); }
 .project-board,.queue-panel { margin-top:14px; }
 .filter-chip { border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;padding:7px 10px;font-size:9px;cursor:pointer; }.filter-chip.active{background:var(--text);color:#111;border-color:var(--text)}
 .project-command-bar { margin-top:16px;display:grid;grid-template-columns:minmax(180px,1.5fr) repeat(4,minmax(128px,.75fr)) auto auto;gap:8px;align-items:center; }
@@ -286,11 +282,9 @@ button.is-pending::before {
   .tour-caption { left:368px;width:min(480px,calc(100vw - 420px)); }
   .summary-grid { grid-template-columns:1fr 1fr; }
   .pipeline-track { grid-template-columns:repeat(3,1fr); }
-  .studio-grid { grid-template-columns:1fr; }
   .project-detail-flow { grid-template-columns:1fr; }
   .project-journey-heading { flex-direction:column; }
   .project-journey-actions { max-width:none;justify-content:flex-start; }
-  .queue-panel { order:-1; }
   .project-command-bar { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .project-advanced-filter-controls { grid-template-columns:repeat(3,minmax(0,1fr)); }
 }
@@ -442,7 +436,7 @@ button.is-pending::before {
 .project-journey-heading h3 { margin:7px 0 8px;font:600 24px/1.08 Manrope,sans-serif;letter-spacing:-.035em; }
 .project-journey-heading p { max-width:720px;margin:0; }
 .project-journey-actions { display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap;max-width:none; }
-.project-journey-steps { display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px; }
+.project-journey-steps { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px; }
 .project-journey-step { appearance:none;width:100%;position:relative;min-height:98px;border:1px solid var(--line);border-radius:13px;padding:13px;display:grid;align-content:start;gap:7px;background:rgba(10,12,10,.64);color:var(--text);font:inherit;text-align:left;cursor:pointer; }
 .project-journey-step:hover { background:rgba(255,255,255,.04); }
 .project-journey-step:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
@@ -2683,11 +2677,6 @@ body.studio-page .filter-chip {
   white-space: nowrap;
 }
 
-body.studio-page .studio-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 330px);
-  gap: 16px;
-}
-
 body.studio-page .project-command-bar {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
@@ -3075,14 +3064,6 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  body.studio-page .studio-grid {
-    grid-template-columns: 1fr;
-  }
-
-  body.studio-page .queue-panel {
-    order: -1;
-  }
-
   body.studio-page .project-row {
     grid-template-columns: 24px minmax(0, 1.8fr) minmax(80px, .8fr);
   }
@@ -3329,21 +3310,7 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
   }
 }
 
-/* Walk test tab: the walk test is the task, so it leads at full width instead of
-   sitting nested at the bottom of the routes card beside an empty column. */
-.spatial-version-strip { grid-column:1/-1; display:grid; grid-template-columns:minmax(0,1fr) minmax(220px,300px); column-gap:22px; }
-.spatial-version-strip > .eyebrow,.spatial-version-strip > h3,.spatial-version-strip > .muted-copy { grid-column:1; }
-.spatial-version-strip > h3 { font-size:21px; }
-.spatial-version-strip > .muted-copy { margin:4px 0 0; }
-.spatial-version-strip > select { grid-column:2; grid-row:1/span 3; align-self:center; }
 .navigation-builds-card > .navigation-build-history { margin-top:14px; padding-top:0; border-top:0; }
-
-@media (max-width:900px) {
-  .spatial-version-strip { grid-template-columns:minmax(0,1fr); }
-  .spatial-version-strip > select { grid-column:1; grid-row:auto; margin-top:12px; }
-}
-
 
 /* Why the walker stopped, held in the published scene's own HUD. */
 .viewer-blocked-reason { margin:8px 0 0; padding:9px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(0,0,0,.55); color:var(--text); font-size:11px; line-height:1.45; }
-.walk-scene-card { grid-column:1/-1; }

@@ -12,6 +12,8 @@ const viewports = [
   { name: "narrow-phone", width: 320, height: 568 },
 ] as const;
 
+const studioShellTransitionWidths = [1280, 1100, 1024, 961, 960] as const;
+
 const now = "2026-07-29T08:00:00.000Z";
 const organisationId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
@@ -397,6 +399,53 @@ test.describe("authenticated studio UI", () => {
     }
   });
 
+  test("the active Studio workspace owns the full grid at transition widths", async ({ page }) => {
+    const expectOnlyVisibleWorkspaceOwnsGrid = async (
+      workspaceSelector: string,
+      expectedShellTracks: number,
+    ): Promise<void> => {
+      const geometry = await page.locator("#studioGrid").evaluate((grid, selector) => {
+        const workspace = grid.querySelector<HTMLElement>(selector);
+        const shell = document.querySelector<HTMLElement>(".studio-shell");
+        if (!workspace || !shell) return null;
+        const gridBounds = grid.getBoundingClientRect();
+        const workspaceBounds = workspace.getBoundingClientRect();
+        return {
+          bodyOverflowX: getComputedStyle(document.body).overflowX,
+          shellTracks: getComputedStyle(shell).gridTemplateColumns.trim().split(/\s+/),
+          gridTracks: getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/),
+          gridWidth: gridBounds.width,
+          workspaceWidth: workspaceBounds.width,
+          visibleChildren: [...grid.children].filter((child) => (
+            child.getClientRects().length > 0 && getComputedStyle(child).display !== "none"
+          )).length,
+        };
+      }, workspaceSelector);
+
+      expect(geometry).not.toBeNull();
+      expect(geometry!.bodyOverflowX).not.toBe("hidden");
+      expect(geometry!.shellTracks).toHaveLength(expectedShellTracks);
+      expect(geometry!.gridTracks).toHaveLength(1);
+      expect(geometry!.visibleChildren).toBe(1);
+      expect(Math.abs(geometry!.gridWidth - geometry!.workspaceWidth)).toBeLessThanOrEqual(1);
+    };
+
+    for (const width of studioShellTransitionWidths) {
+      await page.setViewportSize({ width, height: 800 });
+      const expectedShellTracks = width <= 960 ? 1 : 2;
+
+      await page.getByRole("button", { name: "Projects", exact: true }).click();
+      await expectOnlyVisibleWorkspaceOwnsGrid("#projectBoard", expectedShellTracks);
+
+      const advancedTools = page.locator(".studio-nav-advanced");
+      if (await advancedTools.getAttribute("open") === null) {
+        await advancedTools.getByText("Advanced tools", { exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Processing activity", exact: true }).click();
+      await expectOnlyVisibleWorkspaceOwnsGrid("#queuePanel", expectedShellTracks);
+    }
+  });
+
   test("every columnar Studio row shares one column geometry contract", async ({ page }) => {
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
@@ -571,7 +620,15 @@ test.describe("authenticated studio UI", () => {
           layout.viewportWidth + 1,
         );
 
-        await dialog.evaluate((element) => (element as HTMLDialogElement).close());
+        const closeButton = dialog.locator(".dialog-close").first();
+        if (await closeButton.count()) {
+          await expect(closeButton, `${dialogId} close button`).toHaveAttribute("type", "button");
+          await expect(closeButton, `${dialogId} close binding`).toHaveAttribute("data-close-dialog", "");
+          await closeButton.click();
+          await expect(dialog, `${dialogId} closes from its visible control`).toBeHidden();
+        } else {
+          await dialog.evaluate((element) => (element as HTMLDialogElement).close());
+        }
       }
     }
   });
