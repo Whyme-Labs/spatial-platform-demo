@@ -1561,6 +1561,9 @@ const compareDomain = createCompareDomain({
   parseTimestamp,
 });
 
+const dialogInvokers = new WeakMap<HTMLDialogElement, HTMLElement>();
+const discardGuardDialogIds = new Set(["newProjectDialog", "portfolioToolsDialog"]);
+
 bindInterface();
 void initialise();
 
@@ -1629,6 +1632,7 @@ async function initialise(): Promise<void> {
 function bindInterface(): void {
   compareDomain.bind();
   bindDialogSemantics();
+  bindDialogShells();
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, () => {
     transitionToSignedOut("Your session expired. Sign in again.");
   });
@@ -2624,7 +2628,10 @@ function bindInterface(): void {
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("dialog")?.close());
+    button.addEventListener("click", () => {
+      const dialog = button.closest<HTMLDialogElement>("dialog");
+      if (dialog) void requestDialogClose(dialog);
+    });
   });
   document.querySelectorAll<HTMLButtonElement>(".filter-chip").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2698,6 +2705,171 @@ function bindDialogSemantics(): void {
       }
     });
   });
+}
+
+function bindDialogShells(): void {
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog) => {
+    const nativeShowModal = dialog.showModal.bind(dialog);
+    dialog.showModal = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body) {
+        dialogInvokers.set(dialog, active);
+      }
+      nativeShowModal();
+    };
+    dialog.addEventListener("close", () => {
+      delete dialog.dataset.dirty;
+      const invoker = dialogInvokers.get(dialog);
+      dialogInvokers.delete(dialog);
+      if (invoker?.isConnected) queueMicrotask(() => invoker.focus());
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab" || !dialog.open) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), a[href], input:not(:disabled):not([type='hidden']), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])",
+      )).filter((control) => control.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    if (discardGuardDialogIds.has(dialog.id)) {
+      dialog.addEventListener("input", (event) => {
+        if (event.isTrusted && !(event.target as Element | null)?.closest(".portfolio-task-picker")) {
+          dialog.dataset.dirty = "true";
+        }
+      });
+      dialog.addEventListener("change", (event) => {
+        if (event.isTrusted && !(event.target as Element | null)?.closest(".portfolio-task-picker")) {
+          dialog.dataset.dirty = "true";
+        }
+      });
+      dialog.addEventListener("cancel", (event) => {
+        if (dialog.dataset.dirty !== "true") return;
+        event.preventDefault();
+        void requestDialogClose(dialog);
+      });
+    }
+  });
+
+  document.querySelectorAll<HTMLDialogElement>("dialog:not(#portfolioToolsDialog):not(#versionComparisonDialog)")
+    .forEach((dialog) => {
+      const root = dialog.querySelector<HTMLElement>(":scope > form");
+      if (!root || root.classList.contains("dialog-shell")) return;
+      const eyebrow = root.querySelector<HTMLElement>(":scope > .eyebrow");
+      const heading = root.querySelector<HTMLElement>(":scope > h1, :scope > h2, :scope > h3");
+      if (!heading) return;
+
+      const footerGroups = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > .form-actions, :scope > .capture-intake-actions",
+      ));
+      const footerActions = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > button:not(.dialog-close)",
+      ));
+      const footerFeedback = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > .form-error",
+      ));
+      const header = document.createElement("header");
+      header.className = "dialog-shell-header";
+      if (eyebrow) header.append(eyebrow);
+      header.append(heading);
+      const body = document.createElement("div");
+      body.className = "dialog-shell-body";
+      const excluded = new Set<HTMLElement>([
+        ...footerGroups,
+        ...footerActions,
+        ...footerFeedback,
+      ]);
+      for (const child of Array.from(root.children)) {
+        if (child === eyebrow || child === heading || excluded.has(child as HTMLElement)) continue;
+        body.append(child);
+      }
+      const footer = document.createElement("footer");
+      footer.className = "dialog-shell-footer";
+      footer.append(...footerFeedback, ...footerGroups, ...footerActions);
+      footer.hidden = footer.childElementCount === 0;
+      root.classList.add("dialog-shell");
+      root.replaceChildren(header, body, footer);
+      const syncPurpose = () => {
+        dialog.dataset.dialogPurpose = heading.textContent?.trim() || dialog.id;
+      };
+      syncPurpose();
+      new MutationObserver(syncPurpose).observe(heading, {
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    });
+
+  const comparisonDialog = byId<HTMLDialogElement>("versionComparisonDialog");
+  comparisonDialog.dataset.dialogPurpose =
+    byId("comparisonTitle").textContent?.trim() ?? "Compare immutable versions";
+  bindPortfolioTaskDialog();
+}
+
+function bindPortfolioTaskDialog(): void {
+  const dialog = byId<HTMLDialogElement>("portfolioToolsDialog");
+  const header = dialog.querySelector<HTMLElement>(":scope > .portfolio-dialog-shell");
+  const body = dialog.querySelector<HTMLElement>(":scope > .portfolio-tools-grid");
+  if (!header || !body) return;
+  dialog.classList.add("dialog-composite-shell");
+  header.classList.add("dialog-shell-header");
+  body.classList.add("dialog-shell-body");
+  const sections = Array.from(body.querySelectorAll<HTMLElement>(":scope > .portfolio-tool-section"));
+  const labels = [
+    "Project templates",
+    "Export metadata",
+    "Import metadata",
+    "Project schema",
+    "Metadata handoff",
+    "Verified asset copy",
+  ];
+  const picker = document.createElement("label");
+  picker.className = "portfolio-task-picker";
+  picker.append(element("span", "", "Portfolio task"));
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "Portfolio task");
+  select.append(...sections.map((_, index) =>
+    new Option(labels[index] ?? `Portfolio task ${index + 1}`, String(index))
+  ));
+  picker.append(select);
+  select.addEventListener("change", applyPortfolioTaskSelection);
+  const introduction = header.querySelector<HTMLElement>(":scope > p");
+  body.prepend(...(introduction ? [picker, introduction] : [picker]));
+  applyPortfolioTaskSelection();
+  dialog.dataset.dialogPurpose = "One portfolio operation at a time";
+}
+
+function applyPortfolioTaskSelection(): void {
+  const dialog = document.getElementById("portfolioToolsDialog");
+  const select = dialog?.querySelector<HTMLSelectElement>(".portfolio-task-picker select");
+  if (!dialog || !select) return;
+  const selectedIndex = Number(select.value || "0");
+  const sections = Array.from(dialog.querySelectorAll<HTMLElement>(".portfolio-tool-section"));
+  sections.forEach((section, index) => {
+    section.hidden = index !== selectedIndex;
+  });
+}
+
+async function requestDialogClose(dialog: HTMLDialogElement): Promise<void> {
+  if (dialog.dataset.discardPromptOpen === "true") return;
+  if (dialog.dataset.dirty === "true" && discardGuardDialogIds.has(dialog.id)) {
+    dialog.dataset.discardPromptOpen = "true";
+    const discard = await confirmOperator(
+      "Discard the changes in this dialog? Your unsaved input will be lost.",
+      "Discard changes",
+    );
+    delete dialog.dataset.discardPromptOpen;
+    if (!discard) return;
+    delete dialog.dataset.dirty;
+  }
+  dialog.close();
 }
 
 async function handleSignIn(form: FormData): Promise<void> {
@@ -4104,6 +4276,7 @@ function renderPortfolioTools(): void {
   renderPortfolioImportActions();
   renderPortfolioHandoffActions();
   renderAssetHandoffActions();
+  applyPortfolioTaskSelection();
 }
 
 function editProjectTemplate(template: ProjectTemplate): void {

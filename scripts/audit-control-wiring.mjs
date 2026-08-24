@@ -378,6 +378,12 @@ function auditStudioWorkflow(html, source) {
     !source.includes("activateProjectSection(selected[1], true, \"push\", true)")) {
     failures.push("compact project navigation does not share the canonical routed section controls");
   }
+  if (!source.includes("bindDialogShells();") ||
+    !source.includes('root.classList.add("dialog-shell")') ||
+    !source.includes("dialog.dataset.dialogPurpose") ||
+    !source.includes("requestDialogClose(dialog)")) {
+    failures.push("Studio dialogs do not share the stable task, scroll, focus, and discard shell");
+  }
   if (!source.includes('activateProjectSection(section, true, "push", true)')) {
     failures.push("project section controls do not use the canonical routed activation path");
   }
