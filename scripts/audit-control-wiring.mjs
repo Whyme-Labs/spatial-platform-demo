@@ -372,6 +372,12 @@ function auditStudioWorkflow(html, source) {
     !source.includes("renderProjectContext(model)")) {
     failures.push("project routes do not expose the stable stage, blocker, and next-action context");
   }
+  if (!html.includes('id="projectSectionPicker"') ||
+    !source.includes("projectSectionPicker.replaceChildren") ||
+    !source.includes('projectSectionPicker.addEventListener("change"') ||
+    !source.includes("activateProjectSection(selected[1], true, \"push\", true)")) {
+    failures.push("compact project navigation does not share the canonical routed section controls");
+  }
   if (!source.includes('activateProjectSection(section, true, "push", true)')) {
     failures.push("project section controls do not use the canonical routed activation path");
   }

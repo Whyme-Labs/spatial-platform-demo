@@ -569,19 +569,26 @@ test.describe("authenticated studio UI", () => {
       await page.setViewportSize(viewport);
 
       await page.getByRole("button", { name: "Projects", exact: true }).click();
-      await expectColumnsAligned(page, ".project-row");
+      if (viewport.width > 640) await expectColumnsAligned(page, ".project-row");
+      else await expect(page.locator(".project-row.record-row")).toHaveCount(2);
 
-      await page.getByText("Advanced tools", { exact: true }).click();
+      const advancedTools = page.locator(".studio-nav-advanced");
+      if (await advancedTools.getAttribute("open") === null) {
+        await advancedTools.getByText("Advanced tools", { exact: true }).click();
+      }
       await page.getByRole("button", { name: "Processing activity", exact: true }).click();
-      await expectColumnsAligned(page, ".queue-item");
+      if (viewport.width > 640) await expectColumnsAligned(page, ".queue-item");
+      else await expect(page.locator(".queue-item.record-row")).toHaveCount(2);
 
       await page.getByRole("button", { name: "Published previews", exact: true }).click();
-      await expectColumnsAligned(page, ".release-list-row");
+      if (viewport.width > 900) await expectColumnsAligned(page, ".release-list-row");
+      else await expect(page.locator(".release-list-row.record-row")).toHaveCount(2);
 
       // Team access is a primary nav destination now that inviting is the only
       // way anyone gets access.
       await page.getByRole("button", { name: "Team access", exact: true }).click();
-      await expectColumnsAligned(page, ".team-member-row");
+      if (viewport.width > 760) await expectColumnsAligned(page, ".team-member-row");
+      else await expect(page.locator(".team-member-row.record-row")).toHaveCount(2);
 
       await page.evaluate(() => {
         const fixture = document.createElement("div");
@@ -606,6 +613,138 @@ test.describe("authenticated studio UI", () => {
       await page.locator("[data-geometry-column-fixture]").evaluate((fixture) => fixture.remove());
       await expectResponsiveSurface(page, ".studio-shell");
     }
+  });
+
+  test("long operational records use explicit responsive priorities", async ({ page }) => {
+    const longProjects = Array.from({ length: 100 }, (_, index) => ({
+      id: `33333333-3333-4333-8333-${String(index + 1).padStart(12, "0")}`,
+      name: `Conservation capture ${String(index + 1).padStart(3, "0")} with an eighty-character expanded operational project identity`,
+      slug: `conservation-capture-${index + 1}`,
+      status: index % 2 === 0 ? "INGESTED" : "PUBLISHED",
+      captureAdapter: "registered-open-import-with-expanded-source-identifier",
+      deliveryTemplate: "venue-navigator",
+      notes: null,
+      customerName: "An institution with an expanded portfolio identity",
+      customFields: {},
+      latestVersionId: null,
+      latestVersionNumber: null,
+      activeReleaseSlug: null,
+      updatedAt: now,
+    }));
+    let projectFixtureCount = 100;
+    await page.route("**/api/projects", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await json(route, 200, { projects: longProjects.slice(0, projectFixtureCount) });
+    });
+    for (const count of [0, 1, 10, 100]) {
+      projectFixtureCount = count;
+      await page.reload();
+      await expect(page.locator("#projectTable .record-row")).toHaveCount(count);
+      if (count === 0) {
+        await expect(page.locator("#projectTable .empty-state")).toBeVisible();
+      }
+    }
+    await expect(page.getByRole("button", {
+      name: `Open ${longProjects.at(-1)!.name}`,
+      exact: true,
+    })).toBeVisible();
+
+    const expectContainedRecords = async (
+      selector: string,
+      expectedKinds: readonly string[],
+    ): Promise<void> => {
+      const records = await page.locator(selector).evaluateAll((rows) => rows
+        .filter((row) => row.getClientRects().length > 0)
+        .map((row) => {
+          const bounds = row.getBoundingClientRect();
+          const actions = [...row.querySelectorAll<HTMLElement>("button, a, summary, select")]
+            .filter((action) => action.getClientRects().length > 0)
+            .map((action) => {
+              const actionBounds = action.getBoundingClientRect();
+              return {
+                left: actionBounds.left,
+                right: actionBounds.right,
+              };
+            });
+          return {
+            kind: (row as HTMLElement).dataset.recordKind ?? "",
+            hasPrimary: Boolean(row.querySelector(":scope > .record-primary")),
+            left: bounds.left,
+            right: bounds.right,
+            clientWidth: (row as HTMLElement).clientWidth,
+            scrollWidth: (row as HTMLElement).scrollWidth,
+            viewportWidth: window.innerWidth,
+            actions,
+          };
+        }));
+      expect(records.length, `${selector} has visible records`).toBeGreaterThan(0);
+      for (const record of records) {
+        expect(expectedKinds, `${selector} declares ${record.kind}`).toContain(record.kind);
+        expect(record.hasPrimary, `${record.kind} declares an identity slot`).toBe(true);
+        expect(record.left, `${record.kind} left containment`).toBeGreaterThanOrEqual(-1);
+        expect(record.right, `${record.kind} right containment`).toBeLessThanOrEqual(record.viewportWidth + 1);
+        expect(record.scrollWidth, `${record.kind} internal overflow`).toBeLessThanOrEqual(record.clientWidth + 1);
+        for (const action of record.actions) {
+          expect(action.left, `${record.kind} action left containment`).toBeGreaterThanOrEqual(-1);
+          expect(action.right, `${record.kind} action right containment`).toBeLessThanOrEqual(record.viewportWidth + 1);
+        }
+      }
+      await expectResponsiveSurface(page, ".studio-shell");
+    };
+
+    for (const viewport of viewports.slice(1)) {
+      await page.setViewportSize(viewport);
+      await page.getByRole("button", { name: "Projects", exact: true }).click();
+      await expectContainedRecords("#projectTable .record-row", ["project"]);
+      const projectHeader = page.locator("#projectTable .record-table-header");
+      if (viewport.width <= 640) await expect(projectHeader).toBeHidden();
+      else await expect(projectHeader).toBeVisible();
+
+      const advanced = page.locator(".studio-nav-advanced");
+      if (await advanced.getAttribute("open") === null) {
+        await advanced.getByText("Advanced tools", { exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Processing activity", exact: true }).click();
+      await expectContainedRecords("#jobList .record-row", ["job"]);
+
+      await page.getByRole("button", { name: "Client review", exact: true }).click();
+      if (await page.locator("#reviewInbox .record-row").count() === 0) {
+        await page.getByRole("button", { name: "Open activity", exact: true }).click();
+      }
+      await expectContainedRecords("#reviewInbox .record-row", ["review-comment", "reviewer"]);
+
+      await page.getByRole("button", { name: "Published previews", exact: true }).click();
+      await expectContainedRecords("#releaseList .record-row", ["release"]);
+      const release = page.locator("#releaseList .record-row").first();
+      await expect(release.locator(".record-primary")).toBeVisible();
+      await expect(release.locator(".record-status")).toBeVisible();
+      await expect(release.locator(".record-essential")).toBeVisible();
+      await expect(release.getByText("More release actions", { exact: true })).toBeVisible();
+
+      await page.getByRole("button", { name: "Team access", exact: true }).click();
+      await expectContainedRecords("#teamOverview .record-row", ["team-member", "team-invitation"]);
+
+      if (await advanced.getAttribute("open") === null) {
+        await advanced.getByText("Advanced tools", { exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Hosting & lifecycle", exact: true }).click();
+      await expectContainedRecords("#hostingOverview .record-row", [
+        "hosting-subscription",
+        "invoice",
+        "checkout",
+      ]);
+      await expect(page.getByRole("button", { name: "Mark paid", exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Void", exact: true })).toBeVisible();
+      await expect(page.getByRole("link", { name: "Resume secure checkout", exact: true })).toBeVisible();
+    }
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    const firstRelease = page.locator("#releaseList .record-row").first();
+    await firstRelease.getByText("More release actions", { exact: true }).click();
+    await expect(firstRelease.getByRole("button", { name: "Export traversal evidence" })).toBeVisible();
+    await expect(firstRelease.getByRole("button", { name: "Revoke" })).toBeVisible();
+    await expectContainedRecords("#releaseList .record-row", ["release"]);
   });
 
   test("normal Studio actions stay within two bordered content surfaces", async ({ page }) => {
@@ -657,15 +796,17 @@ test.describe("authenticated studio UI", () => {
   test("traversal evidence download keeps the complete server digest visible", async ({ page }) => {
     await page.getByText("Advanced tools", { exact: true }).click();
     await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    await page.getByText("More release actions", { exact: true }).first().click();
     await page.getByRole("button", { name: "Export traversal evidence" }).first().click();
     await expect(page.locator("#globalNotice")).toContainText(`SHA-256 ${"a".repeat(64)}`);
   });
 
   test("archived projects stay out of current production and remain recoverable", async ({ page }) => {
-    await expect(page.getByText("Archived alignment fixture", { exact: true })).toHaveCount(0);
+    const projects = page.locator("#projectTable");
+    await expect(projects.getByText("Archived alignment fixture", { exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Archived", exact: true }).click();
-    await expect(page.getByText("Archived alignment fixture", { exact: true })).toBeVisible();
-    await expect(page.getByText("Responsive indoor scene", { exact: true })).toHaveCount(0);
+    await expect(projects.getByText("Archived alignment fixture", { exact: true })).toBeVisible();
+    await expect(projects.getByText("Responsive indoor scene", { exact: true })).toHaveCount(0);
   });
 
   test("provisional navigation authoring is labelled in scene units instead of metres", async ({
@@ -1317,6 +1458,8 @@ async function mockAnonymousAuth(page: Page): Promise<void> {
 }
 
 async function mockAuthenticatedStudio(page: Page): Promise<void> {
+  const longProjectName = "Museum conservation capture with a deliberately expanded eighty-character project identity";
+  const longReleaseSlug = "museum-conservation-capture-with-expanded-publication-channel-identifier";
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -1346,12 +1489,12 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
     const secondProject = {
       ...project,
       id: "44444444-4444-4444-8444-444444444444",
-      name: "A longer project name for alignment",
-      slug: "longer-project",
+      name: longProjectName,
+      slug: longReleaseSlug,
       status: "PUBLISHED",
       latestVersionId: "55555555-5555-4555-8555-555555555555",
       latestVersionNumber: 2,
-      activeReleaseSlug: "longer-project",
+      activeReleaseSlug: longReleaseSlug,
     };
     const archivedProject = {
       ...project,
@@ -1377,7 +1520,46 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
         }],
       });
     }
-    if (path === "/api/review/inbox") return json(route, 200, { projects: [] });
+    if (path === "/api/review/inbox") {
+      return json(route, 200, {
+        projects: [{
+          id: secondProject.id,
+          name: longProjectName,
+          slug: secondProject.slug,
+          status: "PUBLISHED",
+          role: "production_operator",
+          latest_version_id: secondProject.latestVersionId,
+          latest_version_number: 2,
+          release_slug: longReleaseSlug,
+        }],
+      });
+    }
+    if (path === `/api/projects/${secondProject.id}/reviews` && method === "GET") {
+      return json(route, 200, {
+        comments: [{
+          id: "97979797-9797-4797-8797-979797979701",
+          version_id: secondProject.latestVersionId,
+          kind: "comment",
+          status: "open",
+          body: "A long reviewer note explains the exact visual region, expected correction, and publication consequence without clipping on a narrow viewport.",
+          author_email: "reviewer.with.an.expanded.operational.identity@subdomain.whymelabs.example",
+          author_name: "External conservation reviewer",
+          created_at: now,
+        }],
+        decisions: [],
+        reviewers: [{
+          invitation_id: "97979797-9797-4797-8797-979797979702",
+          user_id: "97979797-9797-4797-8797-979797979703",
+          email: "reviewer.with.an.expanded.operational.identity@subdomain.whymelabs.example",
+          display_name: "External conservation reviewer",
+          role: "reviewer",
+          invitation_status: "accepted",
+          expires_at: "2026-09-29T08:00:00.000Z",
+          revoked_at: null,
+        }],
+        versions: [],
+      });
+    }
     if (path === "/api/dashboard") {
       return json(route, 200, {
         activeProjects: 1,
@@ -1412,7 +1594,7 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
           job_type: "semantic.extract-v1",
           state: "FAILED",
           progress: 52,
-          progress_message: "Needs retry",
+          progress_message: "Needs retry after a multi-line source validation failure with expanded operator guidance",
           attempt_count: 1,
           max_attempts: 3,
           created_at: now,
@@ -1466,10 +1648,57 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
     if (path === "/api/hosting") {
       return json(route, 200, {
         paymentProviderConfigured: false,
+        manualBillingEnabled: true,
         plans: [],
-        subscriptions: [],
-        checkouts: [],
-        invoices: [],
+        subscriptions: [{
+          id: "98989898-9898-4898-8989-989898989801",
+          project_id: secondProject.id,
+          project_name: longProjectName,
+          plan_code: "managed_delivery_with_expanded_operational_identifier",
+          plan_name: "Managed delivery and evidence retention",
+          status: "active",
+          current_period_end: "2026-09-29T08:00:00.000Z",
+          renews_automatically: 1,
+          storage_bytes: 73_400_000,
+          included_storage_bytes: 1_000_000_000,
+          payment_provider: null,
+          provider_subscription_id: null,
+          provider_cancel_at_period_end: 0,
+          billing_note: null,
+        }],
+        checkouts: [{
+          id: "98989898-9898-4898-8989-989898989802",
+          project_id: secondProject.id,
+          project_name: longProjectName,
+          plan_code: "managed_delivery",
+          status: "open",
+          amount_cents: 12_500,
+          currency: "MYR",
+          payment_provider: "stripe",
+          provider_checkout_id: null,
+          payment_status: "requires_payment_method",
+          checkout_url: "https://billing.example.com/session/expanded-checkout-identifier-98989898",
+          last_error: "The payment provider returned an expanded multi-line recovery message that must remain readable without clipping.",
+          expires_at: "2026-09-29T08:00:00.000Z",
+          completed_at: null,
+          created_at: now,
+        }],
+        invoices: [{
+          id: "98989898-9898-4898-8989-989898989803",
+          project_name: longProjectName,
+          status: "open",
+          currency: "MYR",
+          amount_cents: 12_500,
+          due_at: "2026-09-29T08:00:00.000Z",
+          period_start: now,
+          period_end: "2026-09-29T08:00:00.000Z",
+          paid_at: null,
+          billing_method: "manual",
+          external_reference: "invoice-reference-with-expanded-operational-identifier-98989898",
+          payment_reference: null,
+          note: null,
+          subscription_id: "98989898-9898-4898-8989-989898989801",
+        }],
         alerts: [],
         lifecycleRuns: [],
       });
@@ -1485,13 +1714,25 @@ async function mockAuthenticatedStudio(page: Page): Promise<void> {
           lastActiveAt: now,
         }, {
           userId: "88888888-8888-4888-8888-888888888888",
-          email: "reviewer@whymelabs.com",
+          email: "reviewer.with.an.expanded.operational.identity@subdomain.whymelabs.example",
           displayName: "Reviewer",
           role: "reviewer",
           status: "invited",
           lastActiveAt: null,
         }],
-        invitations: [],
+        invitations: [{
+          id: "89898989-8989-4898-8989-898989898989",
+          email: "invited.operator.with.expanded.identity@subdomain.whymelabs.example",
+          role: "production_operator",
+          status: "pending",
+          invitedAt: now,
+          expiresAt: "2026-09-29T08:00:00.000Z",
+          acceptedAt: null,
+          revokedAt: null,
+          lastSentAt: now,
+          sendCount: 2,
+          invitedBy: userId,
+        }],
       });
     }
     if (path === "/api/team/identity-providers") return json(route, 200, { providers: [] });

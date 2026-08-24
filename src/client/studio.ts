@@ -2651,10 +2651,20 @@ function bindInterface(): void {
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
     [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
   ];
+  const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
+  projectSectionPicker.replaceChildren(...projectSectionButtons.map(([button, section]) =>
+    new Option(button.textContent?.trim() ?? humanStatus(section), section)
+  ));
   projectSectionButtons.forEach(([button, section]) => {
     button.addEventListener("click", () => {
       activateProjectSection(section, true, "push", true);
     });
+  });
+  projectSectionPicker.addEventListener("change", () => {
+    const selected = projectSectionButtons.find(([, section]) =>
+      section === projectSectionPicker.value
+    );
+    if (selected) activateProjectSection(selected[1], true, "push", true);
   });
   window.addEventListener("hashchange", () => void navigateFromHash());
   window.addEventListener("popstate", () => void navigateFromHash());
@@ -3151,9 +3161,19 @@ function activateView(
     state.projectSection = resolvedSection;
   }
   state.view = view;
-  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonWorkspaceAvailable(
+  const comparisonAvailable = comparisonWorkspaceAvailable(
     state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   );
+  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonAvailable;
+  const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
+  projectSectionPicker.value = state.projectSection;
+  const compareOption = Array.from(projectSectionPicker.options).find((option) =>
+    option.value === "compare"
+  );
+  if (compareOption) {
+    compareOption.hidden = !comparisonAvailable;
+    compareOption.disabled = !comparisonAvailable;
+  }
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
   });
@@ -5024,8 +5044,9 @@ function renderPendingInvitations(): void {
     invitationError,
   );
   for (const invitation of state.pendingInvitations) {
-    const row = element("div", "team-member-row");
-    const identity = element("div", "team-member-identity");
+    const row = element("div", "team-member-row record-row");
+    row.dataset.recordKind = "organisation-invitation";
+    const identity = element("div", "team-member-identity record-primary");
     identity.append(
       element("strong", "", invitation.organisationName),
       element("span", "", humanStatus(invitation.role)),
@@ -5035,8 +5056,8 @@ function renderPendingInvitations(): void {
         `Invited ${relativeTime(invitation.invitedAt)} · expires ${relativeTime(invitation.expiresAt)}`,
       ),
     );
-    const status = element("span", "status-pill invited", "Pending");
-    const actions = element("div", "team-member-actions");
+    const status = element("span", "status-pill record-status invited", "Pending");
+    const actions = element("div", "team-member-actions record-actions");
     const accept = element("button", "primary-button", "Accept");
     const decline = element("button", "quiet-button", "Decline");
     accept.addEventListener("click", () => {
@@ -5139,6 +5160,7 @@ function clearTenantWorkspace(): void {
 function renderProjects(): void {
   const container = byId("projectTable");
   container.replaceChildren();
+  container.dataset.recordCollection = "projects";
   container.setAttribute("role", "table");
   container.setAttribute("aria-label", "Production projects");
   const projects = visibleProjects();
@@ -5148,7 +5170,7 @@ function renderProjects(): void {
     renderProjectPagination();
     return;
   }
-  const header = element("div", "project-row header");
+  const header = element("div", "project-row header record-table-header");
   header.setAttribute("role", "row");
   const selectVisible = document.createElement("input");
   selectVisible.type = "checkbox";
@@ -5172,7 +5194,8 @@ function renderProjects(): void {
   for (const cell of header.children) cell.setAttribute("role", "columnheader");
   container.append(header);
   for (const project of projects) {
-    const row = element("div", "project-row");
+    const row = element("div", "project-row record-row");
+    row.dataset.recordKind = "project";
     row.setAttribute("role", "row");
     if (state.selectedProjectIds.has(project.id)) row.classList.add("selected");
     const selected = document.createElement("input");
@@ -5186,7 +5209,7 @@ function renderProjects(): void {
       bulkLifecycleOperation = null;
       renderProjects();
     });
-    const identityCell = element("span", "project-identity-cell");
+    const identityCell = element("span", "project-identity-cell record-primary");
     const identity = element("button", "project-row-link project-identity");
     identity.setAttribute("aria-label", `Open ${project.name}`);
     const icon = element("b", "project-icon property", project.name.slice(0, 1).toUpperCase());
@@ -5194,7 +5217,7 @@ function renderProjects(): void {
     name.append(element("strong", "", project.name), element("small", "", project.customerName ?? "Capture project"));
     identity.append(icon, name);
     identityCell.append(identity);
-    const stage = element("span");
+    const stage = element("span", "record-status");
     stage.append(element("i", `state ${statusClass(project.status)}`), document.createTextNode(humanStatus(project.status)));
     identity.addEventListener("click", () => {
       void runAction({
@@ -5208,9 +5231,15 @@ function renderProjects(): void {
       if (target instanceof Element && target.closest("button, input, a, select, textarea")) return;
       identity.click();
     });
-    const selectedCell = element("span", "project-select-cell");
+    const selectedCell = element("span", "project-select-cell record-selector");
     selectedCell.append(selected);
-    row.append(selectedCell, identityCell, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)));
+    row.append(
+      selectedCell,
+      identityCell,
+      element("span", "record-secondary", project.captureAdapter),
+      stage,
+      element("span", "record-secondary", relativeTime(project.updatedAt)),
+    );
     for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
@@ -5371,6 +5400,7 @@ function renderBulkProjectActions(): void {
 function renderJobs(): void {
   const container = byId("jobList");
   container.replaceChildren();
+  container.dataset.recordCollection = "jobs";
   if (!state.jobs.length) {
     container.append(emptyState("No processing jobs.", true));
     renderJobPagination();
@@ -5378,9 +5408,10 @@ function renderJobs(): void {
   }
   const visibleJobs = state.view === "jobs" ? state.jobs : state.jobs.slice(0, 12);
   for (const [index, job] of visibleJobs.entries()) {
-    const row = element("div", "queue-item");
+    const row = element("div", "queue-item record-row");
+    row.dataset.recordKind = "job";
     const order = element("span", "queue-order", String(index + 1).padStart(2, "0"));
-    const body = element("div");
+    const body = element("div", "record-primary");
     body.append(
       element("strong", "", job.job_type),
       element("small", "", `${job.project_name ?? job.project_id} · ${humanStatus(job.state)} · attempt ${job.attempt_count}/${job.max_attempts}`),
@@ -5400,7 +5431,7 @@ function renderJobs(): void {
     bar.style.width = `${job.progress}%`;
     progress.append(bar);
     body.append(progress);
-    const actions = element("div", "job-actions");
+    const actions = element("div", "job-actions record-actions");
     if (["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) {
       const retry = element("button", "job-action", "Retry");
       retry.addEventListener("click", async () => {
@@ -5448,12 +5479,13 @@ function renderJobPagination(): void {
 function renderReleases(): void {
   const container = byId("releaseList");
   container.replaceChildren();
+  container.dataset.recordCollection = "releases";
   if (!state.releases.length) {
     container.append(emptyState("No release history yet. Approve a version, then publish its first channel."));
     renderReleasePagination();
     return;
   }
-  const header = element("div", "release-list-row header");
+  const header = element("div", "release-list-row header record-table-header");
   header.setAttribute("role", "row");
   ["Project", "Channel", "Policy", "Published", "State", ""].forEach((label) =>
     header.append(element("span", "", label))
@@ -5463,14 +5495,16 @@ function renderReleases(): void {
   container.setAttribute("aria-label", "Published release history");
   container.append(header);
   for (const release of state.releases) {
-    const row = element("div", "release-list-row");
+    const row = element("div", "release-list-row record-row");
+    row.dataset.recordKind = "release";
     row.setAttribute("role", "row");
-    const project = element("span");
+    const project = element("span", "record-primary");
     project.append(
       element("strong", "", release.project_name ?? "Project"),
       element("small", "", `Scene v${release.version_number} · Release ${release.release_number}`),
     );
     const channel = document.createElement("a");
+    channel.className = "record-essential";
     channel.href = `/s/${release.slug}`;
     channel.target = "_blank";
     channel.rel = "noopener";
@@ -5480,7 +5514,7 @@ function renderReleases(): void {
       : release.is_active
         ? "Active"
         : "Historical";
-    const actions = element("span", "release-actions");
+    const actions = element("span", "release-actions record-actions");
     if (release.project_id) {
       const manage = element("button", "quiet-button", "Manage");
       manage.addEventListener("click", () => {
@@ -5492,6 +5526,9 @@ function renderReleases(): void {
       });
       actions.append(manage);
     }
+    const actionMenu = element("details", "record-action-menu");
+    actionMenu.append(element("summary", "quiet-button", "More release actions"));
+    const actionMenuItems = element("div", "record-action-menu-items");
     const exportEvidence = element("button", "quiet-button", "Export traversal evidence");
     exportEvidence.addEventListener("click", () => {
       void runAction({
@@ -5500,7 +5537,7 @@ function renderReleases(): void {
         pendingLabel: "Exporting…",
       }, () => exportNavigationTraversalEvidence(release));
     });
-    actions.append(exportEvidence);
+    actionMenuItems.append(exportEvidence);
     if (release.is_active && !release.revoked_at) {
       const revoke = element("button", "danger-button", "Revoke");
       revoke.addEventListener("click", async () => {
@@ -5517,7 +5554,7 @@ function renderReleases(): void {
           pendingLabel: "Revoking…",
         }, () => revokeRelease(release.slug));
       });
-      actions.append(revoke);
+      actionMenuItems.append(revoke);
     } else if (!release.revoked_at) {
       const rollback = element("button", "quiet-button", "Make active");
       rollback.addEventListener("click", async () => {
@@ -5533,14 +5570,16 @@ function renderReleases(): void {
           pendingLabel: "Activating…",
         }, () => rollbackRelease(release));
       });
-      actions.append(rollback);
+      actionMenuItems.append(rollback);
     }
+    actionMenu.append(actionMenuItems);
+    actions.append(actionMenu);
     row.append(
       project,
       channel,
-      element("span", "", release.access_policy),
-      element("span", "", relativeTime(release.published_at)),
-      element("span", `release-state ${stateLabel.toLowerCase()}`, stateLabel),
+      element("span", "record-secondary", release.access_policy),
+      element("span", "record-secondary", relativeTime(release.published_at)),
+      element("span", `release-state record-status ${stateLabel.toLowerCase()}`, stateLabel),
       actions,
     );
     for (const cell of row.children) cell.setAttribute("role", "cell");
@@ -5561,6 +5600,7 @@ function renderReleasePagination(): void {
 function renderReviews(): void {
   const container = byId("reviewInbox");
   container.replaceChildren();
+  container.dataset.recordCollection = "review-projects";
   if (!state.reviewProjects.length) {
     container.append(emptyState(isReviewer()
       ? "No project has been shared with this account."
@@ -5631,8 +5671,9 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     activity.append(element("p", "muted-copy", "No review activity has been recorded."));
   }
   for (const comment of detail.comments.slice(0, 12)) {
-    const row = element("div", "review-line");
-    const copy = element("div");
+    const row = element("div", "review-line record-row");
+    row.dataset.recordKind = "review-comment";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${humanStatus(comment.kind)} · ${humanStatus(comment.status)}`),
       element("p", "", comment.body),
@@ -5640,7 +5681,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     );
     row.append(copy);
     if (!isReviewer() && comment.status === "open") {
-      const actions = element("span", "release-actions");
+      const actions = element("span", "release-actions record-actions");
       for (const status of ["resolved", "dismissed"] as const) {
         const button = element("button", status === "resolved" ? "quiet-button" : "danger-button", status === "resolved" ? "Resolve" : "Dismiss");
         button.addEventListener("click", () => {
@@ -5666,9 +5707,11 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
   }
   if (!isReviewer() && detail.reviewers?.length) {
     for (const reviewer of detail.reviewers) {
-      const row = element("div", "review-line");
-      row.append(element("div", "", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
+      const row = element("div", "review-line record-row");
+      row.dataset.recordKind = "reviewer";
+      row.append(element("div", "record-primary", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
       if (!reviewer.revoked_at && reviewer.invitation_status !== "revoked") {
+        const actions = element("div", "record-actions");
         const revoke = element("button", "danger-button", "Revoke access");
         revoke.addEventListener("click", async () => {
           if (!await confirmOperator(`Revoke ${reviewer.email} from ${project.name}?`)) return;
@@ -5678,7 +5721,8 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
             pendingLabel: "Revoking…",
           }, () => revokeReviewer(project, reviewer));
         });
-        row.append(revoke);
+        actions.append(revoke);
+        row.append(actions);
       }
       activity.append(row);
     }
@@ -5689,6 +5733,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
 function renderHosting(): void {
   const container = byId("hostingOverview");
   container.replaceChildren();
+  container.dataset.recordCollection = "hosting";
   if (!state.hosting) {
     container.append(emptyState("Hosting information is unavailable."));
     return;
@@ -5719,8 +5764,9 @@ function renderHosting(): void {
   subscriptions.append(element("span", "eyebrow", "ACTIVE SERVICES"), element("h3", "", "Project subscriptions"));
   if (!state.hosting.subscriptions.length) subscriptions.append(element("p", "muted-copy", "No hosting subscription configured."));
   for (const subscription of state.hosting.subscriptions) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = element("div", "hosting-row record-row");
+    row.dataset.recordKind = "hosting-subscription";
+    const copy = element("div", "record-primary");
     const usage = subscription.included_storage_bytes > 0
       ? `${Math.min(100, (subscription.storage_bytes / subscription.included_storage_bytes) * 100).toFixed(1)}% storage`
       : `${formatBytes(subscription.storage_bytes)} storage`;
@@ -5728,7 +5774,7 @@ function renderHosting(): void {
       element("strong", "", subscription.project_name),
       element("small", "", `${subscription.plan_name} · ${humanStatus(subscription.status)} · ${usage} · through ${parseTimestamp(subscription.current_period_end).toLocaleDateString()}`),
     );
-    const actions = element("span", "release-actions");
+    const actions = element("span", "release-actions record-actions");
     const manage = element("button", "quiet-button", "Manage");
     manage.addEventListener("click", () => {
       void runAction({
@@ -5773,8 +5819,9 @@ function renderHosting(): void {
   const finance = element("article", "workspace-card-large");
   finance.append(element("span", "eyebrow", "BILLING & ALERTS"), element("h3", "", "Invoice and recovery ledger"));
   for (const invoice of state.hosting.invoices.slice(0, 8)) {
-    const row = element("div", "hosting-row billing-invoice-row");
-    const copy = element("div");
+    const row = element("div", "hosting-row billing-invoice-row record-row");
+    row.dataset.recordKind = "invoice";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${invoice.project_name} · ${formatMoney(invoice.amount_cents, invoice.currency)}`),
       element(
@@ -5794,18 +5841,22 @@ function renderHosting(): void {
       invoice.billing_method === "manual" &&
       invoice.status === "open"
     ) {
-      row.append(manualInvoiceControls(invoice));
+      const actionSlot = element("div", "record-actions record-action-form");
+      actionSlot.append(manualInvoiceControls(invoice));
+      row.append(actionSlot);
     }
     finance.append(row);
   }
   for (const checkout of state.hosting.checkouts.slice(0, 8)) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = element("div", "hosting-row record-row");
+    row.dataset.recordKind = "checkout";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${checkout.project_name} · ${humanStatus(checkout.plan_code)}`),
       element("small", "", `${formatMoney(checkout.amount_cents, checkout.currency)} · Checkout ${humanStatus(checkout.status)}${checkout.payment_status ? ` · ${humanStatus(checkout.payment_status)}` : ""}`),
     );
     row.append(copy);
+    const actions = element("div", "record-actions");
     if (
       checkout.checkout_url &&
       ["pending", "open"].includes(checkout.status) &&
@@ -5814,9 +5865,10 @@ function renderHosting(): void {
       const resume = element("a", "quiet-button", "Resume secure checkout");
       resume.href = checkout.checkout_url;
       resume.rel = "noopener";
-      row.append(resume);
+      actions.append(resume);
     }
-    if (checkout.last_error) row.append(element("p", "form-error", checkout.last_error));
+    if (actions.childElementCount) row.append(actions);
+    if (checkout.last_error) row.append(element("p", "form-error record-evidence", checkout.last_error));
     finance.append(row);
   }
   for (const alert of state.hosting.alerts.slice(0, 8)) {
@@ -6204,6 +6256,7 @@ async function transitionManualSubscription(
 function renderTeam(): void {
   const container = byId("teamOverview");
   container.replaceChildren();
+  container.dataset.recordCollection = "team";
   if (state.user?.role !== "platform_admin") {
     container.append(emptyState("Platform administrator access is required."));
     return;
@@ -6231,8 +6284,9 @@ function renderTeam(): void {
     identityProviders.append(emptyState("No enterprise identity provider is configured. Email OTP remains available."));
   }
   for (const provider of state.identityProviders) {
-    const row = element("div", "team-member-row");
-    const copy = element("div", "team-member-identity");
+    const row = element("div", "team-member-row record-row");
+    row.dataset.recordKind = "identity-provider";
+    const copy = element("div", "team-member-identity record-primary");
     const readiness = provider.secretConfigured ? "secret configured" : "secret required";
     copy.append(
       element("strong", "", provider.name),
@@ -6249,8 +6303,8 @@ function renderTeam(): void {
     if (provider.lastError) {
       copy.append(element("small", "provider-error-copy", provider.lastError));
     }
-    const status = element("span", `status-pill ${provider.status}`, humanStatus(provider.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${provider.status}`, humanStatus(provider.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (provider.status !== "active") {
       const activate = element(
         "button",
@@ -6322,8 +6376,9 @@ function renderTeam(): void {
     captureAgents.append(emptyState("No unattended transfer credential has been issued."));
   }
   for (const credential of state.captureAgents) {
-    const row = element("div", `team-member-row ${credential.status}`);
-    const identity = element("div", "team-member-identity");
+    const row = element("div", `team-member-row record-row ${credential.status}`);
+    row.dataset.recordKind = "capture-agent";
+    const identity = element("div", "team-member-identity record-primary");
     const projectNames = credential.projectIds.map((projectId) => (
       state.projects.find((project) => project.id === projectId)?.name ?? `Unavailable project ${projectId.slice(0, 8)}`
     ));
@@ -6346,8 +6401,8 @@ function renderTeam(): void {
         }`,
       ),
     );
-    const status = element("span", `status-pill ${credential.status}`, humanStatus(credential.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${credential.status}`, humanStatus(credential.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (credential.status !== "revoked") {
       const edit = element("button", "quiet-button", "Edit scope");
       edit.addEventListener("click", () => openCaptureAgentDialog("edit", credential));
@@ -6383,8 +6438,9 @@ function renderTeam(): void {
   );
   if (!state.team.members.length) members.append(emptyState("No production team members found."));
   for (const member of state.team.members) {
-    const row = element("div", `team-member-row ${member.status}`);
-    const identity = element("div", "team-member-identity");
+    const row = element("div", `team-member-row record-row ${member.status}`);
+    row.dataset.recordKind = "team-member";
+    const identity = element("div", "team-member-identity record-primary");
     identity.append(
       element("strong", "", member.displayName),
       element("span", "", member.email),
@@ -6396,8 +6452,8 @@ function renderTeam(): void {
         }`,
       ),
     );
-    const status = element("span", `status-pill ${member.status}`, humanStatus(member.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${member.status}`, humanStatus(member.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (member.userId === state.user?.userId) {
       actions.append(element("small", "current-member-label", "Current session"));
     } else if (member.status === "revoked") {
@@ -6451,8 +6507,9 @@ function renderTeam(): void {
     invitations.append(element("p", "muted-copy", "No team invitations have been issued."));
   }
   for (const invitation of state.team.invitations) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = element("div", "hosting-row record-row");
+    row.dataset.recordKind = "team-invitation";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", invitation.email),
       element(
@@ -6469,6 +6526,7 @@ function renderTeam(): void {
     );
     row.append(copy);
     if (invitation.status === "pending") {
+      const actions = element("div", "record-actions");
       const resend = element("button", "quiet-button", "Resend");
       resend.addEventListener("click", () => {
         void runAction({
@@ -6477,7 +6535,8 @@ function renderTeam(): void {
           pendingLabel: "Resending…",
         }, () => resendTeamInvitation(invitation));
       });
-      row.append(resend);
+      actions.append(resend);
+      row.append(actions);
     }
     invitations.append(row);
   }
@@ -13894,18 +13953,19 @@ function renderCustomDomains(projectId: string): void {
     return;
   }
   for (const domain of workspace.domains) {
-    const row = element("article", "domain-row");
+    const row = element("article", "domain-row record-row");
+    row.dataset.recordKind = "domain";
     const heading = element("div", "domain-row-heading");
-    const title = element("div");
+    const title = element("div", "record-primary");
     title.append(
       element("strong", "", domain.hostname),
       element("small", "", domainStatusDescription(domain)),
     );
-    const badge = element("span", `status-badge ${domain.status === "active" ? "success" : domain.status === "failed" ? "danger" : "warning"}`, humanStatus(domain.status));
+    const badge = element("span", `status-badge record-status ${domain.status === "active" ? "success" : domain.status === "failed" ? "danger" : "warning"}`, humanStatus(domain.status));
     heading.append(title, badge);
     row.append(heading);
 
-    const evidence = element("div", "domain-evidence");
+    const evidence = element("div", "domain-evidence record-secondary");
     evidence.append(
       element("span", "", `Ownership · ${domain.dnsVerifiedAt ? "verified" : "pending"}`),
       element("span", "", `Routing · ${humanStatus(domain.providerStatus ?? "not provisioned")}`),
@@ -13921,7 +13981,7 @@ function renderCustomDomains(projectId: string): void {
       row.append(element("p", "form-error", domain.lastError));
     }
 
-    const actions = element("div", "release-actions");
+    const actions = element("div", "release-actions record-actions");
     if (!domain.dnsVerifiedAt && domain.status !== "active") {
       const token = customDomainChallenges.get(domain.id);
       if (token) {

@@ -63,12 +63,18 @@ export function bindFormFeedback(form: HTMLFormElement): void {
   form.addEventListener("input", clearValidControl);
   form.addEventListener("change", clearValidControl);
   form.addEventListener("reset", () => {
+    const actionMessageAtReset = actionTarget?.textContent ?? "";
     queueMicrotask(() => {
       for (const element of Array.from(form.elements)) {
         const control = formControl(element);
         if (control) clearFieldFailure(control);
       }
-      if (actionTarget) clearFormActionFeedback(form, actionTarget);
+      if (
+        actionTarget &&
+        (!actionTarget.textContent || actionTarget.textContent === actionMessageAtReset)
+      ) {
+        clearFormActionFeedback(form, actionTarget);
+      }
     });
   });
 }

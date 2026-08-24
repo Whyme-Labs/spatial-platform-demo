@@ -40,7 +40,11 @@ test("project rows open a dedicated project workspace with nested tools", async 
     const layout = await page.evaluate(() => {
       const heading = document.querySelector<HTMLElement>(".project-page-heading")?.getBoundingClientRect();
       const context = document.querySelector<HTMLElement>(".project-context-bar")?.getBoundingClientRect();
-      const navigation = document.querySelector<HTMLElement>(".project-section-nav")?.getBoundingClientRect();
+      const sectionNav = document.querySelector<HTMLElement>(".project-section-nav");
+      const compactPicker = document.querySelector<HTMLElement>(".project-section-picker");
+      const navigation = sectionNav && getComputedStyle(sectionNav).display !== "none"
+        ? sectionNav.getBoundingClientRect()
+        : compactPicker?.getBoundingClientRect();
       const action = document.querySelector<HTMLElement>("#projectCurrentAction")?.getBoundingClientRect();
       const workspace = document.querySelector<HTMLElement>('[data-project-workflow="overview"]')?.getBoundingClientRect();
       return {
@@ -59,7 +63,17 @@ test("project rows open a dedicated project workspace with nested tools", async 
     expect(layout.navigationGap, `${viewport.width}px project navigation overlaps its heading`).toBeGreaterThan(0);
     expect(layout.ordered, `${viewport.width}px project task order`).toBe(true);
     expect(layout.actionContained, `${viewport.width}px project action containment`).toBe(true);
+    if (viewport.width <= 900) {
+      await expect(page.locator("#projectSectionPicker")).toBeVisible();
+      await expect(page.locator("#projectSectionPicker")).toHaveValue("overview");
+      await expect(page.locator(".project-section-nav")).toBeHidden();
+    } else {
+      await expect(page.locator("#projectSectionPicker")).toBeHidden();
+      await expect(page.locator(".project-section-nav")).toBeVisible();
+    }
   }
+
+  await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByText("Technical details and source history", { exact: true }).click();
   await expectProjectSurfaceDepth(page);
@@ -98,6 +112,46 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.locator("#projectTable")).toBeVisible();
 });
 
+test("the compact project section picker preserves routes and browser history", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`/studio.html#project/${projectId}`);
+    const picker = page.locator("#projectSectionPicker");
+    const tabs = page.locator(".project-section-nav");
+
+    if (viewport.width === 1024) {
+      await expect(tabs).toBeVisible();
+      await expect(picker).toBeHidden();
+      await page.getByRole("button", { name: "Process", exact: true }).click();
+    } else {
+      await expect(picker).toBeVisible();
+      await expect(tabs).toBeHidden();
+      await expect(picker).toHaveValue("overview");
+      await expect(picker.locator("option[value='compare']")).toHaveAttribute("disabled", "");
+      await picker.selectOption("process");
+    }
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+    await expect(page.getByRole("heading", {
+      name: "Processing and qualification",
+      exact: true,
+    })).toBeFocused();
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("process");
+
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("process");
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("overview");
+  }
+});
+
 test("an archived project makes restore the truthful current action", async ({ page }) => {
   let restored = false;
   await mockApprovedProject(page, () => undefined, {
@@ -120,6 +174,43 @@ test("an archived project makes restore the truthful current action", async ({ p
   await expect.poll(() => restored).toBe(true);
   await expect(page.locator("#projectCurrentStage")).toHaveText("Publish");
   await expect(page.locator("#projectCurrentAction")).toHaveText("Publish shareable URL");
+});
+
+test("a long failed custom domain remains actionable on a narrow screen", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { customDomain: true });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto(`/studio.html#project/${projectId}/overview`);
+  await page.getByText("Optional editing, evidence, and delivery tools", { exact: true }).click();
+  await page.getByRole("button", { name: "Add custom domain", exact: true }).click();
+
+  const dialog = page.locator("#domainDialog");
+  const domain = dialog.locator(".domain-row.record-row");
+  await expect(domain.getByText(
+    "customer-preview-with-expanded-operational-hostname.spatial.example.com",
+    { exact: true },
+  )).toBeVisible();
+  await expect(domain.locator(".record-status")).toHaveText("Failed");
+  await expect(domain.locator(".form-error")).toContainText("provider activation failed");
+  await expect(domain.getByRole("button", { name: "Generate TXT challenge", exact: true })).toBeVisible();
+  await expect(domain.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
+  const bounds = await domain.evaluate((row) => {
+    const record = row.getBoundingClientRect();
+    const actions = [...row.querySelectorAll<HTMLElement>("button, a")]
+      .filter((action) => action.getClientRects().length > 0)
+      .map((action) => action.getBoundingClientRect().right);
+    return {
+      left: record.left,
+      right: record.right,
+      viewportWidth: window.innerWidth,
+      scrollWidth: (row as HTMLElement).scrollWidth,
+      clientWidth: (row as HTMLElement).clientWidth,
+      actions,
+    };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(-1);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth + 1);
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+  expect(bounds.actions.every((right) => right <= bounds.viewportWidth + 1)).toBe(true);
 });
 
 test("flattened project sections reclaim the active canvas width", async ({ page }) => {
@@ -819,6 +910,7 @@ async function mockApprovedProject(
     noviceLifecycle?: boolean;
     archived?: boolean;
     onRestore?: () => void;
+    customDomain?: boolean;
     startingViewFrameQuality?: Record<string, unknown>;
     publishResult?: { status: number; body: Record<string, unknown> };
   } = {},
@@ -1007,6 +1099,34 @@ async function mockApprovedProject(
       project.status = "DRAFT";
       options.onRestore?.();
       return json(route, 200, { project });
+    }
+    if (options.customDomain && method === "GET" && path === `/api/projects/${projectId}/domains`) {
+      return json(route, 200, {
+        providerConfigured: true,
+        cnameTarget: "customers.spatial.example.com",
+        domains: [{
+          id: "78787878-7878-4878-8878-787878787878",
+          hostname: "customer-preview-with-expanded-operational-hostname.spatial.example.com",
+          status: "failed",
+          dnsVerifiedAt: null,
+          provider: "cloudflare",
+          providerHostnameId: null,
+          providerStatus: "failed",
+          providerSslStatus: "pending_validation",
+          providerValidation: {
+            sslValidationRecords: [{
+              status: "pending",
+              txtName: `_acme-challenge.${"x".repeat(56)}.spatial.example.com`,
+              txtValue: "domain-validation-token-with-expanded-evidence-value-787878787878",
+            }],
+          },
+          provisioningAttempts: 2,
+          lastCheckedAt: now,
+          provisionedAt: null,
+          lastError: "Cloudflare provider activation failed with expanded operator recovery guidance.",
+          createdAt: now,
+        }],
+      });
     }
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {
