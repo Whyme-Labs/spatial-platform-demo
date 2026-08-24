@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-24T19:04:35Z",
+  "generatedAt": "2026-08-24T19:32:02Z",
   "title": "Design System: Spatial Studio",
   "extensions": {
     "colorMeta": {
@@ -113,6 +113,14 @@
       "description": "One flat portfolio-health readout integrated into the Current production surface.",
       "html": "<dl class=\"ds-portfolio-overview\" aria-label=\"Portfolio health\"><div><dt>Active projects</dt><dd><strong>—</strong><span>Immutable version history</span></dd></div><div><dt>Processing queue</dt><dd><strong>—</strong><span>Leased by local or cloud agents</span></dd></div><div><dt>Hosted assets</dt><dd><strong>—</strong><span>Private R2 storage</span></dd></div><div class=\"ds-portfolio-release\"><dt>Active releases</dt><dd><strong>—</strong><span>Revocable in one operation</span></dd></div></dl>",
       "css": ".ds-portfolio-overview { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-bottom: 1px solid var(--line, rgba(244, 239, 225, 0.13)); color: var(--text, #f4efe1); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; } .ds-portfolio-overview > div { min-width: 0; padding: 14px 16px; border-inline-start: 1px solid var(--line, rgba(244, 239, 225, 0.13)); } .ds-portfolio-overview > div:first-child { border-inline-start: 0; padding-inline-start: 0; } .ds-portfolio-overview > div:last-child { padding-inline-end: 0; } .ds-portfolio-overview dt, .ds-portfolio-overview dd > span { color: var(--muted, #aaa99e); font-size: 12px; line-height: 1.4; } .ds-portfolio-overview dd { margin: 7px 0 0; display: grid; gap: 3px; } .ds-portfolio-overview strong { font-size: 24px; font-variation-settings: \"wght\" 620; font-variant-numeric: tabular-nums; line-height: 1; } .ds-portfolio-release strong { color: var(--accent, #d4ff58); }"
+    },
+    {
+      "name": "Portfolio Refinement",
+      "kind": "custom",
+      "refersTo": "portfolio-refinement",
+      "description": "One disclosure for secondary project statuses, sort, source, delivery, and saved views, with active constraints visible while closed.",
+      "html": "<details class=\"ds-refine\"><summary><span>Refine</span><span>QA · FJD Trion</span></summary><div><fieldset><legend>Status</legend><button aria-pressed=\"true\">QA</button></fieldset></div></details>",
+      "css": ".ds-refine { border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 10px; background: rgba(255, 255, 255, 0.018); color: var(--text, #f4efe1); font-family: \"Manrope Variable\", \"Avenir Next\", sans-serif; } .ds-refine summary { min-height: 44px; padding: 0 12px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; cursor: pointer; font-size: 12px; font-weight: 650; } .ds-refine summary span:last-child { overflow: hidden; color: var(--accent, #d4ff58); text-align: right; text-overflow: ellipsis; white-space: nowrap; } .ds-refine > div { border-top: 1px solid var(--line, rgba(244, 239, 225, 0.13)); padding: 12px; } .ds-refine button { min-height: 44px; border: 1px solid var(--line, rgba(244, 239, 225, 0.13)); border-radius: 10px; background: transparent; color: var(--muted, #aaa99e); padding: 0 12px; font: 620 12px/1.2 \"Manrope Variable\", \"Avenir Next\", sans-serif; }"
     },
     {
       "name": "Evidence Disclosure",

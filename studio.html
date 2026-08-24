@@ -121,13 +121,7 @@
         <div id="projectBoard" class="project-board" data-surface-role="task">
           <div class="section-heading">
             <div><span class="eyebrow">PROJECTS</span><h2>Current production</h2></div>
-            <div class="filter-group">
-              <button class="filter-chip active" data-filter="all">Current</button>
-              <button class="filter-chip" data-filter="PROCESSING">Processing</button>
-              <button class="filter-chip" data-filter="QA_REQUIRED">QA</button>
-              <button class="filter-chip" data-filter="PUBLISHED">Published</button>
-              <button class="filter-chip" data-filter="ARCHIVED">Archived</button>
-            </div>
+            <button class="filter-chip active" data-filter="all" type="button">Current</button>
           </div>
           <dl id="summaryGrid" class="portfolio-overview" aria-label="Portfolio health">
             <div>
@@ -152,47 +146,64 @@
               <span class="sr-only">Search projects</span>
               <input id="projectSearch" type="search" maxlength="120" placeholder="Search project or customer…" />
             </label>
-            <label>
-              <span class="sr-only">Sort projects</span>
-              <select id="projectSort">
-                <option value="updated_desc">Recently updated</option>
-                <option value="updated_asc">Oldest updated</option>
-                <option value="name_asc">Name A-Z</option>
-                <option value="name_desc">Name Z-A</option>
-              </select>
-            </label>
             <details id="projectAdvancedFilters" class="project-advanced-filters">
-              <summary>Filters and saved views</summary>
-              <div class="project-advanced-filter-controls">
-                <label>
-                  <span>Capture source</span>
-                  <select id="projectAdapterFilter">
-                    <option value="">All capture sources</option>
-                    <optgroup label="Guided capture sources">
-                      <option value="xgrids-lcc">XGRIDS LCC</option>
-                      <option value="fjd-trion">FJD Trion</option>
-                      <option value="open-import">Open asset import</option>
-                    </optgroup>
-                    <optgroup label="Specialist evidence sources">
-                      <option value="phone-video">Phone / video evidence</option>
-                      <option value="drone-imagery">Drone imagery evidence</option>
-                    </optgroup>
-                  </select>
-                </label>
-                <label>
-                  <span>Delivery classification</span>
-                  <select id="projectDeliveryFilter"><option value="">All delivery classifications</option></select>
-                </label>
-                <label>
-                  <span>Saved view</span>
-                  <select id="savedProjectView"><option value="">Current filters</option></select>
-                </label>
-                <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
-                <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
-                <button id="loadMoreProjectViews" class="text-button" type="button" hidden>Load more views</button>
+              <summary>
+                <span>Refine</span>
+                <span id="projectRefineSummary" class="project-refine-summary">Current</span>
+              </summary>
+              <div class="project-refine-panel">
+                <fieldset class="project-status-refinements">
+                  <legend>Status</legend>
+                  <div class="filter-group">
+                    <button class="filter-chip" data-filter="PROCESSING" type="button">Processing</button>
+                    <button class="filter-chip" data-filter="QA_REQUIRED" type="button">QA</button>
+                    <button class="filter-chip" data-filter="PUBLISHED" type="button">Published</button>
+                    <button class="filter-chip" data-filter="ARCHIVED" type="button">Archived</button>
+                  </div>
+                </fieldset>
+                <div class="project-advanced-filter-controls">
+                  <label>
+                    <span>Sort projects</span>
+                    <select id="projectSort">
+                      <option value="updated_desc">Recently updated</option>
+                      <option value="updated_asc">Oldest updated</option>
+                      <option value="name_asc">Name A-Z</option>
+                      <option value="name_desc">Name Z-A</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Capture source</span>
+                    <select id="projectAdapterFilter">
+                      <option value="">All capture sources</option>
+                      <optgroup label="Guided capture sources">
+                        <option value="xgrids-lcc">XGRIDS LCC</option>
+                        <option value="fjd-trion">FJD Trion</option>
+                        <option value="open-import">Open asset import</option>
+                      </optgroup>
+                      <optgroup label="Specialist evidence sources">
+                        <option value="phone-video">Phone / video evidence</option>
+                        <option value="drone-imagery">Drone imagery evidence</option>
+                      </optgroup>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Delivery classification</span>
+                    <select id="projectDeliveryFilter"><option value="">All delivery classifications</option></select>
+                  </label>
+                  <label>
+                    <span>Saved view</span>
+                    <select id="savedProjectView"><option value="">Current filters</option></select>
+                  </label>
+                </div>
+                <div class="project-refine-actions">
+                  <button id="saveProjectViewButton" class="quiet-button" type="button">Save view</button>
+                  <button id="deleteProjectViewButton" class="text-button" type="button" hidden>Delete view</button>
+                  <button id="loadMoreProjectViews" class="text-button" type="button" hidden>Load more views</button>
+                </div>
               </div>
             </details>
           </div>
+          <p id="projectResultsStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
           <div id="projectBulkBar" class="bulk-action-bar" role="status" aria-live="polite" hidden>
             <strong id="projectSelectionCount">0 projects selected</strong>
             <span id="projectSelectionHint">Select projects from the current portfolio.</span>
