@@ -11,4 +11,3 @@ body.viewer-page :is(button,a,input,select,textarea,summary):focus-visible { out
 body.viewer-page :is(button,input,select,textarea):disabled { color:GrayText;border-color:GrayText;opacity:1; }
   :is(.state,.worker-status i,.spark-runtime-dot) { forced-color-adjust:none;background:CanvasText;outline:1px solid Canvas; }
 } }
-

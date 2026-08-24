@@ -39,6 +39,7 @@ test.describe("touch-first Spark controls", () => {
   });
 
   test("keeps free roam active while thumb movement always releases to neutral", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
     await page.goto("/renderer/index.html");
     await page.evaluate(() => {
       window.dispatchEvent(new Event("spatial:e2e-mobile-controls-ready"));
@@ -51,6 +52,19 @@ test.describe("touch-first Spark controls", () => {
     await expect(joystick).toBeVisible();
     await expect(page.getByText("Drag scene to look")).toBeVisible();
     await expect(page.locator("#sparkViewport")).toHaveClass(/free-roam-active/);
+    const controlFloor = await page.locator("#toggleHelp").evaluate((button) => {
+      const movementLabel = document.querySelector<HTMLElement>(".spark-movement-label");
+      return {
+        fontSize: Number.parseFloat(getComputedStyle(button).fontSize),
+        height: button.getBoundingClientRect().height,
+        movementLabelFontSize: movementLabel
+          ? Number.parseFloat(getComputedStyle(movementLabel).fontSize)
+          : 0,
+      };
+    });
+    expect(controlFloor.fontSize).toBeGreaterThanOrEqual(12);
+    expect(controlFloor.movementLabelFontSize).toBeGreaterThanOrEqual(12);
+    expect(controlFloor.height).toBeGreaterThanOrEqual(44);
 
     await joystick.evaluate((element) => {
       const bounds = element.getBoundingClientRect();

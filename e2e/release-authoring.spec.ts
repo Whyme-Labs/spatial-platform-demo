@@ -581,6 +581,10 @@ test("release authoring resets project-specific fields and submits scene rotatio
   await dialog.locator("input[name='initialCameraPosition']").fill("1, 2, 3");
   await dialog.locator("input[name='sceneRotationZ']").fill("180");
   await dialog.locator(".dialog-close").click();
+  await expect(page.locator("#askDialog")).toBeVisible();
+  await page.locator("#askDialog")
+    .getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect(dialog).toBeHidden();
 
   await openRelease.click();
   await expect(dialog.getByRole("textbox", { name: "Subtitle", exact: true })).toHaveValue("");

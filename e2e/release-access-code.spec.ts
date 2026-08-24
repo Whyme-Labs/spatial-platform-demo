@@ -91,6 +91,7 @@ test("access-code action feedback stays contained at every supported width", asy
         parentRight: parent?.right ?? 0,
         actionBottom: action?.bottom ?? 0,
         errorTop: bounds.top,
+        fontSize: Number.parseFloat(style.fontSize),
         overflowWrap: style.overflowWrap,
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
@@ -103,6 +104,7 @@ test("access-code action feedback stays contained at every supported width", asy
     expect(geometry.errorTop, `${width}px feedback separation`).toBeGreaterThan(
       geometry.actionBottom,
     );
+    expect(geometry.fontSize, `${width}px feedback text`).toBeGreaterThanOrEqual(12);
     expect(geometry.overflowWrap, `${width}px action wrapping`).toBe("anywhere");
     expect(geometry.documentWidth, `${width}px document width`).toBeLessThanOrEqual(geometry.viewportWidth + 1);
     if (width === 320) {
@@ -176,10 +178,25 @@ test("coarse-pointer viewer navigation keeps 44px controls and forced-color focu
     await navigator.click();
     const roomTarget = await page.locator(".navigator-item").first().boundingBox();
     const barrierTarget = await page.locator(".dynamic-barrier-toggle").first().boundingBox();
+    const topActionTarget = await page.locator(".top-actions .primary-button").boundingBox();
     expect(roomTarget).not.toBeNull();
     expect(roomTarget!.height).toBeGreaterThanOrEqual(44);
     expect(barrierTarget).not.toBeNull();
     expect(barrierTarget!.height).toBeGreaterThanOrEqual(44);
+    expect(topActionTarget).not.toBeNull();
+    expect(topActionTarget!.height).toBeGreaterThanOrEqual(44);
+    const operationalText = await page.locator(
+      ".top-actions .primary-button:visible, .navigator-trigger:visible, " +
+      ".floor-plan-toolbar :is(label,strong,select):visible, " +
+      ".dynamic-barrier-copy :is(strong,span):visible, .dynamic-barrier-toggle:visible",
+    ).evaluateAll((elements) => elements.map((element) => ({
+      text: element.textContent?.trim() ?? "",
+      fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+    })));
+    expect(operationalText.length).toBeGreaterThan(0);
+    for (const item of operationalText) {
+      expect(item.fontSize, item.text).toBeGreaterThanOrEqual(12);
+    }
 
     const axe = await new AxeBuilder({ page })
       .exclude("#rendererFrame")

@@ -495,6 +495,12 @@ test.describe("authenticated studio UI", () => {
     const name = dialog.getByLabel("View name", { exact: true });
     const submit = dialog.getByRole("button", { name: "Save project view", exact: true });
     await name.fill("Duplicate view");
+    await dialog.locator(".dialog-close").click();
+    const discard = page.locator("#askDialog");
+    await expect(discard).toBeVisible();
+    await discard.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toBeVisible();
+    await expect(name).toHaveValue("Duplicate view");
     await submit.click();
 
     await expect(name).toHaveAttribute("aria-invalid", "true");
@@ -525,6 +531,72 @@ test.describe("authenticated studio UI", () => {
     await expect(name).not.toHaveAttribute("aria-invalid");
     await expect(name).not.toHaveAttribute("aria-errormessage");
     await expect(actionFeedback).toBeHidden();
+  });
+
+  test("primary project forms propagate server field failures to the shared feedback owner", async ({ page }) => {
+    await page.route(`**/api/projects/${projectId}`, async (route) => {
+      if (route.request().method() === "GET") {
+        return json(route, 200, {
+          project: {
+            id: projectId,
+            name: "Responsive indoor scene",
+            slug: "responsive-indoor-scene",
+            status: "INGESTED",
+            captureAdapter: "open-import",
+            deliveryTemplate: "venue-navigator",
+            notes: "Stable UI acceptance fixture.",
+            customerName: "WhyMe Labs",
+            customFields: {},
+            latestVersionId: null,
+            latestVersionNumber: null,
+            activeReleaseSlug: null,
+            updatedAt: now,
+          },
+          versions: [],
+          assets: [],
+          jobs: [],
+          releases: [],
+          captureBundles: [],
+          comparisonReadiness: { available: false, eligiblePairs: [], versions: [] },
+          previewReadyVersionIds: [],
+        });
+      }
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({
+        status: 422,
+        contentType: "application/json",
+        headers: { "x-request-id": "request-project-settings" },
+        body: JSON.stringify({
+          error: "Project settings were not accepted",
+          details: {
+            fieldErrors: { name: ["Use a unique project name"] },
+            formErrors: [],
+          },
+        }),
+      });
+    });
+    await page.getByRole("button", { name: "Open Responsive indoor scene" }).click();
+    await page.getByRole("button", { name: "Overview", exact: true }).click();
+    await page.getByText("Technical details and source history", { exact: true }).click();
+    await expect(page.getByRole("button", { name: "Edit project settings" })).toBeVisible();
+    await page.getByRole("button", { name: "Edit project settings" }).click();
+
+    const dialog = page.locator("#editProjectDialog");
+    const name = dialog.getByLabel("Project name", { exact: true });
+    const submit = dialog.getByRole("button", { name: "Save project settings", exact: true });
+    await name.fill("Rejected duplicate project name");
+    await submit.click();
+
+    await expect(name).toHaveAttribute("aria-invalid", "true");
+    const errorId = await name.getAttribute("aria-errormessage");
+    expect(errorId).toBeTruthy();
+    await expect(dialog.locator(`#${errorId}`)).toHaveText("Use a unique project name.");
+    await expect(dialog.locator("#editProjectError")).toContainText(
+      "Project settings were not accepted.",
+    );
+    await expect(dialog.locator("#editProjectError")).toContainText(
+      "Reference: request-project-settings.",
+    );
   });
 
   test("record workspaces do not own or nest live announcements", async ({ page }) => {

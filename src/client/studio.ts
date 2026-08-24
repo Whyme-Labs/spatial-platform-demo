@@ -90,6 +90,7 @@ import {
 } from "../shared/paired-capture-journey";
 import {
   legacyUnspecifiedProjectWorkflowPolicy,
+  normalizeProjectDeliveryTemplate,
   parseProjectWorkflowPolicy,
   projectPolicyForDeliveryTemplate,
   type ProjectWorkflowPolicy,
@@ -1572,7 +1573,12 @@ const compareDomain = createCompareDomain({
 });
 
 const dialogInvokers = new WeakMap<HTMLDialogElement, HTMLElement>();
-const discardGuardDialogIds = new Set(["newProjectDialog", "portfolioToolsDialog"]);
+const discardGuardExcludedDialogIds = new Set([
+  "askDialog",
+  "captureAgentTokenDialog",
+  "loginDialog",
+  "versionComparisonDialog",
+]);
 
 bindInterface();
 void initialise();
@@ -2749,14 +2755,16 @@ function bindDialogShells(): void {
         first.focus();
       }
     });
-    if (discardGuardDialogIds.has(dialog.id)) {
+    if (dialogGuardsDraft(dialog)) {
       dialog.addEventListener("input", (event) => {
-        if (event.isTrusted && !(event.target as Element | null)?.closest(".portfolio-task-picker")) {
+        const target = event.target;
+        if (event.isTrusted && target instanceof Element && !target.closest(".portfolio-task-picker")) {
           dialog.dataset.dirty = "true";
         }
       });
       dialog.addEventListener("change", (event) => {
-        if (event.isTrusted && !(event.target as Element | null)?.closest(".portfolio-task-picker")) {
+        const target = event.target;
+        if (event.isTrusted && target instanceof Element && !target.closest(".portfolio-task-picker")) {
           dialog.dataset.dirty = "true";
         }
       });
@@ -2764,6 +2772,9 @@ function bindDialogShells(): void {
         if (dialog.dataset.dirty !== "true") return;
         event.preventDefault();
         void requestDialogClose(dialog);
+      });
+      dialog.addEventListener("reset", () => {
+        queueMicrotask(() => delete dialog.dataset.dirty);
       });
     }
   });
@@ -2869,7 +2880,7 @@ function applyPortfolioTaskSelection(): void {
 
 async function requestDialogClose(dialog: HTMLDialogElement): Promise<void> {
   if (dialog.dataset.discardPromptOpen === "true") return;
-  if (dialog.dataset.dirty === "true" && discardGuardDialogIds.has(dialog.id)) {
+  if (dialog.dataset.dirty === "true" && dialogGuardsDraft(dialog)) {
     dialog.dataset.discardPromptOpen = "true";
     const discard = await confirmOperator(
       "Discard the changes in this dialog? Your unsaved input will be lost.",
@@ -2880,6 +2891,16 @@ async function requestDialogClose(dialog: HTMLDialogElement): Promise<void> {
     delete dialog.dataset.dirty;
   }
   dialog.close();
+}
+
+function dialogGuardsDraft(dialog: HTMLDialogElement): boolean {
+  if (discardGuardExcludedDialogIds.has(dialog.id)) return false;
+  if (dialog.id === "portfolioToolsDialog") return true;
+  return Boolean(dialog.querySelector(
+    "form:not([method='dialog']) :is(input:not([type='hidden']):not([readonly]):not(:disabled), select:not(:disabled), textarea:not([readonly]):not(:disabled))",
+  )) && Boolean(dialog.querySelector(
+    "form:not([method='dialog']) :is(button[type='submit'], input[type='submit'])",
+  ));
 }
 
 async function handleSignIn(form: FormData): Promise<void> {
@@ -12511,7 +12532,7 @@ function openEditProjectDialog(): void {
     project.captureOrigin ?? captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId),
   );
   setValue("assetProducer", project.assetProducer ?? "");
-  setValue("deliveryTemplate", project.deliveryTemplate);
+  setValue("deliveryTemplate", normalizeProjectDeliveryTemplate(project.deliveryTemplate));
   setValue("notes", project.notes ?? "");
   // Trajectory auto-open changes what the platform will open on machine
   // evidence alone, so it stays an administrator decision and is shown only
@@ -12562,40 +12583,36 @@ async function updateProject(form: FormData): Promise<void> {
     "walked-contact":
       "Enable walked-contact clutter demotion: any wall run standing on walked floor is removed.",
   }[trajectoryClutterDemotion];
-  try {
-    await api(`/api/projects/${project.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        name: String(form.get("name") ?? ""),
-        customerName: optionalString(form.get("customerName")) ?? null,
-        customerEmail: optionalString(form.get("customerEmail")) ?? null,
-        notes: optionalString(form.get("notes")) ?? null,
-        customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
-        ...(state.user?.role === "platform_admin" ? {
-          captureOrigin: String(form.get("captureOrigin") ?? project.captureOrigin ??
-            captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
-          assetProducer: assetProducer || null,
-          deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
-          // The policy schema is strict and every dimension is behaviour, so
-          // the whole current policy travels with the one dimension this form
-          // edits — never a partial object that would reset the rest.
-          ...(policyChanged ? {
-            workflowPolicy: { ...currentPolicy, trajectoryAutoOpen, trajectoryClutterDemotion },
-            transitionReason: trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen
-              ? (trajectoryAutoOpen === "visited-rooms"
-                ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
-                : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.")
-              : clutterDemotionReason,
-          } : {}),
+  await api(`/api/projects/${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: String(form.get("name") ?? ""),
+      customerName: optionalString(form.get("customerName")) ?? null,
+      customerEmail: optionalString(form.get("customerEmail")) ?? null,
+      notes: optionalString(form.get("notes")) ?? null,
+      customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
+      ...(state.user?.role === "platform_admin" ? {
+        captureOrigin: String(form.get("captureOrigin") ?? project.captureOrigin ??
+          captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
+        assetProducer: assetProducer || null,
+        deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
+        // The policy schema is strict and every dimension is behaviour, so
+        // the whole current policy travels with the one dimension this form
+        // edits — never a partial object that would reset the rest.
+        ...(policyChanged ? {
+          workflowPolicy: { ...currentPolicy, trajectoryAutoOpen, trajectoryClutterDemotion },
+          transitionReason: trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen
+            ? (trajectoryAutoOpen === "visited-rooms"
+              ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
+              : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.")
+            : clutterDemotionReason,
         } : {}),
-      }),
-    });
-    editProjectDialog.close();
-    showToast("Project settings saved");
-    await refreshAll();
-  } catch (error) {
-    byId("editProjectError").textContent = errorMessage(error);
-  }
+      } : {}),
+    }),
+  });
+  editProjectDialog.close();
+  showToast("Project settings saved");
+  await refreshAll();
 }
 
 async function bulkChangeProjectLifecycle(action: "archive" | "restore"): Promise<void> {
@@ -13270,31 +13287,27 @@ async function approveVersion(form: FormData): Promise<void> {
     asset.kind === "poster" &&
     asset.integrity_status === "verified"
   );
-  try {
-    await api(`/api/versions/${version.id}/approve`, {
-      method: "POST",
-      body: JSON.stringify({
-        webAssetId: String(form.get("webAssetId") ?? ""),
-        posterAssetId: verifiedPoster?.id ?? null,
-        visualGrade: String(form.get("visualGrade") ?? "B"),
-        measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
-        privacyStatus: "approved",
-        notes: optionalString(form.get("notes")),
-      }),
-    });
-    qaDialog.close();
-    showToast("Version approved");
-    await refreshAll();
-    // Publication is the natural next act after QA, so the release dialog
-    // opens itself with the reviewed transform evidence pre-selected instead
-    // of making the operator hunt for the publish button. Publishing stays
-    // its own explicit submit: it binds source-to-world evidence, rotation,
-    // and audience, and rollback operates on releases — its receipt cannot
-    // be folded into the QA approval's.
-    await openReleaseDialog();
-  } catch (error) {
-    byId("qaError").textContent = errorMessage(error);
-  }
+  await api(`/api/versions/${version.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      webAssetId: String(form.get("webAssetId") ?? ""),
+      posterAssetId: verifiedPoster?.id ?? null,
+      visualGrade: String(form.get("visualGrade") ?? "B"),
+      measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
+      privacyStatus: "approved",
+      notes: optionalString(form.get("notes")),
+    }),
+  });
+  qaDialog.close();
+  showToast("Version approved");
+  await refreshAll();
+  // Publication is the natural next act after QA, so the release dialog
+  // opens itself with the reviewed transform evidence pre-selected instead
+  // of making the operator hunt for the publish button. Publishing stays
+  // its own explicit submit: it binds source-to-world evidence, rotation,
+  // and audience, and rollback operates on releases — its receipt cannot
+  // be folded into the QA approval's.
+  await openReleaseDialog();
 }
 
 async function openReleaseDialog(): Promise<void> {
@@ -13591,85 +13604,83 @@ async function publishRelease(form: FormData): Promise<void> {
   if (!state.selected) return;
   releaseOperationId ??= crypto.randomUUID();
   const expiresAtValue = optionalString(form.get("expiresAt"));
-  try {
-    const initialCamera = parseReleaseInitialCamera(form);
-    const startingViewQuality = releaseStartingViewQualityReceipt(initialCamera);
-    const sceneRotationDegrees = parseSceneRotationDegrees([
-      form.get("sceneRotationX"),
-      form.get("sceneRotationY"),
-      form.get("sceneRotationZ"),
-    ]);
-    const sourceToWorld = parseReleaseSourceToWorld(form);
-    if (sceneRotationDegrees && sourceToWorld) {
-      throw new Error(
-        "Use either visual scene rotation or reviewed source-to-world evidence, not both.",
-      );
-    }
-    const sourceToWorldEvidenceId = sourceToWorld
-      ? String(form.get("sourceToWorldEvidenceId") ?? "")
-      : null;
-    if (sourceToWorld && !sourceToWorldEvidenceId) {
-      throw new Error(
-        "Choose an accepted semantic extraction that proves the release transform.",
-      );
-    }
-    const navigationWorldUnit = state.spatial?.navigationProfile.worldUnit ?? "metres";
-    if (sourceToWorld && sourceToWorld.worldUnit !== navigationWorldUnit) {
-      throw new Error(
-        `Tune the navigation agent to ${
-          sourceToWorld.worldUnit === "scene_units"
-            ? "Provisional scene units (SU)"
-            : "Metric metres"
-        } before publishing this transform.`,
-      );
-    }
-    const accessPolicy = String(form.get("accessPolicy") ?? "token");
-    // Open exposure is a deliberate act, never a dialog default: anyone with
-    // the link (public and unlisted alike) walks the scene with no credential.
-    if (accessPolicy === "public" || accessPolicy === "unlisted") {
-      const confirmed = await confirmPublicationDecision({
-        title: accessPolicy === "public" ? "Publish publicly?" : "Publish unlisted?",
-        message: "Anyone with the link will enter this scene with no credential. " +
-          "Choose Access token instead to gate it behind a shareable secret link.",
-        confirmLabel: accessPolicy === "public" ? "Make it public" : "Publish unlisted",
-      });
-      if (!confirmed) return;
-    }
-    const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
-      `/api/projects/${state.selected.project.id}/releases`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          clientOperationId: releaseOperationId,
-          slug: String(form.get("slug") ?? ""),
-          accessPolicy,
-          expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
-          ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
-          ...(startingViewQuality ? { startingViewQuality } : {}),
-          viewerConfig: {
-            title: String(form.get("title") ?? state.selected.project.name),
-            subtitle: optionalString(form.get("subtitle")),
-            captureDate: optionalString(form.get("captureDate")),
-            measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
-            splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
-            defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
-            ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
-            ...(sourceToWorld ? { sourceToWorld } : {}),
-            ...(initialCamera ? { initialCamera } : {}),
-          },
-        }),
-      },
+  const initialCamera = parseReleaseInitialCamera(form);
+  const startingViewQuality = releaseStartingViewQualityReceipt(initialCamera);
+  const sceneRotationDegrees = parseSceneRotationDegrees([
+    form.get("sceneRotationX"),
+    form.get("sceneRotationY"),
+    form.get("sceneRotationZ"),
+  ]);
+  const sourceToWorld = parseReleaseSourceToWorld(form);
+  if (sceneRotationDegrees && sourceToWorld) {
+    throw new Error(
+      "Use either visual scene rotation or reviewed source-to-world evidence, not both.",
     );
-    releaseDialog.close();
-    releaseOperationId = null;
-    const access = result.release.accessToken ? `${result.release.url}?access_token=${encodeURIComponent(result.release.accessToken)}` : result.release.url;
-    showNotice(`Published: ${access}`, "success");
-    await navigator.clipboard.writeText(access).catch(() => undefined);
-    showToast("Release published; link copied");
-    await refreshAll();
-  } catch (error) {
-    byId("releaseError").textContent = errorMessage(error);
   }
+  const sourceToWorldEvidenceId = sourceToWorld
+    ? String(form.get("sourceToWorldEvidenceId") ?? "")
+    : null;
+  if (sourceToWorld && !sourceToWorldEvidenceId) {
+    throw new Error(
+      "Choose an accepted semantic extraction that proves the release transform.",
+    );
+  }
+  const navigationWorldUnit = state.spatial?.navigationProfile.worldUnit ?? "metres";
+  if (sourceToWorld && sourceToWorld.worldUnit !== navigationWorldUnit) {
+    throw new Error(
+      `Tune the navigation agent to ${
+        sourceToWorld.worldUnit === "scene_units"
+          ? "Provisional scene units (SU)"
+          : "Metric metres"
+      } before publishing this transform.`,
+    );
+  }
+  const accessPolicy = String(form.get("accessPolicy") ?? "token");
+  // Open exposure is a deliberate act, never a dialog default: anyone with
+  // the link (public and unlisted alike) walks the scene with no credential.
+  if (accessPolicy === "public" || accessPolicy === "unlisted") {
+    const confirmed = await confirmPublicationDecision({
+      title: accessPolicy === "public" ? "Publish publicly?" : "Publish unlisted?",
+      message: "Anyone with the link will enter this scene with no credential. " +
+        "Choose Access token instead to gate it behind a shareable secret link.",
+      confirmLabel: accessPolicy === "public" ? "Make it public" : "Publish unlisted",
+    });
+    if (!confirmed) return;
+  }
+  const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
+    `/api/projects/${state.selected.project.id}/releases`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: releaseOperationId,
+        slug: String(form.get("slug") ?? ""),
+        accessPolicy,
+        expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
+        ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
+        ...(startingViewQuality ? { startingViewQuality } : {}),
+        viewerConfig: {
+          title: String(form.get("title") ?? state.selected.project.name),
+          subtitle: optionalString(form.get("subtitle")),
+          captureDate: optionalString(form.get("captureDate")),
+          measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
+          splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
+          defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
+          ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
+          ...(sourceToWorld ? { sourceToWorld } : {}),
+          ...(initialCamera ? { initialCamera } : {}),
+        },
+      }),
+    },
+  );
+  releaseDialog.close();
+  releaseOperationId = null;
+  const access = result.release.accessToken
+    ? `${result.release.url}?access_token=${encodeURIComponent(result.release.accessToken)}`
+    : result.release.url;
+  showNotice(`Published: ${access}`, "success");
+  await navigator.clipboard.writeText(access).catch(() => undefined);
+  showToast("Release published; link copied");
+  await refreshAll();
 }
 
 function reviewedSemanticSourceToWorld(): Array<{

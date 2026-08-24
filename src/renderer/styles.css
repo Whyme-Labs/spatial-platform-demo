@@ -484,7 +484,7 @@ button {
   position: absolute;
   bottom: 8px;
   color: rgb(255 255 255 / 48%);
-  font: 600 0.58rem/1 "IBM Plex Mono", ui-monospace, monospace;
+  font: 600 0.75rem/1 "IBM Plex Mono", ui-monospace, monospace;
   letter-spacing: 0.14em;
 }
 
@@ -501,7 +501,7 @@ button {
   border-radius: 999px;
   background: rgb(13 17 19 / 58%);
   color: #dce2dc;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   pointer-events: none;
   backdrop-filter: blur(12px);
 }
@@ -611,12 +611,12 @@ button {
 @media (any-pointer: coarse) and (max-width: 360px) {
   .spark-controls button {
     padding: 0 9px;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
 
   .spark-runtime {
     padding: 0 9px;
-    font-size: 0.68rem;
+    font-size: 0.75rem;
   }
 
 }

@@ -794,6 +794,16 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   )).toBe("navigator");
   await page.locator("#closeNavigator").click();
   await expect(page.locator("#reviewPanel")).toBeVisible();
+  const reviewTextFloor = await page.locator(
+    "#reviewPanel label:visible, #reviewPanel .scene-review-activity:visible",
+  ).evaluateAll((elements) => elements.map((element) => ({
+    text: element.textContent?.trim() ?? "",
+    fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+  })));
+  expect(reviewTextFloor.length).toBeGreaterThan(0);
+  for (const item of reviewTextFloor) {
+    expect(item.fontSize, item.text).toBeGreaterThanOrEqual(12);
+  }
   const reviewSafeArea = await page.locator("#reviewPanel").evaluate((panel) => {
     const bounds = panel.getBoundingClientRect();
     return { right: bounds.right, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };

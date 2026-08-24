@@ -26,6 +26,7 @@ import type {
   RendererOverlayLayoutMessage,
   RendererOverlayModeMessage,
 } from "../shared/overlay-layout";
+import { isRendererOverlayLayoutMessage } from "../shared/overlay-layout";
 import "./styles/viewer-entry.css";
 
 const VIEWER_MOVEMENT_KEYS = new Set([
@@ -677,42 +678,33 @@ function isSpatialRendererMessage(value: unknown): value is SpatialRendererMessa
   if (!value || typeof value !== "object") return false;
   const source = Reflect.get(value, "source");
   const type = Reflect.get(value, "type");
-  return source === "spatial-spark" &&
-    (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
+  if (source !== "spatial-spark") return false;
+  if (type === "overlay-layout") return isRendererOverlayLayoutMessage(value);
+  return (type === "progress" || type === "ready" || type === "error" || type === "camera" ||
       type === "camera-update" || type === "camera-set" || type === "control-mode" ||
       type === "control-help" || type === "heartbeat" || type === "movement-blocked" ||
-      type === "overlay-layout" ||
       type === "authored-traversal-state" || type === "dynamic-barrier-state");
 }
 
 function applyRendererOverlayLayout(message: RendererOverlayLayoutMessage): void {
-  const width = finiteOverlayDimension(message.viewport.width, innerWidth);
   const height = finiteOverlayDimension(message.viewport.height, innerHeight);
   const chrome = [message.zones.toolbar, message.zones.status, message.zones.help]
     .filter(validOverlayRect);
   let topReserved = 0;
   let bottomReserved = 0;
-  let rightReserved = 0;
   for (const rect of chrome) {
     if ((rect.top + rect.bottom) / 2 < height / 2) topReserved = Math.max(topReserved, rect.bottom);
     else bottomReserved = Math.max(bottomReserved, height - rect.top);
-    rightReserved = Math.max(rightReserved, width - rect.left);
   }
   const movement = [message.zones.movement, message.zones.altitude].filter(validOverlayRect);
-  let leftReserved = 0;
   for (const rect of movement) {
     bottomReserved = Math.max(bottomReserved, height - rect.top);
-    leftReserved = Math.max(leftReserved, rect.right);
   }
   topReserved = Math.min(height, Math.max(0, topReserved));
   bottomReserved = Math.min(height, Math.max(0, bottomReserved));
-  leftReserved = Math.min(width, Math.max(0, leftReserved));
-  rightReserved = Math.min(width, Math.max(0, rightReserved));
   const viewport = byId<HTMLElement>("viewport");
   viewport.style.setProperty("--renderer-top-reserved", `${Math.ceil(topReserved)}px`);
   viewport.style.setProperty("--renderer-bottom-reserved", `${Math.ceil(bottomReserved)}px`);
-  viewport.style.setProperty("--renderer-left-reserved", `${Math.ceil(leftReserved)}px`);
-  viewport.style.setProperty("--renderer-right-reserved", `${Math.ceil(rightReserved)}px`);
 }
 
 function finiteOverlayDimension(value: number, fallback: number): number {
