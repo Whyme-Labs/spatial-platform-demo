@@ -7,15 +7,37 @@ colors:
   accent-ink: "#11150b"
   field-black: "#0d0f0e"
   work-surface: "#101210"
+  select-surface: "#101210"
+  file-input-surface: "#101210"
   field-panel: "#151815"
   field-glass: "rgba(19, 22, 20, 0.88)"
   control-surface: "#0f120f"
+  control-surface-deep: "#0f110f"
+  utility-card-surface: "#0f110f"
+  raised-surface: "#111311"
+  inset-surface: "#0e100f"
+  dialog-chrome-surface: "#101310"
+  popover-surface: "#0b0d0c"
+  code-surface: "#0b0d0c"
+  select-option-surface: "#151915"
+  surface-tint-subtle: "rgba(255, 255, 255, 0.018)"
   archive-ivory: "#f4efe1"
   evidence-muted: "#aaa99e"
+  field-label: "#c4c9c1"
+  placeholder-text: "#858b83"
   field-line: "rgba(244, 239, 225, 0.13)"
   field-line-strong: "rgba(244, 239, 225, 0.24)"
   verified-mint: "#8ecbb7"
   decision-clay: "#cf775d"
+  decision-border: "rgba(207, 119, 93, 0.42)"
+  state-clay-border: "rgba(207, 119, 93, 0.38)"
+  state-mint-border: "rgba(142, 203, 183, 0.38)"
+  state-lime-border: "rgba(214, 255, 75, 0.38)"
+  focus-border: "rgba(212, 255, 88, 0.72)"
+  focus-halo: "rgba(212, 255, 88, 0.10)"
+  focus-border-quiet: "rgba(212, 255, 88, 0.60)"
+  focus-halo-quiet: "rgba(212, 255, 88, 0.08)"
+  active-step-surface: "rgba(212, 255, 88, 0.08)"
   daylight-paper: "#eef0ec"
   daylight-surface: "#e4e7e2"
   daylight-surface-strong: "#d9ddd7"
@@ -206,7 +228,7 @@ The palette pairs survey-marker lime with warm mineral neutrals, then assigns mi
 
 **The Two Light Conditions Rule.** Public storytelling uses the daylight palette; production work and immersive viewing use the field-dark palette. Preserve the shared typography, lime signal, warm neutrals, and linework instead of forcing both contexts into one background.
 
-**The Evidence Color Rule.** Lime means active or next, mint means verified or complete, and clay means attention or blocked. Never use these three colors interchangeably.
+**The Evidence Color Rule.** Lime means active or next, mint means verified or complete, and clay means attention or blocked. Never use these three colors interchangeably. Repeated control, nested, navigation, field-label, focus, and decision-boundary roles resolve through shared semantic tokens; geometry and evidence visualizations may retain local colors.
 
 **The Signal Rarity Rule.** Give Survey Lime to the single consequential action, active path, or focal proof surface in a region; equal lime emphasis across neighboring controls destroys its meaning.
 

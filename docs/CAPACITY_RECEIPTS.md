@@ -863,8 +863,8 @@ renderer changes.
 
 Last measured: 2026-08-25
 
-Source baseline: `6eae367`, with the issue #83 route-audit and marketing-image
-hydration changes in the measured worktree. The client chunks below carry
+Source baseline: `16f6a31`, with the issue #84 semantic-token changes in the
+measured worktree. The client chunks below carry
 their own SHA-256 identities in `config/frontend-route-receipts.json`.
 
 Reproduce the production-bundle receipt and enforce its structural tripwires
@@ -885,12 +885,12 @@ frontend totals; their only job is to carry both viewer routes through the real
 
 | Route | Frontend encoded body | Frontend transferred | FCP | Route ready | Renderer first frame |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Signed-out Studio | 205,067 B | 206,341 B | 116 ms | 169 ms | n/a |
-| Authenticated portfolio | 205,067 B | 206,341 B | 40 ms | 82 ms | n/a |
-| First private preview | 3,333,015 B | 3,334,647 B | 44 ms | 901 ms | 152 ms |
-| First published viewer frame | 3,333,015 B | 3,334,647 B | 44 ms | 874 ms | 95 ms |
+| Signed-out Studio | 205,362 B | 206,636 B | 72 ms | 119 ms | n/a |
+| Authenticated portfolio | 205,362 B | 206,636 B | 44 ms | 84 ms | n/a |
+| First private preview | 3,333,235 B | 3,334,867 B | 40 ms | 918 ms | 155 ms |
+| First published viewer frame | 3,333,235 B | 3,334,867 B | 40 ms | 896 ms | 104 ms |
 
-The Studio routes loaded only `studio-jAuhcphL.js`,
+The Studio routes loaded only `studio-4fK_G6fv.js`,
 `action-state-DO3fNd-u.js`, and `world-units-SLVxYD65.js`. Each viewer route
 also loaded the real renderer, physical-navigation, Detour, and Recast
 compatibility chunks before `ready`. The exact filenames, raw byte counts,

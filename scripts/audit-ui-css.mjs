@@ -16,11 +16,45 @@ const runtimeCustomProperties = new Set([
 ]);
 const coreStudioFamily = /\.(?:studio-shell|studio-grid|studio-sidebar|studio-nav(?:-advanced)?|project-(?:navigation(?:-primary)?|journey-nav|section-nav|section-picker|expert-navigation)|dialog-card|dialog-shell(?:-[\w-]+)?|record-(?:row|primary|status|evidence|actions))\b/;
 const feedbackBase = /^\.(?:form-error|field-message|action-feedback)(?::|$)/;
+const migratedStudioColorLiterals = new Map([
+  ["#0f120f", "--control-surface"],
+  ["#111311", "--raised-surface"],
+  ["#0e100f", "--inset-surface"],
+  ["#101310", "--dialog-chrome-surface"],
+  ["#151915", "--select-option-surface"],
+  ["#c4c9c1", "--field-label"],
+  ["#858b83", "--placeholder-text"],
+  ["rgba(255,255,255,.018)", "--surface-tint-subtle"],
+  ["rgba(207,119,93,.42)", "--decision-border"],
+  ["rgba(207,119,93,.38)", "--state-clay-border"],
+  ["rgba(142,203,183,.38)", "--state-mint-border"],
+  ["rgba(214,255,75,.38)", "--state-lime-border"],
+  ["rgba(212,255,88,.72)", "--focus-border"],
+  ["rgba(212,255,88,.1)", "--focus-halo"],
+  ["rgba(212,255,88,.6)", "--focus-border-quiet"],
+]);
+const ambiguousMigratedStudioColorLiterals = new Map([
+  ["#101210", ["--work-surface", "--select-surface", "--file-input-surface"]],
+  ["#0f110f", ["--control-surface-deep", "--utility-card-surface"]],
+  ["#0b0d0c", ["--popover-surface", "--code-surface"]],
+  ["rgba(212,255,88,.08)", ["--focus-halo-quiet", "--active-step-surface"]],
+]);
 const errors = [];
 const reports = [];
 const definitions = new Set();
 const uses = new Set();
 const selectorInventory = new Set();
+
+function migratedStudioColorFindings(value) {
+  const colors = value.match(/#[0-9a-f]{3,8}(?![0-9a-f])|rgba?\([^)]*\)/gi) ?? [];
+  return colors.flatMap((color) => {
+    const literal = color.replaceAll(/\s+/g, "").toLowerCase();
+    const token = migratedStudioColorLiterals.get(literal);
+    if (token) return [{ literal, tokens: [token] }];
+    const tokens = ambiguousMigratedStudioColorLiterals.get(literal);
+    return tokens ? [{ literal, tokens }] : [];
+  });
+}
 
 function parse(fileName) {
   const absolutePath = path.join(stylesDirectory, fileName);
@@ -155,6 +189,14 @@ for (const owner of owners) {
     declarationCount += 1;
     if (declaration.prop.startsWith("--")) definitions.add(declaration.prop);
     for (const match of declaration.value.matchAll(/var\((--[\w-]+)/g)) uses.add(match[1]);
+    if (owner === "studio" || owner === "primitives") {
+      for (const { literal, tokens } of migratedStudioColorFindings(declaration.value)) {
+        if (owner === "primitives" && tokens.includes(declaration.prop)) continue;
+        errors.push(
+          `${fileName}:${declaration.source.start.line}: reintroduced semantic color literal ${literal}; use ${tokens.map((token) => `var(${token})`).join(" or ")}`,
+        );
+      }
+    }
 
     if (declaration.important) {
       importantCount += 1;
@@ -206,6 +248,15 @@ for (const owner of owners) {
     selectors: selectorCount,
     declarations: declarationCount,
     important: importantCount,
+  });
+}
+
+if (process.argv.includes("--negative-fixture")) {
+  const fixture = postcss.parse(".negative-fixture{background:#101210;color:#858b83;box-shadow:0 0 0 3px rgba(212,255,88,.08)}");
+  fixture.walkDecls((declaration) => {
+    for (const { literal, tokens } of migratedStudioColorFindings(declaration.value)) {
+      errors.push(`negative-fixture: reintroduced semantic color literal ${literal}; use ${tokens.map((token) => `var(${token})`).join(" or ")}`);
+    }
   });
 }
 

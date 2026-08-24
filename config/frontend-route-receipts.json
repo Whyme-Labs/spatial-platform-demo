@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-08-24T20:17:23.994Z",
+  "measuredAt": "2026-08-24T20:40:17.404Z",
   "environment": {
     "node": "v22.23.0",
     "platform": "darwin-arm64",
@@ -13,13 +13,13 @@
   "derivation": "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. Route bytes and timings are receipts, not CI limits.",
   "routes": {
     "signed-out-studio": {
-      "measuredFrontendEncodedBodyBytes": 205067,
-      "measuredFrontendTransferredBytes": 206341,
+      "measuredFrontendEncodedBodyBytes": 205362,
+      "measuredFrontendTransferredBytes": 206636,
       "maxForbiddenChunkCount": 0,
       "maxUnexpectedMarketingAssetCount": null,
       "measuredChunks": [
         "action-state-DO3fNd-u.js",
-        "studio-jAuhcphL.js",
+        "studio-Be8b4HEe.js",
         "world-units-SLVxYD65.js"
       ],
       "measuredChunkIdentities": [
@@ -30,9 +30,9 @@
           "rawBytes": 14324
         },
         {
-          "name": "studio-jAuhcphL.js",
+          "name": "studio-Be8b4HEe.js",
           "role": "shell-shared",
-          "sha256": "ec4f7acd75d7e3e4a3e6def848dbea9eecfaa6d6c1dc8c45056fd4d384552a10",
+          "sha256": "8f8f2bff28cfa571d88f84735a051f126110d14acd4b77973c0551ece0d5e82e",
           "rawBytes": 343924
         },
         {
@@ -44,19 +44,19 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 116,
+        "firstContentfulPaintMs": 72,
         "rendererReady": null,
-        "readyAtMs": 169
+        "readyAtMs": 119
       }
     },
     "authenticated-portfolio": {
-      "measuredFrontendEncodedBodyBytes": 205067,
-      "measuredFrontendTransferredBytes": 206341,
+      "measuredFrontendEncodedBodyBytes": 205362,
+      "measuredFrontendTransferredBytes": 206636,
       "maxForbiddenChunkCount": 0,
       "maxUnexpectedMarketingAssetCount": null,
       "measuredChunks": [
         "action-state-DO3fNd-u.js",
-        "studio-jAuhcphL.js",
+        "studio-Be8b4HEe.js",
         "world-units-SLVxYD65.js"
       ],
       "measuredChunkIdentities": [
@@ -67,10 +67,75 @@
           "rawBytes": 14324
         },
         {
-          "name": "studio-jAuhcphL.js",
+          "name": "studio-Be8b4HEe.js",
           "role": "shell-shared",
-          "sha256": "ec4f7acd75d7e3e4a3e6def848dbea9eecfaa6d6c1dc8c45056fd4d384552a10",
+          "sha256": "8f8f2bff28cfa571d88f84735a051f126110d14acd4b77973c0551ece0d5e82e",
           "rawBytes": 343924
+        },
+        {
+          "name": "world-units-SLVxYD65.js",
+          "role": "shell-shared",
+          "sha256": "6b957d8c9791662507651fb01f148a252959c63b666cc2ebd9195463e7faefec",
+          "rawBytes": 9135
+        }
+      ],
+      "measuredUnexpectedMarketingAssets": [],
+      "measuredTiming": {
+        "firstContentfulPaintMs": 44,
+        "rendererReady": null,
+        "readyAtMs": 84
+      }
+    },
+    "private-preview-first-frame": {
+      "measuredFrontendEncodedBodyBytes": 3333235,
+      "measuredFrontendTransferredBytes": 3334867,
+      "maxForbiddenChunkCount": null,
+      "maxUnexpectedMarketingAssetCount": 0,
+      "measuredChunks": [
+        "action-state-DO3fNd-u.js",
+        "detour-navigation-CsY3FsVs.js",
+        "physical-navigation-C4gWyve0.js",
+        "recast-navigation.wasm-compat-BWLobtMG.js",
+        "renderer-5HDDm7ya.js",
+        "viewer-B2bbFwK9.js",
+        "world-units-SLVxYD65.js"
+      ],
+      "measuredChunkIdentities": [
+        {
+          "name": "action-state-DO3fNd-u.js",
+          "role": "shell-shared",
+          "sha256": "d47449ea50442659859407cea384fa54085584f9780d1117496c5bdca82a2eea",
+          "rawBytes": 14324
+        },
+        {
+          "name": "detour-navigation-CsY3FsVs.js",
+          "role": "renderer-navigation",
+          "sha256": "7efc52b03c2d384737a0a97c80a1e787e73157fc54ad6310060dd511ae54c3c7",
+          "rawBytes": 29312
+        },
+        {
+          "name": "physical-navigation-C4gWyve0.js",
+          "role": "renderer-navigation",
+          "sha256": "b60e40ead10d42935d8b256d43c94b58f10bb55f7cc24a41cd8bcbeb430023c4",
+          "rawBytes": 2912645
+        },
+        {
+          "name": "recast-navigation.wasm-compat-BWLobtMG.js",
+          "role": "renderer-navigation",
+          "sha256": "bcbf4af32b81222fd1eea265bcdf4f345200fc8d78743743a2d4d7e4af3fcceb",
+          "rawBytes": 726354
+        },
+        {
+          "name": "renderer-5HDDm7ya.js",
+          "role": "renderer-navigation",
+          "sha256": "6608595ad196d1b1fa8cb59bdd8d2ee1086e707d19dd2124569dd34cfd4c0cf0",
+          "rawBytes": 5525218
+        },
+        {
+          "name": "viewer-B2bbFwK9.js",
+          "role": "shell-shared",
+          "sha256": "9a79ee3fb20fda64fbb7c07981ae66acb613771c7bb7bf6ee4306a24639291b4",
+          "rawBytes": 39444
         },
         {
           "name": "world-units-SLVxYD65.js",
@@ -82,87 +147,22 @@
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
         "firstContentfulPaintMs": 40,
-        "rendererReady": null,
-        "readyAtMs": 82
-      }
-    },
-    "private-preview-first-frame": {
-      "measuredFrontendEncodedBodyBytes": 3333015,
-      "measuredFrontendTransferredBytes": 3334647,
-      "maxForbiddenChunkCount": null,
-      "maxUnexpectedMarketingAssetCount": 0,
-      "measuredChunks": [
-        "action-state-DO3fNd-u.js",
-        "detour-navigation-CsY3FsVs.js",
-        "physical-navigation-C4gWyve0.js",
-        "recast-navigation.wasm-compat-BWLobtMG.js",
-        "renderer-5HDDm7ya.js",
-        "viewer-BxbEkF_g.js",
-        "world-units-SLVxYD65.js"
-      ],
-      "measuredChunkIdentities": [
-        {
-          "name": "action-state-DO3fNd-u.js",
-          "role": "shell-shared",
-          "sha256": "d47449ea50442659859407cea384fa54085584f9780d1117496c5bdca82a2eea",
-          "rawBytes": 14324
-        },
-        {
-          "name": "detour-navigation-CsY3FsVs.js",
-          "role": "renderer-navigation",
-          "sha256": "7efc52b03c2d384737a0a97c80a1e787e73157fc54ad6310060dd511ae54c3c7",
-          "rawBytes": 29312
-        },
-        {
-          "name": "physical-navigation-C4gWyve0.js",
-          "role": "renderer-navigation",
-          "sha256": "b60e40ead10d42935d8b256d43c94b58f10bb55f7cc24a41cd8bcbeb430023c4",
-          "rawBytes": 2912645
-        },
-        {
-          "name": "recast-navigation.wasm-compat-BWLobtMG.js",
-          "role": "renderer-navigation",
-          "sha256": "bcbf4af32b81222fd1eea265bcdf4f345200fc8d78743743a2d4d7e4af3fcceb",
-          "rawBytes": 726354
-        },
-        {
-          "name": "renderer-5HDDm7ya.js",
-          "role": "renderer-navigation",
-          "sha256": "6608595ad196d1b1fa8cb59bdd8d2ee1086e707d19dd2124569dd34cfd4c0cf0",
-          "rawBytes": 5525218
-        },
-        {
-          "name": "viewer-BxbEkF_g.js",
-          "role": "shell-shared",
-          "sha256": "45e6607b16097d2517822c7a5de72cab47a7c1867695d3f35ed687f65bc8e70a",
-          "rawBytes": 39444
-        },
-        {
-          "name": "world-units-SLVxYD65.js",
-          "role": "shell-shared",
-          "sha256": "6b957d8c9791662507651fb01f148a252959c63b666cc2ebd9195463e7faefec",
-          "rawBytes": 9135
-        }
-      ],
-      "measuredUnexpectedMarketingAssets": [],
-      "measuredTiming": {
-        "firstContentfulPaintMs": 44,
         "rendererReady": {
-          "atMs": 504.5,
+          "atMs": 555.1000000238419,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 152,
+          "timeToFirstFrameMs": 155,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 901
+        "readyAtMs": 918
       }
     },
     "published-viewer-first-frame": {
-      "measuredFrontendEncodedBodyBytes": 3333015,
-      "measuredFrontendTransferredBytes": 3334647,
+      "measuredFrontendEncodedBodyBytes": 3333235,
+      "measuredFrontendTransferredBytes": 3334867,
       "maxForbiddenChunkCount": null,
       "maxUnexpectedMarketingAssetCount": 0,
       "measuredChunks": [
@@ -171,7 +171,7 @@
         "physical-navigation-C4gWyve0.js",
         "recast-navigation.wasm-compat-BWLobtMG.js",
         "renderer-5HDDm7ya.js",
-        "viewer-BxbEkF_g.js",
+        "viewer-B2bbFwK9.js",
         "world-units-SLVxYD65.js"
       ],
       "measuredChunkIdentities": [
@@ -206,9 +206,9 @@
           "rawBytes": 5525218
         },
         {
-          "name": "viewer-BxbEkF_g.js",
+          "name": "viewer-B2bbFwK9.js",
           "role": "shell-shared",
-          "sha256": "45e6607b16097d2517822c7a5de72cab47a7c1867695d3f35ed687f65bc8e70a",
+          "sha256": "9a79ee3fb20fda64fbb7c07981ae66acb613771c7bb7bf6ee4306a24639291b4",
           "rawBytes": 39444
         },
         {
@@ -220,18 +220,18 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 44,
+        "firstContentfulPaintMs": 40,
         "rendererReady": {
-          "atMs": 442.60000002384186,
+          "atMs": 492.89999997615814,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 95,
+          "timeToFirstFrameMs": 104,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 874
+        "readyAtMs": 896
       }
     }
   }
