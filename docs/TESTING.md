@@ -88,6 +88,11 @@ viewports. It fails when:
 - the project command grid does not collapse at the mobile breakpoint;
 - OTP submission sends duplicate requests or omits pending, failure and retry states.
 
+The authenticated Studio shell also sweeps widths 1280, 1100, 1024, 961 and
+960. At every width, the active Projects or Processing activity workspace must
+own the grid's only track. The gate also rejects page-level horizontal overflow
+masking so a clipped component cannot make the document-width check pass.
+
 ## Production gate
 
 `npm run check` runs:

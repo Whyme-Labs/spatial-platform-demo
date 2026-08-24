@@ -1,3 +1,10 @@
+import {
+  actionFailureMessage,
+  clearActionFeedback,
+  describeActionFailure,
+  showActionFailure,
+} from "./feedback";
+
 export class SingleFlight {
   private readonly active = new Map<string, Promise<unknown>>();
 
@@ -53,7 +60,12 @@ export function runAction<T>(
     if (!options.errorTarget && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("spatial-action-start"));
     }
-    if (options.errorTarget) options.errorTarget.textContent = "";
+    if (options.errorTarget) {
+      clearActionFeedback(options.errorTarget, {
+        trigger: options.trigger,
+        form: options.form,
+      });
+    }
     options.trigger.textContent = options.pendingLabel;
     options.trigger.classList.add("is-pending");
     options.trigger.setAttribute("aria-busy", "true");
@@ -63,12 +75,18 @@ export function runAction<T>(
     try {
       return await task();
     } catch (error) {
-      const message = actionErrorMessage(error);
       if (options.errorTarget) {
-        options.errorTarget.textContent = message;
+        showActionFailure(options.errorTarget, error, {
+          trigger: options.trigger,
+          form: options.form,
+        });
       } else if (typeof window !== "undefined") {
+        const failure = describeActionFailure(error);
         window.dispatchEvent(new CustomEvent("spatial-action-error", {
-          detail: { message },
+          detail: {
+            ...failure,
+            message: actionFailureMessage(error),
+          },
         }));
       }
       return undefined;
@@ -85,11 +103,6 @@ export function runAction<T>(
       }
     }
   });
-}
-
-function actionErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) return error.message;
-  return "The action could not be completed. Review the connection and retry.";
 }
 
 function uniqueControls(

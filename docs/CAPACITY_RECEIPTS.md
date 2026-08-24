@@ -1,6 +1,75 @@
 # Capacity receipts
 
-Last measured: 2026-08-13
+Last measured: 2026-08-24
+
+## Frontend CSS ownership receipt
+
+Last measured: 2026-08-24
+
+The UI audit baseline was measured from `styles.css` at commit `0d20ec1`
+with a PostCSS AST inventory:
+
+| Source | Bytes | Lines | Rules | Selectors | Declarations | `!important` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| mixed baseline | 160,868 | 3,757 | 1,450 | 1,666 | 4,655 | 24 |
+| owned sources | 141,464 | 3,665 | 1,313 | 1,460 | 4,080 | 15 |
+| measured change | -19,404 | -92 | -137 | -206 | -575 | -9 |
+
+The reduction is a receipt, not a target. It came from deleting source-proved
+dead prototype families, consolidating the authoritative shell/feedback/
+record/dialog contracts, and removing accidental important declarations.
+The remaining important declarations are limited to hidden and screen-reader
+content, reduced motion, and forced-color focus/state handling.
+
+Reproduce the owned-source measurement and enforce the ownership contract from
+the repository root:
+
+```bash
+npm run audit:css -- --json
+```
+
+The command fails for unlayered rules, a changed entry graph, cross-owner core
+selectors, duplicate selector/property declarations in one condition,
+undefined static custom properties, ID selectors, page-root overflow masks,
+unscoped viewer rules, or important declarations outside accessibility
+exceptions. Re-run the browser UI matrix whenever a rule moves between owners;
+a lower byte count alone is not evidence that the migration preserved layout.
+
+## Responsive visual-baseline receipt
+
+Last measured: 2026-08-24
+
+`npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
+1,551,351 bytes against `e2e/visual-baselines.sha256`. The images were
+generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
+digest
+`sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
+the Ubuntu/Chromium environment pinned for baseline review and matched by the
+CI browser job.
+
+Twenty images are the paired populated-Studio and ready-viewer matrix at the
+ten supported viewports. Nine state images cover Studio session loading,
+empty projects, 100 records, pending plus completed processing, inline
+validation, a short-height long error, viewer loading, access failure, and the
+short-landscape navigator. The long fixtures use the contract maxima of 120
+characters for project/viewer titles, 255 characters for upload filenames, and
+80 characters for release slugs.
+
+The pixel-by-pixel Studio transition receipt is produced by:
+
+```bash
+npx playwright test e2e/ui-quality.spec.ts \
+  --grep 'every critical transition pixel'
+```
+
+It measures every integer viewport width from 945 through 1110 px and attaches
+`studio-transition-corridor.json` to the Playwright report. Each row records
+shell tracks, Studio-grid width, active-workspace width, and sidebar width.
+The gate verifies root overflow ownership, exact one-track/two-track mode,
+active-workspace equality with its grid, primary-workspace dominance over the
+navigation rail in side-rail mode, and non-decreasing width inside each mode.
+The width interval is the audit's prescribed critical corridor, not a runtime
+capacity limit.
 
 ## Staging lifecycle canary budgets
 
@@ -717,6 +786,32 @@ The immutable FJD LAS replay receipt is recorded in
 its selected floor has an 85-cell clear component against the production
 32-cell requirement, while the ceiling is rejected for zero wall support.
 
+## Studio project-canvas width
+
+Last measured: 2026-08-24
+
+Command:
+
+```bash
+npx playwright test e2e/release-authoring.spec.ts \
+  --grep 'flattened project sections reclaim' --reporter=json
+```
+
+The test opens the authenticated project fixture and measures `#detailBody`.
+It then replays the removed `.output-section` border and responsive padding on
+the same DOM before measuring again. This isolates the width consumed by the
+extra section card without comparing different project data.
+
+| Viewport | Nested section width | Flat section width | Reclaimed width |
+| ---: | ---: | ---: | ---: |
+| 1024 px | 655.53125 px | 698.46875 px | 42.9375 px |
+| 768 px | 698 px | 732 px | 34 px |
+
+The regression requires the flat width to exceed the replayed nested width at
+both viewports. It does not turn either observed width into a minimum or a
+budget. Re-run the receipt when the Studio shell, page padding, or project
+workspace composition changes.
+
 ## Starting-view first-frame quality thresholds
 
 Last measured: 2026-08-19
@@ -756,7 +851,7 @@ renderer changes.
 
 ## Full software-gate receipt
 
-Last measured: 2026-08-13
+Last measured: 2026-08-24
 
 Command:
 
@@ -764,14 +859,14 @@ Command:
 npm run check
 ```
 
-The complete local production gate passed with 369 Worker/domain tests across
-64 vitest files, 92 navigation and migration contracts across 15 node-test
-files, and 93 Playwright scenarios. Instrumented coverage measured 72.01%
-statements, 62.13% branches, 85.65% functions, and 78.41% lines. The same
-command also passed generated types, TypeScript, the action-state audit for 2
-client entry points, the control-wiring audit (150 static and 128 dynamic
-buttons, 22 static and 10 dynamic links, 37 interactive forms, 246 governed
-lifecycle fields), the inventory, production-config, and migration audits, the
+The complete local production gate passed with 451 Worker/domain tests across
+78 Vitest files, 134 navigation and migration contracts across 16 node-test
+files, and 129 Playwright scenarios across 12 browser specs. Instrumented
+coverage measured 72.99% statements, 63.42% branches, 86.18% functions, and
+79.26% lines. The same command also passed generated types, TypeScript, CSS and
+visual-baseline ownership audits, the action-state audit for 2 client entry
+points, the control-wiring audit (151 static and 111 dynamic buttons, 23 static
+and 10 dynamic links, 37 interactive forms, 246 governed lifecycle fields),
+the current user-facing inventory, production-config and migration audits, the
 production build, and a Cloudflare production deployment dry run. Remeasure
-this receipt whenever those reported counts or coverage values are changed in
-readiness documentation.
+this receipt whenever those reported counts or coverage values change.

@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  snapshotPathTemplate: "{testDir}/{testFilePath}-snapshots/{arg}{ext}",
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 2 : 0,
@@ -15,6 +16,8 @@ export default defineConfig({
   ],
   use: {
     baseURL: "http://127.0.0.1:8791",
+    locale: "en-US",
+    timezoneId: "UTC",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "retain-on-failure",

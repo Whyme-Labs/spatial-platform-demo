@@ -62,12 +62,12 @@
 
       <div id="globalNotice" class="notice-card" role="status" aria-live="polite" hidden></div>
 
-      <section id="pendingInvitationsPanel" class="output-section" hidden>
+      <section id="pendingInvitationsPanel" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">ORGANISATION INVITATIONS</span><h2>Organisations waiting for your answer</h2></div>
           <span class="worker-status"><i></i>Explicit consent</span>
         </div>
-        <div id="pendingInvitationList" class="workspace-grid" aria-live="polite">
+        <div id="pendingInvitationList" class="workspace-grid">
           <div class="empty-state">No organisation invitation is awaiting your response.</div>
         </div>
       </section>
@@ -81,25 +81,37 @@
           </div>
           <span id="detailStatus" class="status-pill"></span>
         </div>
+        <div class="project-context-bar" aria-label="Current project task">
+          <dl class="project-context-state">
+            <div><dt>Current stage</dt><dd id="projectCurrentStage"></dd></div>
+            <div><dt>Blocker</dt><dd id="projectCurrentBlocker"></dd></div>
+          </dl>
+          <button id="projectCurrentAction" class="primary-button" type="button"></button>
+        </div>
         <nav class="project-section-nav" aria-label="Project workspace">
           <button id="projectOverviewTab" type="button" data-project-section="overview">Overview</button>
+          <button id="projectProcessTab" type="button" data-project-section="process">Process</button>
           <button id="projectStructureTab" type="button" data-project-section="structure">Structure</button>
           <button id="projectCompareTab" type="button" data-project-section="compare" hidden>Compare</button>
           <button id="projectPublishTab" type="button" data-project-section="publish">Publish</button>
           <button id="projectMeasurementTab" type="button" data-project-section="measurement">Measurement evidence</button>
           <button id="projectExpertTab" type="button" data-project-section="expert">Expert</button>
         </nav>
+        <label class="project-section-picker" for="projectSectionPicker">
+          <span>Project section</span>
+          <select id="projectSectionPicker"></select>
+        </label>
       </section>
 
       <section id="summaryGrid" class="summary-grid" aria-label="Workspace summary">
-        <article class="summary-card"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
-        <article class="summary-card"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
-        <article class="summary-card"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
-        <article class="summary-card accent"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Active projects</span><strong id="activeProjects">-</strong><small>Immutable version history</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Processing queue</span><strong id="processingJobs">-</strong><small>Leased by local or cloud agents</small></article>
+        <article class="summary-card" data-surface-role="record"><span>Hosted assets</span><strong id="hostedAssets">-</strong><small id="hostedBytes">Private R2 storage</small></article>
+        <article class="summary-card accent" data-surface-role="notice"><span>Active releases</span><strong id="activeReleases">-</strong><small>Revocable in one operation</small></article>
       </section>
 
       <section id="studioGrid" class="studio-grid">
-        <div id="projectBoard" class="project-board">
+        <div id="projectBoard" class="project-board" data-surface-role="task">
           <div class="section-heading">
             <div><span class="eyebrow">PROJECTS</span><h2>Current production</h2></div>
             <div class="filter-group">
@@ -165,8 +177,8 @@
               <button id="bulkArchiveProjects" class="danger-button" type="button">Archive selected</button>
             </div>
           </div>
-          <div id="projectTable" class="project-table" aria-live="polite">
-            <div class="empty-state">Sign in to load production projects.</div>
+          <div id="projectTable" class="project-table">
+            <div class="empty-state">Restoring secure project access…</div>
           </div>
           <div id="projectPagination" class="project-pagination" hidden>
             <span id="projectPaginationStatus"></span>
@@ -174,7 +186,7 @@
           </div>
         </div>
 
-        <aside id="queuePanel" class="queue-panel">
+        <aside id="queuePanel" class="queue-panel" data-surface-role="task">
           <div class="section-heading">
             <div><span class="eyebrow">DURABLE JOBS</span><h2>Processing queue</h2></div>
             <span class="worker-status"><i></i>Pull-agent contract</span>
@@ -184,7 +196,7 @@
             <span id="jobPaginationStatus"></span>
             <button id="loadMoreJobs" class="quiet-button" type="button">Load more jobs</button>
           </div>
-          <div class="worker-card">
+          <div class="worker-card" data-surface-role="notice">
             <span>Compute architecture</span>
             <strong>Local RTX now.<br />Elastic workers later.</strong>
             <small>Leases, heartbeats, idempotency keys, attempts and dead-letter states are persisted in D1.</small>
@@ -192,16 +204,27 @@
         </aside>
       </section>
 
-      <section id="projectDetail" class="output-section" tabindex="-1" hidden>
+      <section id="projectDetail" class="output-section project-detail" data-project-workflow="overview" data-surface-role="section" tabindex="-1" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">OVERVIEW</span><h2>Project overview and sharing</h2></div>
+        </div>
         <div id="detailBody" class="project-detail-grid"></div>
       </section>
 
-      <section id="releaseWorkspace" class="output-section" hidden>
+      <section id="processWorkspace" class="output-section" data-project-workflow="process" data-surface-role="section" hidden>
+        <div class="section-heading">
+          <div><span class="eyebrow">PROCESS</span><h2>Processing and qualification</h2></div>
+          <span class="worker-status"><i></i>Project-specific activity</span>
+        </div>
+        <div id="processOverview" class="workspace-grid"></div>
+      </section>
+
+      <section id="releaseWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">RELEASE INVENTORY</span><h2>Published history and active channels</h2></div>
           <span class="worker-status"><i></i>Immutable release records</span>
         </div>
-        <div id="releaseList" class="release-table" aria-live="polite">
+        <div id="releaseList" class="release-table">
           <div class="empty-state">No releases loaded.</div>
         </div>
         <div id="releasePagination" class="list-pagination" hidden>
@@ -210,57 +233,57 @@
         </div>
       </section>
 
-      <section id="reviewWorkspace" class="output-section" hidden>
+      <section id="reviewWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">CLIENT REVIEW</span><h2>Scoped access, anchored feedback, and approval history</h2></div>
           <span class="worker-status"><i></i>Version-aware review</span>
         </div>
-        <div id="reviewInbox" class="workspace-grid" aria-live="polite">
+        <div id="reviewInbox" class="workspace-grid">
           <div class="empty-state">No review projects loaded.</div>
         </div>
       </section>
 
-      <section id="hostingWorkspace" class="output-section" hidden>
+      <section id="hostingWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">COMMERCIAL HOSTING</span><h2>Plans, invoices, storage, renewals, and operational alerts</h2></div>
           <span class="worker-status"><i></i>Lifecycle controlled</span>
         </div>
-        <div id="hostingOverview" class="workspace-grid" aria-live="polite">
+        <div id="hostingOverview" class="workspace-grid">
           <div class="empty-state">No hosting data loaded.</div>
         </div>
       </section>
 
-      <section id="spatialWorkspace" class="output-section" hidden>
+      <section id="spatialWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span id="spatialWorkspaceEyebrow" class="eyebrow">STRUCTURE</span><h2 id="spatialWorkspaceTitle">Review reconstructed rooms and openings</h2></div>
           <span class="worker-status"><i></i>Vendor-neutral semantics</span>
         </div>
-        <div id="spatialOverview" class="workspace-grid" aria-live="polite">
+        <div id="spatialOverview" class="workspace-grid">
           <div class="empty-state">Open a project to author its latest immutable version.</div>
         </div>
       </section>
 
-      <section id="measurementWorkspace" class="output-section" hidden>
+      <section id="measurementWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">MEASURED FLOOR PLAN / SCAN-TO-CAD</span><h2>Tolerances, independent checks, cost evidence, and professional boundaries</h2></div>
           <span class="worker-status"><i></i>Evidence before reliance</span>
         </div>
-        <div id="measurementOverview" class="workspace-grid" aria-live="polite">
+        <div id="measurementOverview" class="workspace-grid">
           <div class="empty-state">Open a project to define its measurement brief.</div>
         </div>
       </section>
 
-      <section id="publishWorkspace" class="output-section" hidden>
+      <section id="publishWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">RELEASE</span><h2>Review and publish</h2></div>
           <span class="worker-status"><i></i>Evidence-gated delivery</span>
         </div>
-        <div id="publishOverview" class="workspace-grid" aria-live="polite">
+        <div id="publishOverview" class="workspace-grid">
           <div class="empty-state">Open a project to review its publication readiness.</div>
         </div>
       </section>
 
-      <section id="teamWorkspace" class="output-section" hidden>
+      <section id="teamWorkspace" class="output-section" data-surface-role="section" hidden>
         <div class="section-heading">
           <div><span class="eyebrow">ORGANISATION ACCESS</span><h2>Members, invitations, roles, and immediate revocation</h2></div>
           <div class="button-cluster">
@@ -269,7 +292,7 @@
             <button id="inviteTeamButton" class="primary-button" type="button">+ Invite teammate</button>
           </div>
         </div>
-        <div id="teamOverview" class="workspace-grid" aria-live="polite">
+        <div id="teamOverview" class="workspace-grid">
           <div class="empty-state">Team access is available to platform administrators.</div>
         </div>
       </section>
@@ -298,7 +321,7 @@
       <div id="enterpriseLoginRegion" class="enterprise-login-region">
         <span class="auth-divider">or</span>
         <button id="enterpriseLoginButton" class="quiet-button wide" type="button">Continue with enterprise SSO</button>
-        <div id="enterpriseProviderChoices" class="enterprise-provider-choices" aria-live="polite"></div>
+        <div id="enterpriseProviderChoices" class="enterprise-provider-choices"></div>
       </div>
       <p id="loginError" class="form-error" role="alert"></p>
     </form>
@@ -320,7 +343,7 @@
         <div class="mock-form-grid">
           <label for="newCaptureName"><span>Scene name</span><input id="newCaptureName" name="name" required minlength="3" maxlength="120" placeholder="Ground floor showroom" /></label>
         </div>
-        <section id="newProjectRequiredInformation" class="custom-field-form-section" aria-live="polite" hidden>
+        <section id="newProjectRequiredInformation" class="custom-field-form-section" hidden>
           <h3>Required organisation information</h3>
           <p>Complete the fields governed by this workspace before uploading.</p>
           <div id="newProjectRequiredCustomFields" class="custom-field-grid"></div>
@@ -333,7 +356,7 @@
             <label><span>Customer contact email</span><input name="customerEmail" type="email" /></label>
             <label class="full"><span>Notes</span><textarea name="notes" maxlength="4000" placeholder="Optional context for the capture or team"></textarea></label>
           </div>
-          <section id="newProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+          <section id="newProjectCustomFields" class="custom-field-form-section"></section>
         </details>
       </section>
       <section class="capture-intake-step" data-capture-intake-step="2" aria-labelledby="captureIntakeFilesTitle" hidden>
@@ -349,7 +372,7 @@
       </section>
       <section class="capture-intake-step" data-capture-intake-step="3" aria-labelledby="captureIntakeReviewTitle" hidden>
         <h3 id="captureIntakeReviewTitle">Review and process</h3>
-        <div id="newCaptureReview" class="capture-intake-review" aria-live="polite"></div>
+        <div id="newCaptureReview" class="capture-intake-review"></div>
         <p class="field-note">The source files remain immutable. Machine-generated structure and walking evidence still require the stage-specific checks shown after processing.</p>
       </section>
       <div class="upload-progress"><i id="newProjectUploadProgress"></i></div>
@@ -380,7 +403,7 @@
   </dialog>
 
   <dialog id="portfolioToolsDialog" class="dialog-card portfolio-dialog">
-    <button class="dialog-close" value="cancel" type="submit">×</button>
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form method="dialog" class="portfolio-dialog-shell">
       <span class="eyebrow">PORTFOLIO OPERATIONS</span>
       <h2>Templates and portable metadata.</h2>
@@ -391,7 +414,7 @@
         <div class="section-heading">
           <div><span class="eyebrow">TEMPLATES</span><h3>Reusable project defaults</h3></div>
         </div>
-        <div id="projectTemplateList" class="compact-record-list" aria-live="polite"></div>
+        <div id="projectTemplateList" class="compact-record-list"></div>
         <div id="projectTemplatePagination" class="list-pagination" hidden>
           <span id="projectTemplatePaginationStatus"></span>
           <button id="loadMoreProjectTemplates" class="quiet-button" type="button">Load more templates</button>
@@ -445,7 +468,7 @@
         <span class="eyebrow">PROJECT SCHEMA</span>
         <h3>Organisation-defined metadata</h3>
         <p>Typed fields are validated by the API and travel with a direct portfolio handoff. Field keys and types remain immutable.</p>
-        <div id="projectFieldList" class="compact-record-list" aria-live="polite"></div>
+        <div id="projectFieldList" class="compact-record-list"></div>
         <form id="projectFieldForm" class="inline-tool-form">
           <input name="fieldId" type="hidden" />
           <div class="mock-form-grid">
@@ -543,7 +566,7 @@
       <section id="captureAgentProjectField" class="capture-agent-project-field">
         <span class="field-label">Assigned projects</span>
         <p>Removing a project stops new parts and completion immediately. Existing immutable R2 objects are not deleted.</p>
-        <div id="captureAgentProjectChoices" class="capture-agent-project-choices" aria-live="polite"></div>
+        <div id="captureAgentProjectChoices" class="capture-agent-project-choices"></div>
       </section>
       <button id="captureAgentSubmit" class="primary-button wide" type="submit">Create scoped token</button>
       <p id="captureAgentError" class="form-error" role="alert"></p>
@@ -551,12 +574,12 @@
   </dialog>
 
   <dialog id="captureAgentTokenDialog" class="dialog-card wide-dialog">
-    <button class="dialog-close" value="cancel" type="submit">×</button>
+    <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form method="dialog">
       <span class="eyebrow">TOKEN ISSUED</span>
       <h2 id="captureAgentTokenTitle">Store this credential now.</h2>
       <p>This token is sufficient only for the assigned project upload APIs. Put it in <code>SPATIAL_CAPTURE_AGENT_TOKEN</code>; never commit it to source control.</p>
-      <label class="full"><span>Capture-agent token</span><textarea id="captureAgentTokenValue" readonly rows="4" spellcheck="false"></textarea></label>
+      <label class="full"><span>Capture-agent token</span><textarea id="captureAgentTokenValue" class="capture-agent-token-value" readonly rows="4" spellcheck="false"></textarea></label>
       <div class="form-actions">
         <button id="copyCaptureAgentToken" class="primary-button" type="button">Copy token</button>
         <button class="quiet-button" value="cancel" type="submit">I stored it safely</button>
@@ -628,7 +651,7 @@
           <div><span class="eyebrow">IMMUTABLE INPUTS</span><h3 id="captureBundleAssetsTitle">Assign evidence roles</h3></div>
         </div>
         <p class="field-note">Only verified assets on the selected version appear. Select an asset, then choose every role it genuinely evidences.</p>
-        <div id="captureBundleAssets" class="capture-bundle-assets" aria-live="polite"></div>
+        <div id="captureBundleAssets" class="capture-bundle-assets"></div>
       </section>
       <section class="capture-bundle-section">
         <span class="eyebrow">COMMERCIAL RIGHTS</span>
@@ -680,7 +703,7 @@
         <p id="editProjectTrajectoryClutterDemotionNote" class="field-note full" hidden>Extraction reads stacked goods as full-height wall. Pass-through evidence only clears what the scanner walked straight through, never the clutter it walked around, which can strand most of the captured floor. The walked options also demote runs standing on ground the scanner was carried over; walked contact reaches furthest and may also clear a real wall the scanner passed close beside. Neither can enlarge the walkable space, because floor is only ever laid under rooms, thresholds, and walked ground.</p>
         <label class="full"><span>Project notes</span><textarea name="notes" maxlength="4000"></textarea></label>
       </div>
-      <section id="editProjectCustomFields" class="custom-field-form-section" aria-live="polite"></section>
+      <section id="editProjectCustomFields" class="custom-field-form-section"></section>
       <button class="primary-button wide" type="submit">Save project settings</button>
       <p id="editProjectError" class="form-error" role="alert"></p>
     </form>
@@ -841,7 +864,7 @@
         <label class="full"><span>Hostname</span><input name="hostname" placeholder="tour.customer.com" required /></label>
       </div>
       <button class="primary-button wide" type="submit">Create verification record</button>
-      <div id="domainInstructions" class="notice-card" hidden></div>
+      <div id="domainInstructions" class="notice-card domain-instructions" hidden></div>
       <section class="domain-inventory-section" aria-labelledby="domainInventoryTitle">
         <div class="workspace-section-heading">
           <div>
@@ -849,7 +872,7 @@
             <h3 id="domainInventoryTitle">Registered domains</h3>
           </div>
         </div>
-        <div id="domainInventory" class="domain-inventory" aria-live="polite"></div>
+        <div id="domainInventory" class="domain-inventory"></div>
       </section>
       <p id="domainError" class="form-error" role="alert"></p>
     </form>
@@ -1271,7 +1294,7 @@
         <i></i><span>Preparing signed comparison sessions…</span>
       </div>
 
-      <div id="comparisonGrid" class="comparison-grid" aria-live="polite">
+      <div id="comparisonGrid" class="comparison-grid">
         <article class="comparison-card" data-comparison-side="left">
           <header><div><span class="eyebrow">LEFT</span><h3 id="compareLeftTitle">Select a version</h3></div><span id="compareLeftStatus" class="comparison-status">Waiting</span></header>
           <div class="comparison-frame-stage">

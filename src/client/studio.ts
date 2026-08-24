@@ -13,6 +13,10 @@ import {
 } from "./api";
 import { isActionPending, runAction, SingleFlight } from "./action-state";
 import {
+  actionFailureMessage as errorMessage,
+  bindFormFeedback,
+} from "./feedback";
+import {
   parseSceneRotationDegrees,
   SCENE_ROTATION_MAX_DEGREES,
   SCENE_ROTATION_MIN_DEGREES,
@@ -27,6 +31,21 @@ import {
   type GeometryChangeReport,
   type RegisteredSceneChangeReport,
 } from "./studio/stages/compare";
+import {
+  renderProcessWorkspace,
+  type ProcessWorkspaceModel,
+} from "./studio/stages/process";
+import {
+  detailLine,
+  detailTask,
+  element,
+  emptyState,
+  noticeSurface,
+  recordRow,
+  recordSurface,
+  taskDisclosure,
+  workspaceTask,
+} from "./studio/ui/dom";
 import { hasAuthoredSpatialRuntime } from "../shared/spatial-release-guard";
 import {
   parseStartingViewQualityMetrics,
@@ -71,6 +90,7 @@ import {
 } from "../shared/paired-capture-journey";
 import {
   legacyUnspecifiedProjectWorkflowPolicy,
+  normalizeProjectDeliveryTemplate,
   parseProjectWorkflowPolicy,
   projectPolicyForDeliveryTemplate,
   type ProjectWorkflowPolicy,
@@ -84,7 +104,7 @@ import {
   navigationClearancePresetSummary,
   type NavigationClearancePresetId,
 } from "../shared/navigation-clearance-presets";
-import "../../styles.css";
+import "./styles/studio-entry.css";
 
 type TurnstileWidgetOptions = {
   sitekey: string;
@@ -1198,6 +1218,49 @@ type ProjectSection =
   | "publish"
   | "measurement"
   | "expert";
+type JourneySection = "overview" | "process" | "structure" | "publish";
+type ProjectBlocker =
+  | { kind: "clear"; label: "No blocker" }
+  | { kind: "blocked"; label: string; detail: string };
+type ProjectWorkspaceCommand =
+  | { kind: "open-upload" }
+  | { kind: "restore-project"; projectId: string }
+  | { kind: "show-capture-correction"; message: string }
+  | { kind: "retry-job"; jobId: string }
+  | { kind: "refresh-project"; projectId: string }
+  | { kind: "review-structure"; projectId: string }
+  | { kind: "open-preview"; versionId: string }
+  | { kind: "review-privacy"; projectId: string }
+  | { kind: "publish"; projectId: string };
+type ProjectNextAction = {
+  label: string;
+  section: JourneySection;
+  command: ProjectWorkspaceCommand;
+};
+type ProjectJourneyState = {
+  renderableVersion: Version | null;
+  activeJob: Job | null;
+  failedJob: Job | null;
+  captureQualification: ReturnType<typeof automaticCaptureQualification>;
+  hasCapture: boolean;
+  hasMetricGeometry: boolean;
+  floorplanJob: Job | null;
+  navigationJob: Job | null;
+  navigationReady: boolean;
+  structureReady: boolean;
+  privacyVersion: Version | null;
+  privacyApproved: boolean;
+  automaticWalkingWorkActive: boolean;
+  walkingExceptionReviewReady: boolean;
+};
+type ProjectWorkspaceModel = {
+  journey: ProjectJourneyState;
+  canonicalSection: JourneySection;
+  stageLabel: "Archived" | "Capture" | "Process" | "Structure" | "Publish" | "Complete";
+  blocker: ProjectBlocker;
+  nextAction: ProjectNextAction;
+  process: ProcessWorkspaceModel;
+};
 
 type ProjectStageCapability =
   | "structure-processing-poll"
@@ -1509,6 +1572,14 @@ const compareDomain = createCompareDomain({
   parseTimestamp,
 });
 
+const dialogInvokers = new WeakMap<HTMLDialogElement, HTMLElement>();
+const discardGuardExcludedDialogIds = new Set([
+  "askDialog",
+  "captureAgentTokenDialog",
+  "loginDialog",
+  "versionComparisonDialog",
+]);
+
 bindInterface();
 void initialise();
 
@@ -1576,6 +1647,8 @@ async function initialise(): Promise<void> {
 
 function bindInterface(): void {
   compareDomain.bind();
+  bindDialogSemantics();
+  bindDialogShells();
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, () => {
     transitionToSignedOut("Your session expired. Sign in again.");
   });
@@ -1640,6 +1713,8 @@ function bindInterface(): void {
     navigationBuildForm,
     semanticExtractionForm,
     semanticReviewForm,
+    floorplanExtractionForm,
+    floorplanReviewForm,
     routeForm,
     measurementBriefForm,
     checkPointForm,
@@ -1656,7 +1731,7 @@ function bindInterface(): void {
     identityProviderForm,
     captureAgentForm,
   ]) {
-    bindConstraintFeedback(form);
+    bindFormFeedback(form);
   }
   byId("newProjectButton").addEventListener("click", () => {
     projectOperationId = crypto.randomUUID();
@@ -2569,7 +2644,10 @@ function bindInterface(): void {
   window.addEventListener("message", handleSceneAuthoringRendererMessage);
   window.addEventListener("message", handleReleaseCameraRendererMessage);
   document.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((button) => {
-    button.addEventListener("click", () => button.closest("dialog")?.close());
+    button.addEventListener("click", () => {
+      const dialog = button.closest<HTMLDialogElement>("dialog");
+      if (dialog) void requestDialogClose(dialog);
+    });
   });
   document.querySelectorAll<HTMLButtonElement>(".filter-chip").forEach((button) => {
     button.addEventListener("click", () => {
@@ -2590,40 +2668,239 @@ function bindInterface(): void {
   byId<HTMLButtonElement>("backToProjects").addEventListener("click", () => activateView("projects", true, "push"));
   const projectSectionButtons: Array<[HTMLButtonElement, ProjectSection]> = [
     [byId<HTMLButtonElement>("projectOverviewTab"), "overview"],
+    [byId<HTMLButtonElement>("projectProcessTab"), "process"],
     [byId<HTMLButtonElement>("projectStructureTab"), "structure"],
     [byId<HTMLButtonElement>("projectCompareTab"), "compare"],
     [byId<HTMLButtonElement>("projectPublishTab"), "publish"],
     [byId<HTMLButtonElement>("projectMeasurementTab"), "measurement"],
     [byId<HTMLButtonElement>("projectExpertTab"), "expert"],
   ];
+  const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
+  projectSectionPicker.replaceChildren(...projectSectionButtons.map(([button, section]) =>
+    new Option(button.textContent?.trim() ?? humanStatus(section), section)
+  ));
   projectSectionButtons.forEach(([button, section]) => {
     button.addEventListener("click", () => {
       activateProjectSection(section, true, "push", true);
     });
+  });
+  projectSectionPicker.addEventListener("change", () => {
+    const selected = projectSectionButtons.find(([, section]) =>
+      section === projectSectionPicker.value
+    );
+    if (selected) activateProjectSection(selected[1], true, "push", true);
   });
   window.addEventListener("hashchange", () => void navigateFromHash());
   window.addEventListener("popstate", () => void navigateFromHash());
   activateView(viewFromHash(), false);
 }
 
-function bindConstraintFeedback(form: HTMLFormElement): void {
-  const errorTarget = form.querySelector<HTMLElement>(".form-error");
-  if (!errorTarget) return;
-  form.addEventListener("invalid", (event) => {
-    const field = event.target;
-    if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement || field instanceof HTMLTextAreaElement)) return;
-    errorTarget.textContent = field.validationMessage || "Review the highlighted field and try again.";
-  }, true);
-  form.addEventListener("input", (event) => {
-    const field = event.target;
-    if (
-      field instanceof HTMLInputElement ||
-      field instanceof HTMLSelectElement ||
-      field instanceof HTMLTextAreaElement
-    ) {
-      if (field.validity.valid) errorTarget.textContent = "";
+function bindDialogSemantics(): void {
+  document.querySelectorAll<HTMLElement>(".worker-status i").forEach((marker) => {
+    marker.setAttribute("aria-hidden", "true");
+  });
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog, index) => {
+    const heading = dialog.querySelector<HTMLElement>("h1, h2, h3");
+    if (!dialog.hasAttribute("aria-label") && !dialog.hasAttribute("aria-labelledby")) {
+      if (heading) {
+        heading.id ||= `${dialog.id || `dialog-${index + 1}`}-title`;
+        dialog.setAttribute("aria-labelledby", heading.id);
+      } else {
+        dialog.setAttribute("aria-label", "Dialog");
+      }
+    }
+    dialog.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((control) => {
+      const visibleLabel = control.textContent?.trim() ?? "";
+      if (
+        !control.hasAttribute("aria-label") &&
+        !control.hasAttribute("aria-labelledby") &&
+        (!visibleLabel || visibleLabel === "×")
+      ) {
+        const dialogName = heading?.textContent?.trim();
+        control.setAttribute("aria-label", dialogName ? `Close ${dialogName}` : "Close dialog");
+      }
+    });
+  });
+}
+
+function bindDialogShells(): void {
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog) => {
+    const nativeShowModal = dialog.showModal.bind(dialog);
+    dialog.showModal = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body) {
+        dialogInvokers.set(dialog, active);
+      }
+      nativeShowModal();
+    };
+    dialog.addEventListener("close", () => {
+      delete dialog.dataset.dirty;
+      const invoker = dialogInvokers.get(dialog);
+      dialogInvokers.delete(dialog);
+      if (invoker?.isConnected) queueMicrotask(() => invoker.focus());
+    });
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key !== "Tab" || !dialog.open) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        "button:not(:disabled), a[href], input:not(:disabled):not([type='hidden']), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])",
+      )).filter((control) => control.getClientRects().length > 0);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    if (dialogGuardsDraft(dialog)) {
+      dialog.addEventListener("input", (event) => {
+        const target = event.target;
+        if (event.isTrusted && target instanceof Element && !target.closest(".portfolio-task-picker")) {
+          dialog.dataset.dirty = "true";
+        }
+      });
+      dialog.addEventListener("change", (event) => {
+        const target = event.target;
+        if (event.isTrusted && target instanceof Element && !target.closest(".portfolio-task-picker")) {
+          dialog.dataset.dirty = "true";
+        }
+      });
+      dialog.addEventListener("cancel", (event) => {
+        if (dialog.dataset.dirty !== "true") return;
+        event.preventDefault();
+        void requestDialogClose(dialog);
+      });
+      dialog.addEventListener("reset", () => {
+        queueMicrotask(() => delete dialog.dataset.dirty);
+      });
     }
   });
+
+  document.querySelectorAll<HTMLDialogElement>("dialog:not(#portfolioToolsDialog):not(#versionComparisonDialog)")
+    .forEach((dialog) => {
+      const root = dialog.querySelector<HTMLElement>(":scope > form");
+      if (!root || root.classList.contains("dialog-shell")) return;
+      const eyebrow = root.querySelector<HTMLElement>(":scope > .eyebrow");
+      const heading = root.querySelector<HTMLElement>(":scope > h1, :scope > h2, :scope > h3");
+      if (!heading) return;
+
+      const footerGroups = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > .form-actions, :scope > .capture-intake-actions",
+      ));
+      const footerActions = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > button:not(.dialog-close)",
+      ));
+      const footerFeedback = Array.from(root.querySelectorAll<HTMLElement>(
+        ":scope > .form-error",
+      ));
+      const header = document.createElement("header");
+      header.className = "dialog-shell-header";
+      if (eyebrow) header.append(eyebrow);
+      header.append(heading);
+      const body = document.createElement("div");
+      body.className = "dialog-shell-body";
+      const excluded = new Set<HTMLElement>([
+        ...footerGroups,
+        ...footerActions,
+        ...footerFeedback,
+      ]);
+      for (const child of Array.from(root.children)) {
+        if (child === eyebrow || child === heading || excluded.has(child as HTMLElement)) continue;
+        body.append(child);
+      }
+      const footer = document.createElement("footer");
+      footer.className = "dialog-shell-footer";
+      footer.append(...footerFeedback, ...footerGroups, ...footerActions);
+      footer.hidden = footer.childElementCount === 0;
+      root.classList.add("dialog-shell");
+      root.replaceChildren(header, body, footer);
+      const syncPurpose = () => {
+        dialog.dataset.dialogPurpose = heading.textContent?.trim() || dialog.id;
+      };
+      syncPurpose();
+      new MutationObserver(syncPurpose).observe(heading, {
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    });
+
+  const comparisonDialog = byId<HTMLDialogElement>("versionComparisonDialog");
+  comparisonDialog.dataset.dialogPurpose =
+    byId("comparisonTitle").textContent?.trim() ?? "Compare immutable versions";
+  bindPortfolioTaskDialog();
+}
+
+function bindPortfolioTaskDialog(): void {
+  const dialog = byId<HTMLDialogElement>("portfolioToolsDialog");
+  const header = dialog.querySelector<HTMLElement>(":scope > .portfolio-dialog-shell");
+  const body = dialog.querySelector<HTMLElement>(":scope > .portfolio-tools-grid");
+  if (!header || !body) return;
+  dialog.classList.add("dialog-composite-shell");
+  header.classList.add("dialog-shell-header");
+  body.classList.add("dialog-shell-body");
+  const sections = Array.from(body.querySelectorAll<HTMLElement>(":scope > .portfolio-tool-section"));
+  const labels = [
+    "Project templates",
+    "Export metadata",
+    "Import metadata",
+    "Project schema",
+    "Metadata handoff",
+    "Verified asset copy",
+  ];
+  const picker = document.createElement("label");
+  picker.className = "portfolio-task-picker";
+  picker.append(element("span", "", "Portfolio task"));
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", "Portfolio task");
+  select.append(...sections.map((_, index) =>
+    new Option(labels[index] ?? `Portfolio task ${index + 1}`, String(index))
+  ));
+  picker.append(select);
+  select.addEventListener("change", applyPortfolioTaskSelection);
+  const introduction = header.querySelector<HTMLElement>(":scope > p");
+  body.prepend(...(introduction ? [picker, introduction] : [picker]));
+  applyPortfolioTaskSelection();
+  dialog.dataset.dialogPurpose = "One portfolio operation at a time";
+}
+
+function applyPortfolioTaskSelection(): void {
+  const dialog = document.getElementById("portfolioToolsDialog");
+  const select = dialog?.querySelector<HTMLSelectElement>(".portfolio-task-picker select");
+  if (!dialog || !select) return;
+  const selectedIndex = Number(select.value || "0");
+  const sections = Array.from(dialog.querySelectorAll<HTMLElement>(".portfolio-tool-section"));
+  sections.forEach((section, index) => {
+    section.hidden = index !== selectedIndex;
+  });
+}
+
+async function requestDialogClose(dialog: HTMLDialogElement): Promise<void> {
+  if (dialog.dataset.discardPromptOpen === "true") return;
+  if (dialog.dataset.dirty === "true" && dialogGuardsDraft(dialog)) {
+    dialog.dataset.discardPromptOpen = "true";
+    const discard = await confirmOperator(
+      "Discard the changes in this dialog? Your unsaved input will be lost.",
+      "Discard changes",
+    );
+    delete dialog.dataset.discardPromptOpen;
+    if (!discard) return;
+    delete dialog.dataset.dirty;
+  }
+  dialog.close();
+}
+
+function dialogGuardsDraft(dialog: HTMLDialogElement): boolean {
+  if (discardGuardExcludedDialogIds.has(dialog.id)) return false;
+  if (dialog.id === "portfolioToolsDialog") return true;
+  return Boolean(dialog.querySelector(
+    "form:not([method='dialog']) :is(input:not([type='hidden']):not([readonly]):not(:disabled), select:not(:disabled), textarea:not([readonly]):not(:disabled))",
+  )) && Boolean(dialog.querySelector(
+    "form:not([method='dialog']) :is(button[type='submit'], input[type='submit'])",
+  ));
 }
 
 async function handleSignIn(form: FormData): Promise<void> {
@@ -3085,7 +3362,7 @@ function focusProjectSectionHeading(section: ProjectSection): void {
   const selector = section === "overview"
     ? "#detailTitle"
     : section === "process"
-      ? "#detailBody .project-journey h3"
+      ? "#processWorkspace h2"
       : section === "publish"
         ? "#publishWorkspace h2"
         : section === "measurement"
@@ -3116,9 +3393,19 @@ function activateView(
     state.projectSection = resolvedSection;
   }
   state.view = view;
-  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonWorkspaceAvailable(
+  const comparisonAvailable = comparisonWorkspaceAvailable(
     state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   );
+  byId<HTMLButtonElement>("projectCompareTab").hidden = !comparisonAvailable;
+  const projectSectionPicker = byId<HTMLSelectElement>("projectSectionPicker");
+  projectSectionPicker.value = state.projectSection;
+  const compareOption = Array.from(projectSectionPicker.options).find((option) =>
+    option.value === "compare"
+  );
+  if (compareOption) {
+    compareOption.hidden = !comparisonAvailable;
+    compareOption.disabled = !comparisonAvailable;
+  }
   document.querySelectorAll<HTMLButtonElement>(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.section === (view === "project" ? "projects" : view));
   });
@@ -3126,12 +3413,6 @@ function activateView(
     const active = view === "project" && button.dataset.projectSection === state.projectSection;
     button.classList.toggle("active", active);
     if (active) button.setAttribute("aria-current", "page");
-    else button.removeAttribute("aria-current");
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-project-journey-section]").forEach((button) => {
-    const active = view === "project" &&
-      button.dataset.projectJourneySection === state.projectSection;
-    if (active) button.setAttribute("aria-current", "step");
     else button.removeAttribute("aria-current");
   });
   const advancedNavigation = document.querySelector<HTMLDetailsElement>(".studio-nav-advanced");
@@ -3143,11 +3424,10 @@ function activateView(
   byId("projectWorkspaceHeader").hidden = !projectVisible;
   byId("summaryGrid").hidden = !projectsVisible;
   byId("studioGrid").hidden = !["projects", "jobs"].includes(view);
-  byId("studioGrid").classList.toggle("jobs-only", jobsVisible);
-  byId("studioGrid").classList.toggle("projects-only", projectsVisible);
   byId("projectBoard").hidden = jobsVisible;
   byId("queuePanel").hidden = !jobsVisible;
-  byId("projectDetail").hidden = !projectVisible || !["overview", "process"].includes(state.projectSection);
+  byId("projectDetail").hidden = !projectVisible || state.projectSection !== "overview";
+  byId("processWorkspace").hidden = !projectVisible || state.projectSection !== "process";
   byId("releaseWorkspace").hidden = view !== "releases";
   byId("reviewWorkspace").hidden = view !== "reviews";
   byId("spatialWorkspace").hidden = !projectVisible ||
@@ -4027,6 +4307,7 @@ function renderPortfolioTools(): void {
   renderPortfolioImportActions();
   renderPortfolioHandoffActions();
   renderAssetHandoffActions();
+  applyPortfolioTaskSelection();
 }
 
 function editProjectTemplate(template: ProjectTemplate): void {
@@ -4977,7 +5258,7 @@ function renderPendingInvitations(): void {
     return;
   }
   panel.hidden = false;
-  const card = element("article", "workspace-card-large");
+  const card = workspaceTask();
   const invitationError = element("p", "form-error");
   invitationError.id = "pendingInvitationError";
   invitationError.setAttribute("role", "alert");
@@ -4996,8 +5277,9 @@ function renderPendingInvitations(): void {
     invitationError,
   );
   for (const invitation of state.pendingInvitations) {
-    const row = element("div", "team-member-row");
-    const identity = element("div", "team-member-identity");
+    const row = recordRow("div", "team-member-row");
+    row.dataset.recordKind = "organisation-invitation";
+    const identity = element("div", "team-member-identity record-primary");
     identity.append(
       element("strong", "", invitation.organisationName),
       element("span", "", humanStatus(invitation.role)),
@@ -5007,8 +5289,8 @@ function renderPendingInvitations(): void {
         `Invited ${relativeTime(invitation.invitedAt)} · expires ${relativeTime(invitation.expiresAt)}`,
       ),
     );
-    const status = element("span", "status-pill invited", "Pending");
-    const actions = element("div", "team-member-actions");
+    const status = element("span", "status-pill record-status invited", "Pending");
+    const actions = element("div", "team-member-actions record-actions");
     const accept = element("button", "primary-button", "Accept");
     const decline = element("button", "quiet-button", "Decline");
     accept.addEventListener("click", () => {
@@ -5111,6 +5393,7 @@ function clearTenantWorkspace(): void {
 function renderProjects(): void {
   const container = byId("projectTable");
   container.replaceChildren();
+  container.dataset.recordCollection = "projects";
   container.setAttribute("role", "table");
   container.setAttribute("aria-label", "Production projects");
   const projects = visibleProjects();
@@ -5120,7 +5403,7 @@ function renderProjects(): void {
     renderProjectPagination();
     return;
   }
-  const header = element("div", "project-row header");
+  const header = element("div", "project-row header record-table-header");
   header.setAttribute("role", "row");
   const selectVisible = document.createElement("input");
   selectVisible.type = "checkbox";
@@ -5137,14 +5420,15 @@ function renderProjects(): void {
     bulkLifecycleOperation = null;
     renderProjects();
   });
-  const selectVisibleCell = element("span", "project-select-cell");
+  const selectVisibleCell = element("label", "project-select-cell");
   selectVisibleCell.append(selectVisible);
   header.append(selectVisibleCell);
   ["Project", "Source", "Stage", "Updated"].forEach((label) => header.append(element("span", "", label)));
   for (const cell of header.children) cell.setAttribute("role", "columnheader");
   container.append(header);
   for (const project of projects) {
-    const row = element("div", "project-row");
+    const row = recordRow("div", "project-row");
+    row.dataset.recordKind = "project";
     row.setAttribute("role", "row");
     if (state.selectedProjectIds.has(project.id)) row.classList.add("selected");
     const selected = document.createElement("input");
@@ -5158,7 +5442,7 @@ function renderProjects(): void {
       bulkLifecycleOperation = null;
       renderProjects();
     });
-    const identityCell = element("span", "project-identity-cell");
+    const identityCell = element("span", "project-identity-cell record-primary");
     const identity = element("button", "project-row-link project-identity");
     identity.setAttribute("aria-label", `Open ${project.name}`);
     const icon = element("b", "project-icon property", project.name.slice(0, 1).toUpperCase());
@@ -5166,8 +5450,10 @@ function renderProjects(): void {
     name.append(element("strong", "", project.name), element("small", "", project.customerName ?? "Capture project"));
     identity.append(icon, name);
     identityCell.append(identity);
-    const stage = element("span");
-    stage.append(element("i", `state ${statusClass(project.status)}`), document.createTextNode(humanStatus(project.status)));
+    const stage = element("span", "record-status");
+    const stageMarker = element("i", `state ${statusClass(project.status)}`);
+    stageMarker.setAttribute("aria-hidden", "true");
+    stage.append(stageMarker, document.createTextNode(humanStatus(project.status)));
     identity.addEventListener("click", () => {
       void runAction({
         key: `select-project:${project.id}`,
@@ -5177,12 +5463,18 @@ function renderProjects(): void {
     });
     row.addEventListener("click", (event) => {
       const target = event.target;
-      if (target instanceof Element && target.closest("button, input, a, select, textarea")) return;
+      if (target instanceof Element && target.closest("button, input, label, a, select, textarea")) return;
       identity.click();
     });
-    const selectedCell = element("span", "project-select-cell");
+    const selectedCell = element("label", "project-select-cell record-selector");
     selectedCell.append(selected);
-    row.append(selectedCell, identityCell, element("span", "", project.captureAdapter), stage, element("span", "", relativeTime(project.updatedAt)));
+    row.append(
+      selectedCell,
+      identityCell,
+      element("span", "record-secondary", project.captureAdapter),
+      stage,
+      element("span", "record-secondary", relativeTime(project.updatedAt)),
+    );
     for (const cell of row.children) cell.setAttribute("role", "cell");
     container.append(row);
   }
@@ -5343,6 +5635,7 @@ function renderBulkProjectActions(): void {
 function renderJobs(): void {
   const container = byId("jobList");
   container.replaceChildren();
+  container.dataset.recordCollection = "jobs";
   if (!state.jobs.length) {
     container.append(emptyState("No processing jobs.", true));
     renderJobPagination();
@@ -5350,9 +5643,10 @@ function renderJobs(): void {
   }
   const visibleJobs = state.view === "jobs" ? state.jobs : state.jobs.slice(0, 12);
   for (const [index, job] of visibleJobs.entries()) {
-    const row = element("div", "queue-item");
+    const row = recordRow("div", "queue-item");
+    row.dataset.recordKind = "job";
     const order = element("span", "queue-order", String(index + 1).padStart(2, "0"));
-    const body = element("div");
+    const body = element("div", "record-primary");
     body.append(
       element("strong", "", job.job_type),
       element("small", "", `${job.project_name ?? job.project_id} · ${humanStatus(job.state)} · attempt ${job.attempt_count}/${job.max_attempts}`),
@@ -5372,7 +5666,7 @@ function renderJobs(): void {
     bar.style.width = `${job.progress}%`;
     progress.append(bar);
     body.append(progress);
-    const actions = element("div", "job-actions");
+    const actions = element("div", "job-actions record-actions");
     if (["FAILED", "DEAD_LETTER", "CANCELLED"].includes(job.state)) {
       const retry = element("button", "job-action", "Retry");
       retry.addEventListener("click", async () => {
@@ -5420,12 +5714,13 @@ function renderJobPagination(): void {
 function renderReleases(): void {
   const container = byId("releaseList");
   container.replaceChildren();
+  container.dataset.recordCollection = "releases";
   if (!state.releases.length) {
     container.append(emptyState("No release history yet. Approve a version, then publish its first channel."));
     renderReleasePagination();
     return;
   }
-  const header = element("div", "release-list-row header");
+  const header = element("div", "release-list-row header record-table-header");
   header.setAttribute("role", "row");
   ["Project", "Channel", "Policy", "Published", "State", ""].forEach((label) =>
     header.append(element("span", "", label))
@@ -5435,14 +5730,16 @@ function renderReleases(): void {
   container.setAttribute("aria-label", "Published release history");
   container.append(header);
   for (const release of state.releases) {
-    const row = element("div", "release-list-row");
+    const row = recordRow("div", "release-list-row");
+    row.dataset.recordKind = "release";
     row.setAttribute("role", "row");
-    const project = element("span");
+    const project = element("span", "record-primary");
     project.append(
       element("strong", "", release.project_name ?? "Project"),
       element("small", "", `Scene v${release.version_number} · Release ${release.release_number}`),
     );
     const channel = document.createElement("a");
+    channel.className = "record-essential";
     channel.href = `/s/${release.slug}`;
     channel.target = "_blank";
     channel.rel = "noopener";
@@ -5452,7 +5749,7 @@ function renderReleases(): void {
       : release.is_active
         ? "Active"
         : "Historical";
-    const actions = element("span", "release-actions");
+    const actions = element("span", "release-actions record-actions");
     if (release.project_id) {
       const manage = element("button", "quiet-button", "Manage");
       manage.addEventListener("click", () => {
@@ -5464,6 +5761,9 @@ function renderReleases(): void {
       });
       actions.append(manage);
     }
+    const actionMenu = element("details", "record-action-menu");
+    actionMenu.append(element("summary", "quiet-button", "More release actions"));
+    const actionMenuItems = element("div", "record-action-menu-items");
     const exportEvidence = element("button", "quiet-button", "Export traversal evidence");
     exportEvidence.addEventListener("click", () => {
       void runAction({
@@ -5472,7 +5772,7 @@ function renderReleases(): void {
         pendingLabel: "Exporting…",
       }, () => exportNavigationTraversalEvidence(release));
     });
-    actions.append(exportEvidence);
+    actionMenuItems.append(exportEvidence);
     if (release.is_active && !release.revoked_at) {
       const revoke = element("button", "danger-button", "Revoke");
       revoke.addEventListener("click", async () => {
@@ -5489,7 +5789,7 @@ function renderReleases(): void {
           pendingLabel: "Revoking…",
         }, () => revokeRelease(release.slug));
       });
-      actions.append(revoke);
+      actionMenuItems.append(revoke);
     } else if (!release.revoked_at) {
       const rollback = element("button", "quiet-button", "Make active");
       rollback.addEventListener("click", async () => {
@@ -5505,14 +5805,16 @@ function renderReleases(): void {
           pendingLabel: "Activating…",
         }, () => rollbackRelease(release));
       });
-      actions.append(rollback);
+      actionMenuItems.append(rollback);
     }
+    actionMenu.append(actionMenuItems);
+    actions.append(actionMenu);
     row.append(
       project,
       channel,
-      element("span", "", release.access_policy),
-      element("span", "", relativeTime(release.published_at)),
-      element("span", `release-state ${stateLabel.toLowerCase()}`, stateLabel),
+      element("span", "record-secondary", release.access_policy),
+      element("span", "record-secondary", relativeTime(release.published_at)),
+      element("span", `release-state record-status ${stateLabel.toLowerCase()}`, stateLabel),
       actions,
     );
     for (const cell of row.children) cell.setAttribute("role", "cell");
@@ -5533,6 +5835,7 @@ function renderReleasePagination(): void {
 function renderReviews(): void {
   const container = byId("reviewInbox");
   container.replaceChildren();
+  container.dataset.recordCollection = "review-projects";
   if (!state.reviewProjects.length) {
     container.append(emptyState(isReviewer()
       ? "No project has been shared with this account."
@@ -5540,7 +5843,7 @@ function renderReviews(): void {
     return;
   }
   for (const project of state.reviewProjects) {
-    const card = element("article", "workspace-card-large");
+    const card = workspaceTask();
     const heading = element("div", "workspace-card-heading");
     const title = element("div");
     title.append(
@@ -5603,8 +5906,9 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     activity.append(element("p", "muted-copy", "No review activity has been recorded."));
   }
   for (const comment of detail.comments.slice(0, 12)) {
-    const row = element("div", "review-line");
-    const copy = element("div");
+    const row = recordRow("div", "review-line");
+    row.dataset.recordKind = "review-comment";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${humanStatus(comment.kind)} · ${humanStatus(comment.status)}`),
       element("p", "", comment.body),
@@ -5612,7 +5916,7 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
     );
     row.append(copy);
     if (!isReviewer() && comment.status === "open") {
-      const actions = element("span", "release-actions");
+      const actions = element("span", "release-actions record-actions");
       for (const status of ["resolved", "dismissed"] as const) {
         const button = element("button", status === "resolved" ? "quiet-button" : "danger-button", status === "resolved" ? "Resolve" : "Dismiss");
         button.addEventListener("click", () => {
@@ -5638,9 +5942,11 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
   }
   if (!isReviewer() && detail.reviewers?.length) {
     for (const reviewer of detail.reviewers) {
-      const row = element("div", "review-line");
-      row.append(element("div", "", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
+      const row = recordRow("div", "review-line");
+      row.dataset.recordKind = "reviewer";
+      row.append(element("div", "record-primary", `${reviewer.email} · ${humanStatus(reviewer.role)} · ${humanStatus(reviewer.invitation_status)}`));
       if (!reviewer.revoked_at && reviewer.invitation_status !== "revoked") {
+        const actions = element("div", "record-actions");
         const revoke = element("button", "danger-button", "Revoke access");
         revoke.addEventListener("click", async () => {
           if (!await confirmOperator(`Revoke ${reviewer.email} from ${project.name}?`)) return;
@@ -5650,7 +5956,8 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
             pendingLabel: "Revoking…",
           }, () => revokeReviewer(project, reviewer));
         });
-        row.append(revoke);
+        actions.append(revoke);
+        row.append(actions);
       }
       activity.append(row);
     }
@@ -5661,11 +5968,12 @@ function renderReviewActivity(project: ReviewProject, detail: ReviewDetail): HTM
 function renderHosting(): void {
   const container = byId("hostingOverview");
   container.replaceChildren();
+  container.dataset.recordCollection = "hosting";
   if (!state.hosting) {
     container.append(emptyState("Hosting information is unavailable."));
     return;
   }
-  const plans = element("article", "workspace-card-large");
+  const plans = workspaceTask();
   plans.append(
     element("span", "eyebrow", "AVAILABLE PLANS"),
     element("h3", "", "Productised recurring hosting"),
@@ -5677,7 +5985,7 @@ function renderHosting(): void {
   );
   const planGrid = element("div", "plan-grid");
   for (const plan of state.hosting.plans) {
-    const card = element("div", "plan-card");
+    const card = recordSurface("div", "plan-card");
     card.append(
       element("strong", "", plan.name),
       element("b", "", plan.monthly_price_cents ? `${formatMoney(plan.monthly_price_cents, "MYR")} / mo` : "Custom"),
@@ -5687,12 +5995,13 @@ function renderHosting(): void {
   }
   plans.append(planGrid);
 
-  const subscriptions = element("article", "workspace-card-large");
+  const subscriptions = workspaceTask();
   subscriptions.append(element("span", "eyebrow", "ACTIVE SERVICES"), element("h3", "", "Project subscriptions"));
   if (!state.hosting.subscriptions.length) subscriptions.append(element("p", "muted-copy", "No hosting subscription configured."));
   for (const subscription of state.hosting.subscriptions) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = recordRow("div", "hosting-row");
+    row.dataset.recordKind = "hosting-subscription";
+    const copy = element("div", "record-primary");
     const usage = subscription.included_storage_bytes > 0
       ? `${Math.min(100, (subscription.storage_bytes / subscription.included_storage_bytes) * 100).toFixed(1)}% storage`
       : `${formatBytes(subscription.storage_bytes)} storage`;
@@ -5700,7 +6009,7 @@ function renderHosting(): void {
       element("strong", "", subscription.project_name),
       element("small", "", `${subscription.plan_name} · ${humanStatus(subscription.status)} · ${usage} · through ${parseTimestamp(subscription.current_period_end).toLocaleDateString()}`),
     );
-    const actions = element("span", "release-actions");
+    const actions = element("span", "release-actions record-actions");
     const manage = element("button", "quiet-button", "Manage");
     manage.addEventListener("click", () => {
       void runAction({
@@ -5742,11 +6051,12 @@ function renderHosting(): void {
     subscriptions.append(row);
   }
 
-  const finance = element("article", "workspace-card-large");
+  const finance = workspaceTask();
   finance.append(element("span", "eyebrow", "BILLING & ALERTS"), element("h3", "", "Invoice and recovery ledger"));
   for (const invoice of state.hosting.invoices.slice(0, 8)) {
-    const row = element("div", "hosting-row billing-invoice-row");
-    const copy = element("div");
+    const row = recordRow("div", "hosting-row billing-invoice-row");
+    row.dataset.recordKind = "invoice";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${invoice.project_name} · ${formatMoney(invoice.amount_cents, invoice.currency)}`),
       element(
@@ -5766,18 +6076,22 @@ function renderHosting(): void {
       invoice.billing_method === "manual" &&
       invoice.status === "open"
     ) {
-      row.append(manualInvoiceControls(invoice));
+      const actionSlot = element("div", "record-actions record-action-form");
+      actionSlot.append(manualInvoiceControls(invoice));
+      row.append(actionSlot);
     }
     finance.append(row);
   }
   for (const checkout of state.hosting.checkouts.slice(0, 8)) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = recordRow("div", "hosting-row");
+    row.dataset.recordKind = "checkout";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", `${checkout.project_name} · ${humanStatus(checkout.plan_code)}`),
       element("small", "", `${formatMoney(checkout.amount_cents, checkout.currency)} · Checkout ${humanStatus(checkout.status)}${checkout.payment_status ? ` · ${humanStatus(checkout.payment_status)}` : ""}`),
     );
     row.append(copy);
+    const actions = element("div", "record-actions");
     if (
       checkout.checkout_url &&
       ["pending", "open"].includes(checkout.status) &&
@@ -5786,9 +6100,10 @@ function renderHosting(): void {
       const resume = element("a", "quiet-button", "Resume secure checkout");
       resume.href = checkout.checkout_url;
       resume.rel = "noopener";
-      row.append(resume);
+      actions.append(resume);
     }
-    if (checkout.last_error) row.append(element("p", "form-error", checkout.last_error));
+    if (actions.childElementCount) row.append(actions);
+    if (checkout.last_error) row.append(element("p", "form-error record-evidence", checkout.last_error));
     finance.append(row);
   }
   for (const alert of state.hosting.alerts.slice(0, 8)) {
@@ -5798,7 +6113,7 @@ function renderHosting(): void {
     finance.append(element("p", "muted-copy", "No invoices or operational alerts."));
   }
 
-  const lifecycle = element("article", "workspace-card-large");
+  const lifecycle = workspaceTask();
   lifecycle.append(
     element("span", "eyebrow", "ENFORCED LIFECYCLE"),
     element("h3", "", "Expiry, retention, and restore evidence"),
@@ -5843,7 +6158,7 @@ function renderHosting(): void {
 }
 
 function renderManualBillingPanel(): HTMLElement {
-  const card = element("article", "workspace-card-large manual-billing-card");
+  const card = workspaceTask("manual-billing-card");
   const hosting = state.hosting;
   card.append(
     element("span", "eyebrow", "MERCHANT BILLING"),
@@ -6176,6 +6491,7 @@ async function transitionManualSubscription(
 function renderTeam(): void {
   const container = byId("teamOverview");
   container.replaceChildren();
+  container.dataset.recordCollection = "team";
   if (state.user?.role !== "platform_admin") {
     container.append(emptyState("Platform administrator access is required."));
     return;
@@ -6185,7 +6501,7 @@ function renderTeam(): void {
     return;
   }
 
-  const identityProviders = element("article", "workspace-card-large identity-provider-card");
+  const identityProviders = workspaceTask("identity-provider-card");
   const identityError = element("p", "form-error");
   identityError.id = "identityProviderWorkspaceError";
   identityError.setAttribute("role", "alert");
@@ -6203,8 +6519,9 @@ function renderTeam(): void {
     identityProviders.append(emptyState("No enterprise identity provider is configured. Email OTP remains available."));
   }
   for (const provider of state.identityProviders) {
-    const row = element("div", "team-member-row");
-    const copy = element("div", "team-member-identity");
+    const row = recordRow("div", "team-member-row");
+    row.dataset.recordKind = "identity-provider";
+    const copy = element("div", "team-member-identity record-primary");
     const readiness = provider.secretConfigured ? "secret configured" : "secret required";
     copy.append(
       element("strong", "", provider.name),
@@ -6221,8 +6538,8 @@ function renderTeam(): void {
     if (provider.lastError) {
       copy.append(element("small", "provider-error-copy", provider.lastError));
     }
-    const status = element("span", `status-pill ${provider.status}`, humanStatus(provider.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${provider.status}`, humanStatus(provider.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (provider.status !== "active") {
       const activate = element(
         "button",
@@ -6271,7 +6588,7 @@ function renderTeam(): void {
     identityProviders.append(row);
   }
 
-  const captureAgents = element("article", "workspace-card-large capture-agent-card");
+  const captureAgents = workspaceTask("capture-agent-card");
   const captureAgentWorkspaceError = element("p", "form-error");
   captureAgentWorkspaceError.id = "captureAgentWorkspaceError";
   captureAgentWorkspaceError.setAttribute("role", "alert");
@@ -6294,8 +6611,9 @@ function renderTeam(): void {
     captureAgents.append(emptyState("No unattended transfer credential has been issued."));
   }
   for (const credential of state.captureAgents) {
-    const row = element("div", `team-member-row ${credential.status}`);
-    const identity = element("div", "team-member-identity");
+    const row = recordRow("div", `team-member-row ${credential.status}`);
+    row.dataset.recordKind = "capture-agent";
+    const identity = element("div", "team-member-identity record-primary");
     const projectNames = credential.projectIds.map((projectId) => (
       state.projects.find((project) => project.id === projectId)?.name ?? `Unavailable project ${projectId.slice(0, 8)}`
     ));
@@ -6318,8 +6636,8 @@ function renderTeam(): void {
         }`,
       ),
     );
-    const status = element("span", `status-pill ${credential.status}`, humanStatus(credential.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${credential.status}`, humanStatus(credential.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (credential.status !== "revoked") {
       const edit = element("button", "quiet-button", "Edit scope");
       edit.addEventListener("click", () => openCaptureAgentDialog("edit", credential));
@@ -6346,7 +6664,7 @@ function renderTeam(): void {
     captureAgents.append(row);
   }
 
-  const members = element("article", "workspace-card-large team-members-card");
+  const members = workspaceTask("team-members-card");
   const activeCount = state.team.members.filter((member) => member.status === "active").length;
   members.append(
     element("span", "eyebrow", "LEAST-PRIVILEGE MEMBERSHIP"),
@@ -6355,8 +6673,9 @@ function renderTeam(): void {
   );
   if (!state.team.members.length) members.append(emptyState("No production team members found."));
   for (const member of state.team.members) {
-    const row = element("div", `team-member-row ${member.status}`);
-    const identity = element("div", "team-member-identity");
+    const row = recordRow("div", `team-member-row ${member.status}`);
+    row.dataset.recordKind = "team-member";
+    const identity = element("div", "team-member-identity record-primary");
     identity.append(
       element("strong", "", member.displayName),
       element("span", "", member.email),
@@ -6368,8 +6687,8 @@ function renderTeam(): void {
         }`,
       ),
     );
-    const status = element("span", `status-pill ${member.status}`, humanStatus(member.status));
-    const actions = element("div", "team-member-actions");
+    const status = element("span", `status-pill record-status ${member.status}`, humanStatus(member.status));
+    const actions = element("div", "team-member-actions record-actions");
     if (member.userId === state.user?.userId) {
       actions.append(element("small", "current-member-label", "Current session"));
     } else if (member.status === "revoked") {
@@ -6414,7 +6733,7 @@ function renderTeam(): void {
     members.append(row);
   }
 
-  const invitations = element("article", "workspace-card-large");
+  const invitations = workspaceTask();
   invitations.append(
     element("span", "eyebrow", "INVITATION LEDGER"),
     element("h3", "", "Recent invitation lifecycle"),
@@ -6423,8 +6742,9 @@ function renderTeam(): void {
     invitations.append(element("p", "muted-copy", "No team invitations have been issued."));
   }
   for (const invitation of state.team.invitations) {
-    const row = element("div", "hosting-row");
-    const copy = element("div");
+    const row = recordRow("div", "hosting-row");
+    row.dataset.recordKind = "team-invitation";
+    const copy = element("div", "record-primary");
     copy.append(
       element("strong", "", invitation.email),
       element(
@@ -6441,6 +6761,7 @@ function renderTeam(): void {
     );
     row.append(copy);
     if (invitation.status === "pending") {
+      const actions = element("div", "record-actions");
       const resend = element("button", "quiet-button", "Resend");
       resend.addEventListener("click", () => {
         void runAction({
@@ -6449,7 +6770,8 @@ function renderTeam(): void {
           pendingLabel: "Resending…",
         }, () => resendTeamInvitation(invitation));
       });
-      row.append(resend);
+      actions.append(resend);
+      row.append(actions);
     }
     invitations.append(row);
   }
@@ -6816,10 +7138,7 @@ function renderSpatial(): void {
     container.append(emptyState("Upload and process an immutable scene version before authoring semantics."));
     return;
   }
-  const versionControl = element(
-    "article",
-    "workspace-card-large spatial-version-control",
-  );
+  const versionControl = workspaceTask("spatial-version-control");
   const versionSelect = document.createElement("select");
   versionSelect.setAttribute("aria-label", "Spatial version");
   for (const version of state.selected?.versions ?? []) {
@@ -6859,7 +7178,7 @@ function renderSpatial(): void {
   if (state.projectSection === "structure") {
     container.append(renderSceneAuthoringWorkspace(project, spatial));
   }
-  const hierarchy = element("article", "workspace-card-large");
+  const hierarchy = workspaceTask();
   hierarchy.append(
     element("span", "eyebrow", `VERSION ${spatial.version.version_number}`),
     element("h3", "", "Place structure"),
@@ -6919,7 +7238,7 @@ function renderSpatial(): void {
   add.addEventListener("click", () => openSpatialEntityDialog(null));
   hierarchy.append(add);
 
-  const semanticExtraction = element("article", "workspace-card-large semantic-extraction-card");
+  const semanticExtraction = workspaceTask("semantic-extraction-card");
   semanticExtraction.append(
     element("span", "eyebrow", "POINT-CLOUD SEMANTICS"),
     element("h3", "", "Machine candidates, human-authored structure"),
@@ -6937,7 +7256,7 @@ function renderSpatial(): void {
     );
   }
   for (const extraction of extractionRuns.slice(0, 8)) {
-    const card = element("section", "semantic-extraction-run");
+    const card = recordSurface("section", "semantic-extraction-run");
     const heading = element("div", "semantic-extraction-heading");
     heading.append(
       element("strong", "", extraction.input_file_name),
@@ -7046,7 +7365,7 @@ function renderSpatial(): void {
     ),
   );
 
-  const routes = element("article", "workspace-card-large");
+  const routes = workspaceTask();
   routes.append(
     element("span", "eyebrow", "GUIDED NAVIGATION"),
     element("h3", "", "Routes and movement runtime"),
@@ -7280,14 +7599,14 @@ function renderSpatial(): void {
     if (actions.childElementCount) row.append(actions);
     navigationBuildHistory.append(row);
   }
-  const navigationBuildsCard = element("article", "workspace-card-large navigation-builds-card");
+  const navigationBuildsCard = workspaceTask("navigation-builds-card");
   navigationBuildsCard.append(
     element("span", "eyebrow", "VERIFIED NAVIGATION"),
     element("h3", "", "Build receipts and operator review"),
     navigationBuildHistory,
   );
 
-  const captureEvidence = element("article", "workspace-card-large capture-assurance");
+  const captureEvidence = workspaceTask("capture-assurance");
   captureEvidence.append(
     element("span", "eyebrow", "CAPTURE COMPLETENESS"),
     element("h3", "", "Pose-path coverage, explicit recapture evidence"),
@@ -7353,7 +7672,7 @@ function renderSpatial(): void {
     readiness: state.selected?.comparisonReadiness ?? emptyComparisonReadiness,
   });
 
-  const delivery = element("article", "workspace-card-large");
+  const delivery = workspaceTask();
   delivery.append(
     element("span", "eyebrow", "ADAPTIVE DELIVERY"),
     element("h3", "", "Measured device policy"),
@@ -7410,7 +7729,7 @@ function renderPublish(): void {
     return;
   }
 
-  const card = element("article", "workspace-card-large publication-readiness-card");
+  const card = workspaceTask("publication-readiness-card");
   const latestVersion = detail.versions[0] ?? null;
   const releasableVersion = auxiliaryCollisionTargetVersion();
   const navigationReady = Boolean(
@@ -7501,7 +7820,7 @@ function renderSceneAuthoringWorkspace(
   project: Project,
   spatial: SpatialWorkspace,
 ): HTMLElement {
-  const card = element("article", "workspace-card-large scene-authoring-workspace");
+  const card = workspaceTask("scene-authoring-workspace");
   const heading = element("div", "scene-authoring-heading");
   const copy = element("div");
   copy.append(
@@ -8122,7 +8441,7 @@ function askOperator(question: {
 }
 
 function renderFloorplanWorkflow(project: Project, spatial: SpatialWorkspace): HTMLElement {
-  const workflow = element("article", "workspace-card-large floorplan-workflow-card");
+  const workflow = workspaceTask("floorplan-workflow-card");
   workflow.append(
     element("span", "eyebrow", "VENDOR-NEUTRAL FLOOR PLAN"),
     element("h3", "", "Metric capture → operator revision → portable drawings"),
@@ -10135,7 +10454,7 @@ function renderCaptureScanStructure(structure: CaptureScanStructure): HTMLElemen
     );
     card.append(metrics);
     if (structure.vendorFieldNames.length) {
-      const fields = element("div", "notice-card capture-evidence-issues");
+      const fields = noticeSurface("div", "capture-evidence-issues");
       fields.append(element("strong", "", "Vendor extension fields recorded verbatim"));
       const list = document.createElement("ul");
       for (const name of structure.vendorFieldNames) list.append(element("li", "", name));
@@ -10201,7 +10520,7 @@ function renderCaptureCompletenessReport(report: CaptureCompletenessReport): HTM
   card.append(header, metrics, renderCaptureCompletenessOverlay(summary));
 
   if (summary.blockers.length) {
-    const blockers = element("div", "notice-card capture-evidence-issues");
+    const blockers = noticeSurface("div", "capture-evidence-issues");
     blockers.append(element("strong", "", "Conclusion blocked"));
     const list = document.createElement("ul");
     for (const blocker of summary.blockers) list.append(element("li", "", blocker));
@@ -10238,9 +10557,9 @@ function renderCaptureCompletenessReport(report: CaptureCompletenessReport): HTM
     element("p", "field-note", summary.limitation),
   );
   if (report.status === "reviewed") {
-    card.append(element(
+    card.append(noticeSurface(
       "div",
-      "notice-card",
+      "",
       `${humanStatus(report.review_decision ?? "reviewed")}: ${report.review_note ?? "Review recorded."}`,
     ));
   }
@@ -10413,7 +10732,7 @@ function renderMeasurement(): void {
     container.append(emptyState("Open a project from Projects before defining its measurement evidence."));
     return;
   }
-  const briefs = element("article", "workspace-card-large");
+  const briefs = workspaceTask();
   briefs.append(
     element("span", "eyebrow", "ACCEPTANCE CONTRACT"),
     element("h3", "", "Measurement briefs"),
@@ -10510,7 +10829,7 @@ function renderMeasurement(): void {
   });
   briefs.append(create);
 
-  const economics = element("article", "workspace-card-large");
+  const economics = workspaceTask();
   economics.append(
     element("span", "eyebrow", "UNIT ECONOMICS"),
     element("h3", "", "Measured delivery cost"),
@@ -10518,7 +10837,7 @@ function renderMeasurement(): void {
     projectFact("Cost records", String(workspace.costs.length)),
     element("p", "muted-copy", "Capture, compute, cleanup, QA, and professional partner costs are recorded separately so pricing can be validated from real jobs."),
   );
-  const boundaries = element("article", "workspace-card-large");
+  const boundaries = workspaceTask();
   boundaries.append(
     element("span", "eyebrow", "PROFESSIONAL BOUNDARY"),
     element("h3", "", "Certification cannot be self-declared"),
@@ -10664,20 +10983,10 @@ async function selectProject(
 }
 
 function firstIncompleteProjectSection(detail: ProjectDetail): ProjectSection {
-  const journey = projectJourneyState(detail);
-  if (!journey.hasCapture) return "overview";
-  if (journey.captureQualification?.status === "blocked") return "process";
-  if (!journey.renderableVersion) return "process";
-  if (!journey.navigationReady && journey.automaticWalkingWorkActive) return "process";
-  if (!journey.structureReady) return "structure";
-  if (!journey.navigationReady) return "publish";
-  if (journey.privacyVersion?.status === "QA_REQUIRED") return "publish";
-  if (!journey.privacyApproved) return "publish";
-  if (!detail.releases.some((release) => release.is_active && !release.revoked_at)) return "publish";
-  return "overview";
+  return projectWorkspaceModel(detail).canonicalSection;
 }
 
-function projectJourneyState(detail: ProjectDetail) {
+function projectJourneyState(detail: ProjectDetail): ProjectJourneyState {
   const renderableVersion = detail.versions.find((version) =>
     detail.assets.some((asset) =>
       asset.version_id === version.id &&
@@ -10742,6 +11051,229 @@ function projectJourneyState(detail: ProjectDetail) {
     privacyApproved,
     automaticWalkingWorkActive,
     walkingExceptionReviewReady,
+  };
+}
+
+function projectWorkspaceModel(detail: ProjectDetail): ProjectWorkspaceModel {
+  const journey = projectJourneyState(detail);
+  const archived = detail.project.status === "ARCHIVED";
+  const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
+  const canonicalSection: JourneySection = archived || !journey.hasCapture
+    ? "overview"
+    : journey.captureQualification?.status === "blocked" ||
+        !journey.renderableVersion ||
+        !journey.navigationReady && journey.automaticWalkingWorkActive
+      ? "process"
+      : !journey.structureReady
+        ? "structure"
+        : !journey.navigationReady ||
+            journey.privacyVersion?.status === "QA_REQUIRED" ||
+            !journey.privacyApproved ||
+            !activeRelease
+          ? "publish"
+          : "overview";
+
+  const blocker: ProjectBlocker = archived
+    ? {
+      kind: "blocked",
+      label: "Project archived",
+      detail: "Restore this project before changing its capture, structure, or publication.",
+    }
+    : journey.captureQualification?.status === "blocked"
+    ? {
+      kind: "blocked",
+      label: "Capture compatibility",
+      detail: journey.captureQualification.reason ?? "The shared capture frame was not verified.",
+    }
+    : journey.failedJob
+      ? {
+        kind: "blocked",
+        label: "Processing failed",
+        detail: journey.failedJob.progress_message ?? humanStatus(journey.failedJob.state),
+      }
+      : journey.walkingExceptionReviewReady
+        ? {
+          kind: "blocked",
+          label: "Structural review",
+          detail: "Automatic reconstruction found structural exceptions that need review.",
+        }
+        : canonicalSection === "structure" && !journey.hasMetricGeometry
+          ? {
+            kind: "blocked",
+            label: "Registered geometry",
+            detail: "A registered metric point cloud is required to build structure and walking evidence.",
+          }
+        : canonicalSection === "publish" && !journey.navigationReady
+          ? {
+            kind: "blocked",
+            label: "Walking map",
+            detail: "Verified collision and navigation evidence is required before publication.",
+          }
+          : canonicalSection === "publish" && !journey.privacyApproved
+            ? {
+              kind: "blocked",
+              label: "Privacy approval",
+              detail: "The newest immutable version needs operator privacy approval.",
+            }
+            : { kind: "clear", label: "No blocker" };
+
+  const stageLabel = archived
+    ? "Archived"
+    : canonicalSection === "overview"
+      ? journey.hasCapture ? "Complete" : "Capture"
+      : canonicalSection === "process"
+        ? "Process"
+        : canonicalSection === "structure"
+          ? "Structure"
+          : "Publish";
+  const nextAction = projectNextAction(detail, journey, canonicalSection);
+  const process: ProcessWorkspaceModel = journey.captureQualification?.status === "blocked"
+    ? {
+      kind: "blocked",
+      title: "Processing needs attention",
+      detail: journey.captureQualification.reason ?? "The capture frame could not be verified.",
+    }
+    : journey.activeJob
+      ? {
+        kind: "working",
+        title: humanStatus(journey.activeJob.job_type),
+        job: journey.activeJob,
+      }
+      : journey.failedJob
+        ? {
+          kind: "blocked",
+          title: "Processing needs attention",
+          detail: journey.failedJob.progress_message ?? humanStatus(journey.failedJob.state),
+        }
+        : journey.renderableVersion
+          ? {
+            kind: "complete",
+            title: "Visual scene prepared",
+            version: journey.renderableVersion,
+          }
+          : {
+            kind: "empty",
+            title: "Waiting for processing",
+            detail: journey.hasCapture
+              ? "The capture is preserved. Refresh this project to check processing activity."
+              : "Upload a capture result to start browser-scene preparation.",
+          };
+
+  return { journey, canonicalSection, stageLabel, blocker, nextAction, process };
+}
+
+function projectNextAction(
+  detail: ProjectDetail,
+  journey: ProjectJourneyState,
+  canonicalSection: JourneySection,
+): ProjectNextAction {
+  if (detail.project.status === "ARCHIVED") {
+    return {
+      label: "Restore project",
+      section: "overview",
+      command: { kind: "restore-project", projectId: detail.project.id },
+    };
+  }
+  if (!journey.hasCapture) {
+    return { label: "Upload capture result", section: "overview", command: { kind: "open-upload" } };
+  }
+  if (journey.captureQualification?.status === "blocked") {
+    return journey.failedJob
+      ? {
+        label: "Retry automatic qualification",
+        section: "process",
+        command: { kind: "retry-job", jobId: journey.failedJob.id },
+      }
+      : {
+        label: "Show correction steps",
+        section: "process",
+        command: {
+          kind: "show-capture-correction",
+          message: `${journey.captureQualification.reason ?? "The shared capture frame was not verified."} Export the visual and geometry files again from the same unchanged Y-up metre frame, then start a replacement immutable capture.`,
+        },
+      };
+  }
+  if (canonicalSection === "process") {
+    if (journey.failedJob) {
+      return {
+        label: "Retry automatic processing",
+        section: "process",
+        command: { kind: "retry-job", jobId: journey.failedJob.id },
+      };
+    }
+    return {
+      label: "Refresh processing status",
+      section: "process",
+      command: { kind: "refresh-project", projectId: detail.project.id },
+    };
+  }
+  if (canonicalSection === "structure") {
+    if (!journey.hasMetricGeometry) {
+      return {
+        label: "Upload registered geometry",
+        section: "overview",
+        command: { kind: "open-upload" },
+      };
+    }
+    if (!journey.walkingExceptionReviewReady) {
+      return {
+        label: "Refresh processing status",
+        section: "process",
+        command: { kind: "refresh-project", projectId: detail.project.id },
+      };
+    }
+    return {
+      label: "Review structural exceptions",
+      section: "structure",
+      command: { kind: "review-structure", projectId: detail.project.id },
+    };
+  }
+  if (canonicalSection === "publish") {
+    if (!journey.navigationReady) {
+      if (journey.walkingExceptionReviewReady) {
+        return {
+          label: "Review structural exceptions",
+          section: "structure",
+          command: { kind: "review-structure", projectId: detail.project.id },
+        };
+      }
+      if (journey.failedJob) {
+        return {
+          label: "Retry automatic processing",
+          section: "process",
+          command: { kind: "retry-job", jobId: journey.failedJob.id },
+        };
+      }
+      return {
+        label: "Refresh processing status",
+        section: "process",
+        command: { kind: "refresh-project", projectId: detail.project.id },
+      };
+    }
+    if (!journey.privacyApproved || journey.privacyVersion?.status === "QA_REQUIRED") {
+      return {
+        label: "Review privacy and approve",
+        section: "publish",
+        command: { kind: "review-privacy", projectId: detail.project.id },
+      };
+    }
+    return {
+      label: "Publish shareable URL",
+      section: "publish",
+      command: { kind: "publish", projectId: detail.project.id },
+    };
+  }
+  if (journey.renderableVersion) {
+    return {
+      label: "Open private preview",
+      section: "overview",
+      command: { kind: "open-preview", versionId: journey.renderableVersion.id },
+    };
+  }
+  return {
+    label: "Refresh processing status",
+    section: "process",
+    command: { kind: "refresh-project", projectId: detail.project.id },
   };
 }
 
@@ -10907,6 +11439,87 @@ function revealAccessLinkButton(
   return reveal;
 }
 
+function renderProjectContext(model: ProjectWorkspaceModel): void {
+  byId("projectCurrentStage").textContent = model.stageLabel;
+  const blocker = byId("projectCurrentBlocker");
+  blocker.textContent = model.blocker.kind === "blocked"
+    ? `${model.blocker.label}: ${model.blocker.detail}`
+    : model.blocker.label;
+  blocker.dataset.blocked = String(model.blocker.kind === "blocked");
+  const action = byId<HTMLButtonElement>("projectCurrentAction");
+  action.textContent = model.nextAction.label;
+  action.disabled = false;
+  action.onclick = () => executeProjectWorkspaceCommand(model.nextAction.command, action);
+}
+
+function executeProjectWorkspaceCommand(
+  command: ProjectWorkspaceCommand,
+  trigger: HTMLButtonElement,
+): void {
+  switch (command.kind) {
+    case "open-upload":
+      openUploadDialog();
+      return;
+    case "restore-project":
+      requestProjectLifecycleChange("restore", trigger, command.projectId);
+      return;
+    case "show-capture-correction":
+      showNotice(command.message, "error");
+      return;
+    case "retry-job": {
+      const job = state.selected?.jobs.find((candidate) => candidate.id === command.jobId);
+      if (!job) {
+        showNotice("The processing job changed. Refresh the project and try again.", "error");
+        return;
+      }
+      void runAction({
+        key: `retry-job:${job.id}`,
+        trigger,
+        pendingLabel: "Queueing retry…",
+      }, () => retryJob(job));
+      return;
+    }
+    case "refresh-project":
+      void runAction({
+        key: `refresh-project:${command.projectId}`,
+        trigger,
+        pendingLabel: "Refreshing…",
+      }, async () => {
+        await refreshAll();
+        await selectProject(command.projectId, false, false);
+      });
+      return;
+    case "review-structure":
+      openSceneEditor(command.projectId, trigger);
+      return;
+    case "open-preview":
+      void runAction({
+        key: `open-preview:${command.versionId}`,
+        trigger,
+        pendingLabel: "Preparing preview…",
+      }, () => openVersionPreview(command.versionId));
+      return;
+    case "review-privacy":
+      void runAction({
+        key: `open-qa:${command.projectId}`,
+        trigger,
+        pendingLabel: "Checking evidence…",
+      }, openQaDialog);
+      return;
+    case "publish":
+      void runAction({
+        key: `open-release:${command.projectId}`,
+        trigger,
+        pendingLabel: "Loading release evidence…",
+      }, openReleaseDialog);
+      return;
+    default: {
+      const exhaustive: never = command;
+      return exhaustive;
+    }
+  }
+}
+
 function renderProjectDetail(): void {
   const detail = state.selected;
   if (!detail) return;
@@ -10917,208 +11530,20 @@ function renderProjectDetail(): void {
   body.className = "project-detail-flow";
   body.replaceChildren();
 
+  const model = projectWorkspaceModel(detail);
   const {
     renderableVersion,
-    activeJob,
-    failedJob,
-    captureQualification,
-    hasCapture,
-    hasMetricGeometry,
-    floorplanJob,
     navigationReady,
-    structureReady,
     privacyVersion: latestVersion,
-    privacyApproved,
-    automaticWalkingWorkActive,
-    walkingExceptionReviewReady,
-  } = projectJourneyState(detail);
+  } = model.journey;
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
-
-  const journey = element("section", "project-journey");
-  const journeyHeading = element("div", "project-journey-heading");
-  const journeyCopy = element("div");
-  journeyCopy.append(
-    element("span", "eyebrow", "CAPTURE JOURNEY"),
-    element(
-      "h3",
-      "",
-      renderableVersion
-        ? captureQualification?.status === "blocked"
-          ? "Capture compatibility needs correction."
-          : navigationReady
-          ? "Your walkable splat preview is ready."
-          : automaticWalkingWorkActive
-            ? "Building and verifying the walking map."
-            : walkingExceptionReviewReady
-              ? "Structural exceptions need review."
-              : hasMetricGeometry
-                ? "Walking-map processing needs attention."
-                : "Registered structural geometry is required."
-        : "From capture result to browser preview.",
-    ),
-    element(
-      "p",
-      "muted-copy",
-      renderableVersion
-        ? captureQualification?.status === "blocked"
-          ? `${captureQualification.reason ?? "Automatic qualification could not verify the shared capture frame."} Return to the capture source, export both files again from one unchanged Y-up metre frame, and upload them as a new immutable capture.`
-          : navigationReady
-          ? "The visual splat, verified collision, and approved walking map are ready for review."
-          : automaticWalkingWorkActive
-            ? `${humanStatus(activeJob!.job_type)} is ${humanStatus(activeJob!.state).toLowerCase()}: ${activeJob!.progress_message ?? `${activeJob!.progress}% complete`}. No routine navigation setup is required.`
-            : walkingExceptionReviewReady
-              ? "Automatic reconstruction found structure that cannot be accepted from geometry alone. Inspect only the highlighted gaps or connectors on the render; collision and walking proof rebuild automatically after correction."
-              : failedJob
-                ? `Automatic walking-map processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
-                : "The visual is preserved, but it has no registered structural source from which collision and walking proof can be generated safely."
-        : activeJob
-          ? `${humanStatus(activeJob.job_type)} is ${humanStatus(activeJob.state).toLowerCase()}: ${activeJob.progress_message ?? `${activeJob.progress}% complete`}.`
-          : failedJob
-            ? `Processing needs attention: ${failedJob.progress_message ?? humanStatus(failedJob.state)}.`
-            : hasCapture
-              ? "The capture is preserved. Refresh processing activity if a browser derivative has not been queued."
-              : "Upload the portable splat and registered metric geometry together. The platform handles browser conversion, floor-plan extraction, structural collision, and navigation generation.",
-    ),
-  );
-  const journeyActions = element("div", "project-journey-actions");
-  if (!hasCapture) {
-    const upload = element("button", "primary-button", "Upload capture result");
-    upload.disabled = detail.project.status === "ARCHIVED";
-    upload.addEventListener("click", openUploadDialog);
-    journeyActions.append(upload);
-  } else if (captureQualification?.status === "blocked") {
-    if (failedJob) {
-      const retry = element("button", "primary-button", "Retry automatic qualification");
-      retry.addEventListener("click", () => {
-        void runAction({
-          key: `retry-job:${failedJob.id}`,
-          trigger: retry,
-          pendingLabel: "Queueing retry…",
-        }, () => retryJob(failedJob));
-      });
-      journeyActions.append(retry);
-    } else {
-      const correction = element("button", "quiet-button", "Show correction steps");
-      correction.addEventListener("click", () => showNotice(
-        `${captureQualification.reason ?? "The shared capture frame was not verified."} Export the visual and geometry PLY files again from the same unchanged Y-up metre coordinate frame, then start a replacement immutable capture.`,
-        "error",
-      ));
-      journeyActions.append(correction);
-    }
-  } else if (renderableVersion && navigationReady) {
-    const preview = element("button", "primary-button", "Open private preview");
-    preview.addEventListener("click", () => {
-      void runAction({
-        key: `open-preview:${renderableVersion.id}`,
-        trigger: preview,
-        pendingLabel: "Preparing preview…",
-      }, () => openVersionPreview(renderableVersion.id));
-    });
-    const copy = element("button", "quiet-button", "Copy preview URL");
-    copy.addEventListener("click", () => {
-      void runAction({
-        key: `copy-preview:${renderableVersion.id}`,
-        trigger: copy,
-        pendingLabel: "Creating link…",
-      }, () => copyVersionPreviewUrl(renderableVersion.id));
-    });
-    const editScene = element("button", "quiet-button", "Edit scene");
-    editScene.addEventListener("click", () => openSceneEditor(detail.project.id, editScene));
-    journeyActions.append(preview, copy, editScene);
-  } else if (renderableVersion && automaticWalkingWorkActive) {
-    const refresh = element("button", "quiet-button", "Refresh walking-map progress");
-    refresh.addEventListener("click", () => {
-      void runAction({
-        key: `refresh-project:${detail.project.id}`,
-        trigger: refresh,
-        pendingLabel: "Refreshing…",
-      }, async () => {
-        await refreshAll();
-        await selectProject(detail.project.id, false, false);
-      });
-    });
-    journeyActions.append(refresh);
-  } else if (renderableVersion && walkingExceptionReviewReady) {
-    const reviewExceptions = element("button", "primary-button", "Review structural exceptions");
-    reviewExceptions.addEventListener("click", () => {
-      openSceneEditor(detail.project.id, reviewExceptions);
-    });
-    journeyActions.append(reviewExceptions);
-  } else if (renderableVersion && failedJob) {
-    const retry = element("button", "primary-button", "Retry automatic processing");
-    retry.addEventListener("click", () => {
-      void runAction({
-        key: `retry-job:${failedJob.id}`,
-        trigger: retry,
-        pendingLabel: "Queueing retry…",
-      }, () => retryJob(failedJob));
-    });
-    journeyActions.append(retry);
-  } else {
-    const refresh = element("button", "quiet-button", "Refresh processing status");
-    refresh.addEventListener("click", () => {
-      void runAction({
-        key: `refresh-project:${detail.project.id}`,
-        trigger: refresh,
-        pendingLabel: "Refreshing…",
-      }, async () => {
-        await refreshAll();
-        await selectProject(detail.project.id, false, false);
-      });
-    });
-    journeyActions.append(refresh);
-  }
-  journeyHeading.append(journeyCopy, journeyActions);
-  const steps = element("div", "project-journey-steps");
-  steps.append(
-    projectJourneyStep("1", "Capture", hasCapture ? "complete" : "current", hasCapture ? "Source preserved" : "Upload files", "overview"),
-    projectJourneyStep(
-      "2",
-      "Process",
-      captureQualification?.status === "blocked"
-        ? "blocked"
-        : renderableVersion ? "complete" : activeJob ? "current" : failedJob ? "blocked" : "waiting",
-      captureQualification?.status === "blocked"
-        ? "Capture frame not verified"
-        : renderableVersion ? "Visual scene prepared" : activeJob ? `${activeJob.progress}% complete` : failedJob ? "Needs attention" : "Starts automatically",
-      "process",
-    ),
-    projectJourneyStep(
-      "3",
-      "Structure",
-      captureQualification?.status === "blocked"
-        ? "blocked"
-        : structureReady
-        ? "complete"
-        : walkingExceptionReviewReady || floorplanJob && ["QUEUED", "LEASED", "RUNNING"].includes(floorplanJob.state)
-          ? "current"
-          : floorplanJob ? "blocked" : hasMetricGeometry ? "waiting" : "blocked",
-      captureQualification?.status === "blocked"
-        ? "Correct capture exports first"
-        : structureReady
-        ? "Rooms and openings approved"
-        : walkingExceptionReviewReady
-          ? "Review structural exceptions"
-          : floorplanJob ? humanStatus(floorplanJob.state) : hasMetricGeometry ? "Starts automatically" : "Geometry required",
-      "structure",
-    ),
-    projectJourneyStep(
-      "4",
-      "Publish",
-      activeRelease ? "complete" : navigationReady && privacyApproved ? "current" : "blocked",
-      activeRelease
-        ? `Live at /${activeRelease.slug}`
-        : !privacyApproved
-          ? "Privacy approval required"
-          : navigationReady
-            ? "Choose audience and publish"
-            : walkingExceptionReviewReady
-              ? "Review structural exceptions"
-              : "Verified walking map required",
-      "publish",
-    ),
-  );
-  journey.append(journeyHeading, steps);
+  renderProjectContext(model);
+  renderProcessWorkspace({
+    container: byId("processOverview"),
+    jobs: detail.jobs,
+    process: model.process,
+    humanStatus,
+  });
 
   const sharing = detailCard("Preview and sharing");
   sharing.classList.add("project-sharing-card");
@@ -11128,6 +11553,15 @@ function renderProjectDetail(): void {
       "muted-copy",
       "Private preview URLs are short-lived operator sessions. Public or customer-facing URLs are created only after privacy review and publication.",
     ));
+    const copyPreview = element("button", "quiet-button wide", "Copy private preview URL");
+    copyPreview.addEventListener("click", () => {
+      void runAction({
+        key: `copy-preview:${renderableVersion.id}`,
+        trigger: copyPreview,
+        pendingLabel: "Creating link…",
+      }, () => copyVersionPreviewUrl(renderableVersion.id));
+    });
+    sharing.append(copyPreview);
   } else if (renderableVersion) {
     sharing.append(element(
       "p",
@@ -11154,7 +11588,11 @@ function renderProjectDetail(): void {
     }
   }
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
-  if (latestVersion?.status === "QA_REQUIRED" && navigationReady) {
+  if (
+    latestVersion?.status === "QA_REQUIRED" &&
+    navigationReady &&
+    model.nextAction.command.kind !== "review-privacy"
+  ) {
     const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
     qaButton.addEventListener("click", () => {
       void runAction({
@@ -11165,7 +11603,11 @@ function renderProjectDetail(): void {
     });
     sharing.append(qaButton);
   }
-  if (releasableVisualVersion && navigationReady) {
+  if (
+    releasableVisualVersion &&
+    navigationReady &&
+    model.nextAction.command.kind !== "publish"
+  ) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
     publishButton.addEventListener("click", () => {
       void runAction({
@@ -11223,29 +11665,23 @@ function renderProjectDetail(): void {
     detail.project.status === "ARCHIVED" ? "quiet-button wide" : "danger-button wide",
     detail.project.status === "ARCHIVED" ? "Restore project" : "Archive project",
   );
-  lifecycleButton.addEventListener("click", async () => {
-    const restoring = detail.project.status === "ARCHIVED";
-    if (!await confirmOperator(
-      restoring
-        ? `Restore ${detail.project.name} to ${humanStatus(detail.project.status === "ARCHIVED" ? "DRAFT" : detail.project.status)}?`
-        : `Archive ${detail.project.name}? Active releases, jobs, and uploads must be resolved first.`,
-    )) return;
-    void runAction({
-      key: `${restoring ? "restore" : "archive"}-project:${detail.project.id}`,
-      trigger: lifecycleButton,
-      pendingLabel: restoring ? "Restoring…" : "Archiving…",
-    }, () => changeProjectLifecycle(restoring ? "restore" : "archive"));
+  lifecycleButton.addEventListener("click", () => {
+    requestProjectLifecycleChange(
+      detail.project.status === "ARCHIVED" ? "restore" : "archive",
+      lifecycleButton,
+      detail.project.id,
+    );
   });
   overview.append(lifecycleButton);
 
   const versions = detailCard("Version history");
   if (!detail.versions.length) versions.append(element("p", "muted-copy", "No immutable scene version yet."));
   for (const version of detail.versions) {
-    versions.append(element("div", "detail-line", `v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleString()}`));
+    versions.append(detailLine(`v${version.version_number} · ${humanStatus(version.status)} · ${parseTimestamp(version.created_at).toLocaleString()}`));
     if (version.workflow_policy_classification_status === "legacy_unknown") {
-      versions.append(element(
+      versions.append(noticeSurface(
         "p",
-        "notice-card",
+        "",
         `Version ${version.version_number} predates classified workflow-policy receipts. Existing releases remain historical evidence; create a new immutable version under an administrator-classified policy before publishing again.`,
       ));
     }
@@ -11263,7 +11699,7 @@ function renderProjectDetail(): void {
   const assets = detailCard("Assets");
   if (!detail.assets.length) assets.append(element("p", "muted-copy", "No assets stored."));
   for (const asset of detail.assets) {
-    assets.append(element("div", "detail-line", `${asset.format.toUpperCase()} · ${asset.file_name} · ${formatBytes(asset.size_bytes)} · ${asset.integrity_status}`));
+    assets.append(detailLine(`${asset.format.toUpperCase()} · ${asset.file_name} · ${formatBytes(asset.size_bytes)} · ${asset.integrity_status}`));
   }
 
   const captureBundles = detailCard("Capture contracts");
@@ -11292,7 +11728,7 @@ function renderProjectDetail(): void {
 
   const releaseHistory = detailCard("Release history");
   for (const release of detail.releases) {
-    const releaseRow = element("div", "release-row");
+    const releaseRow = recordSurface("div", "release-row");
     const link = document.createElement("a");
     link.href = `/s/${release.slug}`;
     link.target = "_blank";
@@ -11395,39 +11831,19 @@ function renderProjectDetail(): void {
   if (effectiveProjectWorkflowPolicy(detail.project).measurement !== "hidden") optionalTools.append(measurementButton);
   optionalTools.append(inviteButton, reviewButton, deliveryButton, domainButton);
 
-  const technicalDetails = element("details", "project-detail-disclosure");
+  const technicalDetails = taskDisclosure();
   technicalDetails.append(element("summary", "", "Technical details and source history"));
   const technicalGrid = element("div", "project-detail-grid");
   technicalGrid.append(overview, versions, assets, captureBundles, releaseHistory);
   technicalDetails.append(technicalGrid);
 
-  const optionalDetails = element("details", "project-detail-disclosure");
+  const optionalDetails = taskDisclosure();
   optionalDetails.append(element("summary", "", "Optional editing, evidence, and delivery tools"));
   const optionalGrid = element("div", "project-detail-grid");
   optionalGrid.append(optionalTools);
   optionalDetails.append(optionalGrid);
 
-  body.append(journey, sharing, technicalDetails, optionalDetails);
-}
-
-function projectJourneyStep(
-  number: string,
-  label: string,
-  status: "complete" | "current" | "available" | "waiting" | "blocked",
-  detail: string,
-  target: ProjectSection,
-): HTMLElement {
-  const step = element("button", `project-journey-step ${status}`);
-  step.type = "button";
-  step.dataset.projectJourneySection = target;
-  step.addEventListener("click", () => activateProjectSection(target, true, "push", true));
-  if (state.projectSection === target) step.setAttribute("aria-current", "step");
-  step.append(
-    element("span", "project-journey-number", number),
-    element("strong", "", label),
-    element("small", "", detail),
-  );
-  return step;
+  body.append(sharing, technicalDetails, optionalDetails);
 }
 
 function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
@@ -11442,7 +11858,7 @@ function openSceneEditor(projectId: string, trigger: HTMLButtonElement): void {
 }
 
 function projectFact(label: string, value: string): HTMLElement {
-  const line = element("div", "detail-line");
+  const line = detailLine();
   line.append(element("strong", "", label), element("span", "", value));
   return line;
 }
@@ -12116,7 +12532,7 @@ function openEditProjectDialog(): void {
     project.captureOrigin ?? captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId),
   );
   setValue("assetProducer", project.assetProducer ?? "");
-  setValue("deliveryTemplate", project.deliveryTemplate);
+  setValue("deliveryTemplate", normalizeProjectDeliveryTemplate(project.deliveryTemplate));
   setValue("notes", project.notes ?? "");
   // Trajectory auto-open changes what the platform will open on machine
   // evidence alone, so it stays an administrator decision and is shown only
@@ -12167,40 +12583,36 @@ async function updateProject(form: FormData): Promise<void> {
     "walked-contact":
       "Enable walked-contact clutter demotion: any wall run standing on walked floor is removed.",
   }[trajectoryClutterDemotion];
-  try {
-    await api(`/api/projects/${project.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        name: String(form.get("name") ?? ""),
-        customerName: optionalString(form.get("customerName")) ?? null,
-        customerEmail: optionalString(form.get("customerEmail")) ?? null,
-        notes: optionalString(form.get("notes")) ?? null,
-        customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
-        ...(state.user?.role === "platform_admin" ? {
-          captureOrigin: String(form.get("captureOrigin") ?? project.captureOrigin ??
-            captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
-          assetProducer: assetProducer || null,
-          deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
-          // The policy schema is strict and every dimension is behaviour, so
-          // the whole current policy travels with the one dimension this form
-          // edits — never a partial object that would reset the rest.
-          ...(policyChanged ? {
-            workflowPolicy: { ...currentPolicy, trajectoryAutoOpen, trajectoryClutterDemotion },
-            transitionReason: trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen
-              ? (trajectoryAutoOpen === "visited-rooms"
-                ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
-                : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.")
-              : clutterDemotionReason,
-          } : {}),
+  await api(`/api/projects/${project.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      name: String(form.get("name") ?? ""),
+      customerName: optionalString(form.get("customerName")) ?? null,
+      customerEmail: optionalString(form.get("customerEmail")) ?? null,
+      notes: optionalString(form.get("notes")) ?? null,
+      customFields: projectCustomFieldsFromForm(byId("editProjectCustomFields"), true),
+      ...(state.user?.role === "platform_admin" ? {
+        captureOrigin: String(form.get("captureOrigin") ?? project.captureOrigin ??
+          captureOriginForLegacyAdapter(project.captureAdapter as CaptureAdapterId)),
+        assetProducer: assetProducer || null,
+        deliveryTemplate: String(form.get("deliveryTemplate") ?? project.deliveryTemplate),
+        // The policy schema is strict and every dimension is behaviour, so
+        // the whole current policy travels with the one dimension this form
+        // edits — never a partial object that would reset the rest.
+        ...(policyChanged ? {
+          workflowPolicy: { ...currentPolicy, trajectoryAutoOpen, trajectoryClutterDemotion },
+          transitionReason: trajectoryAutoOpen !== currentPolicy.trajectoryAutoOpen
+            ? (trajectoryAutoOpen === "visited-rooms"
+              ? "Enable trajectory auto-open: scanner-visited rooms may qualify unresolved openings."
+              : "Disable trajectory auto-open: unresolved openings stay sealed until an operator classifies them.")
+            : clutterDemotionReason,
         } : {}),
-      }),
-    });
-    editProjectDialog.close();
-    showToast("Project settings saved");
-    await refreshAll();
-  } catch (error) {
-    byId("editProjectError").textContent = errorMessage(error);
-  }
+      } : {}),
+    }),
+  });
+  editProjectDialog.close();
+  showToast("Project settings saved");
+  await refreshAll();
 }
 
 async function bulkChangeProjectLifecycle(action: "archive" | "restore"): Promise<void> {
@@ -12251,6 +12663,36 @@ async function bulkChangeProjectLifecycle(action: "archive" | "restore"): Promis
     + `${result.summary.unchanged ? `; ${result.summary.unchanged} already matched the requested state` : ""}.`,
     "success",
   );
+}
+
+function requestProjectLifecycleChange(
+  action: "archive" | "restore",
+  trigger: HTMLButtonElement,
+  projectId: string,
+): void {
+  const project = state.selected?.project;
+  if (!project || project.id !== projectId) {
+    showNotice("The selected project changed. Open it again before changing its lifecycle.", "error");
+    return;
+  }
+  void (async () => {
+    const restoring = action === "restore";
+    const confirmed = await confirmOperator(
+      restoring
+        ? `Restore ${project.name} to ${humanStatus("DRAFT")}?`
+        : `Archive ${project.name}? Active releases, jobs, and uploads must be resolved first.`,
+      restoring ? "Restore project" : "Archive project",
+    );
+    if (!confirmed) return;
+    void runAction({
+      key: `${action}-project:${project.id}`,
+      trigger,
+      pendingLabel: restoring ? "Restoring…" : "Archiving…",
+      idleLabel: () => state.selected?.project.id === project.id
+        ? projectWorkspaceModel(state.selected).nextAction.label
+        : restoring ? "Restore project" : "Archive project",
+    }, () => changeProjectLifecycle(action));
+  })();
 }
 
 async function changeProjectLifecycle(action: "archive" | "restore"): Promise<void> {
@@ -12845,31 +13287,27 @@ async function approveVersion(form: FormData): Promise<void> {
     asset.kind === "poster" &&
     asset.integrity_status === "verified"
   );
-  try {
-    await api(`/api/versions/${version.id}/approve`, {
-      method: "POST",
-      body: JSON.stringify({
-        webAssetId: String(form.get("webAssetId") ?? ""),
-        posterAssetId: verifiedPoster?.id ?? null,
-        visualGrade: String(form.get("visualGrade") ?? "B"),
-        measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
-        privacyStatus: "approved",
-        notes: optionalString(form.get("notes")),
-      }),
-    });
-    qaDialog.close();
-    showToast("Version approved");
-    await refreshAll();
-    // Publication is the natural next act after QA, so the release dialog
-    // opens itself with the reviewed transform evidence pre-selected instead
-    // of making the operator hunt for the publish button. Publishing stays
-    // its own explicit submit: it binds source-to-world evidence, rotation,
-    // and audience, and rollback operates on releases — its receipt cannot
-    // be folded into the QA approval's.
-    await openReleaseDialog();
-  } catch (error) {
-    byId("qaError").textContent = errorMessage(error);
-  }
+  await api(`/api/versions/${version.id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({
+      webAssetId: String(form.get("webAssetId") ?? ""),
+      posterAssetId: verifiedPoster?.id ?? null,
+      visualGrade: String(form.get("visualGrade") ?? "B"),
+      measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
+      privacyStatus: "approved",
+      notes: optionalString(form.get("notes")),
+    }),
+  });
+  qaDialog.close();
+  showToast("Version approved");
+  await refreshAll();
+  // Publication is the natural next act after QA, so the release dialog
+  // opens itself with the reviewed transform evidence pre-selected instead
+  // of making the operator hunt for the publish button. Publishing stays
+  // its own explicit submit: it binds source-to-world evidence, rotation,
+  // and audience, and rollback operates on releases — its receipt cannot
+  // be folded into the QA approval's.
+  await openReleaseDialog();
 }
 
 async function openReleaseDialog(): Promise<void> {
@@ -13166,85 +13604,83 @@ async function publishRelease(form: FormData): Promise<void> {
   if (!state.selected) return;
   releaseOperationId ??= crypto.randomUUID();
   const expiresAtValue = optionalString(form.get("expiresAt"));
-  try {
-    const initialCamera = parseReleaseInitialCamera(form);
-    const startingViewQuality = releaseStartingViewQualityReceipt(initialCamera);
-    const sceneRotationDegrees = parseSceneRotationDegrees([
-      form.get("sceneRotationX"),
-      form.get("sceneRotationY"),
-      form.get("sceneRotationZ"),
-    ]);
-    const sourceToWorld = parseReleaseSourceToWorld(form);
-    if (sceneRotationDegrees && sourceToWorld) {
-      throw new Error(
-        "Use either visual scene rotation or reviewed source-to-world evidence, not both.",
-      );
-    }
-    const sourceToWorldEvidenceId = sourceToWorld
-      ? String(form.get("sourceToWorldEvidenceId") ?? "")
-      : null;
-    if (sourceToWorld && !sourceToWorldEvidenceId) {
-      throw new Error(
-        "Choose an accepted semantic extraction that proves the release transform.",
-      );
-    }
-    const navigationWorldUnit = state.spatial?.navigationProfile.worldUnit ?? "metres";
-    if (sourceToWorld && sourceToWorld.worldUnit !== navigationWorldUnit) {
-      throw new Error(
-        `Tune the navigation agent to ${
-          sourceToWorld.worldUnit === "scene_units"
-            ? "Provisional scene units (SU)"
-            : "Metric metres"
-        } before publishing this transform.`,
-      );
-    }
-    const accessPolicy = String(form.get("accessPolicy") ?? "token");
-    // Open exposure is a deliberate act, never a dialog default: anyone with
-    // the link (public and unlisted alike) walks the scene with no credential.
-    if (accessPolicy === "public" || accessPolicy === "unlisted") {
-      const confirmed = await confirmPublicationDecision({
-        title: accessPolicy === "public" ? "Publish publicly?" : "Publish unlisted?",
-        message: "Anyone with the link will enter this scene with no credential. " +
-          "Choose Access token instead to gate it behind a shareable secret link.",
-        confirmLabel: accessPolicy === "public" ? "Make it public" : "Publish unlisted",
-      });
-      if (!confirmed) return;
-    }
-    const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
-      `/api/projects/${state.selected.project.id}/releases`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          clientOperationId: releaseOperationId,
-          slug: String(form.get("slug") ?? ""),
-          accessPolicy,
-          expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
-          ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
-          ...(startingViewQuality ? { startingViewQuality } : {}),
-          viewerConfig: {
-            title: String(form.get("title") ?? state.selected.project.name),
-            subtitle: optionalString(form.get("subtitle")),
-            captureDate: optionalString(form.get("captureDate")),
-            measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
-            splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
-            defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
-            ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
-            ...(sourceToWorld ? { sourceToWorld } : {}),
-            ...(initialCamera ? { initialCamera } : {}),
-          },
-        }),
-      },
+  const initialCamera = parseReleaseInitialCamera(form);
+  const startingViewQuality = releaseStartingViewQualityReceipt(initialCamera);
+  const sceneRotationDegrees = parseSceneRotationDegrees([
+    form.get("sceneRotationX"),
+    form.get("sceneRotationY"),
+    form.get("sceneRotationZ"),
+  ]);
+  const sourceToWorld = parseReleaseSourceToWorld(form);
+  if (sceneRotationDegrees && sourceToWorld) {
+    throw new Error(
+      "Use either visual scene rotation or reviewed source-to-world evidence, not both.",
     );
-    releaseDialog.close();
-    releaseOperationId = null;
-    const access = result.release.accessToken ? `${result.release.url}?access_token=${encodeURIComponent(result.release.accessToken)}` : result.release.url;
-    showNotice(`Published: ${access}`, "success");
-    await navigator.clipboard.writeText(access).catch(() => undefined);
-    showToast("Release published; link copied");
-    await refreshAll();
-  } catch (error) {
-    byId("releaseError").textContent = errorMessage(error);
   }
+  const sourceToWorldEvidenceId = sourceToWorld
+    ? String(form.get("sourceToWorldEvidenceId") ?? "")
+    : null;
+  if (sourceToWorld && !sourceToWorldEvidenceId) {
+    throw new Error(
+      "Choose an accepted semantic extraction that proves the release transform.",
+    );
+  }
+  const navigationWorldUnit = state.spatial?.navigationProfile.worldUnit ?? "metres";
+  if (sourceToWorld && sourceToWorld.worldUnit !== navigationWorldUnit) {
+    throw new Error(
+      `Tune the navigation agent to ${
+        sourceToWorld.worldUnit === "scene_units"
+          ? "Provisional scene units (SU)"
+          : "Metric metres"
+      } before publishing this transform.`,
+    );
+  }
+  const accessPolicy = String(form.get("accessPolicy") ?? "token");
+  // Open exposure is a deliberate act, never a dialog default: anyone with
+  // the link (public and unlisted alike) walks the scene with no credential.
+  if (accessPolicy === "public" || accessPolicy === "unlisted") {
+    const confirmed = await confirmPublicationDecision({
+      title: accessPolicy === "public" ? "Publish publicly?" : "Publish unlisted?",
+      message: "Anyone with the link will enter this scene with no credential. " +
+        "Choose Access token instead to gate it behind a shareable secret link.",
+      confirmLabel: accessPolicy === "public" ? "Make it public" : "Publish unlisted",
+    });
+    if (!confirmed) return;
+  }
+  const result = await api<{ release: { url: string; accessPolicy: string; accessToken: string | null } }>(
+    `/api/projects/${state.selected.project.id}/releases`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        clientOperationId: releaseOperationId,
+        slug: String(form.get("slug") ?? ""),
+        accessPolicy,
+        expiresAt: expiresAtValue ? new Date(expiresAtValue).toISOString() : null,
+        ...(sourceToWorldEvidenceId ? { sourceToWorldEvidenceId } : {}),
+        ...(startingViewQuality ? { startingViewQuality } : {}),
+        viewerConfig: {
+          title: String(form.get("title") ?? state.selected.project.name),
+          subtitle: optionalString(form.get("subtitle")),
+          captureDate: optionalString(form.get("captureDate")),
+          measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
+          splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
+          defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
+          ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
+          ...(sourceToWorld ? { sourceToWorld } : {}),
+          ...(initialCamera ? { initialCamera } : {}),
+        },
+      }),
+    },
+  );
+  releaseDialog.close();
+  releaseOperationId = null;
+  const access = result.release.accessToken
+    ? `${result.release.url}?access_token=${encodeURIComponent(result.release.accessToken)}`
+    : result.release.url;
+  showNotice(`Published: ${access}`, "success");
+  await navigator.clipboard.writeText(access).catch(() => undefined);
+  showToast("Release published; link copied");
+  await refreshAll();
 }
 
 function reviewedSemanticSourceToWorld(): Array<{
@@ -13702,18 +14138,19 @@ function renderCustomDomains(projectId: string): void {
     return;
   }
   for (const domain of workspace.domains) {
-    const row = element("article", "domain-row");
+    const row = recordRow("article", "domain-row");
+    row.dataset.recordKind = "domain";
     const heading = element("div", "domain-row-heading");
-    const title = element("div");
+    const title = element("div", "record-primary");
     title.append(
       element("strong", "", domain.hostname),
       element("small", "", domainStatusDescription(domain)),
     );
-    const badge = element("span", `status-badge ${domain.status === "active" ? "success" : domain.status === "failed" ? "danger" : "warning"}`, humanStatus(domain.status));
+    const badge = element("span", `status-badge record-status ${domain.status === "active" ? "success" : domain.status === "failed" ? "danger" : "warning"}`, humanStatus(domain.status));
     heading.append(title, badge);
     row.append(heading);
 
-    const evidence = element("div", "domain-evidence");
+    const evidence = element("div", "domain-evidence record-secondary");
     evidence.append(
       element("span", "", `Ownership · ${domain.dnsVerifiedAt ? "verified" : "pending"}`),
       element("span", "", `Routing · ${humanStatus(domain.providerStatus ?? "not provisioned")}`),
@@ -13729,7 +14166,7 @@ function renderCustomDomains(projectId: string): void {
       row.append(element("p", "form-error", domain.lastError));
     }
 
-    const actions = element("div", "release-actions");
+    const actions = element("div", "release-actions record-actions");
     if (!domain.dnsVerifiedAt && domain.status !== "active") {
       const token = customDomainChallenges.get(domain.id);
       if (token) {
@@ -13956,71 +14393,15 @@ function showToast(message: string): void {
   window.setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
-function element<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className = "",
-  text = "",
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  node.textContent = text;
-  return node;
-}
-
 function detailCard(title: string): HTMLElement {
-  const card = element("article", "detail-card");
+  const card = detailTask();
   card.append(element("span", "eyebrow", title.toUpperCase()));
   return card;
-}
-
-function emptyState(message: string, compact = false): HTMLElement {
-  return element("div", `empty-state${compact ? " compact" : ""}`, message);
 }
 
 function optionalString(value: FormDataEntryValue | null): string | undefined {
   const stringValue = typeof value === "string" ? value.trim() : "";
   return stringValue || undefined;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) {
-    const retry = error.status === 429 && error.retryAfterSeconds
-      ? ` Try again in ${error.retryAfterSeconds} seconds.`
-      : error.retryable
-        ? " You can retry this action."
-        : "";
-    const request = error.requestId ? ` Reference: ${error.requestId}.` : "";
-    // A bare "Validation failed" hides the field message that says what to
-    // change; the server always sends it in details.
-    const fields = validationFieldMessages(error.details);
-    const detail = fields.length ? ` ${fields.join(" ")}` : "";
-    return `${error.message}.${detail}${retry}${request}`.replace("..", ".");
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-function validationFieldMessages(payload: unknown): string[] {
-  if (!payload || typeof payload !== "object") return [];
-  const details = Reflect.get(payload, "details");
-  if (!details || typeof details !== "object") return [];
-  const messages: string[] = [];
-  const collect = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
-      messages.push(value.endsWith(".") ? value : `${value}.`);
-      return;
-    }
-    if (Array.isArray(value)) value.forEach(collect);
-  };
-  // Field maps arrive either directly or in zod's { fieldErrors, formErrors }.
-  const fieldErrors = Reflect.get(details, "fieldErrors");
-  const formErrors = Reflect.get(details, "formErrors");
-  if (fieldErrors && typeof fieldErrors === "object") {
-    Object.values(fieldErrors).forEach(collect);
-    collect(formErrors);
-  } else {
-    Object.values(details).forEach(collect);
-  }
-  return messages.slice(0, 3);
 }
 
 function humanStatus(status: string): string {

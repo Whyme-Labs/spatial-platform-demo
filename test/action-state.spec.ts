@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runAction, SingleFlight } from "../src/client/action-state";
+import { ApiError } from "../src/client/api";
+import { describeActionFailure } from "../src/client/feedback";
 
 describe("SingleFlight", () => {
   it("shares one in-flight action across rapid repeated triggers", async () => {
@@ -61,8 +63,9 @@ describe("SingleFlight", () => {
       },
       setAttribute: (name: string, value: string) => attributes.set(name, value),
       removeAttribute: (name: string) => attributes.delete(name),
+      getAttribute: (name: string) => attributes.get(name) ?? null,
     } as unknown as HTMLButtonElement;
-    const errorTarget = { textContent: "" } as HTMLElement;
+    const errorTarget = fakeFeedbackTarget();
     let attempts = 0;
 
     await expect(runAction({
@@ -93,4 +96,83 @@ describe("SingleFlight", () => {
     expect(attempts).toBe(2);
     expect(errorTarget.textContent).toBe("");
   });
+
+  it("preserves field, retry, and request evidence from API failures", async () => {
+    const trigger = {
+      textContent: "Save project",
+      disabled: false,
+      isConnected: true,
+      classList: { add() {}, remove() {} },
+      setAttribute() {},
+      removeAttribute() {},
+      getAttribute: () => null,
+    } as unknown as HTMLButtonElement;
+    const errorTarget = fakeFeedbackTarget();
+
+    const details = { details: { fieldErrors: { name: ["Scene name is required"] } } };
+    const failure = new ApiError(
+      "Validation failed",
+      429,
+      details,
+      "request-42",
+      11,
+      true,
+    );
+    const described = describeActionFailure(failure);
+    expect(described).toMatchObject({
+      kind: "validation",
+      status: 429,
+      requestId: "request-42",
+      retryAfterSeconds: 11,
+      retryable: true,
+      fieldFailures: [{ field: "name", messages: ["Scene name is required."] }],
+    });
+    expect(described.details).toBe(details);
+    expect(described.error).toBe(failure);
+    expect(describeActionFailure(new ApiError(
+      "Direct validation failed",
+      422,
+      { details: { name: ["Use another scene name"], _errors: ["Review the form"] } },
+    ))).toMatchObject({
+      kind: "validation",
+      fieldFailures: [{ field: "name", messages: ["Use another scene name."] }],
+      formMessages: ["Review the form."],
+    });
+    expect(describeActionFailure(new ApiError(
+      "This scene requires access",
+      401,
+      { error: "This scene requires access", accessPolicy: "token" },
+      "request-access",
+    ))).toMatchObject({
+      kind: "action",
+      requestId: "request-access",
+    });
+
+    await runAction({
+      key: "save-project",
+      trigger,
+      pendingLabel: "Saving…",
+      errorTarget,
+    }, async () => {
+      throw failure;
+    });
+
+    expect(errorTarget.textContent).toBe(
+      "Validation failed. Scene name is required. Try again in 11 seconds. Reference: request-42.",
+    );
+  });
 });
+
+function fakeFeedbackTarget(): HTMLElement {
+  const attributes = new Map<string, string>();
+  return {
+    textContent: "",
+    id: "",
+    hidden: false,
+    dataset: {},
+    classList: { add() {} },
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    removeAttribute: (name: string) => attributes.delete(name),
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+  } as unknown as HTMLElement;
+}

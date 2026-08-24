@@ -31,6 +31,11 @@ import {
 } from "../shared/starting-view-quality";
 import { captureAdapterDisplayLabel } from "../shared/capture-adapters";
 import { isSceneRegisteredTraversalEvidenceReceipt } from "../shared/traversal-evidence";
+import type {
+  OverlayRect,
+  RendererOuterOverlayMode,
+  RendererOverlayLayoutMessage,
+} from "../shared/overlay-layout";
 import type { DetourNavigationRuntime } from "./detour-navigation";
 import type { PhysicalNavigationRuntime } from "./physical-navigation";
 import type { MovementRefusal, PhysicalMovementMode } from "./physical-navigation";
@@ -85,6 +90,7 @@ type SparkSceneFormat = "rad" | "spz" | "sog";
 type WalkableBoundarySource = "authored" | "none";
 
 type RendererMessage =
+  | RendererOverlayLayoutMessage
   | {
       source: "spatial-spark";
       type: "progress";
@@ -238,6 +244,7 @@ const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
 const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
 const desktopVerticalHelp = byId<HTMLElement>("desktopVerticalHelp");
 const movementModeToggle = byId<HTMLButtonElement>("movementModeToggle");
+const movementPad = byId<HTMLElement>("movementPad");
 const flightAltitudeControls = byId<HTMLElement>("flightAltitudeControls");
 const flyAscend = byId<HTMLButtonElement>("flyAscend");
 const flyDescend = byId<HTMLButtonElement>("flyDescend");
@@ -245,7 +252,7 @@ const mobileControls = new MobileControlSurface({
   coarsePointer: matchMedia("(any-pointer: coarse)"),
   elements: {
     viewport: sparkViewport,
-    pad: byId("movementPad"),
+    pad: movementPad,
     knob: byId("movementKnob"),
     status: byId("movementStatus"),
     lookHint: byId("mobileLookHint"),
@@ -257,6 +264,7 @@ const mobileControls = new MobileControlSurface({
       mode: active ? "free-roam" : "orbit",
     });
     updateMovementModeChrome();
+    scheduleOverlayLayoutReceipt();
   },
 });
 
@@ -265,6 +273,45 @@ type ControlStatusTone = "ready" | "info" | "error";
 function setControlStatus(message: string, tone: ControlStatusTone = "info"): void {
   controlStatus.textContent = message;
   controlStatus.dataset.tone = tone;
+  scheduleOverlayLayoutReceipt();
+}
+
+let overlayLayoutFrame: number | null = null;
+
+function scheduleOverlayLayoutReceipt(): void {
+  if (overlayLayoutFrame !== null) cancelAnimationFrame(overlayLayoutFrame);
+  overlayLayoutFrame = requestAnimationFrame(() => {
+    overlayLayoutFrame = null;
+    publishOverlayLayoutReceipt();
+  });
+}
+
+function visibleOverlayRect(element: HTMLElement): OverlayRect | null {
+  const style = getComputedStyle(element);
+  if (element.hidden || style.display === "none" || style.visibility === "hidden") return null;
+  const bounds = element.getBoundingClientRect();
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+  return {
+    left: bounds.left,
+    right: bounds.right,
+    top: bounds.top,
+    bottom: bounds.bottom,
+  };
+}
+
+function publishOverlayLayoutReceipt(): void {
+  post({
+    source: "spatial-spark",
+    type: "overlay-layout",
+    viewport: { width: innerWidth, height: innerHeight },
+    zones: {
+      toolbar: visibleOverlayRect(document.querySelector<HTMLElement>(".spark-controls")!),
+      status: visibleOverlayRect(controlStatus),
+      help: visibleOverlayRect(helpPanel),
+      movement: visibleOverlayRect(movementPad),
+      altitude: visibleOverlayRect(flightAltitudeControls),
+    },
+  });
 }
 const enableMobileControlsForTest = (): void => mobileControls.setReady(true);
 if (__SPATIAL_E2E__) {
@@ -393,6 +440,15 @@ async function start(): Promise<void> {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
+    if (Reflect.get(event.data, "type") === "set-outer-overlay-mode") {
+      const requestedMode = Reflect.get(event.data, "mode");
+      const mode: RendererOuterOverlayMode = requestedMode === "navigator" || requestedMode === "review"
+        ? requestedMode
+        : "none";
+      sparkViewport.dataset.outerOverlayMode = mode;
+      scheduleOverlayLayoutReceipt();
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-authoring-plan") {
       replaceSceneAuthoringOverlay(authoringPlanOverlay, Reflect.get(event.data, "plan"));
       // An authoring host is a reviewer's context: the walking package under
@@ -1954,7 +2010,8 @@ function bindChrome(): void {
   helpButton.addEventListener("click", toggleHelp);
   fullscreenButton.addEventListener("click", requestFullscreen);
   document.addEventListener("fullscreenchange", updateFullscreenControl);
-  window.addEventListener("resize", handleControlHelpResize);
+  window.addEventListener("resize", handleChromeResize);
+  scheduleOverlayLayoutReceipt();
 }
 
 function toggleMovementMode(): void {
@@ -2006,6 +2063,7 @@ function updateMovementModeChrome(): void {
   desktopMovementHelp.textContent = movementMode === "fly"
     ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
     : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel";
+  scheduleOverlayLayoutReceipt();
 }
 
 function movementStatusText(): string {
@@ -2204,11 +2262,17 @@ function setControlHelpVisible(visible: boolean): void {
     visible,
     height: visible ? Math.ceil(helpPanel.getBoundingClientRect().height) : 0,
   });
+  scheduleOverlayLayoutReceipt();
 }
 
 function handleControlHelpResize(): void {
   if (helpPanel.hidden) return;
   setControlHelpVisible(true);
+}
+
+function handleChromeResize(): void {
+  handleControlHelpResize();
+  scheduleOverlayLayoutReceipt();
 }
 
 function requestFullscreen(): void {
@@ -2261,7 +2325,7 @@ function dispose(): void {
   if (__SPATIAL_E2E__) {
     window.removeEventListener("spatial:e2e-mobile-controls-ready", enableMobileControlsForTest);
   }
-  window.removeEventListener("resize", handleControlHelpResize);
+  window.removeEventListener("resize", handleChromeResize);
   document.removeEventListener("fullscreenchange", updateFullscreenControl);
   resetButton.removeEventListener("click", resetView);
   movementModeToggle.removeEventListener("click", toggleMovementMode);
@@ -2274,6 +2338,10 @@ function dispose(): void {
   }
   helpButton.removeEventListener("click", toggleHelp);
   fullscreenButton.removeEventListener("click", requestFullscreen);
+  if (overlayLayoutFrame !== null) {
+    cancelAnimationFrame(overlayLayoutFrame);
+    overlayLayoutFrame = null;
+  }
   if (heartbeatHandle !== null) {
     window.clearInterval(heartbeatHandle);
     heartbeatHandle = null;

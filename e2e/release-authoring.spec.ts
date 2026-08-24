@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 const now = "2026-07-31T13:30:00.000Z";
@@ -20,10 +21,21 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.locator("#studioGrid")).toBeHidden();
   await expect(page.getByRole("heading", { name: "Corrected Spark room", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Publish");
+  await expect(page.locator("#projectCurrentBlocker")).toHaveText("No blocker");
+  await expect(page.locator("#projectCurrentAction")).toHaveText("Publish shareable URL");
+
+  await page.getByRole("button", { name: "Process", exact: true }).click();
+  await expect(page.locator("#processWorkspace")).toBeVisible();
+  const processAccessibility = await new AxeBuilder({ page })
+    .exclude("#turnstileWidget")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(processAccessibility.violations, "Project process").toEqual([]);
 
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
-  await expect(page.getByRole("heading", { name: "Your walkable splat preview is ready.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project overview and sharing", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Overview", exact: true })).toHaveAttribute("aria-current", "page");
 
   for (const viewport of [
@@ -33,27 +45,62 @@ test("project rows open a dedicated project workspace with nested tools", async 
     { width: 320, height: 568 },
   ]) {
     await page.setViewportSize(viewport);
+    await page.locator("#projectWorkspaceHeader").evaluate((header) => header.scrollIntoView());
     const layout = await page.evaluate(() => {
       const heading = document.querySelector<HTMLElement>(".project-page-heading")?.getBoundingClientRect();
-      const navigation = document.querySelector<HTMLElement>(".project-section-nav")?.getBoundingClientRect();
+      const context = document.querySelector<HTMLElement>(".project-context-bar")?.getBoundingClientRect();
+      const sectionNav = document.querySelector<HTMLElement>(".project-section-nav");
+      const compactPicker = document.querySelector<HTMLElement>(".project-section-picker");
+      const navigation = sectionNav && getComputedStyle(sectionNav).display !== "none"
+        ? sectionNav.getBoundingClientRect()
+        : compactPicker?.getBoundingClientRect();
+      const action = document.querySelector<HTMLElement>("#projectCurrentAction")?.getBoundingClientRect();
+      const workspace = document.querySelector<HTMLElement>('[data-project-workflow="overview"]')?.getBoundingClientRect();
       return {
         documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
         navigationGap: heading && navigation ? navigation.top - heading.bottom : -1,
+        ordered: Boolean(
+          heading && context && navigation && workspace &&
+          heading.bottom <= context.top &&
+          context.bottom <= navigation.top &&
+          navigation.bottom <= workspace.top
+        ),
+        actionContained: Boolean(action && action.left >= 0 && action.right <= window.innerWidth),
       };
     });
     expect(layout.documentOverflow, `${viewport.width}px project page overflows`).toBeLessThanOrEqual(1);
     expect(layout.navigationGap, `${viewport.width}px project navigation overlaps its heading`).toBeGreaterThan(0);
+    expect(layout.ordered, `${viewport.width}px project task order`).toBe(true);
+    expect(layout.actionContained, `${viewport.width}px project action containment`).toBe(true);
+    if (viewport.width <= 900) {
+      await expect(page.locator("#projectSectionPicker")).toBeVisible();
+      await expect(page.locator("#projectSectionPicker")).toHaveValue("overview");
+      await expect(page.locator(".project-section-nav")).toBeHidden();
+    } else {
+      await expect(page.locator("#projectSectionPicker")).toBeHidden();
+      await expect(page.locator(".project-section-nav")).toBeVisible();
+    }
   }
 
-  const processStep = page.locator(".project-journey-step").filter({ hasText: "Process" });
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  await page.getByText("Technical details and source history", { exact: true }).click();
+  await expectProjectSurfaceDepth(page);
+  await page.getByText("Technical details and source history", { exact: true }).click();
+
+  const processStep = page.getByRole("button", { name: "Process", exact: true });
   await processStep.click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
-  await expect(page.locator('.project-journey-step[aria-current="step"]')).toHaveCount(1);
-  await expect(processStep).toHaveAttribute("aria-current", "step");
+  await expect(processStep).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", {
-    name: "Your walkable splat preview is ready.",
+    name: "Processing and qualification",
     exact: true,
   })).toBeFocused();
+  await expect(page.locator('[data-project-workflow="process"]')).toBeVisible();
+  await expect(page.locator('[data-project-workflow="overview"]')).toBeHidden();
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+  await expect(page.getByRole("heading", { name: "Processing and qualification", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
@@ -64,7 +111,6 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await publishTab.press("Enter");
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
   await expect(publishTab).toHaveAttribute("aria-current", "page");
-  await expect(page.locator(".project-journey-step").filter({ hasText: "Publish" })).toHaveAttribute("aria-current", "step");
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
   await page.goForward();
@@ -75,35 +121,181 @@ test("project rows open a dedicated project workspace with nested tools", async 
   await expect(page.locator("#projectTable")).toBeVisible();
 });
 
+test("the compact project section picker preserves routes and browser history", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 768, height: 1024 },
+    { width: 390, height: 844 },
+    { width: 320, height: 568 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto(`/studio.html#project/${projectId}`);
+    const picker = page.locator("#projectSectionPicker");
+    const tabs = page.locator(".project-section-nav");
+
+    if (viewport.width === 1024) {
+      await expect(tabs).toBeVisible();
+      await expect(picker).toBeHidden();
+      await page.getByRole("button", { name: "Process", exact: true }).click();
+    } else {
+      await expect(picker).toBeVisible();
+      await expect(tabs).toBeHidden();
+      await expect(picker).toHaveValue("overview");
+      await expect(picker.locator("option[value='compare']")).toHaveAttribute("disabled", "");
+      await picker.selectOption("process");
+    }
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+    await expect(page.getByRole("heading", {
+      name: "Processing and qualification",
+      exact: true,
+    })).toBeFocused();
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("process");
+
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("process");
+    await page.goBack();
+    await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
+    if (viewport.width !== 1024) await expect(picker).toHaveValue("overview");
+  }
+});
+
+test("an archived project makes restore the truthful current action", async ({ page }) => {
+  let restored = false;
+  await mockApprovedProject(page, () => undefined, {
+    archived: true,
+    onRestore: () => {
+      restored = true;
+    },
+  });
+
+  await page.goto(`/studio.html#project/${projectId}`);
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Archived");
+  await expect(page.locator("#projectCurrentBlocker")).toContainText("Project archived");
+  const restore = page.locator("#projectCurrentAction");
+  await expect(restore).toHaveText("Restore project");
+  await expect(restore).toBeEnabled();
+
+  await restore.click();
+  await page.locator("#askDialog")
+    .getByRole("button", { name: "Restore project", exact: true }).click();
+  await expect.poll(() => restored).toBe(true);
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Publish");
+  await expect(page.locator("#projectCurrentAction")).toHaveText("Publish shareable URL");
+});
+
+test("a long failed custom domain remains actionable on a narrow screen", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { customDomain: true });
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto(`/studio.html#project/${projectId}/overview`);
+  await page.getByText("Optional editing, evidence, and delivery tools", { exact: true }).click();
+  await page.getByRole("button", { name: "Add custom domain", exact: true }).click();
+
+  const dialog = page.locator("#domainDialog");
+  const domain = dialog.locator(".domain-row.record-row");
+  await expect(domain.getByText(
+    "customer-preview-with-expanded-operational-hostname.spatial.example.com",
+    { exact: true },
+  )).toBeVisible();
+  await expect(domain.locator(".record-status")).toHaveText("Failed");
+  await expect(domain.locator(".form-error")).toContainText("provider activation failed");
+  await expect(domain.getByRole("button", { name: "Generate TXT challenge", exact: true })).toBeVisible();
+  await expect(domain.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
+  const bounds = await domain.evaluate((row) => {
+    const record = row.getBoundingClientRect();
+    const actions = [...row.querySelectorAll<HTMLElement>("button, a")]
+      .filter((action) => action.getClientRects().length > 0)
+      .map((action) => action.getBoundingClientRect().right);
+    return {
+      left: record.left,
+      right: record.right,
+      viewportWidth: window.innerWidth,
+      scrollWidth: (row as HTMLElement).scrollWidth,
+      clientWidth: (row as HTMLElement).clientWidth,
+      actions,
+    };
+  });
+  expect(bounds.left).toBeGreaterThanOrEqual(-1);
+  expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth + 1);
+  expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
+  expect(bounds.actions.every((right) => right <= bounds.viewportWidth + 1)).toBe(true);
+});
+
+test("flattened project sections reclaim the active canvas width", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined);
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
+  const receipt: Array<{ viewport: number; nestedWidth: number; flatWidth: number }> = [];
+
+  for (const viewport of [1024, 768]) {
+    await page.setViewportSize({ width: viewport, height: 800 });
+    const widths = await page.locator("#projectDetail").evaluate((section) => {
+      const body = section.querySelector<HTMLElement>("#detailBody");
+      if (!body) return null;
+      const flatWidth = body.getBoundingClientRect().width;
+      const oldPadding = Math.min(22, Math.max(16, window.innerWidth * .02));
+      section.style.padding = `${oldPadding}px`;
+      section.style.border = "1px solid transparent";
+      const nestedWidth = body.getBoundingClientRect().width;
+      section.style.removeProperty("padding");
+      section.style.removeProperty("border");
+      return { nestedWidth, flatWidth };
+    });
+    expect(widths).not.toBeNull();
+    expect(widths!.flatWidth).toBeGreaterThan(widths!.nestedWidth);
+    receipt.push({ viewport, ...widths! });
+  }
+
+  await test.info().attach("project-workspace-width-receipt", {
+    body: Buffer.from(JSON.stringify(receipt, null, 2)),
+    contentType: "application/json",
+  });
+});
+
 test("structure, expert evidence, and publication are first-class project tasks", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, { auxiliaryQaVersion: true });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  const expectProjectContext = async (): Promise<void> => {
+    await expect(page.locator("#projectCurrentStage")).not.toBeEmpty();
+    await expect(page.locator("#projectCurrentBlocker")).not.toBeEmpty();
+    await expect(page.locator("#projectCurrentAction")).toBeVisible();
+  };
 
   // Automated privacy scanning was removed, so an unapproved version routes
   // straight to Publish, where the operator records their own privacy review.
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+  await expectProjectContext();
+  await expectProjectSurfaceDepth(page);
 
   // Routes and the walking profile are structural authoring; the walk stage
   // dissolved once it held neither a walk test nor its own viewer.
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
+  await expectProjectContext();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime", exact: true })).toBeVisible();
+  await expectProjectSurfaceDepth(page);
 
   await page.getByRole("button", { name: "Expert", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/expert$`));
+  await expectProjectContext();
   await expect(page.getByRole("heading", {
     name: "Inspect technical evidence and recovery controls",
     exact: true,
   })).toBeVisible();
+  await expectProjectSurfaceDepth(page);
 
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/publish$`));
+  await expectProjectContext();
   await expect(page.getByRole("heading", { name: "Review and publish", exact: true })).toBeVisible();
+  await expectProjectSurfaceDepth(page);
 });
 
-test("a novice can upload, inspect every stage, walk test, and publish using visible controls", async ({ page }) => {
+test("a novice can upload, inspect the project workflow, and publish using visible controls", async ({ page }) => {
   let publishedBody: Record<string, unknown> | null = null;
   await mockApprovedProject(page, (body) => {
     publishedBody = body;
@@ -145,11 +337,11 @@ test("a novice can upload, inspect every stage, walk test, and publish using vis
   await expect(intake).toBeHidden();
 
   await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.locator(".project-journey-step").filter({ hasText: "Process" }).click();
-  await expect(page.getByRole("heading", {
-    name: "Structural exceptions need review.",
-    exact: true,
-  })).toBeVisible();
+  await page.getByRole("button", { name: "Process", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Processing and qualification", exact: true })).toBeVisible();
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Structure");
+  await expect(page.locator("#projectCurrentBlocker")).toContainText("Structural review");
+  await expect(page.locator("#projectCurrentAction")).toHaveText("Review structural exceptions");
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Review reconstructed rooms and openings" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add structure or navigation obstacle", exact: true })).toHaveCount(0);
@@ -388,7 +580,11 @@ test("release authoring resets project-specific fields and submits scene rotatio
   await dialog.getByRole("textbox", { name: "Subtitle", exact: true }).fill("Stale project copy");
   await dialog.locator("input[name='initialCameraPosition']").fill("1, 2, 3");
   await dialog.locator("input[name='sceneRotationZ']").fill("180");
-  await dialog.getByRole("button", { name: "×", exact: true }).click();
+  await dialog.locator(".dialog-close").click();
+  await expect(page.locator("#askDialog")).toBeVisible();
+  await page.locator("#askDialog")
+    .getByRole("button", { name: "Discard changes", exact: true }).click();
+  await expect(dialog).toBeHidden();
 
   await openRelease.click();
   await expect(dialog.getByRole("textbox", { name: "Subtitle", exact: true })).toHaveValue("");
@@ -475,16 +671,13 @@ test("processed splats stay blocked until their walking map is approved", async 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Registered structural geometry is required.", exact: true })).toBeVisible();
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Structure");
+  await expect(page.locator("#projectCurrentBlocker")).toContainText("Registered geometry");
   await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Refresh processing status", exact: true })).toBeVisible();
-  await expect(page.getByText(
-    "The visual is preserved, but it has no registered structural source from which collision and walking proof can be generated safely.",
-    { exact: true },
-  )).toBeVisible();
+  await expect(page.getByRole("button", { name: "Upload registered geometry", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Overview", exact: true }).click();
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", {
@@ -506,10 +699,10 @@ test("walking evidence builds automatically without exposing routine authoring",
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/process$`));
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Building and verifying the walking map.", exact: true })).toBeVisible();
-  await expect(page.getByText(/No routine navigation setup is required\.$/)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh walking-map progress", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Processing and qualification", exact: true })).toBeVisible();
+  await expect(page.getByText("Classifying structural surfaces", { exact: true })).toBeVisible();
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Process");
+  await expect(page.getByRole("button", { name: "Refresh processing status", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Review structural exceptions", exact: true })).toHaveCount(0);
 });
 
@@ -522,8 +715,7 @@ test("automatic reconstruction exposes only unresolved structural exceptions", a
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Structural exceptions need review.", exact: true })).toBeVisible();
+  await expect(page.locator("#projectCurrentBlocker")).toContainText("Structural review");
   await expect(page.getByRole("button", { name: "Review structural exceptions", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
 });
@@ -533,8 +725,7 @@ test("multi-level floor-plan review shows every level and vertical connector", a
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
+  await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", {
     name: "Inspect and correct the reconstructed structure in place",
   })).toBeVisible();
@@ -592,8 +783,6 @@ test("navigation authoring controls never touch or overlap", async ({ page }) =>
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Routes and movement runtime" })).toBeVisible();
 
@@ -637,8 +826,6 @@ test("navigation review rows never touch or overlap in Expert", async ({ page })
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await page.getByRole("button", { name: "Expert", exact: true }).click();
 
   const reviewCard = page.locator("article.workspace-card-large").filter({
@@ -682,8 +869,6 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await page.getByRole("button", { name: "Overview", exact: true }).click();
-  await page.getByRole("button", { name: "Edit scene", exact: true }).click();
   await page.getByRole("button", { name: "Structure", exact: true }).click();
   await page.getByRole("button", { name: "Author vertical traversal", exact: true }).click();
 
@@ -696,6 +881,30 @@ test("vertical traversal authoring offers only capture-qualified evidence", asyn
     /lift-proof\.ply · XGRIDS Lixel \/ LCC capture · registration cccccccccccc…/,
   );
 });
+
+async function expectProjectSurfaceDepth(page: Page): Promise<void> {
+  const depths = await page.locator(
+    "#projectDetail button:visible, #projectDetail a:visible, " +
+    "#processWorkspace button:visible, #processWorkspace a:visible, " +
+    "#spatialWorkspace button:visible, #spatialWorkspace a:visible, " +
+    "#publishWorkspace button:visible, #publishWorkspace a:visible, " +
+    "#measurementWorkspace button:visible, #measurementWorkspace a:visible",
+  ).evaluateAll((actions) => actions.map((action) => {
+    let depth = 0;
+    let current = action.parentElement;
+    while (current && !current.classList.contains("studio-main")) {
+      const style = getComputedStyle(current);
+      if (
+        style.borderStyle !== "none" &&
+        Number.parseFloat(style.borderTopWidth) > 0
+      ) depth += 1;
+      current = current.parentElement;
+    }
+    return depth;
+  }));
+  expect(depths.length).toBeGreaterThan(0);
+  expect(Math.max(...depths)).toBeLessThanOrEqual(2);
+}
 
 async function mockApprovedProject(
   page: Page,
@@ -712,6 +921,9 @@ async function mockApprovedProject(
     walkingState?: "building" | "exception";
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
+    archived?: boolean;
+    onRestore?: () => void;
+    customDomain?: boolean;
     startingViewFrameQuality?: Record<string, unknown>;
     publishResult?: { status: number; body: Record<string, unknown> };
   } = {},
@@ -731,7 +943,7 @@ async function mockApprovedProject(
     id: projectId,
     name: "Corrected Spark room",
     slug: "corrected-spark-room",
-    status: options.noviceLifecycle ? "QA_REQUIRED" : "APPROVED",
+    status: options.archived ? "ARCHIVED" : options.noviceLifecycle ? "QA_REQUIRED" : "APPROVED",
     captureAdapter: "open-import",
     deliveryTemplate: "Property showcase",
     notes: "Visual-only Gaussian fixture.",
@@ -895,6 +1107,39 @@ async function mockApprovedProject(
       noviceStage = "approved";
       project.status = "APPROVED";
       return json(route, 200, { version: { id: versionId, status: "APPROVED" } });
+    }
+    if (options.archived && method === "POST" && path === `/api/projects/${projectId}/restore`) {
+      project.status = "DRAFT";
+      options.onRestore?.();
+      return json(route, 200, { project });
+    }
+    if (options.customDomain && method === "GET" && path === `/api/projects/${projectId}/domains`) {
+      return json(route, 200, {
+        providerConfigured: true,
+        cnameTarget: "customers.spatial.example.com",
+        domains: [{
+          id: "78787878-7878-4878-8878-787878787878",
+          hostname: "customer-preview-with-expanded-operational-hostname.spatial.example.com",
+          status: "failed",
+          dnsVerifiedAt: null,
+          provider: "cloudflare",
+          providerHostnameId: null,
+          providerStatus: "failed",
+          providerSslStatus: "pending_validation",
+          providerValidation: {
+            sslValidationRecords: [{
+              status: "pending",
+              txtName: `_acme-challenge.${"x".repeat(56)}.spatial.example.com`,
+              txtValue: "domain-validation-token-with-expanded-evidence-value-787878787878",
+            }],
+          },
+          provisioningAttempts: 2,
+          lastCheckedAt: now,
+          provisionedAt: null,
+          lastError: "Cloudflare provider activation failed with expanded operator recovery guidance.",
+          createdAt: now,
+        }],
+      });
     }
     if (path === `/api/projects/${projectId}` && method === "GET") {
       return json(route, 200, {

@@ -223,7 +223,11 @@ button {
 .spark-controls button:focus-visible {
   background: rgb(255 255 255 / 8%);
   color: #fff;
-  outline: none;
+}
+
+.spark-controls button:focus-visible {
+  outline: 2px solid #d4ff58;
+  outline-offset: -2px;
 }
 
 .spark-controls button:hover::before,
@@ -323,7 +327,7 @@ button {
   background: rgb(10 14 14 / 78%);
   box-shadow: 0 10px 30px rgb(0 0 0 / 20%);
   color: #c2cbc3;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 620;
   text-align: left;
   backdrop-filter: blur(18px) saturate(115%);
@@ -426,7 +430,11 @@ button {
   border-color: #d4ff58;
   background: #d4ff58;
   color: #12160d;
-  outline: none;
+}
+
+.spark-flight-altitude button:focus-visible {
+  outline: 2px solid #12160d;
+  outline-offset: -3px;
 }
 
 .spark-movement-ring {
@@ -476,7 +484,7 @@ button {
   position: absolute;
   bottom: 8px;
   color: rgb(255 255 255 / 48%);
-  font: 600 0.58rem/1 "IBM Plex Mono", ui-monospace, monospace;
+  font: 600 0.75rem/1 "IBM Plex Mono", ui-monospace, monospace;
   letter-spacing: 0.14em;
 }
 
@@ -493,7 +501,7 @@ button {
   border-radius: 999px;
   background: rgb(13 17 19 / 58%);
   color: #dce2dc;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   pointer-events: none;
   backdrop-filter: blur(12px);
 }
@@ -501,6 +509,12 @@ button {
 .spark-look-hint > span:first-child {
   color: #d4ff58;
   font-size: 1rem;
+}
+
+.spark-viewport:is([data-outer-overlay-mode="navigator"],[data-outer-overlay-mode="review"])
+  :is(.spark-movement-pad,.spark-flight-altitude,.spark-look-hint) {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 @keyframes spark-spin {
@@ -597,12 +611,12 @@ button {
 @media (any-pointer: coarse) and (max-width: 360px) {
   .spark-controls button {
     padding: 0 9px;
-    font-size: 0.7rem;
+    font-size: 0.75rem;
   }
 
   .spark-runtime {
     padding: 0 9px;
-    font-size: 0.68rem;
+    font-size: 0.75rem;
   }
 
 }
@@ -631,5 +645,31 @@ button {
   .spark-progress i,
   .spark-movement-knob {
     transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  :is(button, #sparkCanvas, .spark-movement-pad):focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: -3px;
+  }
+
+  :is(.spark-controls button[aria-expanded="true"], .spark-flight-altitude button[data-active]) {
+    border: 2px solid ButtonText;
+  }
+
+  .spark-controls button:disabled,
+  .spark-flight-altitude button:disabled {
+    color: GrayText;
+    border-color: GrayText;
+    opacity: 1;
+  }
+
+  .spark-runtime-dot,
+  .spark-control-status::before {
+    forced-color-adjust: none;
+    background: CanvasText;
+    box-shadow: none;
+    outline: 1px solid Canvas;
   }
 }
