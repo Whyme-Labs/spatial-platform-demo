@@ -42,6 +42,11 @@ test.describe("responsive public surfaces", () => {
       await page.evaluate(() => document.fonts.ready);
 
       await expect(page.getByRole("heading", { name: /Places, made explorable/i })).toBeVisible();
+      const hero = page.getByRole("img", {
+        name: "Concept visualization of an architectural interior transitioning into a Gaussian splat reconstruction.",
+      });
+      await expect(hero).toHaveAttribute("src", "/images/spatial-hero.webp");
+      await expect.poll(() => hero.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
       await expect(page.getByRole("link", { name: "Explore multi-room demo", exact: true })).toHaveAttribute(
         "href",
         "/s/home-scan-spark-multi-room-demo",

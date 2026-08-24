@@ -859,6 +859,63 @@ exceeds the floor by two orders of magnitude. Remeasure by rerunning the spec
 whenever the clear colour, tone mapping, or output colour space of the
 renderer changes.
 
+## Frontend route transfer and lazy-loading boundary
+
+Last measured: 2026-08-25
+
+Source baseline: `6eae367`, with the issue #83 route-audit and marketing-image
+hydration changes in the measured worktree. The client chunks below carry
+their own SHA-256 identities in `config/frontend-route-receipts.json`.
+
+Reproduce the production-bundle receipt and enforce its structural tripwires
+from the repository root with:
+
+```bash
+npm run audit:frontend-routes
+```
+
+The command builds in production mode, starts `vite preview`, and opens each
+route in a fresh Chromium context at 1280x800, `en-US`, UTC, with service
+workers blocked. The recorded run used Node 22.23.0, Vite 8.1.5, Playwright
+1.62.0, Chromium 151.0.7922.34, and macOS arm64. CDP records response transfer
+bytes while response metadata supplies encoded-body bytes. API fixture bodies
+and the deterministic four-splat scene/collision files are excluded from the
+frontend totals; their only job is to carry both viewer routes through the real
+`spatial-spark:ready` movement-ready boundary.
+
+| Route | Frontend encoded body | Frontend transferred | FCP | Route ready | Renderer first frame |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Signed-out Studio | 205,067 B | 206,341 B | 116 ms | 169 ms | n/a |
+| Authenticated portfolio | 205,067 B | 206,341 B | 40 ms | 82 ms | n/a |
+| First private preview | 3,333,015 B | 3,334,647 B | 44 ms | 901 ms | 152 ms |
+| First published viewer frame | 3,333,015 B | 3,334,647 B | 44 ms | 874 ms | 95 ms |
+
+The Studio routes loaded only `studio-jAuhcphL.js`,
+`action-state-DO3fNd-u.js`, and `world-units-SLVxYD65.js`. Each viewer route
+also loaded the real renderer, physical-navigation, Detour, and Recast
+compatibility chunks before `ready`. The exact filenames, raw byte counts,
+source-map ownership classification, and SHA-256 digests are stored in the
+machine receipt.
+
+Two zero-limit tripwires are derived directly from the good paths:
+
+- Signed-out Studio and authenticated portfolio measured zero chunks owned by
+  `src/renderer`, Recast, or Rapier. Their
+  `renderer_navigation_chunk_count` limit is therefore 0.
+- After moving the shared page's hero sources behind marketing-route
+  hydration, private and published viewer routes measured zero `/images/`
+  requests. Their `unexpected_marketing_asset_count` limit is therefore 0.
+
+These are structural lazy-boundary tripwires, not claims about general latency
+or total-byte targets. On failure the audit names the route, budget, limit,
+requested count, requested bytes, offending assets/chunks, and this receipt.
+Wall-clock timings and total route bytes remain observations because local
+server compression and runner scheduling vary. Regenerate the machine receipt
+with `npm run build && node scripts/audit-frontend-routes.mjs --write` whenever
+Vite, Playwright, Chromium, Spark, Recast/Rapier, entry imports, fonts, auth
+bootstrap, renderer-ready semantics, or delivery compression/cache behavior
+changes.
+
 ## Full software-gate receipt
 
 Last measured: 2026-08-24

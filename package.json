@@ -19,6 +19,7 @@
     "audit:controls": "node scripts/audit-control-wiring.mjs",
     "audit:inventory": "node scripts/user-facing-inventory.mjs",
     "audit:production-config": "node scripts/audit-production-config.mjs",
+    "audit:frontend-routes": "npm run build && node scripts/audit-frontend-routes.mjs",
     "inventory:write": "node scripts/user-facing-inventory.mjs --write",
     "qa:browser:capture-bundle": "node scripts/browser-qa-capture-bundle.mjs",
     "qa:browser:raw-change": "node scripts/browser-qa-raw-scene.mjs",

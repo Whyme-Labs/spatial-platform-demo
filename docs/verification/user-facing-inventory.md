@@ -282,8 +282,8 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | captureCompletenessForm | captureCompletenessDialog | global | studio.html:1266 | FORM-A | static | studio.html:1266 |
 | captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1293 | FORM-A | static | studio.html:1293 |
 | versionComparisonForm | versionComparisonDialog | global | studio.html:1322 | FORM-A | static | studio.html:1322 |
-| accessCodeForm | none | global | index.html:271 | FORM-A | browser | e2e/release-access-code.spec.ts |
-| sceneReviewForm | none | global | index.html:297 | FORM-A | static | index.html:297 |
+| accessCodeForm | none | global | index.html:270 | FORM-A | browser | e2e/release-access-code.spec.ts |
+| sceneReviewForm | none | global | index.html:296 | FORM-A | static | index.html:296 |
 
 ## Login inputs
 
@@ -729,42 +729,42 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | comparisonSubmit | button | Load comparison | versionComparisonDialog / versionComparisonForm | studio.html:1325 | CONTROL-A | static | studio.html:1325 |
 | compareLeftRetry | button | Retry left renderer | versionComparisonDialog | studio.html:1340 | CONTROL-A | static | studio.html:1340 |
 | compareRightRetry | button | Retry right renderer | versionComparisonDialog | studio.html:1350 | CONTROL-A | static | studio.html:1350 |
-| index.html:button:146 | button | Capture | generated/global | index.html:146 | CONTROL-A | static | index.html:146 |
-| index.html:button:147 | button | Reconstruct | generated/global | index.html:147 | CONTROL-A | static | index.html:147 |
-| index.html:button:148 | button | Structure | generated/global | index.html:148 | CONTROL-A | static | index.html:148 |
-| index.html:button:149 | button | Publish | generated/global | index.html:149 | CONTROL-A | static | index.html:149 |
-| shareButton | button | Share | generated/global | index.html:242 | CONTROL-A | static | index.html:242 |
-| accessCodeSubmit | button | Unlock scene | accessCodeForm | index.html:285 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
-| retryButton | button | Retry | generated/global | index.html:289 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
-| index.html:button:300 | button | Attach feedback to this view | sceneReviewForm | index.html:300 | CONTROL-A | static | index.html:300 |
-| approveReviewButton | button | Approve version | generated/global | index.html:304 | CONTROL-A | static | index.html:304 |
-| requestChangesButton | button | Request changes | generated/global | index.html:305 | CONTROL-A | static | index.html:305 |
-| toggleReleaseInfo | button | PUBLISHED RELEASE Preparing scene ⌄ | generated/global | index.html:312 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
-| openNavigator | button | Explore rooms ⌄ | generated/global | index.html:330 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
-| closeNavigator | button | Close | generated/global | index.html:355 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| index.html:button:145 | button | Capture | generated/global | index.html:145 | CONTROL-A | static | index.html:145 |
+| index.html:button:146 | button | Reconstruct | generated/global | index.html:146 | CONTROL-A | static | index.html:146 |
+| index.html:button:147 | button | Structure | generated/global | index.html:147 | CONTROL-A | static | index.html:147 |
+| index.html:button:148 | button | Publish | generated/global | index.html:148 | CONTROL-A | static | index.html:148 |
+| shareButton | button | Share | generated/global | index.html:241 | CONTROL-A | static | index.html:241 |
+| accessCodeSubmit | button | Unlock scene | accessCodeForm | index.html:284 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
+| retryButton | button | Retry | generated/global | index.html:288 | CONTROL-A | browser | e2e/release-access-code.spec.ts |
+| index.html:button:299 | button | Attach feedback to this view | sceneReviewForm | index.html:299 | CONTROL-A | static | index.html:299 |
+| approveReviewButton | button | Approve version | generated/global | index.html:303 | CONTROL-A | static | index.html:303 |
+| requestChangesButton | button | Request changes | generated/global | index.html:304 | CONTROL-A | static | index.html:304 |
+| toggleReleaseInfo | button | PUBLISHED RELEASE Preparing scene ⌄ | generated/global | index.html:311 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| openNavigator | button | Explore rooms ⌄ | generated/global | index.html:329 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
+| closeNavigator | button | Close | generated/global | index.html:354 | CONTROL-A | browser | e2e/published-viewer.spec.ts |
 | studio.html:a:14 | link | Spatial Studio Production operations | generated/global | studio.html:14 | LINK-A | static | studio.html:14 |
 | studio.html:a:46 | link | Open public site | generated/global | studio.html:46 | LINK-A | static | studio.html:46 |
-| index.html:a:19 | link | Spatial Studio by Whyme Labs | generated/global | index.html:19 | LINK-A | static | index.html:19 |
-| index.html:a:24 | link | Live demo | generated/global | index.html:24 | LINK-A | static | index.html:24 |
-| index.html:a:25 | link | Deliverables | generated/global | index.html:25 | LINK-A | static | index.html:25 |
-| index.html:a:26 | link | Workflow | generated/global | index.html:26 | LINK-A | static | index.html:26 |
-| index.html:a:27 | link | Assurance | generated/global | index.html:27 | LINK-A | static | index.html:27 |
-| index.html:a:30 | link | Open studio | generated/global | index.html:30 | LINK-A | static | index.html:30 |
-| index.html:a:31 | link | Start a capture | generated/global | index.html:31 | LINK-A | static | index.html:31 |
-| index.html:a:42 | link | Explore multi-room demo | generated/global | index.html:42 | LINK-A | static | index.html:42 |
-| index.html:a:43 | link | Start a capture ↘ | generated/global | index.html:43 | LINK-A | static | index.html:43 |
-| index.html:a:74 | link | Enter the Home Scan demo ↗ | generated/global | index.html:74 | LINK-A | static | index.html:74 |
-| index.html:a:75 | link | Home Scan by Isaiah Sweeney | generated/global | index.html:75 | LINK-A | static | index.html:75 |
-| index.html:a:75 | link | CC BY 4.0 | generated/global | index.html:75 | LINK-A | static | index.html:75 |
-| index.html:a:215 | link | Start a capture | generated/global | index.html:215 | LINK-A | static | index.html:215 |
-| index.html:a:218 | link | Spatial Studio by Whyme Labs | generated/global | index.html:218 | LINK-A | static | index.html:218 |
-| index.html:a:223 | link | Open studio | generated/global | index.html:223 | LINK-A | static | index.html:223 |
-| index.html:a:223 | link | contact@whymelabs.com | generated/global | index.html:223 | LINK-A | static | index.html:223 |
-| index.html:a:231 | link | Spatial Studio Reality, made explorable | generated/global | index.html:231 | LINK-A | static | index.html:231 |
-| index.html:a:241 | link | Open studio | generated/global | index.html:241 | LINK-A | static | index.html:241 |
-| index.html:a:243 | link | About Spatial Studio | generated/global | index.html:243 | LINK-A | static | index.html:243 |
-| accessSignInLink | link | Sign in | generated/global | index.html:288 | LINK-A | browser | e2e/release-access-code.spec.ts |
-| index.html:a:295 | link | Review inbox | generated/global | index.html:295 | LINK-A | static | index.html:295 |
+| index.html:a:18 | link | Spatial Studio by Whyme Labs | generated/global | index.html:18 | LINK-A | static | index.html:18 |
+| index.html:a:23 | link | Live demo | generated/global | index.html:23 | LINK-A | static | index.html:23 |
+| index.html:a:24 | link | Deliverables | generated/global | index.html:24 | LINK-A | static | index.html:24 |
+| index.html:a:25 | link | Workflow | generated/global | index.html:25 | LINK-A | static | index.html:25 |
+| index.html:a:26 | link | Assurance | generated/global | index.html:26 | LINK-A | static | index.html:26 |
+| index.html:a:29 | link | Open studio | generated/global | index.html:29 | LINK-A | static | index.html:29 |
+| index.html:a:30 | link | Start a capture | generated/global | index.html:30 | LINK-A | static | index.html:30 |
+| index.html:a:41 | link | Explore multi-room demo | generated/global | index.html:41 | LINK-A | static | index.html:41 |
+| index.html:a:42 | link | Start a capture ↘ | generated/global | index.html:42 | LINK-A | static | index.html:42 |
+| index.html:a:73 | link | Enter the Home Scan demo ↗ | generated/global | index.html:73 | LINK-A | static | index.html:73 |
+| index.html:a:74 | link | Home Scan by Isaiah Sweeney | generated/global | index.html:74 | LINK-A | static | index.html:74 |
+| index.html:a:74 | link | CC BY 4.0 | generated/global | index.html:74 | LINK-A | static | index.html:74 |
+| index.html:a:214 | link | Start a capture | generated/global | index.html:214 | LINK-A | static | index.html:214 |
+| index.html:a:217 | link | Spatial Studio by Whyme Labs | generated/global | index.html:217 | LINK-A | static | index.html:217 |
+| index.html:a:222 | link | Open studio | generated/global | index.html:222 | LINK-A | static | index.html:222 |
+| index.html:a:222 | link | contact@whymelabs.com | generated/global | index.html:222 | LINK-A | static | index.html:222 |
+| index.html:a:230 | link | Spatial Studio Reality, made explorable | generated/global | index.html:230 | LINK-A | static | index.html:230 |
+| index.html:a:240 | link | Open studio | generated/global | index.html:240 | LINK-A | static | index.html:240 |
+| index.html:a:242 | link | About Spatial Studio | generated/global | index.html:242 | LINK-A | static | index.html:242 |
+| accessSignInLink | link | Sign in | generated/global | index.html:287 | LINK-A | browser | e2e/release-access-code.spec.ts |
+| index.html:a:294 | link | Review inbox | generated/global | index.html:294 | LINK-A | static | index.html:294 |
 | src/client/studio.ts:button:3282 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3282 | CONTROL-A | static | src/client/studio.ts:3282 |
 | src/client/studio.ts:edit:4427 | button | edit | generated/global | src/client/studio.ts:4427 | CONTROL-A | static | src/client/studio.ts:4427 |
 | src/client/studio.ts:remove:4429 | button | remove | generated/global | src/client/studio.ts:4429 | CONTROL-A | static | src/client/studio.ts:4429 |

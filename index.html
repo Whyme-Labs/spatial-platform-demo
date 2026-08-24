@@ -9,7 +9,6 @@
   <meta property="og:description" content="Capture once. Deliver a photorealistic Walk + Fly experience, reviewed navigation, and a maintainable spatial asset." />
   <meta property="og:type" content="website" />
   <meta property="og:image" content="https://spatial.whymelabs.com/images/spatial-hero.webp" />
-  <link rel="preload" href="/images/spatial-hero.avif" as="image" type="image/avif" fetchpriority="high" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230b1320'/%3E%3Ccircle cx='32' cy='32' r='18' fill='%23c7ef45'/%3E%3C/svg%3E" />
   <title>Spatial Studio | Places, made explorable</title>
 </head>
@@ -45,8 +44,8 @@
         </div>
         <figure class="hero-media">
           <picture>
-            <source srcset="/images/spatial-hero.avif" type="image/avif" />
-            <img src="/images/spatial-hero.webp" width="1680" height="934" fetchpriority="high" alt="Concept visualization of an architectural interior transitioning into a Gaussian splat reconstruction." />
+            <source data-marketing-srcset="/images/spatial-hero.avif" type="image/avif" />
+            <img data-marketing-src="/images/spatial-hero.webp" width="1680" height="934" fetchpriority="high" alt="Concept visualization of an architectural interior transitioning into a Gaussian splat reconstruction." />
           </picture>
           <figcaption>
             <span>Spark 3DGS</span>
@@ -158,7 +157,7 @@
             </dl>
           </div>
           <div class="workflow-visual" aria-hidden="true">
-            <img src="/images/spatial-hero.webp" width="1680" height="934" loading="lazy" alt="" />
+            <img data-marketing-src="/images/spatial-hero.webp" width="1680" height="934" loading="lazy" alt="" />
             <div class="workflow-grid"></div>
           </div>
         </div>

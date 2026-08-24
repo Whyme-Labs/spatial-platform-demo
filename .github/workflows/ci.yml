@@ -117,6 +117,9 @@ jobs:
       - name: Run the browser proofs
         run: npm run test:e2e
 
+      - name: Audit frontend route loading
+        run: npm run audit:frontend-routes
+
       - name: Upload browser test evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
