@@ -25,7 +25,7 @@
 .mock-form-grid textarea,
 .mock-form-grid select { width: 100%; background: #0f110f; border: 1px solid var(--line); color: var(--text); border-radius: 12px; padding: 12px; outline: 0; }
 .mock-form-grid textarea { resize: vertical; }
-body { background:#101210; min-height:100vh; }
+body { --bg:#101210; }
 .nav-item { border:0;background:transparent;color:var(--muted);display:flex;align-items:center;text-align:left;cursor:pointer; }
 .nav-item:hover,
 .nav-item.active { background:rgba(255,255,255,.06);color:var(--text); }
@@ -1001,38 +1001,11 @@ input[type="file"]::file-selector-button {
   font: 650 var(--type-label)/1 var(--font-sans);
   cursor: pointer;
 }
-.text-button {
-  min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 8px;
-  color: var(--text);
-  font-size: var(--type-label);
-  text-underline-offset: 3px;
-  white-space: nowrap;
-}
 button:active:not(:disabled) {
   transform: translateY(1px);
 }
-.brand {
+.studio-sidebar > .brand {
   min-width: 0;
-}
-.brand strong {
-  font-family: var(--font-sans);
-  font-size: 1rem;
-  font-variation-settings: "wght" 720;
-  letter-spacing: -.02em;
-}
-.brand small {
-  margin-top: 2px;
-  color: var(--muted);
-  font: 400 var(--type-caption)/1.3 var(--font-mono);
-}
-.eyebrow {
-  color: var(--muted);
-  font: 600 var(--type-caption)/1.4 var(--font-mono);
-  letter-spacing: .1em;
 }
 .studio-shell { min-height:100vh; display:grid;
   grid-template-columns: 260px minmax(0, 1fr);

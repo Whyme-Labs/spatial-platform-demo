@@ -209,6 +209,34 @@ for (const owner of owners) {
   });
 }
 
+for (const [entryFile, imports] of Object.entries(entries)) {
+  const selectorProperties = new Map();
+  for (const fileName of imports) {
+    const { root } = parse(fileName);
+    root.walkRules((rule) => {
+      if (insideAtRule(rule, "keyframes", "")) return;
+      const condition = cascadeConditionContext(rule);
+      for (const selector of postcss.list.comma(rule.selector)) {
+        const normalized = selector.trim();
+        for (const declaration of rule.nodes.filter((node) => node.type === "decl")) {
+          const key = `${condition}|${normalized}|${declaration.prop.toLowerCase()}`;
+          const previous = selectorProperties.get(key);
+          if (previous && previous.fileName !== fileName) {
+            errors.push(
+              `${entryFile}: ${fileName}:${rule.source.start.line} duplicates ${normalized} { ${declaration.prop} } from ${previous.fileName}:${previous.line}`,
+            );
+          } else if (!previous) {
+            selectorProperties.set(key, {
+              fileName,
+              line: rule.source.start.line,
+            });
+          }
+        }
+      }
+    });
+  }
+}
+
 for (const property of uses) {
   if (!definitions.has(property) && !runtimeCustomProperties.has(property)) {
     errors.push(`undefined custom property: ${property}`);
@@ -334,4 +362,16 @@ function studioTypeScriptFiles() {
 function visitTypeScript(node, visitor) {
   visitor(node);
   node.forEachChild((child) => visitTypeScript(child, visitor));
+}
+
+function cascadeConditionContext(node) {
+  const context = [];
+  let parent = node.parent;
+  while (parent && parent.type !== "root") {
+    if (parent.type === "atrule" && parent.name !== "layer") {
+      context.unshift(`@${parent.name} ${parent.params}`);
+    }
+    parent = parent.parent;
+  }
+  return context.join(" > ");
 }

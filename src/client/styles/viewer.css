@@ -211,22 +211,6 @@
 .viewer-page button:active:not(:disabled) {
   transform: translateY(1px);
 }
-.viewer-page .brand strong {
-  font-family: var(--font-sans);
-  font-size: 1rem;
-  font-variation-settings: "wght" 720;
-  letter-spacing: -.02em;
-}
-.viewer-page .brand small {
-  margin-top: 2px;
-  color: var(--muted);
-  font: 400 var(--type-caption)/1.3 var(--font-mono);
-}
-.viewer-page .eyebrow {
-  color: var(--muted);
-  font: 600 var(--type-caption)/1.4 var(--font-mono);
-  letter-spacing: .1em;
-}
 .viewer-page .viewer-blocked-reason { margin:8px 0 0; padding:9px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(0,0,0,.55); color:var(--text); font-size:11px; line-height:1.45; }
 .viewer-page .navigator-item { min-height:40px; }
 .viewer-page .dynamic-barrier-toggle { min-height:40px;font-size:var(--type-label); }
@@ -388,4 +372,3 @@
   }
 }
 }
-

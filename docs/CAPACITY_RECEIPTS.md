@@ -12,8 +12,8 @@ with a PostCSS AST inventory:
 | Source | Bytes | Lines | Rules | Selectors | Declarations | `!important` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mixed baseline | 160,868 | 3,757 | 1,450 | 1,666 | 4,655 | 24 |
-| owned sources | 141,933 | 3,710 | 1,319 | 1,465 | 4,100 | 15 |
-| measured change | -18,935 | -47 | -131 | -201 | -555 | -9 |
+| owned sources | 141,082 | 3,665 | 1,312 | 1,458 | 4,075 | 15 |
+| measured change | -19,786 | -92 | -138 | -208 | -580 | -9 |
 
 The reduction is a receipt, not a target. It came from deleting source-proved
 dead prototype families, consolidating the authoritative shell/feedback/
@@ -40,7 +40,7 @@ a lower byte count alone is not evidence that the migration preserved layout.
 Last measured: 2026-08-24
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
-1,550,641 bytes against `e2e/visual-baselines.sha256`. The images were
+1,550,456 bytes against `e2e/visual-baselines.sha256`. The images were
 generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
 digest
 `sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
@@ -851,7 +851,7 @@ renderer changes.
 
 ## Full software-gate receipt
 
-Last measured: 2026-08-13
+Last measured: 2026-08-24
 
 Command:
 
@@ -859,14 +859,14 @@ Command:
 npm run check
 ```
 
-The complete local production gate passed with 369 Worker/domain tests across
-64 vitest files, 92 navigation and migration contracts across 15 node-test
-files, and 93 Playwright scenarios. Instrumented coverage measured 72.01%
-statements, 62.13% branches, 85.65% functions, and 78.41% lines. The same
-command also passed generated types, TypeScript, the action-state audit for 2
-client entry points, the control-wiring audit (150 static and 128 dynamic
-buttons, 22 static and 10 dynamic links, 37 interactive forms, 246 governed
-lifecycle fields), the inventory, production-config, and migration audits, the
+The complete local production gate passed with 445 Worker/domain tests across
+77 Vitest files, 134 navigation and migration contracts across 16 node-test
+files, and 128 Playwright scenarios across 12 browser specs. Instrumented
+coverage measured 73.01% statements, 63.47% branches, 86.19% functions, and
+79.31% lines. The same command also passed generated types, TypeScript, CSS and
+visual-baseline ownership audits, the action-state audit for 2 client entry
+points, the control-wiring audit (151 static and 111 dynamic buttons, 23 static
+and 10 dynamic links, 37 interactive forms, 246 governed lifecycle fields),
+the current user-facing inventory, production-config and migration audits, the
 production build, and a Cloudflare production deployment dry run. Remeasure
-this receipt whenever those reported counts or coverage values are changed in
-readiness documentation.
+this receipt whenever those reported counts or coverage values change.
