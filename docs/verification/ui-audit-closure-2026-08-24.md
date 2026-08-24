@@ -16,18 +16,20 @@ tab inventory.
 | Issue | Delivered commit | Result |
 | --- | --- | --- |
 | #60 responsive shell | `c8a145e` | one active workspace track, no Studio root overflow mask, transition proof |
-| #63 feedback | `0c0468e` | shared field/action failure contract and ARIA ownership |
+| #63 feedback | `0c0468e`, `a772052` | shared field/action failure contract, primary-form propagation, and ARIA ownership |
 | #61 and #62 hierarchy/task composition | `6a62939` | stable project context, first-class Process route, depth limit, archived recovery |
 | #64 responsive records/navigation | `66ce74a` | explicit record slots and native compact project picker |
-| #66 accessibility floor | `a35a6d3` | rendered type/target floors, Axe, zoom, forced colors |
-| #67 dialogs | `99d289e` | stable task shell, one scroll owner, bounded feedback, draft/focus handling |
-| #68 viewer overlays | `0d20ec1` | measured cross-frame occupied zones and explicit ownership transfer |
-| #69 cascade/primitives | `d779049` | page-owned layered CSS, typed surfaces, Process module, static ownership gate |
+| #66 accessibility floor | `a35a6d3`, `a772052` | rendered Studio, viewer, and renderer type/target floors, Axe, zoom, forced colors |
+| #67 dialogs | `99d289e`, `a772052` | stable task shell, one scroll owner, bounded feedback, draft/focus handling for every mutating form |
+| #68 viewer overlays | `0d20ec1`, `a772052` | validated cross-frame occupied zones and explicit ownership transfer |
+| #69 cascade/primitives | `d779049`, `c92f68a` | page-owned layered CSS, typed surfaces, Process module, cross-entry ownership gate |
 | #65 visual/composition gate | `e187d4b` | reviewed responsive baselines, state matrix, pixel sweep, CI diff artifacts |
+| #70 umbrella closure | `c92f68a`, `a772052` | all 55 findings reconciled, pre-merge review gaps fixed, and the complete gate rerun |
 
-These commits are local to `codex/fix-ui-audit-responsive-shell`. GitHub
-issues #60–#70 remain open until the branch is reviewed and landed; local
-qualification is not represented as remote completion.
+At local qualification time, these commits were on
+`codex/fix-ui-audit-responsive-shell`. GitHub issues #60–#70 stay open until
+the landing pull request passes its required checks and merges; local
+qualification alone is not represented as remote completion.
 
 ## Finding-by-finding reconciliation
 
