@@ -4,6 +4,10 @@ import {
   SCENE_ROTATION_MAX_DEGREES,
   SCENE_ROTATION_MIN_DEGREES,
 } from "../src/shared/scene-rotation";
+import {
+  expectReviewedScreenshot,
+  RESPONSIVE_VISUAL_VIEWPORTS,
+} from "./helpers/visual-matrix";
 
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
@@ -14,11 +18,21 @@ const viewports = [
 ] as const;
 
 const studioShellTransitionWidths = [1280, 1100, 1024, 961, 960] as const;
-
 const now = "2026-07-29T08:00:00.000Z";
 const organisationId = "11111111-1111-4111-8111-111111111111";
 const userId = "22222222-2222-4222-8222-222222222222";
 const projectId = "33333333-3333-4333-8333-333333333333";
+const maximumProjectName = (
+  "Museum conservation capture and reviewed navigation workspace "
+    .repeat(3)
+    .slice(0, 120)
+);
+const maximumReleaseSlug = (
+  "museum-conservation-capture-reviewed-publication-channel-"
+    .repeat(2)
+    .slice(0, 80)
+    .replace(/-$/, "x")
+);
 
 test.describe("responsive public surfaces", () => {
   test("landing page preserves readable controls and layout at supported aspect ratios", async ({ page }) => {
@@ -376,8 +390,11 @@ test.describe("authenticated studio UI", () => {
     }).selectOption("open-import");
     await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
     await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);
+    const maximumAssetFileName =
+      `${"registered-capture-visual-evidence-".repeat(10).slice(0, 251)}.spz`;
+    expect(maximumAssetFileName).toHaveLength(255);
     await dialog.locator("#newCaptureAsset").setInputFiles({
-      name: "atrium.spz",
+      name: maximumAssetFileName,
       mimeType: "application/octet-stream",
       buffer: Buffer.from("visual"),
     });
@@ -386,6 +403,11 @@ test.describe("authenticated studio UI", () => {
       mimeType: "application/octet-stream",
       buffer: Buffer.from("geometry"),
     });
+    await expect.poll(() => dialog.locator("#newCaptureAsset").evaluate(
+      (input) => (input as HTMLInputElement).files?.[0]?.name.length ?? 0,
+    )).toBe(255);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expectResponsiveSurface(page, "#newProjectDialog");
     await expect(frameConfirmation).toBeVisible();
     await expect(frameConfirmation).toHaveAttribute("required", "");
     await frameConfirmation.check();
@@ -396,6 +418,9 @@ test.describe("authenticated studio UI", () => {
   });
 
   test("constraint feedback stays with the invalid field and clears after correction", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "Upload capture", exact: true }).click();
     const dialog = page.locator("#newProjectDialog");
     const field = dialog.locator("#newCaptureName");
@@ -410,6 +435,13 @@ test.describe("authenticated studio UI", () => {
     await expect(fieldMessage).toBeVisible();
     await expect(fieldMessage).not.toBeEmpty();
     await expect(dialog.locator("#projectError")).toBeEmpty();
+    const validationGap = await fieldLabel.evaluate((label) => {
+      const control = label.querySelector("input")!.getBoundingClientRect();
+      const message = label.querySelector<HTMLElement>(".field-message")!.getBoundingClientRect();
+      return message.top - control.bottom;
+    });
+    expect(validationGap).toBeGreaterThan(0);
+    await expectReviewedScreenshot(page, "studio-inline-validation-phone.png");
 
     await field.fill("Atrium walkthrough");
     await expect(field).not.toHaveAttribute("aria-invalid");
@@ -675,6 +707,93 @@ test.describe("authenticated studio UI", () => {
     }
   });
 
+  test("reviewed Studio visual baselines cover every supported transition viewport", async ({ page }) => {
+    expect(maximumProjectName).toHaveLength(120);
+    expect(maximumReleaseSlug).toHaveLength(80);
+    await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.locator("#projectSort").selectOption("name_asc");
+    await page.evaluate(() => document.fonts.ready);
+
+    for (const viewport of RESPONSIVE_VISUAL_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      await page.evaluate(() => scrollTo(0, 0));
+      const composition = await page.evaluate(() => {
+        const visibleInViewport = (element: HTMLElement) => {
+          const style = getComputedStyle(element);
+          const bounds = element.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && bounds.width > 0
+            && bounds.height > 0
+            && bounds.bottom > 0
+            && bounds.top < innerHeight;
+        };
+        const clippedActions = [...document.querySelectorAll<HTMLElement>(
+          ".studio-shell :is(button,a[href],input,select,textarea,summary)",
+        )].filter(visibleInViewport).filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.left < -1 || bounds.right > innerWidth + 1;
+        }).map((element) => element.textContent?.trim() || element.getAttribute("aria-label"));
+        const unusableText = [...document.querySelectorAll<HTMLElement>(
+          ".studio-header h1, .project-row .record-primary",
+        )].filter(visibleInViewport).filter((element) => element.clientWidth <= 0);
+        return {
+          clippedActions,
+          unusableTextCount: unusableText.length,
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: innerWidth,
+        };
+      });
+      expect(composition.clippedActions, viewport.name).toEqual([]);
+      expect(composition.unusableTextCount, viewport.name).toBe(0);
+      expect(composition.documentWidth, viewport.name).toBeLessThanOrEqual(
+        composition.viewportWidth + 1,
+      );
+      await expectReviewedScreenshot(page, `studio-projects-${viewport.name}.png`);
+    }
+  });
+
+  test("reviewed Studio state baseline keeps pending and completed processing distinct", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.route("**/api/jobs", (route) => json(route, 200, {
+      jobs: [{
+        id: "66666666-6666-4666-8666-666666666671",
+        project_id: projectId,
+        version_id: null,
+        project_name: maximumProjectName,
+        job_type: "scene.prepare",
+        state: "PROCESSING",
+        progress: 52,
+        progress_message: "Building the browser scene and retaining the upload receipt",
+        attempt_count: 1,
+        max_attempts: 3,
+        created_at: now,
+      }, {
+        id: "66666666-6666-4666-8666-666666666672",
+        project_id: projectId,
+        version_id: null,
+        project_name: maximumProjectName,
+        job_type: "asset.validate",
+        state: "SUCCEEDED",
+        progress: 100,
+        progress_message: "Source evidence validated",
+        attempt_count: 1,
+        max_attempts: 3,
+        created_at: now,
+      }],
+    }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    const advanced = page.locator(".studio-nav-advanced");
+    await advanced.getByText("Advanced tools", { exact: true }).click();
+    await page.getByRole("button", { name: "Processing activity", exact: true }).click();
+    await expect(page.getByText("Building the browser scene", { exact: false })).toBeVisible();
+    await expect(page.getByText("Source evidence validated", { exact: true })).toBeVisible();
+    await expectReviewedScreenshot(page, "studio-processing-pending-phone.png");
+  });
+
   test("the active Studio workspace owns the full grid at transition widths", async ({ page }) => {
     const expectOnlyVisibleWorkspaceOwnsGrid = async (
       workspaceSelector: string,
@@ -720,6 +839,66 @@ test.describe("authenticated studio UI", () => {
       await page.getByRole("button", { name: "Processing activity", exact: true }).click();
       await expectOnlyVisibleWorkspaceOwnsGrid("#queuePanel", expectedShellTracks);
     }
+  });
+
+  test("the Studio shell stays continuous through every critical transition pixel", async ({ page }) => {
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    const receipt: Array<{
+      width: number;
+      shellTracks: number;
+      gridWidth: number;
+      workspaceWidth: number;
+      sidebarWidth: number;
+    }> = [];
+
+    for (let width = 945; width <= 1110; width += 1) {
+      await page.setViewportSize({ width, height: 800 });
+      const geometry = await page.evaluate(() => {
+        const shell = document.querySelector<HTMLElement>(".studio-shell")!;
+        const sidebar = document.querySelector<HTMLElement>(".studio-sidebar")!;
+        const grid = document.querySelector<HTMLElement>("#studioGrid")!;
+        const workspace = document.querySelector<HTMLElement>("#projectBoard")!;
+        return {
+          shellTracks: getComputedStyle(shell).gridTemplateColumns.trim().split(/\s+/).length,
+          gridWidth: grid.getBoundingClientRect().width,
+          workspaceWidth: workspace.getBoundingClientRect().width,
+          sidebarWidth: sidebar.getBoundingClientRect().width,
+          documentWidth: document.documentElement.scrollWidth,
+          viewportWidth: innerWidth,
+          bodyOverflowX: getComputedStyle(document.body).overflowX,
+        };
+      });
+
+      expect(geometry.bodyOverflowX, `${width}px root overflow owner`).not.toBe("hidden");
+      expect(geometry.documentWidth, `${width}px document width`).toBeLessThanOrEqual(
+        geometry.viewportWidth + 1,
+      );
+      expect(geometry.shellTracks, `${width}px shell tracks`).toBe(width <= 960 ? 1 : 2);
+      expect(
+        Math.abs(geometry.gridWidth - geometry.workspaceWidth),
+        `${width}px active workspace ownership`,
+      ).toBeLessThanOrEqual(1);
+      if (width > 960) {
+        expect(
+          geometry.workspaceWidth,
+          `${width}px primary workspace versus navigation rail`,
+        ).toBeGreaterThan(geometry.sidebarWidth);
+      }
+
+      const previous = receipt.at(-1);
+      if (previous?.shellTracks === geometry.shellTracks) {
+        expect(
+          geometry.workspaceWidth,
+          `${width}px workspace continuity`,
+        ).toBeGreaterThanOrEqual(previous.workspaceWidth);
+      }
+      receipt.push({ width, ...geometry });
+    }
+
+    await test.info().attach("studio-transition-corridor.json", {
+      body: Buffer.from(JSON.stringify(receipt, null, 2)),
+      contentType: "application/json",
+    });
   });
 
   test("every columnar Studio row shares one column geometry contract", async ({ page }) => {
@@ -774,9 +953,16 @@ test.describe("authenticated studio UI", () => {
   });
 
   test("long operational records use explicit responsive priorities", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1280, height: 800 });
     const longProjects = Array.from({ length: 100 }, (_, index) => ({
       id: `33333333-3333-4333-8333-${String(index + 1).padStart(12, "0")}`,
-      name: `Conservation capture ${String(index + 1).padStart(3, "0")} with an eighty-character expanded operational project identity`,
+      name: (
+        `Conservation capture ${String(index + 1).padStart(3, "0")} with reviewed operational evidence `
+          .repeat(3)
+          .slice(0, 120)
+      ),
       slug: `conservation-capture-${index + 1}`,
       status: index % 2 === 0 ? "INGESTED" : "PUBLISHED",
       captureAdapter: "registered-open-import-with-expanded-source-identifier",
@@ -789,6 +975,7 @@ test.describe("authenticated studio UI", () => {
       activeReleaseSlug: null,
       updatedAt: now,
     }));
+    expect(longProjects.every((project) => project.name.length === 120)).toBe(true);
     let projectFixtureCount = 100;
     await page.route("**/api/projects", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
@@ -800,8 +987,10 @@ test.describe("authenticated studio UI", () => {
       await expect(page.locator("#projectTable .record-row")).toHaveCount(count);
       if (count === 0) {
         await expect(page.locator("#projectTable .empty-state")).toBeVisible();
+        await expectReviewedScreenshot(page, "studio-empty-projects-standard-laptop.png");
       }
     }
+    await expectReviewedScreenshot(page, "studio-maximum-records-standard-laptop.png");
     await expect(page.getByRole("button", {
       name: `Open ${longProjects.at(-1)!.name}`,
       exact: true,
@@ -1171,12 +1360,14 @@ test.describe("authenticated studio UI", () => {
       const footerBounds = element.getBoundingClientRect();
       const error = element.querySelector<HTMLElement>(".form-error");
       const action = element.querySelector<HTMLElement>("button:not([hidden])");
+      const errorBounds = error?.getBoundingClientRect();
       const actionBounds = action?.getBoundingClientRect();
       return {
         footerTop: footerBounds.top,
         footerBottom: footerBounds.bottom,
         actionTop: actionBounds?.top ?? 0,
         actionBottom: actionBounds?.bottom ?? 0,
+        errorBottom: errorBounds?.bottom ?? 0,
         errorClientHeight: error?.clientHeight ?? 0,
         errorScrollHeight: error?.scrollHeight ?? 0,
         errorOverflowY: error ? getComputedStyle(error).overflowY : null,
@@ -1186,9 +1377,11 @@ test.describe("authenticated studio UI", () => {
     expect(longErrorLayout.footerTop).toBeGreaterThanOrEqual(-1);
     expect(longErrorLayout.footerBottom).toBeLessThanOrEqual(longErrorLayout.viewportHeight + 1);
     expect(longErrorLayout.actionTop).toBeGreaterThanOrEqual(longErrorLayout.footerTop);
+    expect(longErrorLayout.actionTop).toBeGreaterThan(longErrorLayout.errorBottom);
     expect(longErrorLayout.actionBottom).toBeLessThanOrEqual(longErrorLayout.viewportHeight + 1);
     expect(longErrorLayout.errorScrollHeight).toBeGreaterThan(longErrorLayout.errorClientHeight);
     expect(longErrorLayout.errorOverflowY).toBe("auto");
+    await expectReviewedScreenshot(page, "studio-long-error-dialog-short-height.png");
 
     await close.click();
     const discard = page.locator("#askDialog");
@@ -1268,10 +1461,14 @@ test.describe("studio authentication lifecycle", () => {
       return route.fallback();
     });
 
+    await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/studio.html#projects");
 
     await expect(page.locator("#workspaceName")).toHaveText("Checking session…");
     await expect(page.locator("#workspaceName")).not.toHaveText("Sign in required");
+    await expectReviewedScreenshot(page, "studio-session-loading-standard-laptop.png");
     releaseSession();
     await expect(page.locator("#workspaceName")).toHaveText("UI QA");
     await expect(page.locator("#loginDialog")).not.toBeVisible();
@@ -1796,8 +1993,8 @@ async function mockAnonymousAuth(page: Page): Promise<void> {
 }
 
 async function mockAuthenticatedStudio(page: Page): Promise<void> {
-  const longProjectName = "Museum conservation capture with a deliberately expanded eighty-character project identity";
-  const longReleaseSlug = "museum-conservation-capture-with-expanded-publication-channel-identifier";
+  const longProjectName = maximumProjectName;
+  const longReleaseSlug = maximumReleaseSlug;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;

@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { expectReviewedScreenshot } from "./helpers/visual-matrix";
 import AxeBuilder from "@axe-core/playwright";
 
 const CORRECT_ACCESS_CODE = "f".repeat(64);
@@ -73,9 +74,13 @@ test("access-code action feedback stays contained at every supported width", asy
     await page.goto("/s/gated-room", { waitUntil: "commit" });
     await page.locator("#accessCodeForm input[name='accessCode']").fill("0".repeat(64));
     await page.locator("#accessCodeSubmit").click();
+    await expect(page.locator("#accessCodeError")).toBeVisible();
+    await expect(page.locator("#accessCodeError")).not.toBeEmpty();
     const geometry = await page.locator("#accessCodeError").evaluate((element) => {
       const bounds = element.getBoundingClientRect();
       const parent = element.parentElement?.getBoundingClientRect();
+      const action = element.parentElement?.querySelector<HTMLElement>("#accessCodeSubmit")
+        ?.getBoundingClientRect();
       const style = getComputedStyle(element);
       return {
         borderStyle: style.borderStyle,
@@ -84,6 +89,8 @@ test("access-code action feedback stays contained at every supported width", asy
         right: bounds.right,
         parentLeft: parent?.left ?? 0,
         parentRight: parent?.right ?? 0,
+        actionBottom: action?.bottom ?? 0,
+        errorTop: bounds.top,
         overflowWrap: style.overflowWrap,
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth: window.innerWidth,
@@ -93,8 +100,14 @@ test("access-code action feedback stays contained at every supported width", asy
     expect(geometry.paddingTop, `${width}px action padding`).toBeGreaterThan(0);
     expect(geometry.left, `${width}px action left edge`).toBeGreaterThanOrEqual(geometry.parentLeft - 1);
     expect(geometry.right, `${width}px action right edge`).toBeLessThanOrEqual(geometry.parentRight + 1);
+    expect(geometry.errorTop, `${width}px feedback separation`).toBeGreaterThan(
+      geometry.actionBottom,
+    );
     expect(geometry.overflowWrap, `${width}px action wrapping`).toBe("anywhere");
     expect(geometry.documentWidth, `${width}px document width`).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    if (width === 320) {
+      await expectReviewedScreenshot(page, "viewer-access-error-small-phone.png");
+    }
   }
 });
 

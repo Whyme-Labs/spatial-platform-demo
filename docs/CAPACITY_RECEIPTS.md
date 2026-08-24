@@ -12,8 +12,8 @@ with a PostCSS AST inventory:
 | Source | Bytes | Lines | Rules | Selectors | Declarations | `!important` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | mixed baseline | 160,868 | 3,757 | 1,450 | 1,666 | 4,655 | 24 |
-| owned sources | 141,587 | 3,692 | 1,315 | 1,461 | 4,090 | 15 |
-| measured change | -19,281 | -65 | -135 | -205 | -565 | -9 |
+| owned sources | 141,933 | 3,710 | 1,319 | 1,465 | 4,100 | 15 |
+| measured change | -18,935 | -47 | -131 | -201 | -555 | -9 |
 
 The reduction is a receipt, not a target. It came from deleting source-proved
 dead prototype families, consolidating the authoritative shell/feedback/
@@ -29,11 +29,47 @@ npm run audit:css -- --json
 ```
 
 The command fails for unlayered rules, a changed entry graph, cross-owner core
-selectors, duplicate core selector/property declarations in one condition,
+selectors, duplicate selector/property declarations in one condition,
 undefined static custom properties, ID selectors, page-root overflow masks,
 unscoped viewer rules, or important declarations outside accessibility
 exceptions. Re-run the browser UI matrix whenever a rule moves between owners;
 a lower byte count alone is not evidence that the migration preserved layout.
+
+## Responsive visual-baseline receipt
+
+Last measured: 2026-08-24
+
+`npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
+1,550,641 bytes against `e2e/visual-baselines.sha256`. The images were
+generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
+digest
+`sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
+the Ubuntu/Chromium environment pinned for baseline review and matched by the
+CI browser job.
+
+Twenty images are the paired populated-Studio and ready-viewer matrix at the
+ten supported viewports. Nine state images cover Studio session loading,
+empty projects, 100 records, pending plus completed processing, inline
+validation, a short-height long error, viewer loading, access failure, and the
+short-landscape navigator. The long fixtures use the contract maxima of 120
+characters for project/viewer titles, 255 characters for upload filenames, and
+80 characters for release slugs.
+
+The pixel-by-pixel Studio transition receipt is produced by:
+
+```bash
+npx playwright test e2e/ui-quality.spec.ts \
+  --grep 'every critical transition pixel'
+```
+
+It measures every integer viewport width from 945 through 1110 px and attaches
+`studio-transition-corridor.json` to the Playwright report. Each row records
+shell tracks, Studio-grid width, active-workspace width, and sidebar width.
+The gate verifies root overflow ownership, exact one-track/two-track mode,
+active-workspace equality with its grid, primary-workspace dominance over the
+navigation rail in side-rail mode, and non-decreasing width inside each mode.
+The width interval is the audit's prescribed critical corridor, not a runtime
+capacity limit.
 
 ## Staging lifecycle canary budgets
 

@@ -1,5 +1,10 @@
 # Spark 2.1 indoor-scene browser matrix
 
+> This is the historical physical-profile compatibility receipt from
+> 2026-07-27. The required automated Studio/viewer viewport matrix, committed
+> image baselines, deterministic fixtures, and update workflow now live in
+> [ui-visual-baselines.md](ui-visual-baselines.md).
+
 - Recorded: 2026-07-27
 - Release under test: `https://spatial.whymelabs.com/s/playroom`
 - Asset: 43.0 MiB SPZ, Voxel51 playroom, Apache-2.0

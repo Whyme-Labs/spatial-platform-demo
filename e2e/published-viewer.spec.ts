@@ -1,5 +1,15 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { PROVISIONAL_MEASUREMENT_DISCLAIMER } from "../src/shared/world-units";
+import {
+  expectReviewedScreenshot,
+  RESPONSIVE_VISUAL_VIEWPORTS,
+} from "./helpers/visual-matrix";
+
+const maximumViewerTitle = (
+  "Museum conservation release with reviewed navigation and publication evidence "
+    .repeat(3)
+    .slice(0, 120)
+);
 
 test("published viewer hands startup progress to the embedded Spark loader", async ({ page }) => {
   const telemetry: Array<Record<string, unknown>> = [];
@@ -851,6 +861,119 @@ test("published viewer hands startup progress to the embedded Spark loader", asy
   await expect.poll(() => page.evaluate(() =>
     Object.keys(localStorage).filter((key) => key.startsWith("spatial.traversal-run."))
   )).toEqual([]);
+});
+
+test("reviewed viewer visual baselines cover every supported transition viewport", async ({ page }) => {
+  const manifest = posterManifest("visual-matrix", null);
+  expect(maximumViewerTitle).toHaveLength(120);
+  manifest.project.name = maximumViewerTitle;
+  manifest.viewer.title = maximumViewerTitle;
+  manifest.spatial = {
+    ...manifest.spatial,
+    entities: [{
+      id: "98888888-8888-4888-8888-888888888888",
+      parent_id: null,
+      kind: "room",
+      label: "Long gallery room and conservation review area",
+      position_json: JSON.stringify([0, 0, 0]),
+      geometry_json: null,
+      metadata_json: "{}",
+    }],
+    routes: [],
+    routeStops: [],
+  };
+
+  await page.clock.setFixedTime(new Date("2026-08-24T08:00:00.000Z"));
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.route("**/api/releases/visual-matrix/manifest", (route) => json(route, manifest));
+  await page.route("**/api/releases/visual-matrix/telemetry-session", (route) => json(route, {
+    sessionId: "99999999-9999-4999-8999-999999999999",
+    token: "visual-matrix-token",
+    expiresAtEpochSeconds: Number.MAX_SAFE_INTEGER,
+  }));
+  await page.route("**/api/telemetry", (route) => route.fulfill({ status: 204 }));
+  await page.route("**/renderer/index.html?*", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/html",
+    body: readyOnDemandRenderer().replace(
+      "<body>",
+      '<body style="margin:0;background:#090b0a;color:#f4efe1"><style>[role="status"]{display:none}</style>',
+    ),
+  }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/s/visual-matrix", { waitUntil: "commit" });
+  await expect(page.locator("#loadingOverlay")).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await expectReviewedScreenshot(page, "viewer-loading-phone.png");
+
+  await sendRendererReady(page);
+  await expect(page.locator("#viewerHud")).toBeVisible();
+  await expect(page.locator("#openNavigator")).toBeVisible();
+
+  for (const viewport of RESPONSIVE_VISUAL_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    await page.evaluate(() => scrollTo(0, 0));
+    const composition = await page.locator("#viewport").evaluate((root) => {
+      const rootBounds = root.getBoundingClientRect();
+      const controls = [...document.querySelectorAll<HTMLElement>(
+        "#releaseApp :is(button,a[href],input,select,textarea,summary)",
+      )].filter((element) => {
+        const style = getComputedStyle(element);
+        const bounds = element.getBoundingClientRect();
+        return style.display !== "none"
+          && style.visibility !== "hidden"
+          && bounds.width > 0
+          && bounds.height > 0
+          && bounds.bottom > 0
+          && bounds.top < innerHeight;
+      });
+      return {
+        clippedControls: controls.filter((element) => {
+          const bounds = element.getBoundingClientRect();
+          return bounds.left < -1 || bounds.right > innerWidth + 1
+            || bounds.top < -1 || bounds.bottom > innerHeight + 1;
+        }).map((element) => element.textContent?.trim() || element.getAttribute("aria-label")),
+        hudContained: [...root.querySelectorAll<HTMLElement>("#viewerHud > :not([hidden])")]
+          .every((element) => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.left >= rootBounds.left - 1
+              && bounds.right <= rootBounds.right + 1
+              && bounds.top >= rootBounds.top - 1
+              && bounds.bottom <= rootBounds.bottom + 1;
+          }),
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: innerWidth,
+      };
+    });
+    expect(composition.clippedControls, viewport.name).toEqual([]);
+    expect(composition.hudContained, viewport.name).toBe(true);
+    expect(composition.documentWidth, viewport.name).toBeLessThanOrEqual(
+      composition.viewportWidth + 1,
+    );
+    await expectReviewedScreenshot(page, `viewer-ready-${viewport.name}.png`);
+  }
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+    const width = innerWidth;
+    const height = innerHeight;
+    parent.postMessage({
+      source: "spatial-spark",
+      type: "overlay-layout",
+      viewport: { width, height },
+      zones: {
+        toolbar: { left: width - 244, right: width - 10, top: 10, bottom: 62 },
+        status: { left: width - 244, right: width - 10, top: 70, bottom: 100 },
+        help: null,
+        movement: { left: 18, right: 150, top: height - 150, bottom: height - 18 },
+        altitude: null,
+      },
+    }, location.origin);
+  });
+  await page.locator("#openNavigator").click();
+  await expect(page.locator("#spatialNavigator")).toBeVisible();
+  await expectReviewedScreenshot(page, "viewer-navigator-short-landscape.png");
 });
 
 test("visual-only releases do not imply a metric scale", async ({ page }) => {
