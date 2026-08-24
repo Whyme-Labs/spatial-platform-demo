@@ -2349,8 +2349,8 @@ body.viewer-page :is(button, input, select, textarea) {
   letter-spacing: 0;
 }
 
-body.studio-page :is(button, a, input, select, textarea):focus-visible,
-body.viewer-page :is(button, a, input, select, textarea):focus-visible {
+body.studio-page :is(button, a, input, select, textarea, summary):focus-visible,
+body.viewer-page :is(button, a, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -3303,10 +3303,76 @@ body.viewer-page :is(.scene-card-copy small, .scene-state, .section-title-row, .
 /* Why the walker stopped, held in the published scene's own HUD. */
 .viewer-blocked-reason { margin:8px 0 0; padding:9px 12px; border:1px solid var(--line); border-radius:11px; background:rgba(0,0,0,.55); color:var(--text); font-size:11px; line-height:1.45; }
 
+/* Accessibility floor: 11px captions are secondary only; operational labels
+   use the 12px label token or larger, and controls expose a 40px desktop hit
+   area with a 44px coarse-pointer target. */
+body.viewer-page :is(.icon-button,.round-button) { width:40px;height:40px; }
+body.viewer-page :is(.primary-button,.quiet-button,.wide-outline-button,.danger-button) { min-height:40px; }
+body.viewer-page .floating-menu-button { min-height:40px; }
+body.viewer-page .navigator-item { min-height:40px; }
+body.viewer-page .toggle-row { min-height:40px;cursor:pointer; }
+body.viewer-page .dynamic-barrier-toggle { min-height:40px;font-size:var(--type-label); }
+body.viewer-page :is(.project-tag,.release-info-state,.floor-plan-toolbar strong,.floor-plan-toolbar label,.floor-plan-toolbar select,.dynamic-barrier-copy strong,.dynamic-barrier-copy span,.dynamic-barrier-toggle) { font-size:var(--type-label);line-height:1.4; }
+body.viewer-page :is(.floor-plan-section > p,.dynamic-barrier-section p) { font-size:var(--type-caption);line-height:1.45; }
+body.viewer-page .floor-plan-toolbar select { min-height:40px;font-size:var(--type-label); }
+body.viewer-page .access-code-form label { font-size:var(--type-label);line-height:1.4; }
+body.viewer-page .floor-plan-label { font-size:var(--type-label); }
+body.viewer-page :is(.release-info-toggle,.navigator-trigger):focus-visible { outline:2px solid var(--accent);outline-offset:-3px; }
+
+body.studio-page .checkbox-row { min-height:40px;padding-block:4px;cursor:pointer; }
+body.studio-page .comparison-sync-control { min-height:40px;font-size:var(--type-label); }
+body.studio-page :is(.project-detail-disclosure > summary,.record-action-menu > summary):focus-visible { outline:2px solid var(--accent);outline-offset:-3px; }
+body.studio-page :is(.worker-status,.status-pill,.status-badge,.inline-status) { font-size:var(--type-label);line-height:1.4; }
+body.studio-page .checkbox-row input { width:18px;height:18px;flex:0 0 18px; }
+body.studio-page { --project-selector-track:40px; }
+body.studio-page .project-select-cell { width:40px;min-height:40px;justify-content:center; }
+body.studio-page .project-select { width:18px;height:18px; }
+body.studio-page .project-row { grid-template-columns:var(--project-selector-track) minmax(0,2.25fr) minmax(92px,.8fr) minmax(84px,.8fr) minmax(72px,.7fr); }
+
+@media (max-width:960px) {
+  body.studio-page .project-row { grid-template-columns:var(--project-selector-track) minmax(0,1.8fr) minmax(80px,.8fr); }
+}
+
+@media (max-width:640px) {
+  body.studio-page .project-row.record-row { grid-template-columns:var(--project-selector-track) minmax(0,1fr) auto; }
+}
+
+@media (any-pointer:coarse) {
+  body.studio-page :is(.primary-button,.quiet-button,.wide-outline-button,.danger-button,.text-button,.dialog-close,.project-select-cell,.checkbox-row,.comparison-sync-control),
+  body.viewer-page :is(button,.icon-button,.round-button,.floating-menu-button,.navigator-trigger,.dynamic-barrier-toggle,.floor-plan-toolbar select,.toggle-row) { min-height:44px; }
+  body.studio-page .dialog-close,
+  body.viewer-page :is(.icon-button,.round-button) { width:44px;height:44px; }
+  body.studio-page { --project-selector-track:44px; }
+  body.studio-page .project-select-cell { width:44px; }
+  body.studio-page .project-row { grid-template-columns:var(--project-selector-track) minmax(0,2.25fr) minmax(92px,.8fr) minmax(84px,.8fr) minmax(72px,.7fr); }
+}
+
+@media (any-pointer:coarse) and (max-width:960px) {
+  body.studio-page .project-row { grid-template-columns:var(--project-selector-track) minmax(0,1.8fr) minmax(80px,.8fr); }
+}
+
+@media (any-pointer:coarse) and (max-width:640px) {
+  body.studio-page .project-row.record-row { grid-template-columns:var(--project-selector-track) minmax(0,1fr) auto; }
+}
+
+@media (forced-colors:active) {
+  body.studio-page :is(button,a,input,select,textarea,summary):focus-visible,
+  body.viewer-page :is(button,a,input,select,textarea,summary):focus-visible { outline:3px solid Highlight!important;outline-offset:2px; }
+  body.studio-page :is(.nav-item.active,.filter-chip.active,.project-section-nav button.active,[aria-current="page"],.status-pill,.status-badge),
+  body.viewer-page :is([aria-pressed="true"],[aria-expanded="true"],.release-state,.scene-state) { border:2px solid ButtonText; }
+  body.studio-page :is(button,input,select,textarea):disabled,
+  body.viewer-page :is(button,input,select,textarea):disabled { color:GrayText;border-color:GrayText;opacity:1; }
+  :is(.state,.worker-status i,.spark-runtime-dot) { forced-color-adjust:none;background:CanvasText;outline:1px solid Canvas; }
+}
+
 /* Repeated operational records declare identity, state, secondary evidence,
    and actions without forcing every collection through one component. */
 body.studio-page .record-row,
 body.studio-page .record-primary { min-width:0; }
+body.studio-page .queue-item.record-row { grid-template-columns:27px minmax(0,1fr) minmax(0,90px); }
+body.studio-page .queue-item.record-row > * { min-width:0; }
+body.studio-page .queue-item.record-row .job-actions { max-width:100%;justify-self:stretch; }
+body.studio-page .queue-item.record-row .job-actions > * { max-width:100%; }
 body.studio-page .record-primary { overflow-wrap:anywhere; }
 body.studio-page .hosting-row.record-row { flex-wrap:wrap; }
 body.studio-page .review-line.record-row { align-items:flex-start;flex-direction:column; }
@@ -3321,7 +3387,7 @@ body.studio-page .record-action-menu > summary::-webkit-details-marker { display
 body.studio-page .record-action-menu-items { display:grid;gap:6px;margin-top:6px; }
 body.studio-page .record-action-menu-items > * { width:100%; }
 
-@media (max-width:900px) {
+@media (max-width:1100px) {
   body.studio-page .release-table { overflow-x:visible; }
   body.studio-page .release-list-row.record-table-header { display:none; }
   body.studio-page .release-list-row.record-row {
@@ -3347,7 +3413,7 @@ body.studio-page .record-action-menu-items > * { width:100%; }
   body.studio-page .record-table-header { display:none; }
 
   body.studio-page .project-row.record-row {
-    grid-template-columns:24px minmax(0,1fr) auto;
+    grid-template-columns:var(--project-selector-track) minmax(0,1fr) auto;
     grid-template-areas:"selector identity status";
     gap:10px;
     min-height:64px;
@@ -3384,3 +3450,32 @@ body.studio-page .record-action-menu-items > * { width:100%; }
   body.studio-page .domain-row.record-row > :is(.domain-row-heading,.domain-evidence,.domain-dns-record,.form-error,.record-actions) { min-width:0;width:100%; }
   body.studio-page .domain-row.record-row > .record-actions { justify-content:flex-start; }
 }
+
+/* Operational text is never caption-sized. Captions remain available for
+   genuinely secondary prose outside these task, state, evidence, and action
+   owners. */
+body.studio-page .record-row,
+body.studio-page .record-row :is(strong,small,span,p,a,summary),
+body.studio-page :is(
+  .project-pagination,
+  .list-pagination,
+  .project-back-button,
+  .project-section-nav button,
+  .job-action,
+  .manual-subscription-controls summary,
+  .candidate-choice-fieldset legend,
+  .format-guide summary,
+  .capture-agent-project-choice small,
+  .semantic-group > strong,
+  .geometry-change-metrics small,
+  .geometry-change-row,
+  .capture-evidence-issues li,
+  .capture-room-row > div
+) { font-size:var(--type-label);line-height:1.4; }
+
+body.studio-page :is(
+  .navigation-evidence-json,
+  .geometry-change-legend,
+  .capture-evidence-legend,
+  .format-guide pre
+) { font-size:var(--type-caption);line-height:1.5; }

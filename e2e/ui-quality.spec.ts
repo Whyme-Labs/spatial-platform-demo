@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import {
   SCENE_ROTATION_MAX_DEGREES,
   SCENE_ROTATION_MIN_DEGREES,
@@ -161,6 +162,163 @@ test.describe("authenticated studio UI", () => {
     await expect(page.getByRole("heading", {
       name: "Upload once. Preview the processed splat. Edit only when needed.",
     })).toBeVisible();
+  });
+
+  test("core Studio views and the capture dialog pass automated accessibility checks", async ({ page }) => {
+    const expectAxeClean = async (label: string): Promise<void> => {
+      const result = await new AxeBuilder({ page })
+        .exclude("#turnstileWidget")
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+        .analyze();
+      expect(result.violations, label).toEqual([]);
+    };
+
+    await expectAxeClean("Projects");
+    await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    await expectAxeClean("Published previews");
+    await page.getByRole("button", { name: "Team access", exact: true }).click();
+    await expectAxeClean("Team access");
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    await expectAxeClean("Capture dialog");
+  });
+
+  test("Studio names icon controls and preserves targets, focus, and doubled text", async ({ page }) => {
+    const dialogSemantics = await page.locator("dialog").evaluateAll((dialogs) => dialogs.map((dialog) => ({
+      id: dialog.id,
+      named: Boolean(dialog.getAttribute("aria-label") || dialog.getAttribute("aria-labelledby")),
+      closeNames: [...dialog.querySelectorAll<HTMLElement>(".dialog-close")]
+        .map((close) => close.getAttribute("aria-label") || close.getAttribute("aria-labelledby") || ""),
+    })));
+    expect(dialogSemantics.length).toBeGreaterThan(0);
+    expect(dialogSemantics.filter((dialog) => !dialog.named)).toEqual([]);
+    expect(dialogSemantics.flatMap((dialog) => dialog.closeNames).filter((name) => !name)).toEqual([]);
+
+    const selectorCell = page.locator("#projectTable .project-select-cell").nth(1);
+    const projectCheckbox = selectorCell.locator("input");
+    await expect(projectCheckbox).not.toBeChecked();
+    const selectorTarget = await selectorCell.boundingBox();
+    expect(selectorTarget).not.toBeNull();
+    expect(selectorTarget!.width).toBeGreaterThanOrEqual(40);
+    expect(selectorTarget!.height).toBeGreaterThanOrEqual(40);
+    await selectorCell.click({ position: { x: 2, y: selectorTarget!.height / 2 } });
+    await expect(projectCheckbox).toBeChecked();
+    await expect(page).toHaveURL(/#projects$/);
+
+    const statusSizes = await page.locator(".worker-status:visible, .status-pill:visible, .record-status:visible")
+      .evaluateAll((statuses) => statuses.map((status) => ({
+        text: status.textContent?.trim() ?? "",
+        fontSize: Number.parseFloat(getComputedStyle(status).fontSize),
+      })));
+    expect(statusSizes.length).toBeGreaterThan(0);
+    for (const status of statusSizes) {
+      expect(status.text).not.toBe("");
+      expect(status.fontSize, status.text).toBeGreaterThanOrEqual(12);
+    }
+
+    await page.emulateMedia({ forcedColors: "active" });
+    const projectsNav = page.getByRole("button", { name: "Projects", exact: true });
+    await page.keyboard.press("Tab");
+    await projectsNav.focus();
+    const forcedColorFocus = await projectsNav.evaluate((button) => ({
+      forcedColors: matchMedia("(forced-colors: active)").matches,
+      focusVisible: button.matches(":focus-visible"),
+      outlineWidth: Number.parseFloat(getComputedStyle(button).outlineWidth),
+      borderWidth: Number.parseFloat(getComputedStyle(button).borderTopWidth),
+    }));
+    expect(forcedColorFocus.forcedColors).toBe(true);
+    expect(forcedColorFocus.focusVisible).toBe(true);
+    expect(forcedColorFocus.outlineWidth).toBeGreaterThanOrEqual(3);
+    expect(forcedColorFocus.borderWidth).toBeGreaterThanOrEqual(2);
+
+    await page.emulateMedia({ forcedColors: "none" });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    const dialog = page.locator("#newProjectDialog");
+    const continueAction = dialog.getByRole("button", { name: "Continue to files", exact: true });
+    await continueAction.scrollIntoViewIfNeeded();
+    await expect(continueAction).toBeVisible();
+    const scaled = await dialog.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const form = element.querySelector<HTMLElement>("form");
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        documentWidth: document.documentElement.scrollWidth,
+        formOverflowY: form ? getComputedStyle(form).overflowY : null,
+      };
+    });
+    expect(scaled.left).toBeGreaterThanOrEqual(-1);
+    expect(scaled.right).toBeLessThanOrEqual(scaled.viewportWidth + 1);
+    expect(scaled.top).toBeGreaterThanOrEqual(-1);
+    expect(scaled.bottom).toBeLessThanOrEqual(scaled.viewportHeight + 1);
+    expect(scaled.documentWidth).toBeLessThanOrEqual(scaled.viewportWidth + 1);
+    expect(scaled.formOverflowY).toBe("auto");
+
+    await dialog.locator(".dialog-close").click();
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    await page.setViewportSize({ width: 640, height: 800 });
+    await expect(page.getByRole("button", { name: "Upload capture", exact: true })).toBeVisible();
+    await expectResponsiveSurface(page, ".studio-shell");
+  });
+
+  test("operational Studio text never falls below the 12px label floor", async ({ page }) => {
+    const violations: Array<{ view: string; text: string; className: string; fontSize: number }> = [];
+    const auditCurrentView = async (view: string): Promise<void> => {
+      const current = await page.locator([
+        ".studio-main button:visible",
+        ".studio-sidebar button:visible",
+        ".studio-main a:visible",
+        ".record-row :is(strong,small,span,p,summary):visible",
+        ".project-pagination:visible",
+        ".list-pagination:visible",
+        ".worker-status:visible",
+        ".status-pill:visible",
+        ".status-badge:visible",
+        ".domain-evidence span:visible",
+        ".geometry-change-row:visible",
+        ".capture-evidence-issues li:visible",
+        ".field-message:visible",
+        ".form-error:visible",
+      ].join(", ")).evaluateAll((elements) => elements
+        .filter((element) => element.textContent?.trim() && element.getAttribute("aria-hidden") !== "true")
+        .map((element) => ({
+          text: element.textContent!.trim().replace(/\s+/g, " ").slice(0, 80),
+          className: element.className,
+          fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
+        }))
+        .filter((element) => element.fontSize < 12));
+      violations.push(...current.map((entry) => ({ view, ...entry })));
+    };
+
+    await auditCurrentView("Projects");
+    const advanced = page.locator(".studio-nav-advanced");
+    await advanced.getByText("Advanced tools", { exact: true }).click();
+    await page.getByRole("button", { name: "Processing activity", exact: true }).click();
+    await auditCurrentView("Processing activity");
+    await page.getByRole("button", { name: "Client review", exact: true }).click();
+    await page.getByRole("button", { name: "Open activity", exact: true }).click();
+    await auditCurrentView("Client review");
+    await page.getByRole("button", { name: "Hosting & lifecycle", exact: true }).click();
+    await auditCurrentView("Hosting & lifecycle");
+    await page.getByRole("button", { name: "Published previews", exact: true }).click();
+    await auditCurrentView("Published previews");
+    await page.getByRole("button", { name: "Team access", exact: true }).click();
+    await auditCurrentView("Team access");
+    await page.getByRole("button", { name: "Projects", exact: true }).click();
+    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+    await auditCurrentView("Capture dialog");
+
+    expect(violations).toEqual([]);
   });
 
   test("capture intake guides a novice through details, files, and the processing plan", async ({ page }) => {
@@ -581,7 +739,7 @@ test.describe("authenticated studio UI", () => {
       else await expect(page.locator(".queue-item.record-row")).toHaveCount(2);
 
       await page.getByRole("button", { name: "Published previews", exact: true }).click();
-      if (viewport.width > 900) await expectColumnsAligned(page, ".release-list-row");
+      if (viewport.width > 1100) await expectColumnsAligned(page, ".release-list-row");
       else await expect(page.locator(".release-list-row.record-row")).toHaveCount(2);
 
       // Team access is a primary nav destination now that inviting is the only
@@ -937,6 +1095,53 @@ test.describe("authenticated studio UI", () => {
       }
     }
   });
+});
+
+test("coarse-pointer Studio controls expose full 44px targets", async ({ browser }) => {
+  const context = await browser.newContext({
+    baseURL: test.info().project.use.baseURL,
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  const page = await context.newPage();
+  try {
+    await installTurnstileStub(page);
+    await mockAuthenticatedStudio(page);
+    await page.goto("/studio.html#projects");
+    await expect(page.getByRole("heading", {
+      name: "Upload once. Preview the processed splat. Edit only when needed.",
+    })).toBeVisible();
+    expect(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches)).toBe(true);
+
+    const projectTarget = await page.locator("#projectTable .project-select-cell").nth(1).boundingBox();
+    expect(projectTarget).not.toBeNull();
+    expect(projectTarget!.width).toBeGreaterThanOrEqual(44);
+    expect(projectTarget!.height).toBeGreaterThanOrEqual(44);
+
+    await page.locator("#captureBundleDialog").evaluate((dialog) =>
+      (dialog as HTMLDialogElement).showModal()
+    );
+    const checkboxTarget = await page.locator("#captureBundleDialog .checkbox-row").first().boundingBox();
+    const closeTarget = await page.locator("#captureBundleDialog .dialog-close").boundingBox();
+    expect(checkboxTarget).not.toBeNull();
+    expect(checkboxTarget!.height).toBeGreaterThanOrEqual(44);
+    expect(closeTarget).not.toBeNull();
+    expect(closeTarget!.width).toBeGreaterThanOrEqual(44);
+    expect(closeTarget!.height).toBeGreaterThanOrEqual(44);
+    await page.locator("#captureBundleDialog").evaluate((dialog) =>
+      (dialog as HTMLDialogElement).close()
+    );
+
+    await page.locator("#versionComparisonDialog").evaluate((dialog) =>
+      (dialog as HTMLDialogElement).showModal()
+    );
+    const syncTarget = await page.locator(".comparison-sync-control").boundingBox();
+    expect(syncTarget).not.toBeNull();
+    expect(syncTarget!.height).toBeGreaterThanOrEqual(44);
+  } finally {
+    await context.close();
+  }
 });
 
 test.describe("studio authentication lifecycle", () => {
@@ -1365,6 +1570,25 @@ test.describe("Spark renderer chrome", () => {
       })).toBeVisible();
       await expectResponsiveSurface(page, "body");
     }
+
+    const axe = await new AxeBuilder({ page })
+      .exclude("#sparkCanvas")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(axe.violations).toEqual([]);
+    await page.emulateMedia({ forcedColors: "active" });
+    const help = page.locator("#toggleHelp");
+    await help.focus();
+    const forced = await help.evaluate((button) => ({
+      active: matchMedia("(forced-colors: active)").matches,
+      focusVisible: button.matches(":focus-visible"),
+      outlineWidth: Number.parseFloat(getComputedStyle(button).outlineWidth),
+      disabledOpacity: getComputedStyle(document.querySelector("#resetView")!).opacity,
+    }));
+    expect(forced.active).toBe(true);
+    expect(forced.focusVisible).toBe(true);
+    expect(forced.outlineWidth).toBeGreaterThanOrEqual(3);
+    expect(forced.disabledOpacity).toBe("1");
   });
 });
 
@@ -1388,11 +1612,16 @@ async function expectResponsiveSurface(page: Page, rootSelector: string): Promis
         element instanceof HTMLSelectElement ||
         element instanceof HTMLTextAreaElement;
     });
+    const choiceTargets = visible
+      .filter((element): element is HTMLInputElement =>
+        element instanceof HTMLInputElement && ["checkbox", "radio"].includes(element.type)
+      )
+      .map((input) => input.closest<HTMLElement>("label") ?? input);
     return {
       documentWidth: document.documentElement.scrollWidth,
       viewportWidth: window.innerWidth,
       fonts: [...new Set(visible.map((element) => getComputedStyle(element).fontFamily))],
-      undersizedControls: controls.map((element) => ({
+      undersizedControls: [...controls, ...choiceTargets].map((element) => ({
         label: element.textContent?.trim() || element.getAttribute("aria-label") || element.tagName,
         height: element.getBoundingClientRect().height,
       })).filter((control) => control.height < 39.5),

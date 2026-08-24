@@ -1628,6 +1628,7 @@ async function initialise(): Promise<void> {
 
 function bindInterface(): void {
   compareDomain.bind();
+  bindDialogSemantics();
   window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, () => {
     transitionToSignedOut("Your session expired. Sign in again.");
   });
@@ -2669,6 +2670,34 @@ function bindInterface(): void {
   window.addEventListener("hashchange", () => void navigateFromHash());
   window.addEventListener("popstate", () => void navigateFromHash());
   activateView(viewFromHash(), false);
+}
+
+function bindDialogSemantics(): void {
+  document.querySelectorAll<HTMLElement>(".worker-status i").forEach((marker) => {
+    marker.setAttribute("aria-hidden", "true");
+  });
+  document.querySelectorAll<HTMLDialogElement>("dialog").forEach((dialog, index) => {
+    const heading = dialog.querySelector<HTMLElement>("h1, h2, h3");
+    if (!dialog.hasAttribute("aria-label") && !dialog.hasAttribute("aria-labelledby")) {
+      if (heading) {
+        heading.id ||= `${dialog.id || `dialog-${index + 1}`}-title`;
+        dialog.setAttribute("aria-labelledby", heading.id);
+      } else {
+        dialog.setAttribute("aria-label", "Dialog");
+      }
+    }
+    dialog.querySelectorAll<HTMLElement>("[data-close-dialog]").forEach((control) => {
+      const visibleLabel = control.textContent?.trim() ?? "";
+      if (
+        !control.hasAttribute("aria-label") &&
+        !control.hasAttribute("aria-labelledby") &&
+        (!visibleLabel || visibleLabel === "×")
+      ) {
+        const dialogName = heading?.textContent?.trim();
+        control.setAttribute("aria-label", dialogName ? `Close ${dialogName}` : "Close dialog");
+      }
+    });
+  });
 }
 
 async function handleSignIn(form: FormData): Promise<void> {
@@ -5187,7 +5216,7 @@ function renderProjects(): void {
     bulkLifecycleOperation = null;
     renderProjects();
   });
-  const selectVisibleCell = element("span", "project-select-cell");
+  const selectVisibleCell = element("label", "project-select-cell");
   selectVisibleCell.append(selectVisible);
   header.append(selectVisibleCell);
   ["Project", "Source", "Stage", "Updated"].forEach((label) => header.append(element("span", "", label)));
@@ -5218,7 +5247,9 @@ function renderProjects(): void {
     identity.append(icon, name);
     identityCell.append(identity);
     const stage = element("span", "record-status");
-    stage.append(element("i", `state ${statusClass(project.status)}`), document.createTextNode(humanStatus(project.status)));
+    const stageMarker = element("i", `state ${statusClass(project.status)}`);
+    stageMarker.setAttribute("aria-hidden", "true");
+    stage.append(stageMarker, document.createTextNode(humanStatus(project.status)));
     identity.addEventListener("click", () => {
       void runAction({
         key: `select-project:${project.id}`,
@@ -5228,10 +5259,10 @@ function renderProjects(): void {
     });
     row.addEventListener("click", (event) => {
       const target = event.target;
-      if (target instanceof Element && target.closest("button, input, a, select, textarea")) return;
+      if (target instanceof Element && target.closest("button, input, label, a, select, textarea")) return;
       identity.click();
     });
-    const selectedCell = element("span", "project-select-cell record-selector");
+    const selectedCell = element("label", "project-select-cell record-selector");
     selectedCell.append(selected);
     row.append(
       selectedCell,

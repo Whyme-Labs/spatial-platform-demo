@@ -88,6 +88,7 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@cloudflare/vitest-pool-workers": "0.20.3",
     "@mkkellogg/gaussian-splats-3d": "0.4.7",
     "@playwright/test": "^1.62.0",
