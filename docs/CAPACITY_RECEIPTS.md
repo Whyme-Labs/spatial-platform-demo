@@ -40,7 +40,7 @@ a lower byte count alone is not evidence that the migration preserved layout.
 Last measured: 2026-08-25
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
-1,497,187 bytes against `e2e/visual-baselines.sha256`. The images were
+1,484,124 bytes against `e2e/visual-baselines.sha256`. The images were
 generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
 digest
 `sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
@@ -863,8 +863,8 @@ renderer changes.
 
 Last measured: 2026-08-25
 
-Source baseline: `16f6a31`, with the issue #84 semantic-token changes in the
-measured worktree. The client chunks below carry
+Source baseline: `c4a32c7`, with the issue #79 accessibility-floor changes in
+the measured worktree. The client chunks below carry
 their own SHA-256 identities in `config/frontend-route-receipts.json`.
 
 Reproduce the production-bundle receipt and enforce its structural tripwires
@@ -885,12 +885,12 @@ frontend totals; their only job is to carry both viewer routes through the real
 
 | Route | Frontend encoded body | Frontend transferred | FCP | Route ready | Renderer first frame |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Signed-out Studio | 205,362 B | 206,636 B | 72 ms | 119 ms | n/a |
-| Authenticated portfolio | 205,362 B | 206,636 B | 44 ms | 84 ms | n/a |
-| First private preview | 3,333,235 B | 3,334,867 B | 40 ms | 918 ms | 155 ms |
-| First published viewer frame | 3,333,235 B | 3,334,867 B | 40 ms | 896 ms | 104 ms |
+| Signed-out Studio | 205,441 B | 206,715 B | 88 ms | 141 ms | n/a |
+| Authenticated portfolio | 205,441 B | 206,715 B | 40 ms | 86 ms | n/a |
+| First private preview | 3,333,235 B | 3,334,867 B | 160 ms | 1,097 ms | 147 ms |
+| First published viewer frame | 3,333,235 B | 3,334,867 B | 44 ms | 871 ms | 102 ms |
 
-The Studio routes loaded only `studio-4fK_G6fv.js`,
+The Studio routes loaded only `studio-Dy6PypWS.js`,
 `action-state-DO3fNd-u.js`, and `world-units-SLVxYD65.js`. Each viewer route
 also loaded the real renderer, physical-navigation, Detour, and Recast
 compatibility chunks before `ready`. The exact filenames, raw byte counts,

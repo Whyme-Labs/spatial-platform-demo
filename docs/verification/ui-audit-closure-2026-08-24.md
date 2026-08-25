@@ -19,7 +19,7 @@ tab inventory.
 | #63 feedback | `0c0468e`, `a772052` | shared field/action failure contract, primary-form propagation, and ARIA ownership |
 | #61 and #62 hierarchy/task composition | `6a62939` | stable project context, first-class Process route, depth limit, archived recovery |
 | #64 responsive records/navigation | `66ce74a` | explicit record slots and native compact project picker |
-| #66 accessibility floor | `a35a6d3`, `a772052` | rendered Studio, viewer, and renderer type/target floors, Axe, zoom, forced colors |
+| #66 / #79 accessibility floor | `a35a6d3`, `a772052`, issue #79 successor | comprehensive rendered semantic-text and interactive-target audits, conditional Studio states, comparison evidence, Axe, zoom, forced colors |
 | #67 dialogs | `99d289e`, `a772052` | stable task shell, one scroll owner, bounded feedback, draft/focus handling for every mutating form |
 | #68 viewer overlays | `0d20ec1`, `a772052` | validated cross-frame occupied zones and explicit ownership transfer |
 | #69 cascade/primitives | `d779049`, `c92f68a` | page-owned layered CSS, typed surfaces, Process module, cross-entry ownership gate |
@@ -64,7 +64,7 @@ qualification alone is not represented as remote completion.
 | F-27 desktop rows on mobile | Fixed | named mobile grid areas and action disclosures |
 | F-28 long identifiers | Fixed | exact contract-max fixtures, wrap/truncate/copy behavior |
 | F-29 large-list risk | Measured/guarded | 0/1/10/100 fixture, pagination, selection and containment; virtualization remains demand-led |
-| F-30 9–11 px operational text | Fixed | rendered operational floor is 12 px |
+| F-30 9–11 px operational text | Fixed | all visible essential Studio semantic text is audited at 12 px or above; fine/coarse interactive targets are audited at 40/44 px |
 | F-31 small checkbox targets | Fixed | labelled row target and coarse-pointer geometry |
 | F-32 color-only status | Fixed | textual status accompanies markers; forced-colors state is explicit |
 | F-33 focus clipping/order | Fixed | focus-visible, modal containment/restoration, and routed heading focus |
