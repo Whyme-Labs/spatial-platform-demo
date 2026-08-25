@@ -40,7 +40,7 @@ a lower byte count alone is not evidence that the migration preserved layout.
 Last measured: 2026-08-25
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
-1,484,124 bytes against `e2e/visual-baselines.sha256`. The images were
+1,498,021 bytes against `e2e/visual-baselines.sha256`. The images were
 generated in `mcr.microsoft.com/playwright:v1.62.0-noble` at pulled image
 digest
 `sha256:baed2032d533817f3dbe6425de795788430ba345e819a1201337009ba17c9d07`,
@@ -718,7 +718,7 @@ receipts for this operation.
 
 ## Production-scale local QA list boundaries
 
-Last measured: 2026-08-10
+Dataset boundary last measured: 2026-08-10
 
 The inventory and dataset are derived from the current source rather than a
 guessed tenant size:
@@ -729,10 +729,12 @@ npm run audit:inventory
 npm run qa:data:local
 ```
 
-The inventory audit measured 4 roles, 191 Worker/client routes, 37 forms, 37
-dialogs, 246 governed fields, 318 static/generated controls, 68 persisted state
-sets, and 59 asynchronous workflows. The committed generated inventory records
-the source location and acceptance/edge policy for every row.
+The current inventory audit on 2026-08-25 measured 4 roles, 184 Worker/client
+routes, 37 forms, 37 dialogs, 246 governed fields, 305 static/generated
+controls, 69 persisted state sets, and 59 asynchronous workflows. The
+committed generated inventory records the source location and acceptance/edge
+policy for every row. The production-scale dataset boundary receipt below
+remains from 2026-08-10.
 
 `qa:data:local` reads each primary Studio list query and creates one synthetic
 row beyond its existing SQL boundary in a new isolated `--persist-to`
@@ -798,7 +800,7 @@ its selected floor has an 85-cell clear component against the production
 
 ## Studio project-canvas width
 
-Last measured: 2026-08-24
+Last measured: 2026-08-25
 
 Command:
 
@@ -863,8 +865,8 @@ renderer changes.
 
 Last measured: 2026-08-25
 
-Source baseline: `c4a32c7`, with the issue #79 accessibility-floor changes in
-the measured worktree. The client chunks below carry
+Source baseline: `7ec40e2`, with the issue #86 final-polish changes in the
+measured worktree. The client chunks below carry
 their own SHA-256 identities in `config/frontend-route-receipts.json`.
 
 Reproduce the production-bundle receipt and enforce its structural tripwires
@@ -885,12 +887,12 @@ frontend totals; their only job is to carry both viewer routes through the real
 
 | Route | Frontend encoded body | Frontend transferred | FCP | Route ready | Renderer first frame |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Signed-out Studio | 205,441 B | 206,715 B | 88 ms | 141 ms | n/a |
-| Authenticated portfolio | 205,441 B | 206,715 B | 40 ms | 86 ms | n/a |
-| First private preview | 3,333,235 B | 3,334,867 B | 160 ms | 1,097 ms | 147 ms |
-| First published viewer frame | 3,333,235 B | 3,334,867 B | 44 ms | 871 ms | 102 ms |
+| Signed-out Studio | 205,685 B | 206,959 B | 120 ms | 171 ms | n/a |
+| Authenticated portfolio | 205,685 B | 206,959 B | 48 ms | 100 ms | n/a |
+| First private preview | 3,333,235 B | 3,334,867 B | 48 ms | 943 ms | 160 ms |
+| First published viewer frame | 3,333,235 B | 3,334,867 B | 48 ms | 881 ms | 108 ms |
 
-The Studio routes loaded only `studio-Dy6PypWS.js`,
+The Studio routes loaded only `studio-DNiPxy7i.js`,
 `action-state-DO3fNd-u.js`, and `world-units-SLVxYD65.js`. Each viewer route
 also loaded the real renderer, physical-navigation, Detour, and Recast
 compatibility chunks before `ready`. The exact filenames, raw byte counts,
@@ -918,7 +920,7 @@ changes.
 
 ## Full software-gate receipt
 
-Last measured: 2026-08-24
+Last measured: 2026-08-25
 
 Command:
 
@@ -927,12 +929,12 @@ npm run check
 ```
 
 The complete local production gate passed with 451 Worker/domain tests across
-78 Vitest files, 134 navigation and migration contracts across 16 node-test
-files, and 129 Playwright scenarios across 12 browser specs. Instrumented
-coverage measured 72.99% statements, 63.42% branches, 86.18% functions, and
-79.26% lines. The same command also passed generated types, TypeScript, CSS and
+78 Vitest files, 135 navigation and migration contracts across 17 node-test
+files, and 133 Playwright scenarios across 12 browser specs. Instrumented
+coverage measured 72.98% statements, 63.46% branches, 86.18% functions, and
+79.25% lines. The same command also passed generated types, TypeScript, CSS and
 visual-baseline ownership audits, the action-state audit for 2 client entry
-points, the control-wiring audit (151 static and 111 dynamic buttons, 23 static
+points, the control-wiring audit (153 static and 111 dynamic buttons, 23 static
 and 10 dynamic links, 37 interactive forms, 246 governed lifecycle fields),
 the current user-facing inventory, production-config and migration audits, the
 production build, and a Cloudflare production deployment dry run. Remeasure

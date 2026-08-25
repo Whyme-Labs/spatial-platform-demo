@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-08-25T04:45:01.374Z",
+  "measuredAt": "2026-08-25T05:39:36.602Z",
   "environment": {
     "node": "v22.23.0",
     "platform": "darwin-arm64",
@@ -13,13 +13,13 @@
   "derivation": "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. Route bytes and timings are receipts, not CI limits.",
   "routes": {
     "signed-out-studio": {
-      "measuredFrontendEncodedBodyBytes": 205441,
-      "measuredFrontendTransferredBytes": 206715,
+      "measuredFrontendEncodedBodyBytes": 205685,
+      "measuredFrontendTransferredBytes": 206959,
       "maxForbiddenChunkCount": 0,
       "maxUnexpectedMarketingAssetCount": null,
       "measuredChunks": [
         "action-state-DO3fNd-u.js",
-        "studio-Dy6PypWS.js",
+        "studio-DNiPxy7i.js",
         "world-units-SLVxYD65.js"
       ],
       "measuredChunkIdentities": [
@@ -30,9 +30,9 @@
           "rawBytes": 14324
         },
         {
-          "name": "studio-Dy6PypWS.js",
+          "name": "studio-DNiPxy7i.js",
           "role": "shell-shared",
-          "sha256": "d65398504025c6302541179cc4c252c7a26b498d69de314576691ea2c837928c",
+          "sha256": "191ec0f82e3d569c1467057be781790bdbd5dc54384a79b7c23744f661bc9718",
           "rawBytes": 343924
         },
         {
@@ -44,19 +44,19 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 88,
+        "firstContentfulPaintMs": 120,
         "rendererReady": null,
-        "readyAtMs": 141
+        "readyAtMs": 171
       }
     },
     "authenticated-portfolio": {
-      "measuredFrontendEncodedBodyBytes": 205441,
-      "measuredFrontendTransferredBytes": 206715,
+      "measuredFrontendEncodedBodyBytes": 205685,
+      "measuredFrontendTransferredBytes": 206959,
       "maxForbiddenChunkCount": 0,
       "maxUnexpectedMarketingAssetCount": null,
       "measuredChunks": [
         "action-state-DO3fNd-u.js",
-        "studio-Dy6PypWS.js",
+        "studio-DNiPxy7i.js",
         "world-units-SLVxYD65.js"
       ],
       "measuredChunkIdentities": [
@@ -67,9 +67,9 @@
           "rawBytes": 14324
         },
         {
-          "name": "studio-Dy6PypWS.js",
+          "name": "studio-DNiPxy7i.js",
           "role": "shell-shared",
-          "sha256": "d65398504025c6302541179cc4c252c7a26b498d69de314576691ea2c837928c",
+          "sha256": "191ec0f82e3d569c1467057be781790bdbd5dc54384a79b7c23744f661bc9718",
           "rawBytes": 343924
         },
         {
@@ -81,9 +81,9 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 40,
+        "firstContentfulPaintMs": 48,
         "rendererReady": null,
-        "readyAtMs": 86
+        "readyAtMs": 100
       }
     },
     "private-preview-first-frame": {
@@ -146,18 +146,18 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 160,
+        "firstContentfulPaintMs": 48,
         "rendererReady": {
-          "atMs": 738.3999999761581,
+          "atMs": 587.8999999761581,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 147,
+          "timeToFirstFrameMs": 160,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 1097
+        "readyAtMs": 943
       }
     },
     "published-viewer-first-frame": {
@@ -220,18 +220,18 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 44,
+        "firstContentfulPaintMs": 48,
         "rendererReady": {
-          "atMs": 485.60000002384186,
+          "atMs": 515.6000000238419,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 102,
+          "timeToFirstFrameMs": 108,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 871
+        "readyAtMs": 881
       }
     }
   }

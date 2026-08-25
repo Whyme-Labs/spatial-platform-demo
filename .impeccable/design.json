@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-24T20:27:50Z",
+  "generatedAt": "2026-08-25T05:40:39Z",
   "title": "Design System: Spatial Studio",
   "extensions": {
     "colorMeta": {
@@ -33,7 +33,8 @@
       "ui": { "displayName": "UI", "purpose": "Default operational interface text." },
       "body": { "displayName": "Body", "purpose": "Compact explanatory copy, controls, and table content." },
       "label": { "displayName": "Label", "purpose": "Control labels and compact actions." },
-      "caption-mono": { "displayName": "Evidence Caption", "purpose": "Provenance, indices, technical labels, and machine-readable state." }
+      "caption-mono": { "displayName": "Evidence Caption", "purpose": "Non-essential provenance and metadata outside the operational Studio." },
+      "studio-caption-mono": { "displayName": "Studio Evidence Label", "purpose": "Visible Studio provenance, indices, technical labels, and machine-readable state at the 12px operational floor." }
     },
     "shadows": [
       { "name": "field-float", "value": "0 18px 70px rgba(0, 0, 0, 0.38)", "purpose": "Viewer glass, toasts, and rare floating operational surfaces." },
@@ -104,7 +105,7 @@
       "refersTo": "status-badge",
       "description": "A compact semantic state label using evidence color rather than decorative color.",
       "html": "<span class=\"ds-status-verified\">Verified</span>",
-      "css": ".ds-status-verified { width: max-content; border: 1px solid rgba(142, 203, 183, 0.46); border-radius: 999px; display: inline-flex; align-items: center; padding: 5px 8px; color: var(--mint, #8ecbb7); font: 600 11px/1 \"IBM Plex Mono\", monospace; letter-spacing: 0.05em; text-transform: uppercase; }"
+      "css": ".ds-status-verified { width: max-content; border: 1px solid rgba(142, 203, 183, 0.46); border-radius: 999px; display: inline-flex; align-items: center; padding: 5px 8px; color: var(--mint, #8ecbb7); font: 600 12px/1 \"IBM Plex Mono\", monospace; letter-spacing: 0.05em; text-transform: uppercase; }"
     },
     {
       "name": "Portfolio Overview",
@@ -154,6 +155,7 @@
       { "name": "The Evidence Color Rule", "body": "Lime means active or next, mint means verified or complete, and clay means attention or blocked. Never use these three colors interchangeably.", "section": "colors" },
       { "name": "The Signal Rarity Rule", "body": "Give Survey Lime to the single consequential action, active path, or focal proof surface in a region; equal lime emphasis across neighboring controls destroys its meaning.", "section": "colors" },
       { "name": "The Mono-as-Evidence Rule", "body": "Use IBM Plex Mono only where the text behaves like a label, measurement, index, file fact, or provenance record; never use it for ordinary paragraphs.", "section": "typography" },
+      { "name": "The Studio Operational Floor Rule", "body": "Visible Studio evidence text resolves to the 0.75rem Studio Evidence Label. The smaller Evidence Caption is never interactive or operational and has no Studio exception.", "section": "typography" },
       { "name": "The Compressed-Claim Rule", "body": "Large public headlines may be tightly tracked and closely led because they are short; operational instructions and evidence copy retain comfortable line-height and ordinary tracking.", "section": "typography" },
       { "name": "The Working Plane Rule", "body": "Marketing pages may use expansive editorial whitespace, but operational pages must keep the next action, current state, and blocking evidence within one scannable working plane.", "section": "layout" },
       { "name": "The Line-Before-Shadow Rule", "body": "Use a tonal shift or one-pixel boundary before introducing elevation; shadow is reserved for an actual change in plane.", "section": "elevation" },
