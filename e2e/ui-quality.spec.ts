@@ -979,15 +979,33 @@ test.describe("authenticated studio UI", () => {
         const unusableText = [...document.querySelectorAll<HTMLElement>(
           ".studio-header h1, .project-row .record-primary",
         )].filter(visibleInViewport).filter((element) => element.clientWidth <= 0);
+        const protectsInitialWorkingPlane = innerWidth <= 480 || (
+          innerWidth <= 960 && innerHeight <= 500
+        );
+        const initiallyVisible = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return false;
+          const bounds = element.getBoundingClientRect();
+          return visibleInViewport(element) && bounds.top >= -1 && bounds.bottom <= innerHeight + 1;
+        };
         return {
           clippedActions,
           unusableTextCount: unusableText.length,
           documentWidth: document.documentElement.scrollWidth,
           viewportWidth: innerWidth,
+          initialWorkingPlaneVisible: !protectsInitialWorkingPlane || (
+            initiallyVisible("#newProjectButton") &&
+            initiallyVisible("#projectBoard .section-heading h2")
+          ),
         };
       });
       expect(composition.clippedActions, viewport.name).toEqual([]);
       expect(composition.unusableTextCount, viewport.name).toBe(0);
+      expect(composition.initialWorkingPlaneVisible, viewport.name).toBe(true);
+      await expect(
+        page.getByRole("link", { name: "Open public site", exact: true }),
+        viewport.name,
+      ).toBeVisible();
       expect(composition.documentWidth, viewport.name).toBeLessThanOrEqual(
         composition.viewportWidth + 1,
       );

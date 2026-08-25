@@ -87,6 +87,12 @@ typography:
     fontWeight: 600
     lineHeight: 1.4
     letterSpacing: "0.08em"
+  studio-caption-mono:
+    fontFamily: '"IBM Plex Mono", ui-monospace, monospace'
+    fontSize: "0.75rem"
+    fontWeight: 600
+    lineHeight: 1.4
+    letterSpacing: "0.08em"
 rounded:
   control: "10px"
   surface: "16px"
@@ -153,7 +159,7 @@ components:
   status-badge:
     backgroundColor: "transparent"
     textColor: "{colors.evidence-muted}"
-    typography: "{typography.caption-mono}"
+    typography: "{typography.studio-caption-mono}"
     rounded: "{rounded.full}"
     padding: "5px 8px"
   portfolio-overview:
@@ -249,11 +255,14 @@ The palette pairs survey-marker lime with warm mineral neutrals, then assigns mi
 - **Section Title** (weight 630, 1.25rem, line-height 1.2): operational regions, dialogs, and grouped evidence.
 - **UI / Body** (weight 480–680, 0.8125–0.875rem, line-height 1.45): controls, table rows, explanatory copy, and status text.
 - **Label** (weight 620, 0.75rem, line-height 1.4): control labels and compact action text.
-- **Evidence Caption** (weight 600, 0.6875rem, letter-spacing 0.08em): uppercase metadata, sequence labels, technical state, and provenance.
+- **Evidence Caption** (weight 600, 0.6875rem, letter-spacing 0.08em): non-essential public/viewer metadata and provenance.
+- **Studio Evidence Label** (weight 600, 0.75rem, letter-spacing 0.08em): every visible operational caption, status, sequence label, and provenance record in the Studio.
 
 ### Named Rules
 
 **The Mono-as-Evidence Rule.** Use IBM Plex Mono only where the text behaves like a label, measurement, index, file fact, or provenance record; never use it for ordinary paragraphs.
+
+**The Studio Operational Floor Rule.** Visible Studio evidence text resolves to the 0.75rem Studio Evidence Label. The smaller Evidence Caption is never interactive or operational and has no Studio exception.
 
 **The Compressed-Claim Rule.** Large public headlines may be tightly tracked and closely led because they are short; operational instructions and evidence copy retain comfortable line-height and ordinary tracking.
 

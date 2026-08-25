@@ -41,7 +41,7 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 - Dialogs: 37
 - Governed fields: 246
 - Static and generated controls: 305
-- Route and control assurance: browser=10, deployed-staging=28, integration=111, production-attested=1, static=338, unit=1
+- Route and control assurance: browser=11, deployed-staging=28, integration=111, production-attested=1, static=337, unit=1
 - Persisted state sets: 69
 - Asynchronous workflows: 59
 
@@ -599,7 +599,7 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | signOutButton | button | Sign out | generated/global | studio.html:45 | CONTROL-A | browser | e2e/ui-quality.spec.ts |
 | refreshButton | button | Refresh | generated/global | studio.html:57 | CONTROL-A | browser | e2e/ui-quality.spec.ts |
 | portfolioToolsButton | button | Portfolio tools | generated/global | studio.html:58 | CONTROL-A | static | studio.html:58 |
-| newProjectButton | button | Upload capture | generated/global | studio.html:59 | CONTROL-A | static | studio.html:59 |
+| newProjectButton | button | Upload capture | generated/global | studio.html:59 | CONTROL-A | browser | e2e/ui-quality.spec.ts |
 | backToProjects | button | ← Back to projects | generated/global | studio.html:76 | CONTROL-A | static | studio.html:76 |
 | projectCurrentAction | button | projectCurrentAction | generated/global | studio.html:89 | CONTROL-A | browser | e2e/release-authoring.spec.ts |
 | projectWorkJourney | button | Work | generated/global | studio.html:94 | CONTROL-A | static | studio.html:94 |
