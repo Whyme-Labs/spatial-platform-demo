@@ -426,6 +426,12 @@ test("a novice can upload, inspect the project workflow, and publish using visib
 });
 
 test("comparison becomes its own stage only with a comparison-ready pair", async ({ page }) => {
+  const permissionWarnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning" && /allowfullscreen|fullscreen.*permission/i.test(message.text())) {
+      permissionWarnings.push(message.text());
+    }
+  });
   await mockApprovedProject(page, () => undefined, {
     auxiliaryQaVersion: true,
     comparisonReady: true,
@@ -444,6 +450,11 @@ test("comparison becomes its own stage only with a comparison-ready pair", async
   await expect(page.getByRole("heading", { name: "Compare immutable versions", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Visual version comparison", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Compare scenes side by side", exact: true })).toBeEnabled();
+  for (const frame of [page.locator("#compareLeftFrame"), page.locator("#compareRightFrame")]) {
+    await expect(frame).toHaveAttribute("allow", "fullscreen");
+    await expect(frame).not.toHaveAttribute("allowfullscreen");
+  }
+  expect(permissionWarnings).toEqual([]);
   await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toHaveCount(0);
 });
 
