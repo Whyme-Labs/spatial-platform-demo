@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import { auditStudioAccessibilityFloor } from "./helpers/studio-accessibility-floor";
 
 const now = "2026-07-31T13:30:00.000Z";
 const organisationId = "11111111-1111-4111-8111-111111111111";
@@ -9,6 +10,12 @@ const auxiliaryQaVersionId = "99999999-9999-4999-8999-999999999999";
 
 test("project rows open a dedicated project workspace with nested tools", async ({ page }) => {
   await mockApprovedProject(page, () => undefined);
+  const auditProjectFloor = async (view: string): Promise<void> => {
+    expect(
+      await auditStudioAccessibilityFloor(page),
+      `${view} accessibility floor`,
+    ).toEqual({ text: [], controls: [] });
+  };
 
   await page.goto("/studio.html#projects");
   const projectRow = page.locator(".project-row").filter({ hasText: "Corrected Spark room" });
@@ -92,11 +99,13 @@ test("project rows open a dedicated project workspace with nested tools", async 
       await expect(page.locator(".project-navigation")).toBeVisible();
       await expect(page.locator(".project-journey-nav").getByRole("button")).toHaveCount(3);
     }
+    await auditProjectFloor(`Project overview at ${viewport.width}px`);
   }
 
   await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByText("Technical details and source history", { exact: true }).click();
+  await auditProjectFloor("Project technical details open");
   await expectProjectSurfaceDepth(page);
   await page.getByText("Technical details and source history", { exact: true }).click();
 
@@ -455,7 +464,47 @@ test("comparison becomes its own stage only with a comparison-ready pair", async
     await expect(frame).not.toHaveAttribute("allowfullscreen");
   }
   expect(permissionWarnings).toEqual([]);
+  const comparisonFloor = await auditStudioAccessibilityFloor(page, {
+    root: "#spatialWorkspace",
+  });
+  expect(comparisonFloor).toEqual({ text: [], controls: [] });
   await expect(page.getByRole("heading", { name: "Automated candidates, human decisions", exact: true })).toHaveCount(0);
+});
+
+test("coarse-pointer project and comparison states expose complete 44px targets", async ({ browser }) => {
+  const context = await browser.newContext({
+    baseURL: test.info().project.use.baseURL,
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+  });
+  const page = await context.newPage();
+  try {
+    await mockApprovedProject(page, () => undefined, {
+      auxiliaryQaVersion: true,
+      comparisonReady: true,
+    });
+    const expectCoarseFloor = async (view: string): Promise<void> => {
+      expect(
+        await auditStudioAccessibilityFloor(page, {
+          minimumControlSize: 44,
+          requireSquareControls: true,
+        }),
+        `${view} coarse-pointer floor`,
+      ).toEqual({ text: [], controls: [] });
+    };
+
+    await page.goto(`/studio.html#project/${projectId}`);
+    await expect(page.locator("#projectSectionPicker")).toBeVisible();
+    await expectCoarseFloor("Project context and mobile section picker");
+    await page.getByText("Technical details and source history", { exact: true }).click();
+    await expectCoarseFloor("Project technical details open");
+    await page.locator("#projectSectionPicker").selectOption("compare");
+    await expect(page.getByRole("heading", { name: "Visual version comparison", exact: true })).toBeVisible();
+    await expectCoarseFloor("Version comparison status, facts, and history");
+  } finally {
+    await context.close();
+  }
 });
 
 test("a one-version project keeps comparison in Expert and canonicalizes a Compare deep link", async ({ page }) => {

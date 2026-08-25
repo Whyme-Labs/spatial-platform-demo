@@ -8,6 +8,10 @@ import {
   expectReviewedScreenshot,
   RESPONSIVE_VISUAL_VIEWPORTS,
 } from "./helpers/visual-matrix";
+import {
+  auditStudioAccessibilityFloor,
+  type StudioAccessibilityFloorAudit,
+} from "./helpers/studio-accessibility-floor";
 
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
@@ -337,53 +341,19 @@ test.describe("authenticated studio UI", () => {
   });
 
   test("operational Studio text never falls below the 12px label floor", async ({ page }) => {
-    const violations: Array<{ view: string; text: string; className: string; fontSize: number }> = [];
+    const violations: {
+      text: Array<StudioAccessibilityFloorAudit["text"][number] & { view: string }>;
+      controls: Array<StudioAccessibilityFloorAudit["controls"][number] & { view: string }>;
+    } = { text: [], controls: [] };
     const auditCurrentView = async (view: string): Promise<void> => {
-      const current = await page.locator([
-        ".studio-main button:visible",
-        ".studio-sidebar button:visible",
-        ".studio-main a:visible",
-        ".record-row :is(strong,small,span,p,summary):visible",
-        ".project-pagination:visible",
-        ".list-pagination:visible",
-        ".worker-status:visible",
-        ".status-pill:visible",
-        ".status-badge:visible",
-        ".domain-evidence span:visible",
-        ".geometry-change-row:visible",
-        ".capture-evidence-issues li:visible",
-        ".field-message:visible",
-        ".form-error:visible",
-      ].join(", ")).evaluateAll((elements) => elements
-        .filter((element) => element.textContent?.trim() && element.getAttribute("aria-hidden") !== "true")
-        .map((element) => ({
-          text: element.textContent!.trim().replace(/\s+/g, " ").slice(0, 80),
-          className: element.className,
-          fontSize: Number.parseFloat(getComputedStyle(element).fontSize),
-        }))
-        .filter((element) => element.fontSize < 12));
-      violations.push(...current.map((entry) => ({ view, ...entry })));
+      const current = await auditStudioAccessibilityFloor(page);
+      violations.text.push(...current.text.map((entry) => ({ view, ...entry })));
+      violations.controls.push(...current.controls.map((entry) => ({ view, ...entry })));
     };
 
-    await auditCurrentView("Projects");
-    const advanced = page.locator(".studio-nav-advanced");
-    await advanced.getByText("Advanced tools", { exact: true }).click();
-    await page.getByRole("button", { name: "Processing activity", exact: true }).click();
-    await auditCurrentView("Processing activity");
-    await page.getByRole("button", { name: "Client review", exact: true }).click();
-    await page.getByRole("button", { name: "Open activity", exact: true }).click();
-    await auditCurrentView("Client review");
-    await page.getByRole("button", { name: "Hosting & lifecycle", exact: true }).click();
-    await auditCurrentView("Hosting & lifecycle");
-    await page.getByRole("button", { name: "Published previews", exact: true }).click();
-    await auditCurrentView("Published previews");
-    await page.getByRole("button", { name: "Team access", exact: true }).click();
-    await auditCurrentView("Team access");
-    await page.getByRole("button", { name: "Projects", exact: true }).click();
-    await page.getByRole("button", { name: "Upload capture", exact: true }).click();
-    await auditCurrentView("Capture dialog");
+    await walkPortfolioAccessibilityFloorStates(page, auditCurrentView);
 
-    expect(violations).toEqual([]);
+    expect(violations).toEqual({ text: [], controls: [] });
   });
 
   test("capture intake guides a novice through details, files, and the processing plan", async ({ page }) => {
@@ -1687,44 +1657,13 @@ test("coarse-pointer Studio controls expose full 44px targets", async ({ browser
     })).toBeVisible();
     expect(await page.evaluate(() => matchMedia("(any-pointer: coarse)").matches)).toBe(true);
 
-    const projectTarget = await page.locator("#projectTable .project-select-cell").nth(1).boundingBox();
-    expect(projectTarget).not.toBeNull();
-    expect(projectTarget!.width).toBeGreaterThanOrEqual(44);
-    expect(projectTarget!.height).toBeGreaterThanOrEqual(44);
-
-    const currentTarget = await page.getByRole("button", { name: "Current", exact: true }).boundingBox();
-    const refineTarget = await page.locator("#projectAdvancedFilters > summary").boundingBox();
-    expect(currentTarget).not.toBeNull();
-    expect(currentTarget!.height).toBeGreaterThanOrEqual(44);
-    expect(refineTarget).not.toBeNull();
-    expect(refineTarget!.height).toBeGreaterThanOrEqual(44);
-    await openProjectRefine(page);
-    for (const status of ["Processing", "QA", "Published", "Archived"]) {
-      const target = await page.getByRole("button", { name: status, exact: true }).boundingBox();
-      expect(target, status).not.toBeNull();
-      expect(target!.height, status).toBeGreaterThanOrEqual(44);
-    }
-
-    await page.locator("#captureBundleDialog").evaluate((dialog) =>
-      (dialog as HTMLDialogElement).showModal()
-    );
-    const checkboxTarget = await page.locator("#captureBundleDialog .checkbox-row").first().boundingBox();
-    const closeTarget = await page.locator("#captureBundleDialog .dialog-close").boundingBox();
-    expect(checkboxTarget).not.toBeNull();
-    expect(checkboxTarget!.height).toBeGreaterThanOrEqual(44);
-    expect(closeTarget).not.toBeNull();
-    expect(closeTarget!.width).toBeGreaterThanOrEqual(44);
-    expect(closeTarget!.height).toBeGreaterThanOrEqual(44);
-    await page.locator("#captureBundleDialog").evaluate((dialog) =>
-      (dialog as HTMLDialogElement).close()
-    );
-
-    await page.locator("#versionComparisonDialog").evaluate((dialog) =>
-      (dialog as HTMLDialogElement).showModal()
-    );
-    const syncTarget = await page.locator(".comparison-sync-control").boundingBox();
-    expect(syncTarget).not.toBeNull();
-    expect(syncTarget!.height).toBeGreaterThanOrEqual(44);
+    await walkPortfolioAccessibilityFloorStates(page, async (view) => {
+      const coarseFloor = await auditStudioAccessibilityFloor(page, {
+        minimumControlSize: 44,
+        requireSquareControls: true,
+      });
+      expect(coarseFloor, `${view} coarse-pointer floor`).toEqual({ text: [], controls: [] });
+    });
   } finally {
     await context.close();
   }
@@ -2573,6 +2512,41 @@ async function openProjectRefine(page: Page): Promise<void> {
     await refinements.locator("summary").click();
   }
   await expect(refinements).toHaveAttribute("open", "");
+}
+
+async function walkPortfolioAccessibilityFloorStates(
+  page: Page,
+  audit: (view: string) => Promise<void>,
+): Promise<void> {
+  await audit("Projects");
+  await openProjectRefine(page);
+  await audit("Projects · Refine open");
+  await page.locator("#projectAdvancedFilters > summary").click();
+  await page.locator("#organisationSwitcher").evaluate((element) => {
+    (element as HTMLElement).hidden = false;
+  });
+  await audit("Projects · organisation switcher");
+  await page.locator("#organisationSwitcher").evaluate((element) => {
+    (element as HTMLElement).hidden = true;
+  });
+  const advanced = page.locator(".studio-nav-advanced");
+  await advanced.getByText("Advanced tools", { exact: true }).click();
+  await page.getByRole("button", { name: "Processing activity", exact: true }).click();
+  await audit("Processing activity");
+  await page.getByRole("button", { name: "Client review", exact: true }).click();
+  await page.getByRole("button", { name: "Open activity", exact: true }).click();
+  await audit("Client review");
+  await page.getByRole("button", { name: "Hosting & lifecycle", exact: true }).click();
+  await audit("Hosting & lifecycle");
+  await page.getByRole("button", { name: "Published previews", exact: true }).click();
+  await page.getByText("More release actions", { exact: true }).first().click();
+  await audit("Published previews · actions open");
+  await page.getByRole("button", { name: "Team access", exact: true }).click();
+  await audit("Team access");
+  await page.getByRole("button", { name: "Projects", exact: true }).click();
+  await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+  await page.locator("#newProjectOptionalDetails > summary").click();
+  await audit("Capture dialog · optional settings and progress");
 }
 
 async function expectColumnsAligned(page: Page, selector: string): Promise<void> {
