@@ -38,14 +38,16 @@ The following work is new after the baseline and is the only work claimed for ch
 - Reuse of the renderer's verified camera acceptance path.
 - Documentation of provenance and provisional scene units.
 
-## Commit log
-
-Add each challenge commit here before submission.
+## Material commit log
 
 | Commit | Date | Change |
 |---|---|---|
-| Pending | 2026-08-26 | Product story, rules checklist, challenge branch, and first semantic-browser slice |
+| `83e05a1218fa021842d55d528165b72fd821db8b` | 2026-08-26 | Establish the challenge payload and branch-local expansion workflow |
+| `4c8b61bf61d9b57af7b98971c81bc05f41cc3923` | 2026-08-26 | Add the product story, rules checklist, semantic browser, five WebMCP tools, and tests |
+| `4642a475e671555981d17a341e36846caf66a8ab` | 2026-08-26 | Remove the one-use bootstrap workflow after exact payload expansion |
+
+Git history after the baseline is authoritative for smaller documentation and review changes made before submission.
 
 ## Submission freeze
 
-Before submission, replace `Pending` with exact commit SHAs, record the deployed URL and deployment identifier, and do not mutate the submitted branch or live deployment during judging.
+Before submission, record the deployed URL and deployment identifier here. After submission, do not mutate the submitted branch or live deployment during judging. Continue development from a fork or a new post-submission branch.
