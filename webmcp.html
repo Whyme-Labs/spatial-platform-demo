@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#090b0a" />
+  <meta
+    name="description"
+    content="Spatial Browser gives a photorealistic 3D capture a semantic DOM that people and WebMCP agents can search, inspect, verify, and navigate together."
+  />
+  <title>Spatial Browser · WebMCP Challenge</title>
+  <link rel="stylesheet" href="/src/webmcp/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand" aria-label="Spatial Browser by Whyme Labs">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-copy">
+          <strong>Spatial Browser</strong>
+          <span>WebMCP challenge build</span>
+        </span>
+      </div>
+
+      <div class="scene-identity">
+        <strong id="sceneTitle">Loading spatial release</strong>
+        <span id="sceneSubtitle">Semantic context will appear with the scene</span>
+      </div>
+
+      <div class="status-cluster" aria-label="Application status">
+        <span id="sceneStatus" class="status-pill" data-tone="working">Loading scene</span>
+        <span id="webMcpStatus" class="status-pill" data-tone="working">Waiting for context</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="scene-column" aria-label="Shared photoreal spatial scene">
+        <div class="viewer-shell">
+          <iframe
+            id="rendererFrame"
+            class="renderer-frame"
+            title="Photorealistic semantic spatial scene"
+            allow="fullscreen; xr-spatial-tracking"
+            allowfullscreen
+            referrerpolicy="same-origin"
+            hidden
+          ></iframe>
+          <div class="viewer-vignette" aria-hidden="true"></div>
+
+          <div id="viewerLoading" class="viewer-loading" role="status">
+            <div class="loading-card">
+              <span>Spatial runtime</span>
+              <strong id="loadingDetail">Loading the published scene manifest</strong>
+              <div class="loading-track" aria-hidden="true"><span id="loadingProgress"></span></div>
+            </div>
+          </div>
+
+          <div class="viewer-context" aria-label="Live scene context">
+            <span class="context-chip"><strong>Region</strong> · <span id="currentRegion">No scene context</span></span>
+            <span class="context-chip"><strong>Camera</strong> · <span id="cameraPosition">Camera unavailable</span></span>
+            <span class="context-chip"><strong>Nearby</strong> · <span id="nearbyEntities">No nearby entities</span></span>
+          </div>
+
+          <p id="movementNotice" class="movement-notice" hidden></p>
+        </div>
+
+        <div class="scene-evidence-bar" aria-label="Published scene facts">
+          <div>
+            <span>Release</span>
+            <strong id="sceneSlug">home-scan-spark-multi-room-demo</strong>
+          </div>
+          <div>
+            <span>Appearance</span>
+            <strong id="sceneFormat">3DGS</strong>
+          </div>
+          <div>
+            <span>Scale</span>
+            <strong id="sceneUnit">Checking</strong>
+          </div>
+          <div>
+            <span>Semantic entities</span>
+            <strong id="entityCount">0</strong>
+          </div>
+          <div>
+            <span>Reviewed</span>
+            <strong id="reviewedCount">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <aside class="semantic-panel" aria-label="Semantic scene browser">
+        <section class="panel-intro">
+          <span class="eyebrow">A spatial DOM for captured places</span>
+          <h1>Explore the place, not its pixels.</h1>
+          <p>
+            Persistent rooms, objects, relationships, evidence, and uncertainty sit beside the visual splat.
+            The same state is available to you and the page agent.
+          </p>
+          <div class="index-stats" aria-label="Semantic index summary">
+            <div><strong id="roomCount">0</strong><span>rooms and zones</span></div>
+            <div><strong id="objectCount">0</strong><span>objects</span></div>
+            <div><strong>Live</strong><span>shared context</span></div>
+            <div><strong>5</strong><span>site tools</span></div>
+          </div>
+        </section>
+
+        <section class="search-section">
+          <div class="section-line">
+            <h2>Search the semantic scene</h2>
+            <span id="resultCount">0 matches</span>
+          </div>
+          <form id="semanticSearchForm" class="search-form">
+            <input
+              id="semanticSearchInput"
+              name="query"
+              type="search"
+              autocomplete="off"
+              maxlength="120"
+              placeholder="Try sofa, kitchen, room, walkable..."
+              aria-label="Search scene entities"
+            />
+            <button type="submit">Find</button>
+          </form>
+          <div class="quick-queries" aria-label="Example scene searches">
+            <button type="button" data-semantic-query="sofa">sofa</button>
+            <button type="button" data-semantic-query="table">table</button>
+            <button type="button" data-semantic-query="kitchen">kitchen</button>
+            <button type="button" data-semantic-query="room">rooms</button>
+            <button type="button" data-semantic-query="walkable">walkable</button>
+          </div>
+          <div id="searchResults" class="search-results" aria-live="polite"></div>
+        </section>
+
+        <section id="entityPanel" class="entity-panel" aria-live="polite">
+          <div class="entity-empty">
+            <h2>Select a persistent scene entity</h2>
+            <p>
+              The semantic layer keeps identity, room membership, evidence, relationships, and uncertainty
+              across camera views.
+            </p>
+          </div>
+        </section>
+
+        <section class="tool-section">
+          <div class="section-line">
+            <h2>Live WebMCP activity</h2>
+            <span>shared page state</span>
+          </div>
+          <p id="registeredToolNames" class="registered-tools">Tools register after the scene manifest loads.</p>
+          <ol id="toolActivity" class="tool-activity" aria-live="polite"></ol>
+        </section>
+
+        <section class="assurance-note">
+          <strong>Evidence boundary</strong>
+          <p id="measurementDisclaimer">
+            The photoreal scene is an appearance layer. Geometry and confidence claims remain bounded by the
+            published evidence and review state.
+          </p>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <div id="fatalError" class="fatal-error" hidden>
+    <div class="fatal-error-card">
+      <span>Scene could not start</span>
+      <h2>The semantic browser has no usable release.</h2>
+      <p id="fatalErrorMessage">Unknown scene error.</p>
+      <button id="reloadScene" class="reload-button" type="button">Retry scene</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/src/webmcp/main.ts"></script>
+</body>
+</html>

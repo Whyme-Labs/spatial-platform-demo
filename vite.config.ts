@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
           viewer: resolve(import.meta.dirname, "index.html"),
           studio: resolve(import.meta.dirname, "studio.html"),
           renderer: resolve(import.meta.dirname, "renderer/index.html"),
+          webmcp: resolve(import.meta.dirname, "webmcp.html"),
           ...(isTest
             ? {
                 pointerControls: resolve(
