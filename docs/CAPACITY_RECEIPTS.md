@@ -1,6 +1,6 @@
 # Capacity receipts
 
-Last measured: 2026-08-25
+Last measured: 2026-08-26
 
 ## Frontend CSS ownership receipt
 
@@ -37,7 +37,7 @@ a lower byte count alone is not evidence that the migration preserved layout.
 
 ## Responsive visual-baseline receipt
 
-Last measured: 2026-08-25
+Last measured: 2026-08-26
 
 `npm run audit:visual-baselines` verifies 29 reviewed PNGs containing
 1,498,021 bytes against `e2e/visual-baselines.sha256`. The images were
@@ -861,12 +861,12 @@ exceeds the floor by two orders of magnitude. Remeasure by rerunning the spec
 whenever the clear colour, tone mapping, or output colour space of the
 renderer changes.
 
-## Frontend route transfer and lazy-loading boundary
+## Frontend route transfer, lazy-loading, and mobile performance boundary
 
-Last measured: 2026-08-25
+Last measured: 2026-08-26
 
-Source baseline: `7ec40e2`, with the issue #86 final-polish changes in the
-measured worktree. The client chunks below carry
+Source baseline: `33d3fa2`, with the issue #95 performance-receipt changes in
+the measured worktree. The client chunks below carry
 their own SHA-256 identities in `config/frontend-route-receipts.json`.
 
 Reproduce the production-bundle receipt and enforce its structural tripwires
@@ -877,20 +877,27 @@ npm run audit:frontend-routes
 ```
 
 The command builds in production mode, starts `vite preview`, and opens each
-route in a fresh Chromium context at 1280x800, `en-US`, UTC, with service
-workers blocked. The recorded run used Node 22.23.0, Vite 8.1.5, Playwright
-1.62.0, Chromium 151.0.7922.34, and macOS arm64. CDP records response transfer
-bytes while response metadata supplies encoded-body bytes. API fixture bodies
-and the deterministic four-splat scene/collision files are excluded from the
-frontend totals; their only job is to carry both viewer routes through the real
-`spatial-spark:ready` movement-ready boundary.
+route in a fresh Chromium context at `en-US`, UTC, with service workers
+blocked. Four route-loading receipts use 1280x800. The authenticated mobile
+performance route uses a 412x823 viewport at 1.75 device scale, 4x CPU
+slowdown, 562.5 ms request latency, 188,743 B/s download throughput, and 86,400
+B/s upload throughput. The network values are Lighthouse's adjusted direct-CDP
+settings for request-level Slow 4G throttling; the viewport and network sources
+are pinned to Lighthouse commit `f9cbf2b` in the machine receipt. The recorded
+run used Node 22.23.0,
+Vite 8.1.5, Playwright 1.62.0, Chromium 151.0.7922.34, and macOS arm64. CDP
+records response transfer bytes while response metadata supplies encoded-body
+bytes. API fixture bodies and the deterministic four-splat scene/collision
+files are excluded from the frontend totals; their only job is to carry both
+viewer routes through the real `spatial-spark:ready` movement-ready boundary.
 
 | Route | Frontend encoded body | Frontend transferred | FCP | Route ready | Renderer first frame |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Signed-out Studio | 205,685 B | 206,959 B | 120 ms | 171 ms | n/a |
-| Authenticated portfolio | 205,685 B | 206,959 B | 48 ms | 100 ms | n/a |
-| First private preview | 3,333,235 B | 3,334,867 B | 48 ms | 943 ms | 160 ms |
-| First published viewer frame | 3,333,235 B | 3,334,867 B | 48 ms | 881 ms | 108 ms |
+| Signed-out Studio | 205,685 B | 206,959 B | 200 ms | 403 ms | n/a |
+| Authenticated portfolio | 205,685 B | 206,959 B | 164 ms | 292 ms | n/a |
+| First private preview | 3,333,235 B | 3,334,867 B | 152 ms | 2,986 ms | 360 ms |
+| First published viewer frame | 3,333,235 B | 3,334,867 B | 176 ms | 3,007 ms | 311 ms |
+| Authenticated portfolio, throttled mobile | 190,977 B | 191,931 B | 1,676 ms | 2,299 ms | n/a |
 
 The Studio routes loaded only `studio-DNiPxy7i.js`,
 `action-state-DO3fNd-u.js`, and `world-units-SLVxYD65.js`. Each viewer route
@@ -908,11 +915,34 @@ Two zero-limit tripwires are derived directly from the good paths:
   hydration, private and published viewer routes measured zero `/images/`
   requests. Their `unexpected_marketing_asset_count` limit is therefore 0.
 
-These are structural lazy-boundary tripwires, not claims about general latency
-or total-byte targets. On failure the audit names the route, budget, limit,
-requested count, requested bytes, offending assets/chunks, and this receipt.
-Wall-clock timings and total route bytes remain observations because local
-server compression and runner scheduling vary. Regenerate the machine receipt
+The throttled mobile route additionally exercises the Refine disclosure and
+the Published and Current portfolio filters. Chromium reported all required
+Performance Observer entry types and three distinct interactions.
+
+| Mobile measure | Observed | Published good-experience boundary |
+| --- | ---: | ---: |
+| First Contentful Paint | 1,676 ms | 1,800 ms |
+| Largest Contentful Paint (`h1#viewTitle`) | 1,676 ms | 2,500 ms |
+| Cumulative Layout Shift | 0.000135 | 0.1 |
+| Longest tested interaction | 152 ms | 200 ms |
+
+The three interactions measured 152 ms for opening Refine, 24 ms for
+Published, and 32 ms for Current. The browser also observed three long tasks,
+with the longest at 146 ms. Those long-task values are observations, not
+limits. The interaction row is the maximum Event Timing duration among the
+three scripted interactions, not a claim about production field INP. The
+machine receipt links each enforced threshold to its dedicated web.dev
+definition. The audit also
+fails if Chromium lacks or cannot install the required LCP, layout-shift,
+event, or long-task observers; if FCP or LCP has no positive sample or
+identified LCP element; or if fewer than the three frozen interactions are
+observed. A missing browser signal therefore cannot pass as zero.
+
+The zero counts are structural lazy-boundary tripwires. Total route bytes and
+the four unthrottled route timings remain observations because local server
+compression and runner scheduling vary. On failure the audit names the route,
+budget, limit, requested value, and this receipt; structural failures also name
+the offending assets or chunks and their bytes. Regenerate the machine receipt
 with `npm run build && node scripts/audit-frontend-routes.mjs --write` whenever
 Vite, Playwright, Chromium, Spark, Recast/Rapier, entry imports, fonts, auth
 bootstrap, renderer-ready semantics, or delivery compression/cache behavior
@@ -920,7 +950,7 @@ changes.
 
 ## Full software-gate receipt
 
-Last measured: 2026-08-25
+Last measured: 2026-08-26
 
 Command:
 
@@ -931,8 +961,8 @@ npm run check
 The complete local production gate passed with 451 Worker/domain tests across
 78 Vitest files, 135 navigation and migration contracts across 17 node-test
 files, and 133 Playwright scenarios across 12 browser specs. Instrumented
-coverage measured 72.98% statements, 63.46% branches, 86.18% functions, and
-79.25% lines. The same command also passed generated types, TypeScript, CSS and
+coverage measured 72.97% statements, 63.45% branches, 86.18% functions, and
+79.24% lines. The same command also passed generated types, TypeScript, CSS and
 visual-baseline ownership audits, the action-state audit for 2 client entry
 points, the control-wiring audit (153 static and 111 dynamic buttons, 23 static
 and 10 dynamic links, 37 interactive forms, 246 governed lifecycle fields),
