@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-08-25T05:39:36.602Z",
+  "measuredAt": "2026-08-26T09:32:59.607Z",
   "environment": {
     "node": "v22.23.0",
     "platform": "darwin-arm64",
     "chromium": "151.0.7922.34",
-    "viewport": "1280x800",
+    "viewport": "route-defined: 1280x800 and 412x823 mobile performance",
     "buildMode": "production",
     "cache": "fresh browser context per route",
     "server": "vite preview"
   },
-  "derivation": "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. Route bytes and timings are receipts, not CI limits.",
+  "derivation": "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. The throttled mobile Studio route is additionally gated by published good-experience thresholds. Other route bytes and timings are receipts, not CI limits.",
   "routes": {
     "signed-out-studio": {
       "measuredFrontendEncodedBodyBytes": 205685,
@@ -44,10 +44,15 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 120,
+        "firstContentfulPaintMs": 200,
         "rendererReady": null,
-        "readyAtMs": 171
-      }
+        "readyAtMs": 403
+      },
+      "performanceProfile": null,
+      "measuredPerformance": null,
+      "performanceLimits": null,
+      "performanceThresholdSources": null,
+      "performanceInteractionFlow": null
     },
     "authenticated-portfolio": {
       "measuredFrontendEncodedBodyBytes": 205685,
@@ -81,10 +86,15 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 48,
+        "firstContentfulPaintMs": 164,
         "rendererReady": null,
-        "readyAtMs": 100
-      }
+        "readyAtMs": 292
+      },
+      "performanceProfile": null,
+      "measuredPerformance": null,
+      "performanceLimits": null,
+      "performanceThresholdSources": null,
+      "performanceInteractionFlow": null
     },
     "private-preview-first-frame": {
       "measuredFrontendEncodedBodyBytes": 3333235,
@@ -146,19 +156,24 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 48,
+        "firstContentfulPaintMs": 152,
         "rendererReady": {
-          "atMs": 587.8999999761581,
+          "atMs": 1687.5,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 160,
+          "timeToFirstFrameMs": 360,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 943
-      }
+        "readyAtMs": 2986
+      },
+      "performanceProfile": null,
+      "measuredPerformance": null,
+      "performanceLimits": null,
+      "performanceThresholdSources": null,
+      "performanceInteractionFlow": null
     },
     "published-viewer-first-frame": {
       "measuredFrontendEncodedBodyBytes": 3333235,
@@ -220,19 +235,158 @@
       ],
       "measuredUnexpectedMarketingAssets": [],
       "measuredTiming": {
-        "firstContentfulPaintMs": 48,
+        "firstContentfulPaintMs": 176,
         "rendererReady": {
-          "atMs": 515.6000000238419,
+          "atMs": 2083.2000000476837,
           "source": "spatial-spark",
           "type": "ready",
           "runtime": "spark",
           "version": "2.1.0",
-          "timeToFirstFrameMs": 108,
+          "timeToFirstFrameMs": 311,
           "format": "spz",
           "splatBudget": 2000000
         },
-        "readyAtMs": 881
-      }
+        "readyAtMs": 3007
+      },
+      "performanceProfile": null,
+      "measuredPerformance": null,
+      "performanceLimits": null,
+      "performanceThresholdSources": null,
+      "performanceInteractionFlow": null
+    },
+    "authenticated-portfolio-mobile-performance": {
+      "measuredFrontendEncodedBodyBytes": 190977,
+      "measuredFrontendTransferredBytes": 191931,
+      "maxForbiddenChunkCount": 0,
+      "maxUnexpectedMarketingAssetCount": null,
+      "measuredChunks": [
+        "action-state-DO3fNd-u.js",
+        "studio-DNiPxy7i.js",
+        "world-units-SLVxYD65.js"
+      ],
+      "measuredChunkIdentities": [
+        {
+          "name": "action-state-DO3fNd-u.js",
+          "role": "shell-shared",
+          "sha256": "d47449ea50442659859407cea384fa54085584f9780d1117496c5bdca82a2eea",
+          "rawBytes": 14324
+        },
+        {
+          "name": "studio-DNiPxy7i.js",
+          "role": "shell-shared",
+          "sha256": "191ec0f82e3d569c1467057be781790bdbd5dc54384a79b7c23744f661bc9718",
+          "rawBytes": 343924
+        },
+        {
+          "name": "world-units-SLVxYD65.js",
+          "role": "shell-shared",
+          "sha256": "6b957d8c9791662507651fb01f148a252959c63b666cc2ebd9195463e7faefec",
+          "rawBytes": 9135
+        }
+      ],
+      "measuredUnexpectedMarketingAssets": [],
+      "measuredTiming": {
+        "firstContentfulPaintMs": 1676,
+        "rendererReady": null,
+        "readyAtMs": 2299
+      },
+      "performanceProfile": {
+        "label": "authenticated-mobile-lighthouse-devtools-slow-4g",
+        "viewportSource": "https://github.com/GoogleChrome/lighthouse/blob/f9cbf2bbdde9d10dd097304357974fd4c8e0f197/core/config/constants.js",
+        "networkSource": "https://github.com/GoogleChrome/lighthouse/blob/f9cbf2bbdde9d10dd097304357974fd4c8e0f197/docs/throttling.md#types-of-network-throttling",
+        "viewport": {
+          "width": 412,
+          "height": 823
+        },
+        "deviceScaleFactor": 1.75,
+        "cpuSlowdownMultiplier": 4,
+        "requestLatencyMs": 562.5,
+        "downloadThroughputBytesPerSecond": 188743,
+        "uploadThroughputBytesPerSecond": 86400
+      },
+      "measuredPerformance": {
+        "supportedEntryTypes": [
+          "element",
+          "event",
+          "first-input",
+          "interaction-contentful-paint",
+          "largest-contentful-paint",
+          "layout-shift",
+          "long-animation-frame",
+          "longtask",
+          "mark",
+          "measure",
+          "navigation",
+          "paint",
+          "resource",
+          "soft-navigation",
+          "visibility-state"
+        ],
+        "observerStatus": {
+          "largest-contentful-paint": {
+            "installed": true,
+            "error": null
+          },
+          "layout-shift": {
+            "installed": true,
+            "error": null
+          },
+          "event": {
+            "installed": true,
+            "error": null
+          },
+          "longtask": {
+            "installed": true,
+            "error": null
+          }
+        },
+        "firstContentfulPaintMs": 1676,
+        "largestContentfulPaintMs": 1676,
+        "largestContentfulPaintElement": {
+          "tagName": "H1",
+          "id": "viewTitle",
+          "className": ""
+        },
+        "cumulativeLayoutShift": 0.000135,
+        "maxInteractionMs": 152,
+        "observedInteractionCount": 3,
+        "observedInteractions": [
+          {
+            "name": "open-refine",
+            "interactionId": 6176,
+            "durationMs": 152
+          },
+          {
+            "name": "published",
+            "interactionId": 6183,
+            "durationMs": 24
+          },
+          {
+            "name": "current",
+            "interactionId": 6190,
+            "durationMs": 32
+          }
+        ],
+        "longTaskCount": 3,
+        "longestTaskMs": 146
+      },
+      "performanceLimits": {
+        "firstContentfulPaintMs": 1800,
+        "largestContentfulPaintMs": 2500,
+        "cumulativeLayoutShift": 0.1,
+        "maxInteractionMs": 200
+      },
+      "performanceThresholdSources": {
+        "firstContentfulPaintMs": "https://web.dev/articles/fcp#what_is_a_good_fcp_score",
+        "largestContentfulPaintMs": "https://web.dev/articles/lcp#what_is_a_good_lcp_score",
+        "cumulativeLayoutShift": "https://web.dev/articles/cls#what_is_a_good_cls_score",
+        "maxInteractionMs": "https://web.dev/articles/inp#what_is_a_good_inp_score"
+      },
+      "performanceInteractionFlow": [
+        "open-refine",
+        "published",
+        "current"
+      ]
     }
   }
 }

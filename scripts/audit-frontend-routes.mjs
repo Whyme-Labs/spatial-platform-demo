@@ -23,6 +23,30 @@ const protectedChunkPrefixes = [
   "detour-navigation-",
   "recast-navigation-",
 ];
+const mobilePerformanceProfile = {
+  label: "authenticated-mobile-lighthouse-devtools-slow-4g",
+  viewportSource: "https://github.com/GoogleChrome/lighthouse/blob/f9cbf2bbdde9d10dd097304357974fd4c8e0f197/core/config/constants.js",
+  networkSource: "https://github.com/GoogleChrome/lighthouse/blob/f9cbf2bbdde9d10dd097304357974fd4c8e0f197/docs/throttling.md#types-of-network-throttling",
+  viewport: { width: 412, height: 823 },
+  deviceScaleFactor: 1.75,
+  cpuSlowdownMultiplier: 4,
+  requestLatencyMs: 562.5,
+  downloadThroughputBytesPerSecond: 188_743,
+  uploadThroughputBytesPerSecond: 86_400,
+};
+const goodWebVitalLimits = {
+  firstContentfulPaintMs: 1_800,
+  largestContentfulPaintMs: 2_500,
+  cumulativeLayoutShift: 0.1,
+  maxInteractionMs: 200,
+};
+const goodWebVitalThresholdSources = {
+  firstContentfulPaintMs: "https://web.dev/articles/fcp#what_is_a_good_fcp_score",
+  largestContentfulPaintMs: "https://web.dev/articles/lcp#what_is_a_good_lcp_score",
+  cumulativeLayoutShift: "https://web.dev/articles/cls#what_is_a_good_cls_score",
+  maxInteractionMs: "https://web.dev/articles/inp#what_is_a_good_inp_score",
+};
+const mobileInteractionFlow = ["open-refine", "published", "current"];
 
 const routeDefinitions = [
   { id: "signed-out-studio", path: "/studio.html", kind: "signed-out", protected: true },
@@ -34,6 +58,18 @@ const routeDefinitions = [
     protected: false,
   },
   { id: "published-viewer-first-frame", path: "/s/route-receipt", kind: "published", protected: false },
+  {
+    id: "authenticated-portfolio-mobile-performance",
+    path: "/studio.html#projects",
+    kind: "portfolio",
+    protected: true,
+    performance: {
+      profile: mobilePerformanceProfile,
+      limits: goodWebVitalLimits,
+      thresholdSources: goodWebVitalThresholdSources,
+      interactionFlow: mobileInteractionFlow,
+    },
+  },
 ];
 
 function json(route, body, status = 200) {
@@ -160,6 +196,76 @@ function manifest(fixture, accessPolicy) {
 async function installRoutes(page, kind, fixture) {
   await page.addInitScript(() => {
     window.__routeReceiptReady = [];
+    window.__routeReceiptPerformance = {
+      supportedEntryTypes: [...PerformanceObserver.supportedEntryTypes],
+      observerStatus: {},
+      largestContentfulPaintMs: 0,
+      largestContentfulPaintElement: null,
+      cumulativeLayoutShift: 0,
+      maxInteractionMs: 0,
+      interactionIds: [],
+      interactionDurationsById: {},
+      longTaskCount: 0,
+      longestTaskMs: 0,
+    };
+    window.__routeReceiptObservers = [];
+    const observe = (type, callback, options = {}) => {
+      try {
+        const observer = new PerformanceObserver((list) => callback(list.getEntries()));
+        observer.observe({ type, buffered: true, ...options });
+        window.__routeReceiptObservers.push(observer);
+        window.__routeReceiptPerformance.observerStatus[type] = { installed: true, error: null };
+      } catch (error) {
+        window.__routeReceiptPerformance.observerStatus[type] = {
+          installed: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+    observe("largest-contentful-paint", (entries) => {
+      for (const entry of entries) {
+        window.__routeReceiptPerformance.largestContentfulPaintMs = entry.startTime;
+        window.__routeReceiptPerformance.largestContentfulPaintElement = entry.element
+          ? {
+              tagName: entry.element.tagName,
+              id: entry.element.id || null,
+              className: typeof entry.element.className === "string" ? entry.element.className : null,
+            }
+          : null;
+      }
+    });
+    observe("layout-shift", (entries) => {
+      for (const entry of entries) {
+        if (!entry.hadRecentInput) window.__routeReceiptPerformance.cumulativeLayoutShift += entry.value;
+      }
+    });
+    observe("event", (entries) => {
+      for (const entry of entries) {
+        if (entry.interactionId > 0) {
+          if (!window.__routeReceiptPerformance.interactionIds.includes(entry.interactionId)) {
+            window.__routeReceiptPerformance.interactionIds.push(entry.interactionId);
+          }
+          const interactionKey = String(entry.interactionId);
+          window.__routeReceiptPerformance.interactionDurationsById[interactionKey] = Math.max(
+            window.__routeReceiptPerformance.interactionDurationsById[interactionKey] ?? 0,
+            entry.duration,
+          );
+          window.__routeReceiptPerformance.maxInteractionMs = Math.max(
+            window.__routeReceiptPerformance.maxInteractionMs,
+            entry.duration,
+          );
+        }
+      }
+    }, { durationThreshold: 16 });
+    observe("longtask", (entries) => {
+      for (const entry of entries) {
+        window.__routeReceiptPerformance.longTaskCount += 1;
+        window.__routeReceiptPerformance.longestTaskMs = Math.max(
+          window.__routeReceiptPerformance.longestTaskMs,
+          entry.duration,
+        );
+      }
+    });
     window.addEventListener("message", (event) => {
       if (event.data?.source === "spatial-spark" && event.data?.type === "ready") {
         window.__routeReceiptReady.push({ atMs: performance.now(), ...event.data });
@@ -296,8 +402,15 @@ async function builtChunkCatalogue() {
 }
 
 async function measureRoute(browser, definition, fixture, chunkCatalogue) {
+  const viewport = definition.performance?.profile.viewport ?? { width: 1280, height: 800 };
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 }, locale: "en-US", timezoneId: "UTC", serviceWorkers: "block",
+    viewport,
+    deviceScaleFactor: definition.performance?.profile.deviceScaleFactor ?? 1,
+    isMobile: Boolean(definition.performance),
+    hasTouch: Boolean(definition.performance),
+    locale: "en-US",
+    timezoneId: "UTC",
+    serviceWorkers: "block",
   });
   const page = await context.newPage();
   page.on("pageerror", (error) => console.error(`frontend-route-audit: page error on ${definition.id}: ${error.message}`));
@@ -307,6 +420,20 @@ async function measureRoute(browser, definition, fixture, chunkCatalogue) {
   await installRoutes(page, definition.kind, fixture);
   const client = await context.newCDPSession(page);
   await client.send("Network.enable");
+  if (definition.performance) {
+    const profile = definition.performance.profile;
+    await client.send("Emulation.setCPUThrottlingRate", {
+      rate: profile.cpuSlowdownMultiplier,
+    });
+    await client.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: profile.requestLatencyMs,
+      downloadThroughput: profile.downloadThroughputBytesPerSecond,
+      uploadThroughput: profile.uploadThroughputBytesPerSecond,
+      connectionType: "cellular4g",
+    });
+    await client.send("Network.setCacheDisabled", { cacheDisabled: true });
+  }
   const resources = new Map();
   client.on("Network.responseReceived", ({ requestId, response, type }) => {
     const contentLength = Number(response.headers["content-length"] ?? response.headers["Content-Length"] ?? 0);
@@ -337,6 +464,34 @@ async function measureRoute(browser, definition, fixture, chunkCatalogue) {
     }
   }
   const routeReadyAtMs = await page.evaluate(() => Math.round(performance.now()));
+  if (definition.performance) {
+    const refinements = page.locator("#projectAdvancedFilters");
+    if (await refinements.getAttribute("open") === null) {
+      await refinements.locator("summary").click();
+    }
+    const publishedFilter = page.getByRole("button", { name: "Published", exact: true });
+    await publishedFilter.click();
+    const currentFilter = page.getByRole("button", { name: "Current", exact: true });
+    const appliedPublished = (await publishedFilter.getAttribute("aria-pressed")) === "true" &&
+      (await currentFilter.getAttribute("aria-pressed")) === "false" &&
+      (await page.locator("#projectRefineSummary").textContent())?.trim() === "Published";
+    if (!appliedPublished) {
+      throw new Error(
+        `${definition.id}: published_portfolio_filter limit=applied requested=not_applied ` +
+        `receipt=config/frontend-route-receipts.json`,
+      );
+    }
+    await currentFilter.click();
+    const restoredCurrent = (await currentFilter.getAttribute("aria-pressed")) === "true" &&
+      (await page.locator('button[data-filter="PUBLISHED"]').getAttribute("aria-pressed")) === "false" &&
+      (await refinements.getAttribute("open")) === null;
+    if (!restoredCurrent) {
+      throw new Error(
+        `${definition.id}: current_portfolio_filter limit=restored requested=not_restored ` +
+        `receipt=config/frontend-route-receipts.json`,
+      );
+    }
+  }
   await page.waitForLoadState("networkidle");
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -345,6 +500,39 @@ async function measureRoute(browser, definition, fixture, chunkCatalogue) {
     rendererReady: window.__routeReceiptReady.at(-1) ?? null,
   }));
   timing.readyAtMs = routeReadyAtMs;
+  const performance = definition.performance
+    ? await page.evaluate(() => ({
+        supportedEntryTypes: window.__routeReceiptPerformance.supportedEntryTypes,
+        observerStatus: window.__routeReceiptPerformance.observerStatus,
+        firstContentfulPaintMs: Math.round(
+          performance.getEntriesByName("first-contentful-paint")[0]?.startTime ?? 0,
+        ),
+        largestContentfulPaintMs: Math.round(
+          window.__routeReceiptPerformance.largestContentfulPaintMs,
+        ),
+        largestContentfulPaintElement:
+          window.__routeReceiptPerformance.largestContentfulPaintElement,
+        cumulativeLayoutShift: Number(
+          window.__routeReceiptPerformance.cumulativeLayoutShift.toFixed(6),
+        ),
+        maxInteractionMs: Math.round(window.__routeReceiptPerformance.maxInteractionMs),
+        observedInteractionCount: window.__routeReceiptPerformance.interactionIds.length,
+        observedInteractions: window.__routeReceiptPerformance.interactionIds.map((interactionId) => ({
+          interactionId,
+          durationMs: Math.round(
+            window.__routeReceiptPerformance.interactionDurationsById[String(interactionId)] ?? 0,
+          ),
+        })),
+        longTaskCount: window.__routeReceiptPerformance.longTaskCount,
+        longestTaskMs: Math.round(window.__routeReceiptPerformance.longestTaskMs),
+      }))
+    : null;
+  if (performance) {
+    performance.observedInteractions = performance.observedInteractions.map((interaction, index) => ({
+      name: definition.performance.interactionFlow[index] ?? `unexpected-${index + 1}`,
+      ...interaction,
+    }));
+  }
   const frontend = [...resources.values()].filter((resource) => frontendResource(resource.url));
   const assets = frontend.map((resource) => ({
     path: new URL(resource.url).pathname,
@@ -379,6 +567,11 @@ async function measureRoute(browser, definition, fixture, chunkCatalogue) {
     unexpectedMarketingAssets: marketingAssets,
     assets,
     timing,
+    performanceProfile: definition.performance?.profile ?? null,
+    performance,
+    performanceLimits: definition.performance?.limits ?? null,
+    performanceThresholdSources: definition.performance?.thresholdSources ?? null,
+    performanceInteractionFlow: definition.performance?.interactionFlow ?? null,
   };
   await context.close();
   return result;
@@ -399,6 +592,14 @@ function audit(results, receipt) {
   const failures = [];
   if (receipt.schemaVersion !== 1 || !receipt.routes || typeof receipt.routes !== "object") {
     return ["config/frontend-route-receipts.json: invalid schemaVersion or routes object"];
+  }
+  const measuredRouteIds = results.map((result) => result.id).sort();
+  const receiptedRouteIds = Object.keys(receipt.routes).sort();
+  if (JSON.stringify(measuredRouteIds) !== JSON.stringify(receiptedRouteIds)) {
+    failures.push(
+      `route_set limit=${receiptedRouteIds.join(",")} requested=${measuredRouteIds.join(",")} ` +
+      `receipt=config/frontend-route-receipts.json`,
+    );
   }
   for (const result of results) {
     const budget = receipt.routes[result.id];
@@ -438,6 +639,96 @@ function audit(results, receipt) {
         `receipt=config/frontend-route-receipts.json`,
       );
     }
+    if (result.performanceProfile) {
+      for (const key of [
+        "performanceProfile",
+        "performanceLimits",
+        "performanceThresholdSources",
+        "performanceInteractionFlow",
+      ]) {
+        if (JSON.stringify(budget[key]) !== JSON.stringify(result[key])) {
+          failures.push(
+            `${result.id}: ${key} limit=current_definition requested=stale_or_missing ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+        }
+      }
+      if (!budget.performanceLimits) continue;
+    } else if (budget.performanceProfile || budget.performanceLimits ||
+      budget.performanceThresholdSources || budget.performanceInteractionFlow) {
+      failures.push(
+        `${result.id}: performance_receipt limit=not_configured requested=unexpected ` +
+        `receipt=config/frontend-route-receipts.json`,
+      );
+      continue;
+    }
+    if (budget.performanceLimits) {
+      if (!result.performance) {
+        failures.push(`${result.id}: missing measured performance receipt`);
+        continue;
+      }
+      for (const entryType of ["largest-contentful-paint", "layout-shift", "event", "longtask"]) {
+        if (!result.performance.supportedEntryTypes?.includes(entryType)) {
+          failures.push(
+            `${result.id}: performance_observer_${entryType} limit=supported requested=unsupported ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+        }
+        const observerStatus = result.performance.observerStatus?.[entryType];
+        if (!observerStatus?.installed) {
+          failures.push(
+            `${result.id}: performance_observer_${entryType}_installation limit=installed ` +
+            `requested=${observerStatus?.error ?? "missing"} ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+        }
+      }
+      for (const metric of ["firstContentfulPaintMs", "largestContentfulPaintMs"]) {
+        if (!(result.performance[metric] > 0)) {
+          failures.push(
+            `${result.id}: ${metric}_sample limit=positive requested=${result.performance[metric]} ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+        }
+      }
+      if (!result.performance.largestContentfulPaintElement?.tagName) {
+        failures.push(
+          `${result.id}: largest_contentful_paint_element limit=identified requested=missing ` +
+          `receipt=config/frontend-route-receipts.json`,
+        );
+      }
+      const expectedInteractions = result.performanceInteractionFlow?.length ?? 0;
+      if (expectedInteractions === 0) {
+        failures.push(
+          `${result.id}: performance_interaction_flow limit=non_empty requested=missing ` +
+          `receipt=config/frontend-route-receipts.json`,
+        );
+      } else if (result.performance.observedInteractionCount < expectedInteractions) {
+        failures.push(
+          `${result.id}: observed_interaction_count limit=${expectedInteractions} ` +
+          `requested=${result.performance.observedInteractionCount} ` +
+          `receipt=config/frontend-route-receipts.json`,
+        );
+      }
+      for (const [metric, limit] of Object.entries(budget.performanceLimits)) {
+        if (!Number.isFinite(limit) || limit < 0) {
+          failures.push(
+            `${result.id}: ${metric} limit=non_negative_number requested=${String(limit)} ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+          continue;
+        }
+        const requested = result.performance[metric];
+        if (!Number.isFinite(requested)) {
+          failures.push(`${result.id}: ${metric} limit=${limit} requested=missing`);
+        } else if (requested > limit) {
+          failures.push(
+            `${result.id}: ${metric} limit=${limit} requested=${requested} ` +
+            `receipt=config/frontend-route-receipts.json`,
+          );
+        }
+      }
+    }
   }
   return failures;
 }
@@ -462,7 +753,7 @@ try {
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     chromium: browser.version(),
-    viewport: "1280x800",
+    viewport: "route-defined: 1280x800 and 412x823 mobile performance",
     buildMode: "production",
     cache: "fresh browser context per route",
     server: "vite preview",
@@ -474,7 +765,7 @@ try {
       schemaVersion: 1,
       measuredAt: output.measuredAt,
       environment,
-      derivation: "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. Route bytes and timings are receipts, not CI limits.",
+      derivation: "Protected Studio routes measured zero renderer/navigation chunks, and viewer routes measured zero marketing-image requests after route hydration; zero is each boundary tripwire. The throttled mobile Studio route is additionally gated by published good-experience thresholds. Other route bytes and timings are receipts, not CI limits.",
       routes: Object.fromEntries(results.map((result) => {
         const definition = routeDefinitions.find((candidate) => candidate.id === result.id);
         return [result.id, {
@@ -486,10 +777,21 @@ try {
           measuredChunkIdentities: result.chunkIdentities,
           measuredUnexpectedMarketingAssets: result.unexpectedMarketingAssets,
           measuredTiming: result.timing,
+          performanceProfile: result.performanceProfile,
+          measuredPerformance: result.performance,
+          performanceLimits: definition?.performance?.limits ?? null,
+          performanceThresholdSources: definition?.performance?.thresholdSources ?? null,
+          performanceInteractionFlow: definition?.performance?.interactionFlow ?? null,
         }];
       })),
     };
-    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    const failures = audit(results, receipt);
+    if (failures.length) {
+      for (const failure of failures) console.error(`frontend-route-audit: ${failure}`);
+      process.exitCode = 1;
+    } else {
+      await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`);
+    }
   } else {
     const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
     const failures = audit(results, receipt);

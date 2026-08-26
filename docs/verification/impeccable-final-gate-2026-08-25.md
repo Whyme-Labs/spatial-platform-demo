@@ -129,3 +129,11 @@ chunk identity.
 
 No temporary wrapper, generated design variant, running test server, or
 unreviewed screenshot drift remains in the tracked gate artifacts.
+
+## Successor performance receipt
+
+Issue #95 closes the one-point technical-audit gap with a reproducible,
+throttled mobile measurement of the current production bundle. The historical
+19/20 result above remains unchanged as the 2026-08-25 record. Its 2026-08-26
+successor and the 20/20 reassessment are recorded in
+`docs/verification/impeccable-performance-gap-2026-08-26.md`.
