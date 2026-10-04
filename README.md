@@ -356,7 +356,10 @@ Implemented:
   hidden time of a backgrounded or suspended tab on resume, guided navigation,
   room/POI semantics, and a responsive authored-geometry floor plan with live
   camera position
-- desktop pointer-lock mouse look that falls back to drag-look when the browser
+- Fly-only inspection uses drag to pan and Shift+drag to turn; touch uses one
+  finger to pan and two fingers to turn. Panning follows the visible scene plane
+  without declaring metric scale. Walking keeps its desktop pointer-lock mouse
+  look that falls back to drag-look when the browser
   denies or exits the lock, a render and physics loop paused entirely while the
   tab is hidden, a frame-delta timestep so a resumed tab does not integrate the
   hidden interval as one step, and an explicit WebGL context-loss failure with a

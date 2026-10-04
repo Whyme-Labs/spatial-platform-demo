@@ -55,6 +55,57 @@ for (const accessPolicy of ["private-preview", "public"]) {
         await page.locator("#toggleReleaseInfo").click();
         expect(assetRequests.length).toBeGreaterThan(0);
 
+        const canvas = renderer.locator("#sparkCanvas");
+        const panStart = await cameraPose(page);
+        if (touch) {
+          await canvas.dispatchEvent("pointerdown", { pointerId: 11, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await canvas.dispatchEvent("pointermove", { pointerId: 11, pointerType: "touch", clientX: 220, clientY: 260 });
+          await canvas.dispatchEvent("pointerup", { pointerId: 11, pointerType: "touch", clientX: 220, clientY: 260, button: 0 });
+        } else {
+          const bounds = await canvas.boundingBox();
+          expect(bounds).not.toBeNull();
+          const start = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
+          await page.mouse.move(start.x, start.y);
+          await page.mouse.down();
+          await page.mouse.move(start.x + 80, start.y + 60, { steps: 8 });
+          await page.mouse.up();
+        }
+        await expect.poll(async () => distance((await cameraPose(page)).position, panStart.position)).toBeGreaterThan(0.01);
+        const afterPan = await cameraPose(page);
+        expect(distance(direction(afterPan), direction(panStart))).toBeLessThan(0.001);
+        await expect(canvas.evaluate((element) => document.pointerLockElement === element)).resolves.toBe(false);
+
+        if (touch) {
+          for (let turn = 0; turn < 4; turn += 1) {
+            const turnStart = await cameraPose(page);
+            await canvas.dispatchEvent("pointerdown", { pointerId: 12, pointerType: "touch", clientX: 40, clientY: 200, button: 0 });
+            await canvas.dispatchEvent("pointerdown", { pointerId: 13, pointerType: "touch", clientX: 120, clientY: 200, button: 0 });
+            await canvas.dispatchEvent("pointermove", { pointerId: 12, pointerType: "touch", clientX: 236, clientY: 200 });
+            await canvas.dispatchEvent("pointermove", { pointerId: 13, pointerType: "touch", clientX: 316, clientY: 200 });
+            await expect.poll(async () => distance(direction(await cameraPose(page)), direction(turnStart))).toBeGreaterThan(0.01);
+            await canvas.dispatchEvent("pointerup", { pointerId: 12, pointerType: "touch", clientX: 236, clientY: 200, button: 0 });
+            await canvas.dispatchEvent("pointerup", { pointerId: 13, pointerType: "touch", clientX: 316, clientY: 200, button: 0 });
+          }
+        } else {
+          const bounds = await canvas.boundingBox();
+          await page.keyboard.down("Shift");
+          await page.mouse.move(bounds!.x + 100, bounds!.y + bounds!.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(bounds!.x + 885, bounds!.y + bounds!.height / 2, { steps: 8 });
+          await page.mouse.up();
+          await page.keyboard.up("Shift");
+        }
+        await expect.poll(async () => distance(direction(await cameraPose(page)), direction(afterPan))).toBeGreaterThan(0.01);
+        expect(distance((await cameraPose(page)).position, afterPan.position)).toBeLessThan(0.001);
+        const sideways = await cameraPose(page);
+        await canvas.dispatchEvent("pointerdown", { pointerId: 14, pointerType: touch ? "touch" : "mouse", clientX: 140, clientY: 200, button: 0 });
+        await canvas.dispatchEvent("pointermove", { pointerId: 14, pointerType: touch ? "touch" : "mouse", clientX: 220, clientY: 260 });
+        await canvas.dispatchEvent("pointerup", { pointerId: 14, pointerType: touch ? "touch" : "mouse", clientX: 220, clientY: 260, button: 0 });
+        await expect.poll(async () => distance((await cameraPose(page)).position, sideways.position)).toBeGreaterThan(0.01);
+        const panAfterTurn = await cameraPose(page);
+        expect(distance(panAfterTurn.position, sideways.position)).toBeCloseTo(distance(afterPan.position, panStart.position), 3);
+        expect(distance(direction(panAfterTurn), direction(sideways))).toBeLessThan(0.001);
+
         const before = await cameraPosition(page);
         if (touch) {
           const rise = renderer.getByRole("button", { name: "Rise while flying" });
@@ -82,7 +133,13 @@ function wrapManifest(accessPolicy: string, manifest: unknown): unknown {
 }
 
 async function cameraPosition(page: Page): Promise<[number, number, number]> {
-  return page.evaluate(() => new Promise<[number, number, number]>((resolve, reject) => {
+  return (await cameraPose(page)).position;
+}
+
+type CameraPose = { position: [number, number, number]; target: [number, number, number] };
+
+async function cameraPose(page: Page): Promise<CameraPose> {
+  return page.evaluate(() => new Promise<CameraPose>((resolve, reject) => {
     const renderer = document.querySelector<HTMLIFrameElement>("#rendererFrame")?.contentWindow;
     if (!renderer) return reject(new Error("Renderer is unavailable"));
     const requestId = crypto.randomUUID();
@@ -91,9 +148,19 @@ async function cameraPosition(page: Page): Promise<[number, number, number]> {
       if (event.source !== renderer || event.data?.type !== "camera" || event.data?.requestId !== requestId) return;
       window.clearTimeout(timeout);
       window.removeEventListener("message", receive);
-      resolve(event.data.cameraPose.position);
+      resolve(event.data.cameraPose);
     };
     window.addEventListener("message", receive);
     renderer.postMessage({ source: "spatial-host", type: "capture-camera", requestId }, location.origin);
   }));
+}
+
+function direction(pose: CameraPose): number[] {
+  const vector = pose.target.map((value, index) => value - pose.position[index]!);
+  const length = Math.hypot(...vector);
+  return vector.map((value) => value / length);
+}
+
+function distance(left: number[], right: number[]): number {
+  return Math.hypot(...left.map((value, index) => value - right[index]!));
 }

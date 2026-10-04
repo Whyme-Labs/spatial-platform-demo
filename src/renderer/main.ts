@@ -423,6 +423,7 @@ async function start(): Promise<void> {
   controls.setTranslationEnabled(false);
   rendererControls = controls;
   let visualSceneReady = false;
+  let sceneCentre: THREE.Vector3 | null = null;
   let pendingSpatialRuntimeMessage: object | null = null;
   let activeSpatialRuntimeSignature: string | null = null;
   let hydratedNavigationMeshUrl: string | null = null;
@@ -444,10 +445,15 @@ async function start(): Promise<void> {
     if (Reflect.get(event.data, "type") === "set-visual-preview") {
       if (fatalFailure || collisionDrivenMovement) return;
       visualPreviewActive = true;
+      if (visualSceneReady && !sceneCentre) {
+        mesh.updateMatrixWorld(true);
+        sceneCentre = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld).getCenter(new THREE.Vector3());
+      }
+      if (sceneCentre) controls.setPanTarget(sceneCentre);
       movementMode = "fly";
       controls.setMovementMode("fly");
       setMovementAvailability(controls, visualSceneReady);
-      setControlStatus("Fly preview · measurement and walking need registered geometry", "ready");
+      setControlStatus("Fly preview · drag to pan", "ready");
       return;
     }
     if (Reflect.get(event.data, "type") === "set-outer-overlay-mode") {
@@ -548,6 +554,8 @@ async function start(): Promise<void> {
       authoredTraversalOverlay?.destroy();
       authoredTraversalOverlay = null;
       collisionDrivenMovement = false;
+      visualPreviewActive = false;
+      controls.setPanTarget(null);
       movementMode = "walk";
       stopMobileVerticalMovement();
       controls.setMovementMode("walk");
@@ -1054,6 +1062,13 @@ async function start(): Promise<void> {
 
   await mesh.initialized;
   setProgress(86, "Framing the reconstructed place");
+  let sceneBounds: THREE.Box3 | null = null;
+  if (!config.initialCamera || visualPreviewActive) {
+    mesh.updateMatrixWorld(true);
+    sceneBounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
+    sceneCentre = sceneBounds.getCenter(new THREE.Vector3());
+  }
+  if (visualPreviewActive && sceneCentre) controls.setPanTarget(sceneCentre);
   if (config.initialCamera) {
     camera.fov = config.initialCamera.fovDegrees;
     if (config.initialCamera.up) {
@@ -1063,7 +1078,7 @@ async function start(): Promise<void> {
     camera.lookAt(new THREE.Vector3().fromArray(config.initialCamera.target));
     camera.updateProjectionMatrix();
   } else {
-    frameScene(mesh, camera);
+    frameScene(sceneBounds!, camera);
   }
   setMovementAvailability(controls, movementRuntimeReady || visualPreviewActive);
   if (walkableBoundarySource === "none" && !visualPreviewActive) {
@@ -1928,13 +1943,19 @@ function setMovementAvailability(
   controls.setTranslationEnabled(available);
   controls.setNavigationBounds(available && !collisionDrivenMovement ? walkableBoxes : []);
   mobileControls.setReady(available && readySent);
+  byId("mobileLookHint").querySelector("span:last-child")!.textContent = visualPreviewActive
+    ? "Drag scene to pan" : "Drag scene to look";
   mobileMovementHelp.textContent = available
-    ? movementMode === "fly"
+    ? visualPreviewActive
+      ? "Drag to pan · two-finger drag to turn · joystick to fly · Rise and Lower change altitude"
+      : movementMode === "fly"
       ? "Drag to look · fly with the joystick · Rise and Lower change altitude"
       : "Drag to look · move with the left-thumb joystick"
     : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
-    ? movementMode === "fly"
+    ? visualPreviewActive
+      ? "Drag to pan · Shift+drag to turn · scroll to travel"
+      : movementMode === "fly"
       ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
       : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel"
     : "Walking map required before this scene can be viewed";
@@ -1944,9 +1965,7 @@ function setMovementAvailability(
     movementMode !== "fly" || !mobileControls.active;
 }
 
-function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
-  mesh.updateMatrixWorld(true);
-  const bounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
+function frameScene(bounds: THREE.Box3, camera: THREE.PerspectiveCamera): void {
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
   const center = sphere.center;
   const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 1;
@@ -2070,7 +2089,9 @@ function updateMovementModeChrome(): void {
   desktopVerticalHelp.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly";
   flightAltitudeControls.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly" ||
     !mobileControls.active;
-  desktopMovementHelp.textContent = movementMode === "fly"
+  desktopMovementHelp.textContent = visualPreviewActive
+    ? "Drag to pan · Shift+drag to turn · scroll to travel"
+    : movementMode === "fly"
     ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
     : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel";
   scheduleOverlayLayoutReceipt();
