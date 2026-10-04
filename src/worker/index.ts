@@ -5791,7 +5791,7 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
   if (access instanceof Response) return access;
   const versionId = context.req.param("versionId");
   const version = await context.env.DB.prepare(`
-    SELECT id, version_number, status, source_provenance_json
+    SELECT id, version_number, status, source_provenance_json, manifest_json
     FROM scene_versions
     WHERE id = ? AND project_id = ?
   `).bind(versionId, access.project.id).first<{
@@ -5799,6 +5799,7 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     version_number: number;
     status: string;
     source_provenance_json: string | null;
+    manifest_json: string | null;
   }>();
   if (!version) return notFound(context, "Scene version not found");
   const assets = await context.env.DB.prepare(`
@@ -5819,7 +5820,10 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     sha256: string | null;
     integrity_status: string;
   }>();
-  const asset = assets.results.find((candidate) => allowedWebFormats.has(candidate.format));
+  const approval = parseStoredObject(version.manifest_json ?? "{}");
+  const approvedWebAssetId = readStringProperty(approval, "webAssetId");
+  const asset = assets.results.find((candidate) => allowedWebFormats.has(candidate.format) &&
+    (!approvedWebAssetId || candidate.id === approvedWebAssetId));
   if (!asset || !(await context.env.SPATIAL_ASSETS.head(asset.object_key))) {
     return conflict(context, "This version does not have a verified browser scene yet");
   }
@@ -5830,7 +5834,8 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     access.project.id,
     version.id,
   );
-  const navigation = navigationQualification.ready ? navigationQualification.value : null;
+  const approvedFlyOnly = readStringProperty(approval, "viewingMode") === "fly-only";
+  const navigation = !approvedFlyOnly && navigationQualification.ready ? navigationQualification.value : null;
   const releaseConfig = await context.env.DB.prepare(`
     SELECT viewer_config_json
     FROM releases
@@ -5865,6 +5870,11 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
   const collisionUrl = navigation
     ? `/comparison-asset/${access.project.id}/${version.id}/${navigation.collisionAsset.id}/${encodeURIComponent(navigation.collisionAsset.file_name)}?token=${encodeURIComponent(collisionToken!)}`
     : null;
+  const viewingMode = navigation ? "walkable" : "fly-only";
+  const savedViewingMode = readStringProperty(storedViewer, "viewingMode") ?? "walkable";
+  const savedCameraMatchesFrame = savedViewingMode === viewingMode && (!navigation ||
+    JSON.stringify(canonicalSourceToWorldTransform(Reflect.get(storedViewer, "sourceToWorld"))) ===
+      JSON.stringify(canonicalSourceToWorldTransform(navigation.registration.sourceToWorld)));
   const viewer = {
     title: access.project.name,
     ...storedViewer,
@@ -5872,9 +5882,11 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
       ? PROVISIONAL_MEASUREMENT_DISCLAIMER
       : publicationMeasurementDisclaimer("visual-only"),
     defaultMovementMode: navigation ? Reflect.get(storedViewer, "defaultMovementMode") ?? "walk" : "fly",
+    viewingMode,
+    sceneRotationDegrees: navigation ? undefined : Reflect.get(storedViewer, "sceneRotationDegrees"),
     // Saved release cameras use the registered world frame. Without that
     // transform, let the renderer frame the visual asset in its own coordinates.
-    initialCamera: navigation ? Reflect.get(storedViewer, "initialCamera") : undefined,
+    initialCamera: savedCameraMatchesFrame ? Reflect.get(storedViewer, "initialCamera") : undefined,
     sourceToWorld: navigation?.registration.sourceToWorld,
     captureRegistration: navigation?.registration.receipt,
   };
@@ -15772,36 +15784,53 @@ app.post("/api/versions/:versionId/approve", async (context) => {
     manifest_json: string | null;
   }>();
   if (!version) return notFound(context, "Version not found");
+  let capabilityReview = false;
   if (version.status === "APPROVED" || version.status === "PUBLISHED") {
-    const walkingQualification = await qualifyNavigationPreview(
-      context.env,
-      auth.organisationId,
-      version.project_id,
-      version.id,
-    );
-    if (!walkingQualification.ready) {
-      return conflict(
-        context,
-        `QA approval is no longer valid: ${walkingQualification.message}`,
-      );
-    }
     const prior = parseStoredObject(version.manifest_json ?? "{}");
-    if (readStringProperty(prior, "webAssetId") === parsed.data.webAssetId) {
+    const priorViewingMode = readStringProperty(prior, "viewingMode") ?? "walkable";
+    capabilityReview = priorViewingMode !== parsed.data.viewingMode;
+    if (capabilityReview && readStringProperty(prior, "webAssetId") !== parsed.data.webAssetId) {
+      return conflict(context, "A capability review must keep the approved visual asset");
+    }
+    if (!capabilityReview && priorViewingMode === "walkable") {
+      const walkingQualification = await qualifyNavigationPreview(
+        context.env,
+        auth.organisationId,
+        version.project_id,
+        version.id,
+      );
+      if (!walkingQualification.ready) {
+        return conflict(
+          context,
+          `QA approval is no longer valid: ${walkingQualification.message}`,
+        );
+      }
+    }
+    if (!capabilityReview && readStringProperty(prior, "webAssetId") === parsed.data.webAssetId) {
       return context.json({
         version: { id: version.id, status: version.status },
         idempotent: true,
       });
     }
   }
-  if (version.status !== "QA_REQUIRED") return validationError(context, { version: ["Version is not awaiting QA"] });
+  if (version.status !== "QA_REQUIRED" && !capabilityReview) return validationError(context, { version: ["Version is not awaiting QA"] });
   const webAsset = await context.env.DB.prepare(
     "SELECT * FROM assets WHERE id = ? AND version_id = ? AND organisation_id = ?",
   ).bind(parsed.data.webAssetId, version.id, auth.organisationId).first<AssetRow>();
   if (!webAsset) return validationError(context, { webAssetId: ["Asset does not belong to this version"] });
+  if (webAsset.kind !== "web") return validationError(context, { webAssetId: ["Only a processed browser scene can be approved for publication"] });
   if (!allowedWebFormats.has(webAsset.format)) {
     return validationError(context, { webAssetId: ["Publishable Spark assets must be RAD, SPZ, or SOG"] });
   }
   if (webAsset.integrity_status !== "verified") return validationError(context, { webAssetId: ["Asset integrity has not been verified"] });
+  if (!await context.env.SPATIAL_ASSETS.head(webAsset.object_key)) return conflict(context, "The processed browser scene is unavailable");
+  if (parsed.data.posterAssetId) {
+    const poster = await context.env.DB.prepare(`
+      SELECT id FROM assets WHERE id = ? AND organisation_id = ? AND version_id = ?
+        AND kind = 'poster' AND integrity_status = 'verified' AND deleted_at IS NULL
+    `).bind(parsed.data.posterAssetId, auth.organisationId, version.id).first();
+    if (!poster) return validationError(context, { posterAssetId: ["Only a verified poster from this scene version can be published"] });
+  }
   if (webAsset.format === "spz") {
     // Spark gunzips an SPZ and accepts inner container versions 1-3. The
     // PlayCanvas toolchain emits a raw NGSP v4 container that satisfies our
@@ -15825,22 +15854,25 @@ app.post("/api/versions/:versionId/approve", async (context) => {
   // rather than the scene, and privacy review is handled outside the platform.
   // Nothing here infers privacy state; the QA decision the operator records is
   // the attestation.
-  const walkingQualification = await qualifyNavigationPreview(
-    context.env,
-    auth.organisationId,
-    version.project_id,
-    version.id,
-  );
-  if (!walkingQualification.ready) {
-    return conflict(
-      context,
-      `QA approval blocked: ${walkingQualification.message}`,
+  if (parsed.data.viewingMode === "walkable") {
+    const walkingQualification = await qualifyNavigationPreview(
+      context.env,
+      auth.organisationId,
+      version.project_id,
+      version.id,
     );
+    if (!walkingQualification.ready) {
+      return conflict(
+        context,
+        `QA approval blocked: ${walkingQualification.message}`,
+      );
+    }
   }
   const report = {
     visualGrade: parsed.data.visualGrade,
     privacyStatus: parsed.data.privacyStatus,
     measurementGrade: parsed.data.measurementGrade,
+    viewingMode: parsed.data.viewingMode,
     notes: parsed.data.notes ?? null,
     webAssetId: webAsset.id,
     posterAssetId: parsed.data.posterAssetId ?? null,
@@ -16022,12 +16054,13 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     const candidatePolicyViolations = releasePolicyViolations(candidatePolicy, {
       accessPolicy: parsed.data.accessPolicy,
       defaultMovementMode: parsed.data.viewerConfig.defaultMovementMode,
+      viewingMode: parsed.data.viewerConfig.viewingMode,
     });
     if (Object.keys(candidatePolicyViolations).length) {
       return unprocessable(context, candidatePolicyViolations);
     }
     if (latestVersion) {
-      const navigationClearanceViolations = await releaseNavigationClearanceViolations(
+      const navigationClearanceViolations = parsed.data.viewerConfig.viewingMode === "fly-only" ? {} : await releaseNavigationClearanceViolations(
         context.env.DB,
         project.id,
         latestVersion.id,
@@ -16048,6 +16081,11 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     }
     return validationError(context, { project: ["Project has no approved scene version"] });
   }
+  const flyOnly = parsed.data.viewerConfig.viewingMode === "fly-only";
+  const approvedViewingMode = readStringProperty(parseStoredObject(approved.manifest_json), "viewingMode") ?? "walkable";
+  if (parsed.data.viewerConfig.viewingMode !== approvedViewingMode) {
+    return unprocessable(context, { viewingMode: ["Publication must use the viewing mode recorded in this version's privacy and QA approval"] });
+  }
   const approvedPolicy = await workflowPolicyForSceneVersion(
     context.env.DB,
     project,
@@ -16062,11 +16100,12 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   const approvedPolicyViolations = releasePolicyViolations(approvedPolicy.policy, {
     accessPolicy: parsed.data.accessPolicy,
     defaultMovementMode: parsed.data.viewerConfig.defaultMovementMode,
+    viewingMode: parsed.data.viewerConfig.viewingMode,
   });
   if (Object.keys(approvedPolicyViolations).length) {
     return unprocessable(context, approvedPolicyViolations);
   }
-  const navigationClearanceViolations = await releaseNavigationClearanceViolations(
+  const navigationClearanceViolations = flyOnly ? {} : await releaseNavigationClearanceViolations(
     context.env.DB,
     project.id,
     approved.id,
@@ -16093,6 +16132,9 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   const measurementGrade = parseMeasurementGrade(
     approval && typeof approval === "object" ? Reflect.get(approval, "measurementGrade") : null,
   );
+  if (flyOnly && measurementGrade !== "visual-only") {
+    return conflict(context, "Fly-only publication requires a visual-only measurement grade");
+  }
   if (measurementGrade) {
     const expectedDisclaimer = publicationMeasurementDisclaimer(
       measurementGrade,
@@ -16109,6 +16151,13 @@ app.post("/api/projects/:projectId/releases", async (context) => {
   const webAssetId = readStringProperty(approval, "webAssetId");
   let posterAssetId = readNullableStringProperty(approval, "posterAssetId");
   if (!webAssetId) return validationError(context, { project: ["Approved version has no web asset"] });
+  const publicationAsset = await context.env.DB.prepare(`
+    SELECT object_key FROM assets WHERE id = ? AND organisation_id = ? AND project_id = ?
+      AND version_id = ? AND kind = 'web' AND integrity_status = 'verified' AND deleted_at IS NULL
+  `).bind(webAssetId, auth.organisationId, project.id, approved.id).first<{ object_key: string }>();
+  if (!publicationAsset || !await context.env.SPATIAL_ASSETS.head(publicationAsset.object_key)) {
+    return conflict(context, "Publication blocked: the verified browser scene is unavailable");
+  }
   if (!posterAssetId) {
     const generatedPoster = await context.env.DB.prepare(`
       SELECT id FROM assets
@@ -16119,175 +16168,186 @@ app.post("/api/projects/:projectId/releases", async (context) => {
     `).bind(auth.organisationId, project.id, approved.id).first<{ id: string }>();
     posterAssetId = generatedPoster?.id ?? null;
   }
-  const sceneRegistration = await qualifiedSceneRegistration(
-    context.env.DB,
-    auth.organisationId,
-    project.id,
-    approved.id,
-  );
-  if (!sceneRegistration) {
-    return conflict(
-      context,
-      "Publication blocked: this scene has no verified capture-to-scene registration. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture registration.",
-    );
-  }
-  if (hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees)) {
-    return conflict(
-      context,
-      "Publication blocked: a registered walkable scene cannot rotate only its visual layer. Correct the shared capture-to-scene transform instead.",
-    );
-  }
-  if (parsed.data.viewerConfig.sourceToWorld) {
-    const evidence = await context.env.DB.prepare(`
-      SELECT id, status, review_decision, parameters_json
-      FROM semantic_extraction_runs
-      WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
-    `).bind(
-      parsed.data.sourceToWorldEvidenceId!,
+  let releaseViewerConfig: Omit<ReturnType<typeof releaseInputSchema.parse>["viewerConfig"], "sourceToWorld"> & {
+    sourceToWorld?: SourceToWorldTransform;
+    captureRegistration?: Record<string, unknown>;
+    startingViewQuality?: ReturnType<typeof releaseInputSchema.parse>["startingViewQuality"];
+  } = {
+    ...parsed.data.viewerConfig,
+    ...(parsed.data.startingViewQuality ? { startingViewQuality: parsed.data.startingViewQuality } : {}),
+  };
+  let spatialSnapshot: Awaited<ReturnType<typeof captureSpatialSnapshot>> | null = null;
+  if (!flyOnly) {
+    const sceneRegistration = await qualifiedSceneRegistration(
+      context.env.DB,
       auth.organisationId,
       project.id,
       approved.id,
-    ).first<{
-      id: string;
-      status: string;
-      review_decision: string | null;
-      parameters_json: string;
-    }>();
+    );
+    if (!sceneRegistration) {
+      return conflict(
+        context,
+        "Publication blocked: this scene has no verified capture-to-scene registration. Upload the visual and registered metric geometry together from the same unchanged capture frame, or attach an accepted measured capture registration.",
+      );
+    }
+    if (hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees)) {
+      return conflict(
+        context,
+        "Publication blocked: a registered walkable scene cannot rotate only its visual layer. Correct the shared capture-to-scene transform instead.",
+      );
+    }
+    if (parsed.data.viewerConfig.sourceToWorld) {
+      const evidence = await context.env.DB.prepare(`
+        SELECT id, status, review_decision, parameters_json
+        FROM semantic_extraction_runs
+        WHERE id = ? AND organisation_id = ? AND project_id = ? AND version_id = ?
+      `).bind(
+        parsed.data.sourceToWorldEvidenceId!,
+        auth.organisationId,
+        project.id,
+        approved.id,
+      ).first<{
+        id: string;
+        status: string;
+        review_decision: string | null;
+        parameters_json: string;
+      }>();
+      if (
+        !evidence ||
+        evidence.status !== "REVIEWED" ||
+        evidence.review_decision !== "accept_selected"
+      ) {
+        return conflict(
+          context,
+          "The source-to-world transform must come from an accepted semantic extraction on this exact scene version",
+        );
+      }
+      const evidenceTransform = canonicalSourceToWorldTransform(Reflect.get(
+        parseStoredObject(evidence.parameters_json) as object,
+        "sourceToWorld",
+      ));
+      const releaseTransform = canonicalSourceToWorldTransform(
+        parsed.data.viewerConfig.sourceToWorld,
+      );
+      if (
+        JSON.stringify(evidenceTransform) !== JSON.stringify(releaseTransform)
+      ) {
+        return unprocessable(context, {
+          sourceToWorldEvidenceId: [
+            "The release transform differs from its reviewed semantic extraction evidence",
+          ],
+        });
+      }
+      if (
+        JSON.stringify(sceneRegistration.sourceToWorld) !== JSON.stringify(releaseTransform)
+      ) {
+        return unprocessable(context, {
+          sourceToWorldEvidenceId: [
+            "The release transform differs from the verified registration shared by the visual scene and walking evidence",
+          ],
+        });
+      }
+    }
+    releaseViewerConfig = {
+      ...parsed.data.viewerConfig,
+      sourceToWorld: sceneRegistration.sourceToWorld,
+      captureRegistration: sceneRegistration.receipt,
+      // Freeze the validated first-frame receipt with the release so the
+      // evidence that the frozen starting view passed the gate outlives the
+      // operator session, exactly like the registration receipt above.
+      ...(parsed.data.startingViewQuality
+        ? { startingViewQuality: parsed.data.startingViewQuality }
+        : {}),
+    };
+    spatialSnapshot = await captureSpatialSnapshot(
+      context.env.DB,
+      auth.organisationId,
+      project.id,
+      approved.id,
+    );
+    const snapshotEntities = Reflect.get(spatialSnapshot, "entities");
+    const walkableConnectivity = inspectWalkableConnectivity(
+      Array.isArray(snapshotEntities) ? snapshotEntities : [],
+    );
+    if (walkableConnectivity.componentCount > 1) {
+      const componentLabels = walkableConnectivity.components
+        .map((component) => component.regionLabels.join(", "))
+        .join(" | ");
+      return conflict(
+        context,
+        `Walkable publication blocked: ${walkableConnectivity.componentCount} disconnected navigation components (${componentLabels}). Connect every advertised region with overlapping walkable or doorway geometry before publishing.`,
+      );
+    }
+    const verifiedWalkingPackage = await verifiedPhysicalNavigation(
+      context.env,
+      auth.organisationId,
+      project.id,
+      approved.id,
+      spatialSnapshot,
+    );
+    if (!verifiedWalkingPackage) {
+      return conflict(
+        context,
+        "Publication blocked: the exact approved v7+ collision, navigation report, and Detour navmesh must all be present and verified",
+      );
+    }
+    // The in-scene walk test used to gate publication here. Its whole assertion
+    // was that the end pose differed from the start pose — one millimetre passed
+    // — while the processor already proves room-anchor enclosure in six
+    // directions, both-direction capsule and sphere sweeps against every
+    // reviewed wall, corner slides, route replay, and Detour reachability, and
+    // an operator already approves the build with a typed review note. Binding
+    // the receipt to a build id (correctly) meant every rebuild retired it, so
+    // the gate degraded into rebuild-nudge-publish rather than assurance.
     if (
-      !evidence ||
-      evidence.status !== "REVIEWED" ||
-      evidence.review_decision !== "accept_selected"
+      hasNonIdentitySceneRotation(parsed.data.viewerConfig.sceneRotationDegrees) &&
+      hasAuthoredSpatialRuntime(spatialSnapshot)
     ) {
       return conflict(
         context,
-        "The source-to-world transform must come from an accepted semantic extraction on this exact scene version",
+        "Visual scene rotation cannot be published with authored spatial geometry; rotate the complete spatial frame instead",
       );
     }
-    const evidenceTransform = canonicalSourceToWorldTransform(Reflect.get(
-      parseStoredObject(evidence.parameters_json) as object,
-      "sourceToWorld",
-    ));
-    const releaseTransform = canonicalSourceToWorldTransform(
-      parsed.data.viewerConfig.sourceToWorld,
+    const snapshotProfile = Reflect.get(spatialSnapshot, "navigationProfile");
+    const navigationWorldUnit = parseWorldUnit(
+      snapshotProfile && typeof snapshotProfile === "object"
+        ? Reflect.get(snapshotProfile, "worldUnit")
+        : undefined,
     );
-    if (
-      JSON.stringify(evidenceTransform) !== JSON.stringify(releaseTransform)
-    ) {
-      return unprocessable(context, {
-        sourceToWorldEvidenceId: [
-          "The release transform differs from its reviewed semantic extraction evidence",
-        ],
-      });
+    const releaseWorldUnit = parseWorldUnit(
+      sceneRegistration.sourceToWorld.worldUnit,
+    );
+    if (navigationWorldUnit !== releaseWorldUnit) {
+      return conflict(
+        context,
+        "The navigation profile world unit must match the reviewed source-to-world transform",
+      );
+    }
+    const snapshotArtifacts = [
+      ...((Reflect.get(spatialSnapshot, "entities") as unknown[]) ?? []),
+      ...((Reflect.get(spatialSnapshot, "navigationObstacles") as unknown[]) ?? []),
+    ];
+    if (snapshotArtifacts.some((artifact) =>
+      artifact && typeof artifact === "object" &&
+      parseWorldUnit(Reflect.get(artifact, "world_unit")) !== navigationWorldUnit
+    )) {
+      return conflict(
+        context,
+        "Authored geometry unit provenance must match the navigation profile before publication",
+      );
     }
     if (
-      JSON.stringify(sceneRegistration.sourceToWorld) !== JSON.stringify(releaseTransform)
+      navigationWorldUnit === "scene_units" &&
+      releaseViewerConfig.measurementDisclaimer !== PROVISIONAL_MEASUREMENT_DISCLAIMER
     ) {
-      return unprocessable(context, {
-        sourceToWorldEvidenceId: [
-          "The release transform differs from the verified registration shared by the visual scene and walking evidence",
-        ],
-      });
+      return conflict(
+        context,
+        "Provisional releases must use the platform-authored non-measurement warning",
+      );
     }
-  }
-  const releaseViewerConfig = {
-    ...parsed.data.viewerConfig,
-    sourceToWorld: sceneRegistration.sourceToWorld,
-    captureRegistration: sceneRegistration.receipt,
-    // Freeze the validated first-frame receipt with the release so the
-    // evidence that the frozen starting view passed the gate outlives the
-    // operator session, exactly like the registration receipt above.
-    ...(parsed.data.startingViewQuality
-      ? { startingViewQuality: parsed.data.startingViewQuality }
-      : {}),
-  };
-  const spatialSnapshot = await captureSpatialSnapshot(
-    context.env.DB,
-    auth.organisationId,
-    project.id,
-    approved.id,
-  );
-  const snapshotEntities = Reflect.get(spatialSnapshot, "entities");
-  const walkableConnectivity = inspectWalkableConnectivity(
-    Array.isArray(snapshotEntities) ? snapshotEntities : [],
-  );
-  if (walkableConnectivity.componentCount > 1) {
-    const componentLabels = walkableConnectivity.components
-      .map((component) => component.regionLabels.join(", "))
-      .join(" | ");
-    return conflict(
-      context,
-      `Walkable publication blocked: ${walkableConnectivity.componentCount} disconnected navigation components (${componentLabels}). Connect every advertised region with overlapping walkable or doorway geometry before publishing.`,
-    );
-  }
-  const verifiedWalkingPackage = await verifiedPhysicalNavigation(
-    context.env,
-    auth.organisationId,
-    project.id,
-    approved.id,
-    spatialSnapshot,
-  );
-  if (!verifiedWalkingPackage) {
-    return conflict(
-      context,
-      "Publication blocked: the exact approved v7+ collision, navigation report, and Detour navmesh must all be present and verified",
-    );
-  }
-  // The in-scene walk test used to gate publication here. Its whole assertion
-  // was that the end pose differed from the start pose — one millimetre passed
-  // — while the processor already proves room-anchor enclosure in six
-  // directions, both-direction capsule and sphere sweeps against every
-  // reviewed wall, corner slides, route replay, and Detour reachability, and
-  // an operator already approves the build with a typed review note. Binding
-  // the receipt to a build id (correctly) meant every rebuild retired it, so
-  // the gate degraded into rebuild-nudge-publish rather than assurance.
-  if (
-    hasNonIdentitySceneRotation(releaseViewerConfig.sceneRotationDegrees) &&
-    hasAuthoredSpatialRuntime(spatialSnapshot)
-  ) {
-    return conflict(
-      context,
-      "Visual scene rotation cannot be published with authored spatial geometry; rotate the complete spatial frame instead",
-    );
-  }
-  const snapshotProfile = Reflect.get(spatialSnapshot, "navigationProfile");
-  const navigationWorldUnit = parseWorldUnit(
-    snapshotProfile && typeof snapshotProfile === "object"
-      ? Reflect.get(snapshotProfile, "worldUnit")
-      : undefined,
-  );
-  const releaseWorldUnit = parseWorldUnit(
-    releaseViewerConfig.sourceToWorld.worldUnit,
-  );
-  if (navigationWorldUnit !== releaseWorldUnit) {
-    return conflict(
-      context,
-      "The navigation profile world unit must match the reviewed source-to-world transform",
-    );
-  }
-  const snapshotArtifacts = [
-    ...((Reflect.get(spatialSnapshot, "entities") as unknown[]) ?? []),
-    ...((Reflect.get(spatialSnapshot, "navigationObstacles") as unknown[]) ?? []),
-  ];
-  if (snapshotArtifacts.some((artifact) =>
-    artifact && typeof artifact === "object" &&
-    parseWorldUnit(Reflect.get(artifact, "world_unit")) !== navigationWorldUnit
-  )) {
-    return conflict(
-      context,
-      "Authored geometry unit provenance must match the navigation profile before publication",
-    );
-  }
-  if (
-    navigationWorldUnit === "scene_units" &&
-    releaseViewerConfig.measurementDisclaimer !== PROVISIONAL_MEASUREMENT_DISCLAIMER
-  ) {
-    return conflict(
-      context,
-      "Provisional releases must use the platform-authored non-measurement warning",
-    );
   }
   const viewerConfigJson = JSON.stringify(releaseViewerConfig);
-  const spatialSnapshotJson = JSON.stringify(spatialSnapshot);
+  const spatialSnapshotJson = spatialSnapshot ? JSON.stringify(spatialSnapshot) : null;
   if (parsed.data.accessPolicy !== "token") {
     const duplicateRelease = await context.env.DB.prepare(`
       SELECT r.id, r.release_number, r.published_at, sv.version_number
@@ -16297,7 +16357,7 @@ app.post("/api/projects/:projectId/releases", async (context) => {
       WHERE rc.slug = ? AND rc.organisation_id = ? AND rc.project_id = ?
         AND r.version_id = ? AND r.web_asset_id = ? AND r.poster_asset_id IS ?
         AND r.access_policy = ? AND r.viewer_config_json = ?
-        AND r.spatial_snapshot_json = ? AND r.expires_at IS ?
+        AND r.spatial_snapshot_json IS ? AND r.expires_at IS ?
         AND r.revoked_at IS NULL
       LIMIT 1
     `).bind(
@@ -16470,7 +16530,7 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
   const releaseId = readStringProperty(input, "releaseId");
   if (!releaseId) return validationError(context, { releaseId: ["releaseId is required"] });
   const release = await context.env.DB.prepare(`
-    SELECT r.id, r.project_id, r.version_id, r.spatial_snapshot_json FROM releases r
+    SELECT r.id, r.project_id, r.version_id, r.spatial_snapshot_json, r.viewer_config_json, r.web_asset_id FROM releases r
     JOIN release_channels rc ON rc.project_id = r.project_id
     WHERE r.id = ? AND rc.slug = ? AND r.organisation_id = ? AND r.revoked_at IS NULL
   `).bind(releaseId, context.req.param("slug"), auth.organisationId).first<{
@@ -16478,29 +16538,41 @@ app.post("/api/release-channels/:slug/rollback", async (context) => {
     project_id: string;
     version_id: string;
     spatial_snapshot_json: string | null;
+    viewer_config_json: string;
+    web_asset_id: string;
   }>();
   if (!release) return notFound(context, "Eligible release not found");
-  const frozenSpatial = release.spatial_snapshot_json
-    ? parseSpatialSnapshot(release.spatial_snapshot_json)
-    : null;
-  if (!frozenSpatial) {
-    return conflict(
-      context,
-      "Rollback blocked: this historical release has no valid frozen spatial snapshot",
-    );
+  const webAsset = await context.env.DB.prepare(`
+    SELECT object_key FROM assets WHERE id = ? AND organisation_id = ?
+      AND project_id = ? AND version_id = ? AND kind = 'web'
+      AND integrity_status = 'verified' AND deleted_at IS NULL
+  `).bind(release.web_asset_id, auth.organisationId, release.project_id, release.version_id).first<{ object_key: string }>();
+  if (!webAsset || !await context.env.SPATIAL_ASSETS.head(webAsset.object_key)) {
+    return conflict(context, "Rollback blocked: the verified browser scene is unavailable");
   }
-  const verifiedWalkingPackage = await verifiedPhysicalNavigation(
-    context.env,
-    auth.organisationId,
-    release.project_id,
-    release.version_id,
-    frozenSpatial,
-  );
-  if (!verifiedWalkingPackage) {
-    return conflict(
-      context,
-      "Rollback blocked: this release's exact v7+ collision, navigation report, and Detour navmesh are not all present and verified",
+  if (readStringProperty(parseStoredObject(release.viewer_config_json), "viewingMode") !== "fly-only") {
+    const frozenSpatial = release.spatial_snapshot_json
+      ? parseSpatialSnapshot(release.spatial_snapshot_json)
+      : null;
+    if (!frozenSpatial) {
+      return conflict(
+        context,
+        "Rollback blocked: this historical release has no valid frozen spatial snapshot",
+      );
+    }
+    const verifiedWalkingPackage = await verifiedPhysicalNavigation(
+      context.env,
+      auth.organisationId,
+      release.project_id,
+      release.version_id,
+      frozenSpatial,
     );
+    if (!verifiedWalkingPackage) {
+      return conflict(
+        context,
+        "Rollback blocked: this release's exact v7+ collision, navigation report, and Detour navmesh are not all present and verified",
+      );
+    }
   }
   await context.env.DB.batch([
     context.env.DB.prepare(
@@ -16871,6 +16943,7 @@ app.get("/api/releases/:slug/manifest", async (context) => {
     sessionId: renderSession.id,
   }, context.env.SESSION_PEPPER);
   const viewerConfig = parseStoredObject(release.viewer_config_json);
+  const flyOnly = readStringProperty(viewerConfig, "viewingMode") === "fly-only";
   const theme = await context.env.DB.prepare(`
     SELECT brand_name, logo_url, accent_color, surface_color
     FROM project_themes WHERE project_id = ? AND organisation_id = ?
@@ -16885,30 +16958,30 @@ app.get("/api/releases/:slug/manifest", async (context) => {
       desktop_standard_budget, desktop_high_budget, max_initial_bytes
     FROM project_delivery_policies WHERE project_id = ? AND organisation_id = ?
   `).bind(release.project_id, release.organisation_id).first();
-  const publishedSpatial = release.spatial_snapshot_json
+  const publishedSpatial = !flyOnly && release.spatial_snapshot_json
     ? parseSpatialSnapshot(release.spatial_snapshot_json)
     : null;
-  if (!publishedSpatial) {
+  if (!flyOnly && !publishedSpatial) {
     return conflict(
       context,
       "This release is unavailable because it has no valid frozen spatial snapshot",
     );
   }
-  const verifiedWalkingPackage = await verifiedPhysicalNavigation(
+  const verifiedWalkingPackage = publishedSpatial ? await verifiedPhysicalNavigation(
     context.env,
     release.organisation_id,
     release.project_id,
     release.version_id,
     publishedSpatial,
-  );
-  if (!verifiedWalkingPackage) {
+  ) : null;
+  if (!flyOnly && !verifiedWalkingPackage) {
     return conflict(
       context,
       "This release is unavailable because its exact v7+ collision, navigation report, and Detour navmesh are not all present and verified",
     );
   }
-  const collisionAsset = verifiedWalkingPackage.collisionAsset;
-  const detourAsset = verifiedWalkingPackage.detourAsset;
+  const collisionAsset = verifiedWalkingPackage?.collisionAsset;
+  const detourAsset = verifiedWalkingPackage?.detourAsset;
   context.header("Cache-Control", "private, no-store");
   return context.json({
     schemaVersion: "1.0.0",
@@ -22454,7 +22527,7 @@ async function projectHasActiveManagedHosting(
 
 function releasePolicyViolations(
   policy: ProjectWorkflowPolicy,
-  release: { accessPolicy: string; defaultMovementMode: string },
+  release: { accessPolicy: string; defaultMovementMode: string; viewingMode?: string },
 ): Record<string, string[]> {
   const details: Record<string, string[]> = {};
   if (
@@ -22465,7 +22538,7 @@ function releasePolicyViolations(
       "This workflow requires a private review release protected by a token or customer authentication",
     ];
   }
-  if (policy.navigation === "visitor-walk" && release.defaultMovementMode !== "walk") {
+  if (release.viewingMode !== "fly-only" && policy.navigation === "visitor-walk" && release.defaultMovementMode !== "walk") {
     details.defaultMovementMode = [
       "This workflow requires walking as the default navigation mode",
     ];

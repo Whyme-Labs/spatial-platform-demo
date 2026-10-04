@@ -536,9 +536,9 @@ type VersionRenderable = {
   sizeBytes: number;
   sha256: string | null;
   contentUrl: string;
-  collisionUrl: string;
+  collisionUrl: string | null;
   sessionExpiresAt: string;
-  spatial: Pick<
+  spatial?: Pick<
     SpatialWorkspace,
     | "entities"
     | "routes"
@@ -552,6 +552,7 @@ type VersionRenderable = {
   viewer: {
     splatBudgetMillions?: number;
     defaultMovementMode?: "walk" | "fly";
+    viewingMode?: "fly-only" | "walkable";
     sceneRotationDegrees?: [number, number, number];
     sourceToWorld?: {
       sourceUpAxis: "Y" | "Z";
@@ -587,6 +588,10 @@ function sendVersionSpatialRuntime(
   renderable: VersionRenderable,
 ): void {
   const spatial = renderable.spatial;
+  if (!spatial) {
+    frame.contentWindow?.postMessage({ source: "spatial-host", type: "set-visual-preview" }, location.origin);
+    return;
+  }
   const artifactNavMesh = spatial.navigationArtifact
     ? Reflect.get(spatial.navigationArtifact, "navMesh")
     : null;
@@ -7898,11 +7903,11 @@ function renderPublish(): void {
   }
 
   const card = workspaceTask("publication-readiness-card");
-  const latestVersion = detail.versions[0] ?? null;
   const releasableVersion = auxiliaryCollisionTargetVersion();
   const navigationReady = Boolean(
     releasableVersion && detail.navigationReadyVersionIds.includes(releasableVersion.id),
   );
+  const publicationReady = navigationReady || versionHasFlyOnlyApproval(releasableVersion);
   const workflowPolicy = effectiveVersionWorkflowPolicy(detail.project, releasableVersion);
   const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
     subscription.project_id === detail.project.id && subscription.status === "active"
@@ -7915,7 +7920,7 @@ function renderPublish(): void {
       "Visual scene",
       releasableVersion ? `Version ${releasableVersion.version_number} approved` : "Awaiting QA approval",
     ),
-    projectFact("Walking map", navigationReady ? "Verified and approved" : "Not ready"),
+    projectFact("Viewing", versionHasFlyOnlyApproval(releasableVersion) ? "Fly-only" : navigationReady ? "Walking verified and approved" : "Fly preview awaiting privacy approval"),
     projectFact(
       "Managed hosting",
       workflowPolicy.hosting === "managed-required"
@@ -7939,7 +7944,7 @@ function renderPublish(): void {
     ));
   }
 
-  if (latestVersion?.status === "QA_REQUIRED") {
+  if (qaTargetVersion(detail)) {
     const review = element("button", "quiet-button wide", "Review privacy and approve");
     review.addEventListener("click", () => {
       void runAction({
@@ -7950,7 +7955,7 @@ function renderPublish(): void {
     });
     card.append(review);
   }
-  if (releasableVersion && navigationReady && hostingReady) {
+  if (releasableVersion && publicationReady && hostingReady) {
     const configure = element("button", "primary-button wide", "Configure publication");
     configure.addEventListener("click", () => {
       void runAction({
@@ -7960,7 +7965,7 @@ function renderPublish(): void {
       }, openReleaseDialog);
     });
     card.append(configure);
-  } else if (releasableVersion && navigationReady && !hostingReady) {
+  } else if (releasableVersion && publicationReady && !hostingReady) {
     const configureHosting = element("button", "primary-button wide", "Configure managed hosting");
     configureHosting.addEventListener("click", () => {
       void runAction({
@@ -11425,6 +11430,10 @@ function projectNextAction(
       };
     }
     if (!journey.privacyApproved || journey.privacyVersion?.status === "QA_REQUIRED") {
+      if (!qaTargetVersion(detail)) return {
+        label: "Refresh processing status", section: "process",
+        command: { kind: "refresh-project", projectId: detail.project.id },
+      };
       return {
         label: "Review privacy and approve",
         section: "publish",
@@ -11709,7 +11718,6 @@ function renderProjectDetail(): void {
     renderableVersion,
     navigationReady,
     previewReady,
-    privacyVersion: latestVersion,
   } = model.journey;
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
   renderProjectContext(model);
@@ -11750,7 +11758,7 @@ function renderProjectDetail(): void {
     }
     if (!navigationReady) {
       sharing.append(element(
-        "p", "muted-copy", "Fly preview ready. Add registered geometry for measurement and walking.",
+      "p", "muted-copy", "Fly preview ready. Review privacy to share it, or add geometry for measurement and walking.",
       ));
       if (!model.journey.hasMetricGeometry) {
         const addGeometry = element("button", "quiet-button wide", "Add measurement geometry");
@@ -11786,8 +11794,8 @@ function renderProjectDetail(): void {
   }
   const releasableVisualVersion = auxiliaryCollisionTargetVersion();
   if (
-    latestVersion?.status === "QA_REQUIRED" &&
-    navigationReady &&
+    qaTargetVersion(detail) &&
+    previewReady &&
     model.nextAction.command.kind !== "review-privacy"
   ) {
     const qaButton = element("button", "quiet-button wide", "Review privacy and approve");
@@ -11802,7 +11810,7 @@ function renderProjectDetail(): void {
   }
   if (
     releasableVisualVersion &&
-    navigationReady &&
+    (navigationReady || versionHasFlyOnlyApproval(releasableVisualVersion)) &&
     model.nextAction.command.kind !== "publish"
   ) {
     const publishButton = element("button", "primary-button wide", "Publish shareable URL");
@@ -11840,7 +11848,7 @@ function renderProjectDetail(): void {
     projectFact("Delivery classification", detail.project.deliveryTemplate),
     projectFact("Publication policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).publication)),
     projectFact("Navigation policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).navigation)),
-    projectFact("Required files", humanStatus(effectiveProjectWorkflowPolicy(detail.project).requiredFiles)),
+    projectFact("Walking inputs", humanStatus(effectiveProjectWorkflowPolicy(detail.project).requiredFiles)),
     projectFact("Structure workflow", humanStatus(effectiveProjectWorkflowPolicy(detail.project).structureWorkflow)),
     projectFact("Walking clearance", humanStatus(effectiveProjectWorkflowPolicy(detail.project).navigationClearance)),
     projectFact("Measurement policy", humanStatus(effectiveProjectWorkflowPolicy(detail.project).measurement)),
@@ -13016,6 +13024,28 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   syncUploadPosterCameraRequirement();
 }
 
+function versionApproval(version: Version | null): object | null {
+  if (!version?.manifest_json) return null;
+  let approval: unknown;
+  try {
+    approval = JSON.parse(version.manifest_json);
+  } catch {
+    throw new Error(`Version ${version.version_number} has an invalid QA approval record.`);
+  }
+  return approval && typeof approval === "object" ? approval : null;
+}
+
+function versionHasFlyOnlyApproval(version: Version | null): boolean {
+  const approval = versionApproval(version);
+  return Boolean(approval && Reflect.get(approval, "viewingMode") === "fly-only");
+}
+
+function qaTargetVersion(detail: ProjectDetail): Version | null {
+  return detail.versions.find((version) => detail.previewReadyVersionIds.includes(version.id) && (
+    version.status === "QA_REQUIRED" || versionHasFlyOnlyApproval(version) && detail.navigationReadyVersionIds.includes(version.id)
+  )) ?? null;
+}
+
 function auxiliaryAssetTargetVersion(purpose?: CaptureAssetPurpose): Version | null {
   if (!state.selected) return null;
   const attachableStatuses = purpose === "metric_point_cloud"
@@ -13441,7 +13471,30 @@ async function cancelJob(job: Job): Promise<void> {
 
 async function openQaDialog(): Promise<void> {
   if (!state.selected) return;
-  await loadSpatialWorkspace(state.selected.project.id);
+  const projectId = state.selected.project.id;
+  const detail = await api<ProjectDetail>(`/api/projects/${projectId}`);
+  if (state.selected?.project.id !== projectId) return;
+  state.selected = detail;
+  renderProjectDetail();
+  const version = qaTargetVersion(state.selected);
+  if (!version) {
+    showNotice("Wait for a verified browser scene before reviewing privacy.", "error");
+    return;
+  }
+  const form = byId<HTMLFormElement>("qaForm");
+  form.reset();
+  form.dataset.versionId = version.id;
+  const flyOnly = !state.selected.navigationReadyVersionIds.includes(version.id);
+  form.dataset.viewingMode = flyOnly ? "fly-only" : "walkable";
+  const measurementGrade = form.elements.namedItem("measurementGrade");
+  if (measurementGrade instanceof HTMLSelectElement) {
+    measurementGrade.value = "visual-only";
+    measurementGrade.disabled = flyOnly;
+    measurementGrade.closest("label")!.hidden = flyOnly;
+  }
+  byId("qaViewingMode").textContent = flyOnly
+    ? "Approve a Fly-only visual scene. Measurement and walking are not included."
+    : "Approve this scene with its verified walking map.";
   const select = byId<HTMLSelectElement>("qaAssetSelect");
   select.replaceChildren();
   // The Spark RAD derivative is the paged format every published viewer
@@ -13449,11 +13502,14 @@ async function openQaDialog(): Promise<void> {
   // Creation order once put a raw NGSP SPZ first, and approving that default
   // failed the server's loadability guard every time.
   const webFormatRank: Record<string, number> = { rad: 0, sog: 1, spz: 2 };
+  const priorAssetId = ["APPROVED", "PUBLISHED"].includes(version.status)
+    ? Reflect.get(versionApproval(version) ?? {}, "webAssetId") : null;
   const webCandidates = state.selected.assets
     .filter((candidate) =>
-      candidate.format === "rad" ||
-      candidate.format === "spz" ||
-      candidate.format === "sog"
+      candidate.version_id === version.id && candidate.kind === "web" &&
+      candidate.integrity_status === "verified" &&
+      (!priorAssetId || candidate.id === priorAssetId) &&
+      ["rad", "spz", "sog"].includes(candidate.format)
     )
     .sort((left, right) =>
       (webFormatRank[left.format] ?? 3) - (webFormatRank[right.format] ?? 3)
@@ -13482,7 +13538,7 @@ async function openQaDialog(): Promise<void> {
 }
 
 async function approveVersion(form: FormData): Promise<void> {
-  const version = state.selected?.versions[0];
+  const version = state.selected?.versions.find((candidate) => candidate.id === byId<HTMLFormElement>("qaForm").dataset.versionId);
   if (!version) return;
   const verifiedPoster = state.selected?.assets.find((asset) =>
     asset.version_id === version.id &&
@@ -13496,6 +13552,7 @@ async function approveVersion(form: FormData): Promise<void> {
       posterAssetId: verifiedPoster?.id ?? null,
       visualGrade: String(form.get("visualGrade") ?? "B"),
       measurementGrade: String(form.get("measurementGrade") ?? "visual-only"),
+      viewingMode: byId<HTMLFormElement>("qaForm").dataset.viewingMode,
       privacyStatus: "approved",
       notes: optionalString(form.get("notes")),
     }),
@@ -13520,19 +13577,24 @@ async function openReleaseDialog(): Promise<void> {
     showNotice("Approve a visual scene version before publishing a release.", "error");
     return;
   }
+  const version = state.selected.versions.find((candidate) => candidate.id === versionId);
+  const flyOnly = versionHasFlyOnlyApproval(version ?? null);
   if (
+    !flyOnly && (
     state.spatialProjectId !== projectId ||
     state.spatial?.version?.id !== versionId
+    )
   ) {
     await loadSpatialWorkspace(projectId, versionId);
   }
   if (
     state.selected?.project.id !== projectId ||
-    state.spatial?.version?.id !== versionId
+    !flyOnly && state.spatial?.version?.id !== versionId
   ) return;
   const form = byId<HTMLFormElement>("releaseForm");
   form.reset();
-  const version = state.selected.versions.find((candidate) => candidate.id === versionId);
+  form.dataset.versionId = versionId;
+  form.dataset.viewingMode = flyOnly ? "fly-only" : "walkable";
   const versionPolicy = effectiveVersionWorkflowPolicy(state.selected.project, version);
   const accessPolicy = form.elements.namedItem("accessPolicy");
   if (accessPolicy instanceof HTMLSelectElement) {
@@ -13546,25 +13608,31 @@ async function openReleaseDialog(): Promise<void> {
   }
   const movementMode = form.elements.namedItem("defaultMovementMode");
   if (movementMode instanceof HTMLSelectElement) {
-    movementMode.value = versionPolicy.navigation === "review-walk-and-fly"
+    movementMode.value = flyOnly || versionPolicy.navigation === "review-walk-and-fly"
       ? "fly"
       : "walk";
+    movementMode.disabled = flyOnly;
+    movementMode.closest("label")!.hidden = flyOnly;
   }
+  byId("releaseMovementHelp").textContent = flyOnly
+    ? "Visitors can fly around the visual scene. Measurement and walking are not included."
+    : "Walk and Fly use the approved structural shell and collide with reviewed floors, walls, and ceilings.";
   syncReleaseQualityPreset(form);
   byId<HTMLDetailsElement>("releaseExpertSettings").open = false;
   const slug = form.elements.namedItem("slug");
   const title = form.elements.namedItem("title");
   if (slug instanceof HTMLInputElement) slug.value = state.selected.project.activeReleaseSlug ?? state.selected.project.slug;
   if (title instanceof HTMLInputElement) title.value = state.selected.project.name;
-  const hasAuthoredSpatialGeometry = hasAuthoredSpatialRuntime(state.spatial);
+  const hasAuthoredSpatialGeometry = !flyOnly && hasAuthoredSpatialRuntime(state.spatial);
   form.dataset.hasAuthoredSpatialRuntime = String(hasAuthoredSpatialGeometry);
   byId("sceneRotationNote").textContent = hasAuthoredSpatialGeometry
     ? "Scene rotation is unavailable because this version has authored spatial geometry. Rotate the complete spatial frame before publication instead."
     : "Visual orientation only. This renderer transform does not establish metric scale or replace reviewed source-to-world evidence.";
-  const reviewedTransforms = reviewedSemanticSourceToWorld();
+  const reviewedTransforms = flyOnly ? [] : reviewedSemanticSourceToWorld();
   const latestTransform = reviewedTransforms[0] ?? null;
   const evidenceSelect = form.elements.namedItem("sourceToWorldEvidenceId");
   if (evidenceSelect instanceof HTMLSelectElement) {
+    evidenceSelect.disabled = flyOnly;
     evidenceSelect.replaceChildren(new Option(
       reviewedTransforms.length
         ? "Select reviewed transform evidence"
@@ -13582,7 +13650,10 @@ async function openReleaseDialog(): Promise<void> {
     if (latestTransform) evidenceSelect.value = latestTransform.extractionId;
   }
   const applyTransform = form.elements.namedItem("applySourceToWorld");
-  if (applyTransform instanceof HTMLInputElement) applyTransform.checked = Boolean(latestTransform);
+  if (applyTransform instanceof HTMLInputElement) {
+    applyTransform.checked = Boolean(latestTransform);
+    applyTransform.disabled = flyOnly;
+  }
   if (latestTransform) {
     applyReviewedTransformToReleaseForm(latestTransform.extractionId);
   } else {
@@ -13607,7 +13678,7 @@ async function prepareReleaseCameraPreview(versionId: string): Promise<void> {
   frame.src = "about:blank";
   try {
     const renderable = await createVersionPreview(versionId);
-    if (!releaseDialog.open || state.spatial?.version?.id !== versionId) return;
+    if (!releaseDialog.open || byId<HTMLFormElement>("releaseForm").dataset.versionId !== versionId) return;
     frame.onload = () => {
       frame.dataset.previewReady = "true";
       sendVersionSpatialRuntime(frame, renderable);
@@ -13755,12 +13826,13 @@ function syncReleaseTransformModes(form: HTMLFormElement): void {
     return;
   }
   const hasAuthoredSpatialRuntime = form.dataset.hasAuthoredSpatialRuntime === "true";
+  const flyOnly = form.dataset.viewingMode === "fly-only";
   const hasRotation = hasEnteredSceneRotation(form);
   for (const input of rotationInputs) {
     input.disabled = hasAuthoredSpatialRuntime || applyTransform.checked;
   }
-  applyTransform.disabled = hasRotation;
-  evidence.disabled = hasRotation;
+  applyTransform.disabled = hasRotation || flyOnly;
+  evidence.disabled = hasRotation || flyOnly;
   const acceptedTransform = applyTransform.checked && Boolean(evidence.value);
   for (const name of [
     "releaseMetresPerSourceUnit",
@@ -13866,7 +13938,8 @@ async function publishRelease(form: FormData): Promise<void> {
           captureDate: optionalString(form.get("captureDate")),
           measurementDisclaimer: String(form.get("measurementDisclaimer") ?? ""),
           splatBudgetMillions: Number(form.get("splatBudgetMillions") ?? 2),
-          defaultMovementMode: form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
+          viewingMode: byId<HTMLFormElement>("releaseForm").dataset.viewingMode,
+          defaultMovementMode: byId<HTMLFormElement>("releaseForm").dataset.viewingMode === "fly-only" || form.get("defaultMovementMode") === "fly" ? "fly" : "walk",
           ...(sceneRotationDegrees ? { sceneRotationDegrees } : {}),
           ...(sourceToWorld ? { sourceToWorld } : {}),
           ...(initialCamera ? { initialCamera } : {}),

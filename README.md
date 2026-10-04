@@ -40,7 +40,7 @@ Portable FJD / XGRIDS / open Gaussian export
 ```
 
 The primary Studio journey is **Upload one Gaussian file -> Process -> Private
-Fly preview**. Registered geometry is optional at intake and can be attached
+Fly preview -> Review privacy -> Publish a Fly-only link**. Registered geometry is optional at intake and can be attached
 when measurement, floor plans, or walking are needed. With registered geometry,
 Studio also prepares floor-plan, collision, and navigation work. A final navigation
 build bound to an approved floor-plan revision is
@@ -58,8 +58,10 @@ safe defaults and automatically queues visual processing from a single file.
 A verified browser asset is sufficient for private preview; preview readiness
 does not establish metric scale, collision safety, or publication readiness.
 Registered geometry adds the automatic floor-plan, collision, and navigation
-pipeline. Existing geometry, privacy, QA, and publication gates still apply to
-their respective capabilities.
+pipeline. A fresh QA review can enable walking for a new release after that
+package qualifies; existing Fly-only releases keep their frozen capabilities.
+Privacy, QA, and the explicit audience/publication confirmation govern every
+release. Geometry and registration checks govern measurement and walking.
 
 Every primary intake, including open imports, accepts one portable Gaussian result (`PLY`, `SPZ`,
 `SOG`, `SPLAT`, `KSPLAT`) or browser-ready Spark `RAD`. A registered metric
@@ -72,11 +74,13 @@ walking evidence, it opens in Fly mode with no collision, walking controls, or
 metric scale claims. When its immutable visual-to-structure registration receipt,
 v7+ collision, JSON report, Detour binary, and navigation artifact pass exact-version
 verification, the preview also carries the full walking runtime.
-Public or customer URLs still require the
-operator's recorded privacy review and an explicit release. QA, comparison, and publication repeat the
-registration check, and publication freezes the verified transform and receipt
-with the walking artifacts rather than trusting a separately entered visual
-transform.
+Public or customer URLs require the operator's recorded privacy review and an
+explicit release. Fly-only approval carries a visual-only measurement grade and
+publishes no metric transform or spatial package. Its mode is frozen in the
+release, and missing walking evidence cannot silently convert a walking release
+into a Fly-only one. Walking QA, comparison, and walkable publication repeat the
+registration check and freeze the verified transform and receipt with the
+walking artifacts.
 
 The intake can preserve one narrow provenance assertion: both exports are
 direct outputs of the same capture. That operator statement is not registration

@@ -4073,6 +4073,60 @@ describe("Spatial Studio Worker", () => {
       new Uint8Array([1, 2, 3, 4]),
     );
 
+    // A fresh capability review can enable walking without changing the
+    // published Fly release or uploading the visual again.
+    const priorDecision = JSON.parse(String(approvalRequest.body));
+    const approveMode = (viewingMode: string) => exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      { ...approvalRequest, body: JSON.stringify({ ...priorDecision, viewingMode }) },
+    );
+    expect((await approveMode("fly-only")).status).toBe(200);
+    const publishMode = (viewingMode: string) => exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ slug: "capability-upgrade-fixture", accessPolicy: "public", viewerConfig: {
+          title: "Capability upgrade fixture", measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+          viewingMode, defaultMovementMode: viewingMode === "fly-only" ? "fly" : "walk",
+          ...(viewingMode === "fly-only" ? {
+            initialCamera: { position: [101, 1, 1], target: [100, 1, 0], fovDegrees: 58 },
+            sceneRotationDegrees: [0, 0, 180],
+          } : {}),
+        } }),
+      },
+    );
+    const publishedFly = await publishMode("fly-only");
+    expect(publishedFly.status).toBe(201);
+    const flyRelease = await publishedFly.json<{ release: { id: string } }>();
+    expect((await approveMode("walkable")).status).toBe(200);
+    const upgradePreview = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/versions/${completed.asset.versionId}/preview`, { headers: { cookie } },
+    );
+    const upgradedCamera = await upgradePreview.json<{ renderable: { viewer: Record<string, unknown> } }>();
+    expect(upgradedCamera.renderable.viewer.viewingMode).toBe("walkable");
+    expect(upgradedCamera.renderable.viewer.initialCamera).toBeUndefined();
+    expect(upgradedCamera.renderable.viewer.sceneRotationDegrees).toBeUndefined();
+    const publishedWalk = await publishMode("walkable");
+    expect(publishedWalk.status, JSON.stringify(await publishedWalk.clone().json())).toBe(201);
+    const walkRelease = await publishedWalk.json<{ release: { id: string } }>();
+    const walkingManifest = await exports.default.fetch(`${origin}/api/releases/capability-upgrade-fixture/manifest`);
+    await expect(walkingManifest.json()).resolves.toMatchObject({
+      viewer: { viewingMode: "walkable" }, spatial: { navigationArtifact: { schemaVersion: "spatial-navigation-v7" } },
+    });
+    const restoreFly = await exports.default.fetch(`${origin}/api/release-channels/capability-upgrade-fixture/rollback`, {
+      method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ releaseId: flyRelease.release.id }),
+    });
+    expect(restoreFly.status).toBe(200);
+    const unchangedFly = await exports.default.fetch(`${origin}/api/releases/capability-upgrade-fixture/manifest`);
+    await expect(unchangedFly.json()).resolves.toMatchObject({ viewer: { viewingMode: "fly-only" }, spatial: null });
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM release_channels WHERE slug = 'capability-upgrade-fixture'"),
+      env.DB.prepare("DELETE FROM scene_render_sessions WHERE release_id IN (?, ?)").bind(flyRelease.release.id, walkRelease.release.id),
+      env.DB.prepare("DELETE FROM releases WHERE id IN (?, ?)").bind(flyRelease.release.id, walkRelease.release.id),
+      env.DB.prepare("UPDATE scene_versions SET status = 'APPROVED' WHERE id = ?").bind(completed.asset.versionId),
+      env.DB.prepare("UPDATE projects SET status = 'APPROVED' WHERE id = ?").bind(project.id),
+    ]);
+
     await env.SPATIAL_ASSETS.delete(navigationReportKey);
     const missingNavigationObjectRelease = await exports.default.fetch(
       `${origin}/api/projects/${project.id}/releases`,

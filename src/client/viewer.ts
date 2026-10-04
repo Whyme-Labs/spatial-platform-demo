@@ -85,6 +85,7 @@ type ReleaseManifest = {
     measurementDisclaimer: string;
     splatBudgetMillions?: number | null;
     defaultMovementMode?: "walk" | "fly";
+    viewingMode?: "fly-only" | "walkable";
     sceneRotationDegrees?: [number, number, number];
     sourceToWorld?: SourceToWorldTransform;
     initialCamera?: {
@@ -1551,7 +1552,7 @@ function setRendererCamera(cameraPose: CameraPose): Promise<CameraPose> {
 
 function sendSpatialRuntime(): void {
   const spatial = activeManifest?.spatial;
-  if (activePrivatePreview && !spatial) {
+  if ((activePrivatePreview || activeManifest?.viewer.viewingMode === "fly-only") && !spatial) {
     frame.contentWindow?.postMessage({
       source: "spatial-host",
       type: "set-visual-preview",

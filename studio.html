@@ -751,6 +751,7 @@
       <span class="eyebrow">QUALITY GATE</span>
       <h2>Approve a web derivative.</h2>
       <p>Only Spark RAD, SPZ, or SOG assets can be published. Privacy review happens outside the platform; your confirmation below is the record of it.</p>
+      <p id="qaViewingMode" class="field-note"></p>
       <div class="mock-form-grid">
         <label class="full"><span>Web asset</span><select name="webAssetId" id="qaAssetSelect" required></select></label>
         <label><span>Visual quality decision</span><select name="visualGrade"><option value="A">A — Client-ready: no visible defects at the approved framing and quality preset</option><option value="B">B — Acceptable: minor defects do not distract from the intended experience</option><option value="C">C — Conditional: visible defects require an explicit acceptance note before release</option></select></label>
@@ -777,7 +778,7 @@
         <label><span>Expiry</span><input name="expiresAt" type="datetime-local" /></label>
         <label><span>Opening movement</span><select name="defaultMovementMode"><option value="walk">Walk</option><option value="fly">Fly in 3D</option></select></label>
         <label><span>Viewer quality</span><select name="qualityPreset"><option value="data-saver">Data saver</option><option value="standard">Standard</option><option value="high-detail">High detail</option></select></label>
-        <p class="field-note full">Fly requires an approved v7 closed structural shell. Walk and Fly collide with reviewed floors, walls, and ceilings while ignoring classified furniture.</p>
+        <p id="releaseMovementHelp" class="field-note full">Visitors can fly around a visual scene. Walking requires an approved structural shell.</p>
       </div>
       <section class="release-starting-view" aria-labelledby="releaseStartingViewTitle">
         <div>
