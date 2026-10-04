@@ -346,6 +346,7 @@ let navigationRuntimeGeneration = 0;
 let walkableBoundarySource: WalkableBoundarySource = "none";
 let movementRuntimeReady = false;
 let authoringHostActive = false;
+let visualPreviewActive = false;
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
@@ -440,6 +441,15 @@ async function start(): Promise<void> {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
+    if (Reflect.get(event.data, "type") === "set-visual-preview") {
+      if (fatalFailure || collisionDrivenMovement) return;
+      visualPreviewActive = true;
+      movementMode = "fly";
+      controls.setMovementMode("fly");
+      setMovementAvailability(controls, visualSceneReady);
+      setControlStatus("Fly preview · measurement and walking need registered geometry", "ready");
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-outer-overlay-mode") {
       const requestedMode = Reflect.get(event.data, "mode");
       const mode: RendererOuterOverlayMode = requestedMode === "navigator" || requestedMode === "review"
@@ -1055,8 +1065,8 @@ async function start(): Promise<void> {
   } else {
     frameScene(mesh, camera);
   }
-  setMovementAvailability(controls, movementRuntimeReady);
-  if (walkableBoundarySource === "none") {
+  setMovementAvailability(controls, movementRuntimeReady || visualPreviewActive);
+  if (walkableBoundarySource === "none" && !visualPreviewActive) {
     setControlStatus("Walking map required · preview blocked", "error");
   }
   anchorCameraToWalkable(camera);
@@ -1207,9 +1217,9 @@ async function start(): Promise<void> {
     // reviews the scene precisely before a walking runtime exists, and gating
     // the overlay on that runtime stranded it on a permanent "Finalising the
     // view" over a fully rendered scene. But the visual alone must never post
-    // "ready" — the host treats ready as movement-ready and enables room
-    // navigation on it, so ready waits for the verified runtime (or an
-    // authoring host's free-fly grant), and never follows a fatal error.
+    // "ready" without a movement contract. A verified walking runtime or an
+    // explicit private-preview/authoring flight grant enables movement.
+    // A fatal error must never be followed by ready.
     if (!visualReadyHandled && visualSceneReady && !fatalFailure) {
       visualReadyHandled = true;
       resetButton.disabled = false;
@@ -1222,10 +1232,10 @@ async function start(): Promise<void> {
     }
     if (
       !readySent && !fatalFailure && visualSceneReady &&
-      (movementRuntimeReady || authoringHostActive)
+      (movementRuntimeReady || authoringHostActive || visualPreviewActive)
     ) {
       readySent = true;
-      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive);
+      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive || visualPreviewActive);
       post({
         source: "spatial-spark",
         type: "ready",
@@ -1919,18 +1929,18 @@ function setMovementAvailability(
   controls.setNavigationBounds(available && !collisionDrivenMovement ? walkableBoxes : []);
   mobileControls.setReady(available && readySent);
   mobileMovementHelp.textContent = available
-    ? collisionDrivenMovement && movementMode === "fly"
+    ? movementMode === "fly"
       ? "Drag to look · fly with the joystick · Rise and Lower change altitude"
       : "Drag to look · move with the left-thumb joystick"
     : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
-    ? collisionDrivenMovement && movementMode === "fly"
+    ? movementMode === "fly"
       ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
       : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel"
     : "Walking map required before this scene can be viewed";
   desktopKeyboardHelp.hidden = !available;
-  desktopVerticalHelp.hidden = !available || !collisionDrivenMovement || movementMode !== "fly";
-  flightAltitudeControls.hidden = !available || !collisionDrivenMovement ||
+  desktopVerticalHelp.hidden = !available || movementMode !== "fly";
+  flightAltitudeControls.hidden = !available ||
     movementMode !== "fly" || !mobileControls.active;
 }
 
@@ -2057,8 +2067,8 @@ function updateMovementModeChrome(): void {
     ? (compact ? "Fly" : "Fly mode")
     : (compact ? "Walk" : "Walk mode");
   movementModeToggle.setAttribute("aria-pressed", String(movementMode === "fly"));
-  desktopVerticalHelp.hidden = !movementRuntimeReady || movementMode !== "fly";
-  flightAltitudeControls.hidden = !movementRuntimeReady || movementMode !== "fly" ||
+  desktopVerticalHelp.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly";
+  flightAltitudeControls.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly" ||
     !mobileControls.active;
   desktopMovementHelp.textContent = movementMode === "fly"
     ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
@@ -2199,7 +2209,7 @@ function startMobileVerticalMovement(
   button: HTMLButtonElement,
   direction: -1 | 1,
 ): void {
-  if (!movementRuntimeReady || movementMode !== "fly" || !mobileControls.active) return;
+  if (!(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly" || !mobileControls.active) return;
   event.preventDefault();
   mobileVerticalMovement = direction;
   button.toggleAttribute("data-active", true);

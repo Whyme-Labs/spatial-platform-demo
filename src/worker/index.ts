@@ -4965,7 +4965,10 @@ app.get("/api/projects/:projectId", async (context) => {
   const previewWebAssetExists = previewObjectKey
     ? Boolean(await context.env.SPATIAL_ASSETS.head(previewObjectKey))
     : false;
-  const previewReadyVersionIds = previewCandidateVersionId && previewWebAssetExists &&
+  const previewReadyVersionIds = previewCandidateVersionId && previewWebAssetExists
+    ? [previewCandidateVersionId]
+    : [];
+  const navigationReadyVersionIds = previewCandidateVersionId && previewWebAssetExists &&
     await approvedNavigationPreview(
       context.env,
       auth.organisationId,
@@ -4999,6 +5002,7 @@ app.get("/api/projects/:projectId", async (context) => {
     captureBundles: captureBundles.results,
     comparisonReadiness: comparison,
     previewReadyVersionIds,
+    navigationReadyVersionIds,
   });
 });
 
@@ -5826,10 +5830,7 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     access.project.id,
     version.id,
   );
-  if (!navigationQualification.ready) {
-    return conflict(context, navigationQualification.message);
-  }
-  const navigation = navigationQualification.value;
+  const navigation = navigationQualification.ready ? navigationQualification.value : null;
   const releaseConfig = await context.env.DB.prepare(`
     SELECT viewer_config_json
     FROM releases
@@ -5846,14 +5847,14 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     releaseId: comparisonAssetTokenScope(access.project.id, version.id, asset.id),
     expiresAt: sessionExpiresAt,
   }, context.env.SESSION_PEPPER);
-  const collisionToken = await signSceneToken({
+  const collisionToken = navigation ? await signSceneToken({
     releaseId: comparisonAssetTokenScope(
       access.project.id,
       version.id,
       navigation.collisionAsset.id,
     ),
     expiresAt: sessionExpiresAt,
-  }, context.env.SESSION_PEPPER);
+  }, context.env.SESSION_PEPPER) : null;
   const storedViewerValue = releaseConfig
     ? parseStoredObject(releaseConfig.viewer_config_json)
     : {};
@@ -5861,13 +5862,21 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
     ? storedViewerValue
     : {};
   const contentUrl = `/comparison-asset/${access.project.id}/${version.id}/${asset.id}/${encodeURIComponent(asset.file_name)}?token=${encodeURIComponent(token)}`;
-  const collisionUrl = `/comparison-asset/${access.project.id}/${version.id}/${navigation.collisionAsset.id}/${encodeURIComponent(navigation.collisionAsset.file_name)}?token=${encodeURIComponent(collisionToken)}`;
+  const collisionUrl = navigation
+    ? `/comparison-asset/${access.project.id}/${version.id}/${navigation.collisionAsset.id}/${encodeURIComponent(navigation.collisionAsset.file_name)}?token=${encodeURIComponent(collisionToken!)}`
+    : null;
   const viewer = {
     title: access.project.name,
-    measurementDisclaimer: PROVISIONAL_MEASUREMENT_DISCLAIMER,
     ...storedViewer,
-    sourceToWorld: navigation.registration.sourceToWorld,
-    captureRegistration: navigation.registration.receipt,
+    measurementDisclaimer: navigation
+      ? PROVISIONAL_MEASUREMENT_DISCLAIMER
+      : publicationMeasurementDisclaimer("visual-only"),
+    defaultMovementMode: navigation ? Reflect.get(storedViewer, "defaultMovementMode") ?? "walk" : "fly",
+    // Saved release cameras use the registered world frame. Without that
+    // transform, let the renderer frame the visual asset in its own coordinates.
+    initialCamera: navigation ? Reflect.get(storedViewer, "initialCamera") : undefined,
+    sourceToWorld: navigation?.registration.sourceToWorld,
+    captureRegistration: navigation?.registration.receipt,
   };
   return context.json({
     version: {
@@ -5887,7 +5896,7 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
       collisionUrl,
       sessionExpiresAt: new Date(sessionExpiresAt * 1000).toISOString(),
       viewer,
-      spatial: navigation.spatial,
+      spatial: navigation?.spatial,
     },
     manifest: {
       schemaVersion: "1.0.0",
@@ -5916,7 +5925,7 @@ app.get("/api/projects/:projectId/versions/:versionId/preview", async (context) 
         etag: null,
       },
       viewer,
-      spatial: navigation.spatial,
+      spatial: navigation?.spatial,
       integrity: {
         assetSha256: asset.sha256,
         sessionExpiresAt: new Date(sessionExpiresAt * 1000).toISOString(),

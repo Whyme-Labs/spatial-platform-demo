@@ -398,6 +398,7 @@ type ProjectDetail = {
   captureBundles: CaptureBundle[];
   comparisonReadiness: ComparisonReadiness;
   previewReadyVersionIds: string[];
+  navigationReadyVersionIds: string[];
 };
 const emptyComparisonReadiness: ComparisonReadiness = {
   available: false,
@@ -1271,6 +1272,7 @@ type ProjectJourneyState = {
   floorplanJob: Job | null;
   navigationJob: Job | null;
   navigationReady: boolean;
+  previewReady: boolean;
   structureReady: boolean;
   privacyVersion: Version | null;
   privacyApproved: boolean;
@@ -1280,7 +1282,7 @@ type ProjectJourneyState = {
 type ProjectWorkspaceModel = {
   journey: ProjectJourneyState;
   canonicalSection: JourneySection;
-  stageLabel: "Archived" | "Capture" | "Process" | "Structure" | "Publish" | "Complete";
+  stageLabel: "Archived" | "Capture" | "Process" | "Structure" | "Publish" | "Preview" | "Complete";
   blocker: ProjectBlocker;
   nextAction: ProjectNextAction;
   process: ProcessWorkspaceModel;
@@ -3902,8 +3904,9 @@ function renderNewCaptureReview(): void {
     ? capture.files?.[0]?.name ?? "Not selected"
     : "Not selected";
   const geometryName = geometry instanceof HTMLInputElement
-    ? geometry.files?.[0]?.name ?? "Not selected"
-    : "Not selected";
+    ? geometry.files?.[0]?.name ?? "Optional, add later for measurement and walking"
+    : "Optional";
+  const hasGeometry = geometry instanceof HTMLInputElement && Boolean(geometry.files?.length);
   review.replaceChildren(
     projectFact("Scene", String(new FormData(form).get("name") ?? "")),
     projectFact("Capture origin", originLabel),
@@ -3911,10 +3914,13 @@ function renderNewCaptureReview(): void {
     projectFact("3D appearance", captureName),
     projectFact("Measurement geometry", geometryName),
     element("h4", "", "The platform will"),
-    element("p", "capture-plan-item", "✓ Preserve both source files"),
+    element("p", "capture-plan-item", hasGeometry ? "✓ Preserve both source files" : "✓ Preserve the source file"),
     element("p", "capture-plan-item", "✓ Prepare the browser scene"),
-    element("p", "capture-plan-item", "✓ Detect rooms, walls, and openings"),
-    element("p", "capture-plan-item", "✓ Build the walkable area"),
+    element("p", "capture-plan-item", "✓ Open a private preview"),
+    ...(hasGeometry ? [
+      element("p", "capture-plan-item", "✓ Detect rooms, walls, and openings"),
+      element("p", "capture-plan-item", "✓ Build the walkable area"),
+    ] : []),
   );
 }
 
@@ -4000,13 +4006,13 @@ async function renderNewCaptureHelp(): Promise<void> {
   const frameConfirmation = byId<HTMLInputElement>("sameCaptureFrameConfirmed");
   const frameConfirmationRow = byId<HTMLElement>("newCaptureFrameConfirmation");
   const qualificationStatus = byId("newCaptureQualificationStatus");
-  geometryInput.required = true;
+  geometryInput.required = false;
   const source = producer === "xgrids-lcc"
     ? "XGRIDS"
     : producer === "fjd-trion"
       ? "FJD"
       : "This export";
-  let message = `${source} scenes need a browser visual (PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD) plus measurement geometry from the same scan. Native project files remain supporting evidence.`;
+  let message = `Upload one ${source === "This export" ? "Gaussian" : source} visual file (PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD) to preview the scene.`;
   if (file) {
     try {
       const plan = portableCapturePlan(file);
@@ -4020,12 +4026,15 @@ async function renderNewCaptureHelp(): Promise<void> {
   byId("newCaptureHelp").textContent = message;
   byId("newCaptureGeometryHelp").textContent = geometry
     ? `${geometry.name} will be verified, then used to generate the floor plan, structural collision draft, and navigation draft automatically.`
-    : "Required. Choose the registered PLY, E57, LAS, LAZ, or PTS point cloud exported from the same scan. It supplies the floor plan, collision shell, and walking map.";
+    : "Optional. Add the registered PLY, E57, LAS, LAZ, or PTS point cloud when you need floor plans, measurement, and walking.";
   if (!file || !geometry) {
     captureQualificationMode = ATTESTED_PAIRED_CAPTURE_METHOD;
     frameConfirmationRow.hidden = true;
     frameConfirmation.required = false;
-    qualificationStatus.textContent = "Add both files to check their coordinate compatibility.";
+    byId<HTMLButtonElement>("newCaptureNext").disabled = false;
+    qualificationStatus.textContent = file
+      ? "One visual file is enough for a private Fly preview. Geometry can be added later."
+      : "Choose a visual file to start.";
     return;
   }
   qualificationStatus.textContent = "Checking embedded frame, scale, and up-axis metadata…";
@@ -4080,10 +4089,9 @@ async function createCapture(form: FormData): Promise<void> {
   const template = state.projectTemplates.find((candidate) =>
     candidate.id === String(form.get("projectTemplate") ?? "")
   ) ?? null;
-  if (!geometry) {
-    throw new Error("Add the registered metric point cloud so the floor plan and navigation can be generated automatically.");
-  }
-  const qualificationPreflight = await pairedCaptureCanQualifyAutomatically(file, geometry);
+  const qualificationPreflight = geometry
+    ? await pairedCaptureCanQualifyAutomatically(file, geometry)
+    : { status: "unavailable" } as const;
   if (qualificationPreflight.status === "contradicted") {
     throw new Error(
       `${qualificationPreflight.reason} Export both files again from one unchanged Y-up metre frame.`,
@@ -4093,7 +4101,7 @@ async function createCapture(form: FormData): Promise<void> {
   captureQualificationMode = automaticQualification
     ? AUTOMATIC_PAIRED_CAPTURE_METHOD
     : ATTESTED_PAIRED_CAPTURE_METHOD;
-  if (!automaticQualification && form.get("sameCaptureFrameConfirmed") !== "on") {
+  if (geometry && !automaticQualification && form.get("sameCaptureFrameConfirmed") !== "on") {
     throw new Error(
       "Confirm that both exports come directly from the same capture and still share one registered Y-up metre frame.",
     );
@@ -4146,38 +4154,41 @@ async function createCapture(form: FormData): Promise<void> {
       status: byId("newProjectStatus"),
       progress: byId<HTMLElement>("newProjectUploadProgress"),
       error: byId("projectError"),
-      successToast: "Visual capture uploaded; adding spatial geometry",
+      closeDialog: geometry ? undefined : newProjectDialog,
+      successToast: geometry ? "Visual capture uploaded; adding spatial geometry" : "Capture uploaded; preparing your private preview",
     }, {
       clientOperationId: captureJourneyOperation.primaryUploadOperationId,
-      captureJourney: {
+      ...(geometry ? { captureJourney: {
         id: captureJourneyOperation.id,
         qualification: captureQualificationMode,
         ...(automaticQualification ? {} : { sameFrameConfirmed: true }),
-      },
+      } } : {}),
     });
-    byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
-    byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
-    const spatialUpload = new FormData();
-    spatialUpload.set("asset", geometry);
-    spatialUpload.set("format", geometryPlan!.format);
-    spatialUpload.set("purpose", geometryPlan!.purpose);
-    await uploadAsset(spatialUpload, {
-      status: byId("newProjectStatus"),
-      progress: byId<HTMLElement>("newProjectUploadProgress"),
-      error: byId("projectError"),
-      closeDialog: newProjectDialog,
-      successToast: automaticQualification
-        ? "Capture uploaded; splat, floor plan, and navigation processing started"
-        : "Capture uploaded; provenance preserved. Register measured alignment before building walking geometry",
-    }, {
-      targetVersionId: primary.asset.versionId,
-      clientOperationId: captureJourneyOperation.geometryUploadOperationId,
-      captureJourney: {
-        id: captureJourneyOperation.id,
-        qualification: captureQualificationMode,
-        ...(automaticQualification ? {} : { sameFrameConfirmed: true }),
-      },
-    });
+    if (geometry && geometryPlan) {
+      byId("newProjectStatus").textContent = "Visual capture preserved. Uploading registered geometry…";
+      byId<HTMLElement>("newProjectUploadProgress").style.width = "0%";
+      const spatialUpload = new FormData();
+      spatialUpload.set("asset", geometry);
+      spatialUpload.set("format", geometryPlan.format);
+      spatialUpload.set("purpose", geometryPlan.purpose);
+      await uploadAsset(spatialUpload, {
+        status: byId("newProjectStatus"),
+        progress: byId<HTMLElement>("newProjectUploadProgress"),
+        error: byId("projectError"),
+        closeDialog: newProjectDialog,
+        successToast: automaticQualification
+          ? "Capture uploaded; splat, floor plan, and navigation processing started"
+          : "Capture uploaded; provenance preserved. Register measured alignment before building walking geometry",
+      }, {
+        targetVersionId: primary.asset.versionId,
+        clientOperationId: captureJourneyOperation.geometryUploadOperationId,
+        captureJourney: {
+          id: captureJourneyOperation.id,
+          qualification: captureQualificationMode,
+          ...(automaticQualification ? {} : { sameFrameConfirmed: true }),
+        },
+      });
+    }
     projectOperationId = null;
     captureJourneyOperation = null;
     window.setTimeout(() => {
@@ -7890,7 +7901,7 @@ function renderPublish(): void {
   const latestVersion = detail.versions[0] ?? null;
   const releasableVersion = auxiliaryCollisionTargetVersion();
   const navigationReady = Boolean(
-    releasableVersion && detail.previewReadyVersionIds.includes(releasableVersion.id),
+    releasableVersion && detail.navigationReadyVersionIds.includes(releasableVersion.id),
   );
   const workflowPolicy = effectiveVersionWorkflowPolicy(detail.project, releasableVersion);
   const hostingSubscription = state.hosting?.subscriptions.find((subscription) =>
@@ -11174,6 +11185,9 @@ function projectJourneyState(detail: ProjectDetail): ProjectJourneyState {
   const floorplanJob = journeyJobs.find((job) => job.job_type === "floorplan.extract-v1") ?? null;
   const navigationJob = journeyJobs.find((job) => job.job_type === "navigation.build-v1") ?? null;
   const navigationReady = Boolean(
+    renderableVersion && detail.navigationReadyVersionIds.includes(renderableVersion.id),
+  );
+  const previewReady = Boolean(
     renderableVersion && detail.previewReadyVersionIds.includes(renderableVersion.id),
   );
   const structureReady = navigationReady || Boolean(navigationJob);
@@ -11203,6 +11217,7 @@ function projectJourneyState(detail: ProjectDetail): ProjectJourneyState {
     floorplanJob,
     navigationJob,
     navigationReady,
+    previewReady,
     structureReady,
     privacyVersion,
     privacyApproved,
@@ -11217,6 +11232,8 @@ function projectWorkspaceModel(detail: ProjectDetail): ProjectWorkspaceModel {
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
   const canonicalSection: JourneySection = archived || !journey.hasCapture
     ? "overview"
+    : journey.previewReady && !journey.hasMetricGeometry && !journey.navigationReady
+      ? "overview"
     : journey.captureQualification?.status === "blocked" ||
         !journey.renderableVersion ||
         !journey.navigationReady && journey.automaticWalkingWorkActive
@@ -11277,7 +11294,7 @@ function projectWorkspaceModel(detail: ProjectDetail): ProjectWorkspaceModel {
   const stageLabel = archived
     ? "Archived"
     : canonicalSection === "overview"
-      ? journey.hasCapture ? "Complete" : "Capture"
+      ? journey.hasCapture ? journey.navigationReady ? "Complete" : "Preview" : "Capture"
       : canonicalSection === "process"
         ? "Process"
         : canonicalSection === "structure"
@@ -11691,6 +11708,7 @@ function renderProjectDetail(): void {
   const {
     renderableVersion,
     navigationReady,
+    previewReady,
     privacyVersion: latestVersion,
   } = model.journey;
   const activeRelease = detail.releases.find((release) => release.is_active && !release.revoked_at) ?? null;
@@ -11704,7 +11722,7 @@ function renderProjectDetail(): void {
 
   const sharing = detailCard("Preview and sharing");
   sharing.classList.add("project-sharing-card");
-  if (renderableVersion && navigationReady) {
+  if (renderableVersion && previewReady) {
     sharing.append(element(
       "p",
       "muted-copy",
@@ -11719,11 +11737,33 @@ function renderProjectDetail(): void {
       }, () => copyVersionPreviewUrl(renderableVersion.id));
     });
     sharing.append(copyPreview);
+    if (model.nextAction.command.kind !== "open-preview") {
+      const openPreview = element("button", "quiet-button wide", "Open private preview");
+      openPreview.addEventListener("click", () => {
+        void runAction({
+          key: `open-preview:${renderableVersion.id}`,
+          trigger: openPreview,
+          pendingLabel: "Opening preview…",
+        }, () => openVersionPreview(renderableVersion.id));
+      });
+      sharing.append(openPreview);
+    }
+    if (!navigationReady) {
+      sharing.append(element(
+        "p", "muted-copy", "Fly preview ready. Add registered geometry for measurement and walking.",
+      ));
+      if (!model.journey.hasMetricGeometry) {
+        const addGeometry = element("button", "quiet-button wide", "Add measurement geometry");
+        addGeometry.addEventListener("click", () => openUploadDialog("metric_point_cloud"));
+        addGeometry.disabled = detail.project.status === "ARCHIVED";
+        sharing.append(addGeometry);
+      }
+    }
   } else if (renderableVersion) {
     sharing.append(element(
       "p",
       "muted-copy",
-      "Preview and publication remain blocked until this exact version has a verified visual-to-structure registration plus approved collision, Recast/Detour navigation, and Rapier movement proof.",
+      "The private preview will be available when the browser scene finishes processing.",
     ));
   }
   if (activeRelease) {
@@ -11849,7 +11889,7 @@ function renderProjectDetail(): void {
     versions.append(compareButton);
   }
   const uploadButton = element("button", "primary-button", "Upload source asset");
-  uploadButton.addEventListener("click", openUploadDialog);
+  uploadButton.addEventListener("click", () => openUploadDialog());
   uploadButton.disabled = detail.project.status === "ARCHIVED";
   versions.append(uploadButton);
 
@@ -12864,7 +12904,7 @@ async function changeProjectLifecycle(action: "archive" | "restore"): Promise<vo
   }
 }
 
-function openUploadDialog(): void {
+function openUploadDialog(purpose?: CaptureAssetPurpose): void {
   if (!state.selected) return;
   const projectId = state.selected.project.id;
   const captureProducer = state.selected.project.assetProducer ?? state.selected.project.captureAdapter;
@@ -12883,12 +12923,12 @@ function openUploadDialog(): void {
         : "No adapter-specific evidence profile is available.",
     ),
   );
-  const defaultPurpose: CaptureAssetPurpose =
+  const defaultPurpose: CaptureAssetPurpose = purpose ?? (
     captureProducer === "phone-video"
       ? "source_video"
       : captureProducer === "drone-imagery"
         ? "source_images"
-        : "gaussian_splat";
+        : "gaussian_splat");
   byId<HTMLSelectElement>("uploadPurpose").value = defaultPurpose;
   syncUploadPurpose(defaultPurpose);
   byId<HTMLTextAreaElement>("uploadPosterCamera").value = "";
@@ -12968,20 +13008,23 @@ function syncUploadPurpose(purpose: CaptureAssetPurpose): void {
   // that would correct it. The format select below still narrows, and the
   // server still validates purpose against format and adapter.
   const attachmentTarget = captureAssetPurposeCanAttachToExistingVersion(purpose)
-    ? auxiliaryAssetTargetVersion()
+    ? auxiliaryAssetTargetVersion(purpose)
     : null;
   byId("uploadPurposeHelp").textContent = attachmentTarget
-    ? `${capturePurposeHelp[purpose]} It will attach to v${attachmentTarget.version_number}, the latest approved visual version, without replacing its immutable scene bytes.`
+    ? `${capturePurposeHelp[purpose]} It will attach to visual version ${attachmentTarget.version_number} without replacing its immutable scene bytes.`
     : capturePurposeHelp[purpose];
   syncUploadPosterCameraRequirement();
 }
 
-function auxiliaryAssetTargetVersion(): Version | null {
+function auxiliaryAssetTargetVersion(purpose?: CaptureAssetPurpose): Version | null {
   if (!state.selected) return null;
+  const attachableStatuses = purpose === "metric_point_cloud"
+    ? ["INGESTED", "QA_REQUIRED", "APPROVED", "PUBLISHED", "PROCESSING_FAILED"]
+    : ["APPROVED", "PUBLISHED"];
   return [...state.selected.versions]
     .sort((left, right) => right.version_number - left.version_number)
     .find((version) =>
-      ["APPROVED", "PUBLISHED"].includes(version.status) &&
+      attachableStatuses.includes(version.status) &&
       state.selected!.assets.some((asset) =>
         asset.version_id === version.id &&
         asset.kind === "web" &&
@@ -13184,11 +13227,13 @@ async function uploadAsset(
   const purpose = String(form.get("purpose") ?? "") as CaptureAssetPurpose;
   const targetVersionId = options.targetVersionId ?? (
     captureAssetPurposeCanAttachToExistingVersion(purpose)
-      ? auxiliaryAssetTargetVersion()?.id ?? null
+      ? auxiliaryAssetTargetVersion(purpose)?.id ?? null
       : null
   );
   if (captureAssetPurposeCanAttachToExistingVersion(purpose) && !targetVersionId) {
-    throw new Error("Approve a visual scene version before attaching capture evidence or geometry.");
+    throw new Error(purpose === "metric_point_cloud"
+      ? "Wait for a processed visual scene before attaching measurement geometry."
+      : "Approve a visual scene version before attaching capture evidence.");
   }
   const posterCameraText = String(form.get("posterCamera") ?? "").trim();
   let posterCamera: unknown;
@@ -14082,6 +14127,7 @@ function openReviewerDialog(projectId?: string): void {
       captureBundles: [],
       comparisonReadiness: emptyComparisonReadiness,
       previewReadyVersionIds: [],
+      navigationReadyVersionIds: [],
     };
   }
   reviewerOperationId = crypto.randomUUID();

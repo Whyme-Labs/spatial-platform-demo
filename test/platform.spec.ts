@@ -255,7 +255,7 @@ describe("Spatial Studio Worker", () => {
     expect(response.status).toBe(404);
   });
 
-  it("gives operators a signed render-native authoring scene without weakening preview walking gates", async () => {
+  it("previews a verified visual scene without geometry while preserving spatial authoring gates", async () => {
     const cookie = await login();
     const membership = await env.DB.prepare(`
       SELECT organisation_id AS organisationId, user_id AS userId
@@ -412,14 +412,53 @@ describe("Spatial Studio Worker", () => {
     expect(assetResponse.status).toBe(200);
     expect(new Uint8Array(await assetResponse.arrayBuffer())).toEqual(bytes);
 
+    const priorReleaseId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO releases
+        (id, organisation_id, project_id, version_id, web_asset_id, access_policy,
+          viewer_config_json, published_at, created_by)
+      VALUES (?, ?, ?, ?, ?, 'customer-authenticated', ?, datetime('now'), ?)
+    `).bind(
+      priorReleaseId, membership!.organisationId, projectId, versionId, assetId,
+      JSON.stringify({
+        sourceToWorld: { ...registrationPayload.sourceToWorld, translationMetres: [100, 0, 0] },
+        initialCamera: { position: [101, 1, 1], target: [100, 1, 0], fovDegrees: 58 },
+        defaultMovementMode: "walk",
+      }), membership!.userId,
+    ).run();
     const previewResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/versions/${versionId}/preview`,
       { headers: { cookie } },
     );
-    expect(previewResponse.status).toBe(409);
-    await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("approved structural collision"),
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json<{
+      manifest: {
+        scene: { contentUrl: string; collisionUrl: null };
+        viewer: { defaultMovementMode: string; sourceToWorld?: unknown; captureRegistration?: unknown; initialCamera?: unknown };
+        spatial?: unknown;
+      };
+    }>();
+    expect(preview.manifest.scene.collisionUrl).toBeNull();
+    expect(preview.manifest.spatial).toBeUndefined();
+    expect(preview.manifest.viewer.defaultMovementMode).toBe("fly");
+    expect(preview.manifest.viewer.sourceToWorld).toBeUndefined();
+    expect(preview.manifest.viewer.captureRegistration).toBeUndefined();
+    expect(preview.manifest.viewer.initialCamera).toBeUndefined();
+    const previewAssetResponse = await exports.default.fetch(new URL(preview.manifest.scene.contentUrl, origin));
+    expect(previewAssetResponse.status).toBe(200);
+    expect(new Uint8Array(await previewAssetResponse.arrayBuffer())).toEqual(bytes);
+    const anonymousPreviewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/versions/${versionId}/preview`,
+    );
+    expect(anonymousPreviewResponse.status).toBe(401);
+    const readinessResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}`, {
+      headers: { cookie },
     });
+    await expect(readinessResponse.json()).resolves.toMatchObject({
+      previewReadyVersionIds: [versionId],
+      navigationReadyVersionIds: [],
+    });
+    await env.DB.prepare("DELETE FROM releases WHERE id = ?").bind(priorReleaseId).run();
 
     const sourceJobId = crypto.randomUUID();
     const sourceExtractionId = crypto.randomUUID();
@@ -2698,10 +2737,13 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/projects/${project.id}/versions/${secondVersionId}/preview`,
       { headers: { cookie: reviewerCookie } },
     );
-    expect(previewResponse.status).toBe(409);
+    expect(previewResponse.status).toBe(200);
     expect(previewResponse.headers.get("cache-control")).toBe("private, no-store");
     await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("no verified capture-to-scene registration"),
+      manifest: {
+        scene: { collisionUrl: null },
+        viewer: { defaultMovementMode: "fly" },
+      },
     });
 
     const comparisonResponse = await exports.default.fetch(

@@ -13,13 +13,14 @@ access-controlled browser release without exposing raw capture files.
 
 ```text
 Portable FJD / XGRIDS / open Gaussian export
-  + registered metric point cloud for device captures
   -> automatic project creation
   -> purpose/format-aware resumable multipart R2 upload
   -> hash-bound same-capture/same-frame registration receipt
   -> bounded capture-evidence validation or Gaussian processing
   -> immutable scene version
   -> leased/idempotent processing job
+  -> authenticated private Fly preview
+  + optional registered metric point cloud for measurement and walking
   -> automatic metric floor-plan proposal
   -> automatic structural collision + Recast/Rapier walking-map proof
   -> registered-render inspection: approve as-is or mark structural corrections
@@ -38,10 +39,11 @@ Portable FJD / XGRIDS / open Gaussian export
   -> telemetry / revoke / rollback
 ```
 
-The primary Studio journey is deliberately narrower than the full operations
-surface: **Upload visual + registered geometry -> Process splat + floor plan +
-navigation -> Correct ambiguous structure on the render when needed -> Preview ->
-Publish**. A final navigation build bound to an approved floor-plan revision is
+The primary Studio journey is **Upload one Gaussian file -> Process -> Private
+Fly preview**. Registered geometry is optional at intake and can be attached
+when measurement, floor plans, or walking are needed. With registered geometry,
+Studio also prepares floor-plan, collision, and navigation work. A final navigation
+build bound to an approved floor-plan revision is
 accepted automatically only after its Recast, Rapier, topology, collision, and
 source-hash contracts pass; proposal-only builds remain non-publishable.
 The Projects view is a portfolio only: clicking anywhere on a project row opens
@@ -52,21 +54,25 @@ to the portfolio without leaving selected-project state hidden below the list.
 Creating a project, selecting a delivery template, declaring a low-level asset
 purpose, registering a capture contract, or manually starting floor-plan and
 navigation jobs are not separate prerequisites. Studio creates the project with
-safe defaults and automatically queues visual, floor-plan, collision, and
-navigation work from the two required registered inputs. It does not expose a
-visual-only preview: correction, QA, measurement, review, hosting, and
-custom-domain modules remain downstream of the exact-version walking-map gate.
+safe defaults and automatically queues visual processing from a single file.
+A verified browser asset is sufficient for private preview; preview readiness
+does not establish metric scale, collision safety, or publication readiness.
+Registered geometry adds the automatic floor-plan, collision, and navigation
+pipeline. Existing geometry, privacy, QA, and publication gates still apply to
+their respective capabilities.
 
-Every primary intake, including open imports, requires both a portable Gaussian result (`PLY`, `SPZ`,
-`SOG`, `SPLAT`, `KSPLAT`) or browser-ready Spark `RAD`, and a registered metric
-point cloud (`PLY`, `E57`, `LAS`, `LAZ`, or `PTS`) for automatic floor-plan and
-navigation generation. Native `XBIN`, `LCC`, and `FJDSLAM` projects can still be
+Every primary intake, including open imports, accepts one portable Gaussian result (`PLY`, `SPZ`,
+`SOG`, `SPLAT`, `KSPLAT`) or browser-ready Spark `RAD`. A registered metric
+point cloud (`PLY`, `E57`, `LAS`, `LAZ`, or `PTS`) is required for automatic
+floor-plan and navigation generation. Native `XBIN`, `LCC`, and `FJDSLAM` projects can still be
 preserved as private supporting evidence, but they cannot truthfully enter the
-automatic preview lane without portable exports. A processed version can be opened before publication only
-after its immutable visual-to-structure registration receipt, v7+ collision,
-JSON report, Detour binary, and navigation artifact pass exact-version
-verification. The authenticated preview carries the same complete runtime
-contract as a published release; public or customer URLs still require the
+automatic preview lane without portable exports. A processed version can be
+opened privately as soon as its verified browser asset exists. Without qualified
+walking evidence, it opens in Fly mode with no collision, walking controls, or
+metric scale claims. When its immutable visual-to-structure registration receipt,
+v7+ collision, JSON report, Detour binary, and navigation artifact pass exact-version
+verification, the preview also carries the full walking runtime.
+Public or customer URLs still require the
 operator's recorded privacy review and an explicit release. QA, comparison, and publication repeat the
 registration check, and publication freezes the verified transform and receipt
 with the walking artifacts rather than trusting a separately entered visual
@@ -91,7 +97,8 @@ sample identities and provides an on-demand private qualification lane; XGRIDS
 sample integration is deliberately deferred until the FJD lane is complete.
 The local FJD E2E never publishes or copies bytes to cloud storage: it deletes
 its isolated Worker state after proving adapter and processor compatibility and
-then proving the visual-only result is blocked at the private-preview gate. A separate operator-authorized
+then proving the visual-only result opens as a private Fly preview without
+measurement or walking claims. A separate operator-authorized
 production qualification stores the P2 sample privately with zero releases;
 it is not a public demo and does not change the vendor-neutral production asset
 contract.
@@ -613,7 +620,7 @@ and
 The FJD commands range-inspect the official P2 archive, selectively extract its
 Gaussian PLY and companion `.fjdata` without downloading the whole archive,
 verify a separate official V4e interior LAS, build a Spark RAD compatibility
-artifact, and run a disposable local FJD-adapter/strict-preview-gate E2E.
+artifact, and run a disposable local FJD-adapter/private-Fly-preview E2E.
 `corpus:fjd:e57:inspect` reads any locally cached `.e57` through the public ASTM
 container reader; no vendor E57 is present, so it currently writes an explicit
 `blocked_missing_registered_indoor_corpus` receipt rather than implying a

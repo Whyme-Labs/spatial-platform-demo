@@ -361,7 +361,7 @@ test.describe("authenticated studio UI", () => {
     const dialog = page.locator("#newProjectDialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("heading", {
-      name: "Create a walkable scene.",
+      name: "Upload a scene to preview.",
       exact: true,
     })).toBeVisible();
     await expect(dialog.getByLabel("Scene name", { exact: true })).toBeVisible();
@@ -392,12 +392,9 @@ test.describe("authenticated studio UI", () => {
       "accept",
       ".ply,.e57,.las,.laz,.pts",
     );
-    await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute(
-      "required",
-      "",
-    );
+    await expect(dialog.locator("#newCaptureGeometry")).not.toHaveAttribute("required");
     await expect(dialog.getByText(
-      "Required. Choose the registered PLY, E57, LAS, LAZ, or PTS point cloud exported from the same scan. It supplies the floor plan, collision shell, and walking map.",
+      "Optional. Add the registered PLY, E57, LAS, LAZ, or PTS point cloud when you need floor plans, measurement, and walking.",
       { exact: true },
     )).toBeVisible();
     const frameConfirmation = dialog.getByLabel(
@@ -409,7 +406,7 @@ test.describe("authenticated studio UI", () => {
       name: "Which pipeline produced these files?",
       exact: true,
     }).selectOption("open-import");
-    await expect(dialog.locator("#newCaptureGeometry")).toHaveAttribute("required", "");
+    await expect(dialog.locator("#newCaptureGeometry")).not.toHaveAttribute("required");
     await expect(dialog.getByLabel("Delivery template", { exact: true })).toHaveCount(0);
     const maximumAssetFileName =
       `${"registered-capture-visual-evidence-".repeat(10).slice(0, 251)}.spz`;
@@ -579,6 +576,7 @@ test.describe("authenticated studio UI", () => {
           captureBundles: [],
           comparisonReadiness: { available: false, eligiblePairs: [], versions: [] },
           previewReadyVersionIds: [],
+          navigationReadyVersionIds: [],
         });
       }
       if (route.request().method() !== "PATCH") return route.fallback();

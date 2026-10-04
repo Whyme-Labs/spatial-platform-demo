@@ -367,8 +367,8 @@
     <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="newProjectForm">
       <span class="eyebrow">NEW CAPTURE</span>
-      <h2>Create a walkable scene.</h2>
-      <p>Name the scene, add the two exports from one scan, then review what the platform will prepare.</p>
+      <h2>Upload a scene to preview.</h2>
+      <p>Name the scene and upload one Gaussian file. Add matching geometry when you need measurement or walking.</p>
       <ol class="capture-intake-progress" aria-label="Scene creation progress">
         <li data-capture-intake-indicator="1" aria-current="step"><span>1</span> Scene details</li>
         <li data-capture-intake-indicator="2"><span>2</span> Capture files</li>
@@ -401,8 +401,8 @@
           <label for="newCaptureOrigin"><span>Where did the observations come from?</span><select id="newCaptureOrigin" name="captureOrigin" required><option value="" selected>Choose the capture origin</option><option value="xgrids">XGRIDS scanner</option><option value="fjd">FJD scanner</option><option value="phone">Phone or video</option><option value="drone">Drone imagery</option><option value="third-party">Other or existing data</option></select></label>
           <label for="newCaptureAdapter"><span>Which pipeline produced these files?</span><select id="newCaptureAdapter" name="assetProducer" required><option value="" selected>Choose the asset producer</option><option value="xgrids-lcc">XGRIDS export</option><option value="fjd-trion">FJD Trion export</option><option value="open-import">Other compatible reconstruction or export</option></select></label>
           <label class="full capture-file-field" for="newCaptureAsset"><span>3D appearance file</span><input id="newCaptureAsset" name="capture" type="file" aria-label="3D appearance file" accept=".ply,.spz,.sog,.splat,.ksplat,.rad" required /><small id="newCaptureHelp">Choose the browser visual: PLY, SPZ, SOG, SPLAT, KSPLAT, or Spark RAD.</small></label>
-          <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Measurement geometry file</span><input id="newCaptureGeometry" name="geometry" type="file" aria-label="Measurement geometry file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Choose the registered point cloud exported from the same scan.</small></label>
-          <p id="newCaptureQualificationStatus" class="full field-note" role="status" aria-live="polite">Add both files to check their coordinate compatibility.</p>
+          <label class="full capture-file-field capture-geometry-field" for="newCaptureGeometry"><span>Measurement geometry file (optional)</span><input id="newCaptureGeometry" name="geometry" type="file" aria-label="Measurement geometry file" accept=".ply,.e57,.las,.laz,.pts" /><small id="newCaptureGeometryHelp">Add a registered point cloud for floor plans, measurement, and walking.</small></label>
+          <p id="newCaptureQualificationStatus" class="full field-note" role="status" aria-live="polite">Choose a visual file to start.</p>
           <label id="newCaptureFrameConfirmation" class="full checkbox-row capture-frame-confirmation" hidden><input id="sameCaptureFrameConfirmed" name="sameCaptureFrameConfirmed" type="checkbox" /><span>I confirm both files came from the same unchanged capture coordinate system.</span></label>
         </div>
       </section>
@@ -627,13 +627,13 @@
   <dialog id="uploadDialog" class="dialog-card wide-dialog">
     <button class="dialog-close" value="cancel" type="button" data-close-dialog>×</button>
     <form id="uploadForm">
-      <span class="eyebrow">NEW REVISION</span>
-      <h2>Upload another capture result.</h2>
-      <p>Compatible Gaussian exports are preserved as immutable source, processed automatically, and added as a new project revision.</p>
+      <span class="eyebrow">CAPTURE UPLOAD</span>
+      <h2>Upload a capture file.</h2>
+      <p>Add a new visual revision or attach measurement geometry to the processed scene.</p>
       <section id="uploadAdapterGuidance" class="notice-card"></section>
       <section id="uploadRecovery" class="notice-card" aria-live="polite" hidden></section>
       <div class="mock-form-grid">
-        <label class="full"><span>Portable splat export</span><input id="uploadAssetInput" name="asset" type="file" required /><small id="uploadPurposeHelp">Spark will validate this portable Gaussian export and prepare a browser-ready scene.</small><small id="uploadDetectionNote" class="field-note" role="status"></small></label>
+        <label class="full"><span>Capture file</span><input id="uploadAssetInput" name="asset" type="file" required /><small id="uploadPurposeHelp">Spark will validate this portable Gaussian export and prepare a browser-ready scene.</small><small id="uploadDetectionNote" class="field-note" role="status"></small></label>
         <label id="uploadPosterCameraField" class="full" hidden><span>Authored opening camera (JSON)</span><textarea id="uploadPosterCamera" name="posterCamera" rows="5" spellcheck="false" placeholder='{"position":[0,1,0],"target":[0,1,-1],"up":[0,1,0],"fovDegrees":65}'></textarea><small>SOG web scenes require an authored source camera so the processor poster and published opening agree.</small></label>
         <label><span>Target project</span><input id="uploadProjectName" disabled /></label>
       </div>

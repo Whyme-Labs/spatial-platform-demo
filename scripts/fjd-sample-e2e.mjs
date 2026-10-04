@@ -290,21 +290,17 @@ try {
     headers: { accept: "application/json", cookie: cookieHeader(session) },
   }, "fjd_local_api_ms", localApiTripwireMilliseconds);
   recordApiTiming("GET", previewPath, previewStartedAt);
-  const previewError = await previewResponse.json();
+  const preview = await previewResponse.json();
   report.privatePreview = {
-    blocked: true,
+    blocked: previewResponse.status !== 200,
     status: previewResponse.status,
-    error: previewError.error ?? null,
+    flyOnly: preview.manifest?.viewer?.defaultMovementMode === "fly" && !preview.manifest?.spatial,
+    error: preview.error ?? null,
   };
   recordAssertion(
-    "the product refuses a visual-only FJD preview without registered geometry",
-    // The registration gate fires before the collision/navigation gate: a
-    // visual-only import is refused because it has no verified
-    // capture-to-scene registration, the prerequisite for walking evidence.
-    previewResponse.status === 409 &&
-      String(previewError.error ?? "").includes(
-        "no verified capture-to-scene registration",
-      ),
+    "the product opens a private Fly preview without geometry or metric claims",
+    previewResponse.status === 200 && report.privatePreview.flyOnly &&
+      !preview.manifest.viewer.sourceToWorld && !preview.manifest.scene.collisionUrl,
   );
   report.executionBoundary.observedHttpOrigins = [
     ...new Set(observedFetchOrigins),
