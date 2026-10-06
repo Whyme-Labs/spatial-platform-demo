@@ -544,90 +544,88 @@ button {
   }
 }
 
-@media (any-pointer: coarse) {
-  .spark-mobile-only:not([hidden]) {
-    display: flex !important;
-  }
-
-  .spark-movement-pad.spark-mobile-only:not([hidden]) {
-    display: grid !important;
-  }
-
-  .spark-flight-altitude.spark-mobile-only:not([hidden]) {
-    display: flex !important;
-  }
-
-  .spark-help .spark-mobile-only {
-    display: block !important;
-  }
-
-  .spark-desktop-only {
-    display: none !important;
-  }
-
-  .spark-controls {
-    top: max(10px, env(safe-area-inset-top));
-    right: max(10px, env(safe-area-inset-right));
-    bottom: auto;
-    gap: 4px;
-    max-width: calc(100% - 20px);
-    padding: 4px;
-  }
-
-  .spark-controls button {
-    min-width: max-content;
-    min-height: 44px;
-    padding: 0 11px;
-    font-size: 0.75rem;
-  }
-
-  .spark-controls #enterFullscreen {
-    display: none;
-  }
-
-  .spark-runtime {
-    display: none;
-  }
-
-  .spark-runtime #sparkQuality {
-    display: none;
-  }
-
-  .spark-help {
-    top: calc(max(10px, env(safe-area-inset-top)) + 100px);
-    right: 10px;
-    bottom: auto;
-    left: 10px;
-    max-width: none;
-  }
-
-  .spark-control-status {
-    top: calc(max(10px, env(safe-area-inset-top)) + 60px);
-    right: max(12px, env(safe-area-inset-right));
-    bottom: auto;
-  }
+.spark-viewport[data-input-mode="touch"] .spark-mobile-only:not([hidden]) {
+  display: flex !important;
 }
 
-@media (any-pointer: coarse) and (max-width: 360px) {
-  .spark-controls button {
+.spark-viewport[data-input-mode="touch"] .spark-movement-pad.spark-mobile-only:not([hidden]) {
+  display: grid !important;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-flight-altitude.spark-mobile-only:not([hidden]) {
+  display: flex !important;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-help .spark-mobile-only {
+  display: block !important;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-desktop-only {
+  display: none !important;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-controls {
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  bottom: auto;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  padding: 4px;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-controls button {
+  min-width: max-content;
+  min-height: 44px;
+  padding: 0 11px;
+  font-size: 0.75rem;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-controls #enterFullscreen {
+  display: none;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-runtime {
+  display: none;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-runtime #sparkQuality {
+  display: none;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-help {
+  top: calc(max(10px, env(safe-area-inset-top)) + 100px);
+  right: 10px;
+  bottom: auto;
+  left: 10px;
+  max-width: none;
+}
+
+.spark-viewport[data-input-mode="touch"] .spark-control-status {
+  top: calc(max(10px, env(safe-area-inset-top)) + 60px);
+  right: max(12px, env(safe-area-inset-right));
+  bottom: auto;
+}
+
+@media (max-width: 360px) {
+  .spark-viewport[data-input-mode="touch"] .spark-controls button {
     padding: 0 9px;
     font-size: 0.75rem;
   }
 
-  .spark-runtime {
+  .spark-viewport[data-input-mode="touch"] .spark-runtime {
     padding: 0 9px;
     font-size: 0.75rem;
   }
 
 }
 
-@media (any-pointer: coarse) and (max-height: 480px) and (orientation: landscape) {
-  .spark-flight-altitude {
+@media (max-height: 480px) and (orientation: landscape) {
+  .spark-viewport[data-input-mode="touch"] .spark-flight-altitude {
     bottom: max(18px, env(safe-area-inset-bottom));
     left: calc(max(18px, env(safe-area-inset-left)) + 144px);
   }
 
-  .spark-help {
+  .spark-viewport[data-input-mode="touch"] .spark-help {
     right: max(10px, env(safe-area-inset-right));
     left: auto;
     width: min(320px, calc(100% - 320px));

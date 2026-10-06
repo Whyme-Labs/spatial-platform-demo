@@ -249,7 +249,7 @@ const flightAltitudeControls = byId<HTMLElement>("flightAltitudeControls");
 const flyAscend = byId<HTMLButtonElement>("flyAscend");
 const flyDescend = byId<HTMLButtonElement>("flyDescend");
 const mobileControls = new MobileControlSurface({
-  coarsePointer: matchMedia("(any-pointer: coarse)"),
+  coarsePointer: matchMedia("(pointer: coarse)"),
   elements: {
     viewport: sparkViewport,
     pad: movementPad,
@@ -258,6 +258,7 @@ const mobileControls = new MobileControlSurface({
     lookHint: byId("mobileLookHint"),
   },
   onModeChange: (active) => {
+    if (!active) stopMobileVerticalMovement();
     post({
       source: "spatial-spark",
       type: "control-mode",
@@ -324,7 +325,7 @@ let webglRenderer: THREE.WebGLRenderer | null = null;
 let rendererCamera: THREE.PerspectiveCamera | null = null;
 let rendererControls: ReturnType<typeof createSpatialLookControls> | null = null;
 let resizeObserver: ResizeObserver | null = null;
-let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
+let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion; up: THREE.Vector3 } | null = null;
 let readySent = false;
 let visualReadyHandled = false;
 let heartbeatHandle: number | null = null;
@@ -717,6 +718,7 @@ async function start(): Promise<void> {
             initialView = {
               position: camera.position.clone(),
               quaternion: camera.quaternion.clone(),
+              up: camera.up.clone(),
             };
             movementRuntimeReady = true;
             setMovementAvailability(controls, true);
@@ -801,6 +803,7 @@ async function start(): Promise<void> {
       return;
     }
     if (Reflect.get(event.data, "type") === "movement-key") {
+      if (Reflect.get(event.data, "pressed") === true) mobileControls.setInputMode("pc");
       controls.setKeyboardKeyState(
         String(Reflect.get(event.data, "code") ?? ""),
         Reflect.get(event.data, "pressed") === true,
@@ -1089,6 +1092,7 @@ async function start(): Promise<void> {
   initialView = {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
+    up: camera.up.clone(),
   };
   visualSceneReady = true;
   if (pendingSpatialRuntimeMessage) {
@@ -1498,7 +1502,9 @@ function cameraPose(camera: THREE.PerspectiveCamera): {
   return {
     position: camera.position.toArray() as Vector3Tuple,
     target: target.toArray() as Vector3Tuple,
-    up: camera.up.toArray() as Vector3Tuple,
+    up: (visualPreviewActive
+      ? new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
+      : camera.up).toArray() as Vector3Tuple,
     fovDegrees: camera.fov,
   };
 }
@@ -2081,7 +2087,7 @@ function toggleMovementMode(): void {
 
 function updateMovementModeChrome(): void {
   movementModeToggle.hidden = !collisionDrivenMovement;
-  const compact = matchMedia("(any-pointer: coarse)").matches;
+  const compact = mobileControls.inputMode === "touch";
   movementModeToggle.textContent = movementMode === "walk"
     ? (compact ? "Fly" : "Fly mode")
     : (compact ? "Walk" : "Walk mode");
@@ -2255,6 +2261,7 @@ function resetView(): void {
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
+  if (visualPreviewActive) camera.up.copy(initialView.up);
   if (physicalNavigationRuntime) {
     const restored = physicalNavigationRuntime.placeCamera(
       camera.position.toArray() as Vector3Tuple,

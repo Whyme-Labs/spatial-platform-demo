@@ -265,7 +265,7 @@ test.describe("v7 touch flight controls", () => {
       { timeout: 15_000 },
     );
     await expect(renderer.locator("#movementPad")).toBeVisible();
-    await renderer.locator("#movementModeToggle").click();
+    await renderer.locator("#movementModeToggle").tap();
     await expect(renderer.locator("#movementModeToggle")).toHaveText("Walk");
     await expect(renderer.locator("#flightAltitudeControls")).toBeVisible();
 
@@ -330,8 +330,8 @@ test.describe("v7 touch flight controls", () => {
       { timeout: 15_000 },
     );
     await expect(renderer.locator("#movementPad")).toBeVisible();
-    await renderer.locator("#movementModeToggle").click();
-    await renderer.locator("#toggleHelp").click();
+    await renderer.locator("#movementModeToggle").tap();
+    await renderer.locator("#toggleHelp").tap();
     await expect(renderer.locator("#controlHelp")).toBeVisible();
     await expect(renderer.locator("#flightAltitudeControls")).toBeVisible();
 

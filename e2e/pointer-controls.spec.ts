@@ -55,6 +55,30 @@ test.describe("spatial navigation direction", () => {
     expect(Math.abs(dot(pitchDelta, afterTurn.right))).toBeLessThan(0.02);
   });
 
+  test("Shift-drag turns an inspection view sideways at a steep angle without spinning it", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    await page.keyboard.down("Shift");
+    await drag(page, { x: 500, y: 700 }, { x: 500, y: 70 });
+    const tilted = await readCameraState(page);
+    await drag(page, { x: 500, y: 320 }, { x: 420, y: 320 });
+    const turned = await readCameraState(page);
+    await page.keyboard.up("Shift");
+
+    expect(dot(turned.up, tilted.up)).toBeGreaterThan(0.9999);
+    expect(dot(subtract(turned.direction, tilted.direction), tilted.right)).toBeLessThan(-0.1);
+    expect(vectorLength(subtract(turned.position, tilted.position))).toBeLessThan(0.001);
+  });
+
+  test("inspection activation keeps Rise vertical after a tilted opening was aligned", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?mode=fly&inspection=true");
+    const before = await readCameraState(page);
+    await page.keyboard.down("e");
+    await expect.poll(async () => (await readCameraState(page)).position[1]! - before.position[1]!).toBeGreaterThan(0.05);
+    await page.keyboard.up("e");
+    const after = await readCameraState(page);
+    expect(Math.hypot(after.position[0]! - before.position[0]!, after.position[2]! - before.position[2]!)).toBeLessThan(0.001);
+  });
+
   test("sustained vertical dragging can never pitch past the clamp or flip the camera", async ({
     page,
   }) => {

@@ -357,7 +357,13 @@ Implemented:
   room/POI semantics, and a responsive authored-geometry floor plan with live
   camera position
 - Fly-only inspection uses drag to pan and Shift+drag to turn; touch uses one
-  finger to pan and two fingers to turn. Panning follows the visible scene plane
+  finger to pan and two fingers to turn. PC controls show keyboard and wheel
+  instructions; touch controls show the joystick and Rise/Lower buttons. The
+  control set follows the primary pointer and switches when another input is
+  used, including on devices with both a mouse and touchscreen. Window width
+  only changes the layout. Inspection turning follows the view's own axes so
+  sideways turns stay sideways at steep angles. Restoring a view preserves its
+  orientation and Rise/Lower direction. Panning follows the visible scene plane
   without declaring metric scale. Walking keeps its desktop pointer-lock mouse
   look that falls back to drag-look when the browser
   denies or exits the lock, a render and physics loop paused entirely while the

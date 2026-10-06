@@ -255,7 +255,7 @@ test.describe("touch-first Spark controls", () => {
     await expect(page.locator("#freeRoamToggle")).toHaveCount(0);
     await expect(page.getByRole("group", { name: "Movement joystick" })).toBeHidden();
 
-    await page.getByRole("button", { name: "Controls" }).click();
+    await page.getByRole("button", { name: "Controls" }).tap();
     await expect(page.locator("#mobileMovementHelp")).toHaveText(
       "Walking map required before this scene can be viewed",
     );

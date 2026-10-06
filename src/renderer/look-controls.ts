@@ -95,13 +95,13 @@ export class SpatialNavigationControls {
   }
 
   /**
-   * Re-establish the authored horizon after loading, resetting, or accepting a
-   * camera pose. This is the plane used for yaw and movement until the next
-   * authored pose is applied.
+   * Re-establish movement after loading, resetting, or accepting a camera pose.
+   * Inspection keeps the view orientation and the scene's vertical axis;
+   * walking uses the authored horizon for yaw and movement.
    */
   align(camera: THREE.PerspectiveCamera): void {
     if (this.panFrame) this.panFrame.target.copy(this.panFrame.origin);
-    this.navigationUp.copy(camera.up).normalize();
+    if (!this.panFrame) this.navigationUp.copy(camera.up).normalize();
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
     this.panDeltaX = 0;
@@ -111,11 +111,13 @@ export class SpatialNavigationControls {
     // Alignment follows teleports and authored pose changes; momentum must
     // never carry through a teleport.
     this.motorVelocity.set(0, 0, 0);
+    // A saved inspection up vector describes the picture, not gravity.
+    if (this.panFrame) return;
     // Rebuild the yaw/pitch frame from the camera's current orientation. The
     // stored pitch is measured against the authored horizon and clamped here,
     // so a framing authored beyond the clamp can never start the camera past
-    // the pole, and any roll the incoming pose carried is levelled away —
-    // yaw/pitch look has no axis that could ever reintroduce it.
+    // the pole. The saved up vector retains the pose's authored orientation.
+    // Walking yaw/pitch keeps this horizon; inspection turns use screen axes.
     const up = this.navigationUp;
     const forward = camera.getWorldDirection(new THREE.Vector3());
     const sine = THREE.MathUtils.clamp(forward.dot(up), -1, 1);
@@ -159,8 +161,8 @@ export class SpatialNavigationControls {
     this.applyLookOrientation(camera);
   }
 
-  // Camera orientation is always exactly yaw about the aligned up, then pitch
-  // about the yawed right axis, applied to the roll-free base frame.
+  // Walking and collision-aware flight use yaw about the aligned up, then
+  // pitch about the yawed right axis, applied to the roll-free base frame.
   private applyLookOrientation(camera: THREE.PerspectiveCamera): void {
     camera.quaternion
       .setFromAxisAngle(this.lookBaseRight, this.lookPitch)
@@ -200,6 +202,7 @@ export class SpatialNavigationControls {
 
   setPanTarget(target: THREE.Vector3 | null): void {
     this.panFrame = target ? { origin: target.clone(), target: target.clone() } : null;
+    if (target) this.navigationUp.copy(LOCAL_UP);
     this.suspend();
   }
 
@@ -510,6 +513,15 @@ export class SpatialNavigationControls {
     this.lookDeltaY = 0;
     if (Math.abs(deltaX) < MOVEMENT_EPSILON && Math.abs(deltaY) < MOVEMENT_EPSILON) {
       return false;
+    }
+
+    if (this.panFrame) {
+      // Inspection turns follow the view's own axes. World-up yaw becomes a
+      // screen spin when the view is aimed steeply up or down.
+      camera.rotateY(-deltaX * LOOK_RADIANS_PER_PIXEL);
+      camera.rotateX(-deltaY * LOOK_RADIANS_PER_PIXEL);
+      camera.quaternion.normalize();
+      return true;
     }
 
     this.lookYaw -= deltaX * LOOK_RADIANS_PER_PIXEL;

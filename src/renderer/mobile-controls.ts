@@ -9,7 +9,7 @@ export type WalkableBounds = {
 };
 
 export type MobileControlState = {
-  touchCapable: boolean;
+  inputMode: "pc" | "touch";
   ready: boolean;
   active: boolean;
   pointerId: number | null;
@@ -38,7 +38,7 @@ const NEUTRAL_INPUT = {
 export class MobileControlModel {
   private readonly deadZone: number;
   private current: MobileControlState = {
-    touchCapable: false,
+    inputMode: "pc",
     ready: false,
     active: false,
     pointerId: null,
@@ -57,8 +57,8 @@ export class MobileControlModel {
     };
   }
 
-  setTouchCapable(touchCapable: boolean): void {
-    this.current.touchCapable = touchCapable;
+  setInputMode(inputMode: MobileControlState["inputMode"]): void {
+    this.current.inputMode = inputMode;
     this.syncActivation();
   }
 
@@ -76,7 +76,7 @@ export class MobileControlModel {
     if (
       !this.current.active ||
       !this.current.ready ||
-      !this.current.touchCapable ||
+      this.current.inputMode !== "touch" ||
       this.current.pointerId !== null
     ) {
       return false;
@@ -108,7 +108,7 @@ export class MobileControlModel {
   }
 
   private syncActivation(): void {
-    const active = this.current.touchCapable && this.current.ready;
+    const active = this.current.inputMode === "touch" && this.current.ready;
     if (this.current.active === active) return;
     this.current.active = active;
     if (!active) this.resetInput();
@@ -164,7 +164,7 @@ export class MobileControlSurface {
     this.elements = elements;
     this.coarsePointer = coarsePointer;
     this.onModeChange = onModeChange;
-    this.model.setTouchCapable(coarsePointer.matches);
+    this.model.setInputMode(coarsePointer.matches ? "touch" : "pc");
     this.bind();
     this.render();
   }
@@ -175,6 +175,16 @@ export class MobileControlSurface {
 
   get active(): boolean {
     return this.model.state.active;
+  }
+
+  get inputMode(): MobileControlState["inputMode"] {
+    return this.model.state.inputMode;
+  }
+
+  setInputMode(mode: MobileControlState["inputMode"]): void {
+    if (mode === this.inputMode) return;
+    this.model.setInputMode(mode);
+    this.render();
   }
 
   setReady(ready: boolean): void {
@@ -197,6 +207,9 @@ export class MobileControlSurface {
     this.elements.pad.removeEventListener("pointerup", this.handlePointerEnd);
     this.elements.pad.removeEventListener("pointercancel", this.handlePointerEnd);
     this.elements.pad.removeEventListener("lostpointercapture", this.handlePointerEnd);
+    this.elements.viewport.removeEventListener("pointerdown", this.handleInputPointer, true);
+    this.elements.viewport.removeEventListener("wheel", this.handlePcInput);
+    window.removeEventListener("keydown", this.handlePcInput);
     window.removeEventListener("blur", this.handleSuspend);
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.coarsePointer.removeEventListener("change", this.handleCapabilityChange);
@@ -208,6 +221,9 @@ export class MobileControlSurface {
     this.elements.pad.addEventListener("pointerup", this.handlePointerEnd);
     this.elements.pad.addEventListener("pointercancel", this.handlePointerEnd);
     this.elements.pad.addEventListener("lostpointercapture", this.handlePointerEnd);
+    this.elements.viewport.addEventListener("pointerdown", this.handleInputPointer, true);
+    this.elements.viewport.addEventListener("wheel", this.handlePcInput, { passive: true });
+    window.addEventListener("keydown", this.handlePcInput);
     window.addEventListener("blur", this.handleSuspend);
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.coarsePointer.addEventListener("change", this.handleCapabilityChange);
@@ -252,8 +268,19 @@ export class MobileControlSurface {
   };
 
   private readonly handleCapabilityChange = (event: MediaQueryListEvent): void => {
-    this.model.setTouchCapable(event.matches);
-    this.render();
+    this.setInputMode(event.matches ? "touch" : "pc");
+  };
+
+  private readonly handleInputPointer = (event: PointerEvent): void => {
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      this.setInputMode("touch");
+    } else if (event.pointerType === "mouse") {
+      this.setInputMode("pc");
+    }
+  };
+
+  private readonly handlePcInput = (): void => {
+    this.setInputMode("pc");
   };
 
   private pointerInput(event: PointerEvent): {
@@ -271,12 +298,13 @@ export class MobileControlSurface {
 
   private render(): void {
     const state = this.model.state;
-    this.elements.pad.hidden = !state.touchCapable || !state.active;
+    this.elements.viewport.dataset.inputMode = state.inputMode;
+    this.elements.pad.hidden = !state.active;
     this.elements.pad.setAttribute("aria-disabled", String(!state.ready));
     this.elements.status.textContent = movementDescription(state.movement);
     this.elements.pad.toggleAttribute("data-active", state.pointerId !== null);
     this.elements.knob.style.transform = `translate3d(${round(state.knob.x)}px, ${round(state.knob.y)}px, 0)`;
-    this.elements.lookHint.hidden = !state.touchCapable || !state.active;
+    this.elements.lookHint.hidden = !state.active;
     this.elements.viewport.classList.toggle("free-roam-active", state.active);
     if (state.active !== this.lastReportedActive) {
       this.lastReportedActive = state.active;

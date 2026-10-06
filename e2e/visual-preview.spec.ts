@@ -56,6 +56,15 @@ for (const accessPolicy of ["private-preview", "public"]) {
         expect(assetRequests.length).toBeGreaterThan(0);
 
         const canvas = renderer.locator("#sparkCanvas");
+        if (touch) await renderer.locator("#toggleHelp").tap();
+        else await renderer.locator("#toggleHelp").click();
+        await expect(renderer.getByText(touch ? "Touch controls" : "PC controls", { exact: true })).toBeVisible();
+        await expect(renderer.getByText(touch ? "PC controls" : "Touch controls", { exact: true })).toBeHidden();
+        await expect(renderer.locator("#desktopKeyboardHelp"))[touch ? "toBeHidden" : "toBeVisible"]();
+        await expect(renderer.locator("#movementPad"))[touch ? "toBeVisible" : "toBeHidden"]();
+        await renderer.locator("#controlHelp").screenshot({ path: test.info().outputPath("device-controls.png") });
+        if (touch) await renderer.locator("#toggleHelp").tap();
+        else await renderer.locator("#toggleHelp").click();
         const panStart = await cameraPose(page);
         if (touch) {
           await canvas.dispatchEvent("pointerdown", { pointerId: 11, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
@@ -105,14 +114,30 @@ for (const accessPolicy of ["private-preview", "public"]) {
         const panAfterTurn = await cameraPose(page);
         expect(distance(panAfterTurn.position, sideways.position)).toBeCloseTo(distance(afterPan.position, panStart.position), 3);
         expect(distance(direction(panAfterTurn), direction(sideways))).toBeLessThan(0.001);
+        // The saved view must carry its screen-up axis after inspection turns.
+        expect(direction(panAfterTurn).reduce((sum, value, index) => sum + value * panAfterTurn.up[index]!, 0)).toBeCloseTo(0, 5);
 
         const before = await cameraPosition(page);
         if (touch) {
-          const rise = renderer.getByRole("button", { name: "Rise while flying" });
+          const rise = renderer.locator("#flyAscend");
           await expect(rise).toBeVisible();
           await rise.dispatchEvent("pointerdown", { pointerId: 7, pointerType: "touch", button: 0 });
           await expect.poll(async () => (await cameraPosition(page))[1]).toBeGreaterThan(before[1] + 0.01);
+          // A keyboard on a touch device selects the PC set and stops touch input.
+          await canvas.focus();
+          await page.keyboard.press("ArrowUp");
+          await expect(renderer.locator("#movementPad")).toBeHidden();
+          await expect(renderer.locator("#flightAltitudeControls")).toBeHidden();
+          await expect(rise).not.toHaveAttribute("data-active", "");
           await rise.dispatchEvent("pointerup", { pointerId: 7, pointerType: "touch", button: 0 });
+          await renderer.locator("#toggleHelp").click();
+          await expect(renderer.getByText("PC controls", { exact: true })).toBeVisible();
+          await expect(renderer.locator("#desktopKeyboardHelp")).toBeVisible();
+          await renderer.locator("#toggleHelp").click();
+          await canvas.dispatchEvent("pointerdown", { pointerId: 15, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await canvas.dispatchEvent("pointerup", { pointerId: 15, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await expect(renderer.locator("#movementPad")).toBeVisible();
+          await expect(renderer.locator("#flightAltitudeControls")).toBeVisible();
         } else {
           await renderer.locator("#sparkCanvas").focus();
           await page.keyboard.down("w");
@@ -121,7 +146,51 @@ for (const accessPolicy of ["private-preview", "public"]) {
             return Math.hypot(...after.map((value, index) => value - before[index]!));
           }).toBeGreaterThan(0.01);
           await page.keyboard.up("w");
+
+          // Window size changes the layout, not the selected input controls.
+          await page.setViewportSize({ width: 390, height: 844 });
+          await renderer.locator("#toggleHelp").click();
+          await expect(renderer.getByText("PC controls", { exact: true })).toBeVisible();
+          await expect(renderer.locator("#desktopKeyboardHelp")).toBeVisible();
+          await expect(renderer.locator("#movementPad")).toBeHidden();
+          await renderer.locator("#toggleHelp").click();
+
+          // Hybrid screens can return to mouse controls without losing touch.
+          await canvas.dispatchEvent("pointerdown", { pointerId: 16, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await canvas.dispatchEvent("pointerup", { pointerId: 16, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await expect(renderer.locator("#movementPad")).toBeVisible();
+          await expect(renderer.locator("#flightAltitudeControls")).toBeVisible();
+          await canvas.click();
+          await expect(renderer.locator("#movementPad")).toBeHidden();
+          await expect(renderer.locator("#flightAltitudeControls")).toBeHidden();
         }
+
+        const savedPose = await cameraPose(page);
+        await page.evaluate((pose) => {
+          document.querySelector<HTMLIFrameElement>("#rendererFrame")?.contentWindow?.postMessage({
+            source: "spatial-host", type: "sync-camera", cameraPose: pose,
+          }, location.origin);
+        }, savedPose);
+        const restoredPose = await cameraPose(page);
+        expect(distance(direction(restoredPose), direction(savedPose))).toBeLessThan(0.001);
+        expect(distance(restoredPose.up, savedPose.up)).toBeLessThan(0.001);
+        if (touch) {
+          await renderer.locator("#flyAscend").dispatchEvent("pointerdown", { pointerId: 18, pointerType: "touch", button: 0 });
+        } else {
+          await canvas.focus();
+          await page.keyboard.down("e");
+        }
+        await expect.poll(async () => (await cameraPose(page)).position[1] - restoredPose.position[1]).toBeGreaterThan(0.01);
+        if (touch) await renderer.locator("#flyAscend").dispatchEvent("pointerup", { pointerId: 18, pointerType: "touch", button: 0 });
+        else await page.keyboard.up("e");
+        const afterRestoredRise = await cameraPose(page);
+        expect(Math.hypot(afterRestoredRise.position[0] - restoredPose.position[0], afterRestoredRise.position[2] - restoredPose.position[2])).toBeLessThan(0.001);
+        if (touch) await renderer.locator("#resetView").tap();
+        else await renderer.locator("#resetView").click();
+        await expect.poll(async () => distance((await cameraPose(page)).position, panStart.position)).toBeLessThan(0.001);
+        const resetPose = await cameraPose(page);
+        expect(distance(direction(resetPose), direction(panStart))).toBeLessThan(0.001);
+        expect(distance(resetPose.up, panStart.up)).toBeLessThan(0.001);
       });
     });
   }
@@ -136,7 +205,12 @@ async function cameraPosition(page: Page): Promise<[number, number, number]> {
   return (await cameraPose(page)).position;
 }
 
-type CameraPose = { position: [number, number, number]; target: [number, number, number] };
+type CameraPose = {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fovDegrees: number;
+};
 
 async function cameraPose(page: Page): Promise<CameraPose> {
   return page.evaluate(() => new Promise<CameraPose>((resolve, reject) => {
