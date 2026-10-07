@@ -7,6 +7,7 @@ type MovementInput = {
 };
 
 export type SpatialMovementMode = "walk" | "fly";
+export type InspectionDragMode = "pan" | "turn" | "rotate";
 
 type NavigationBounds = {
   min: THREE.Vector3;
@@ -14,6 +15,8 @@ type NavigationBounds = {
 };
 
 const LOCAL_RIGHT = new THREE.Vector3(1, 0, 0);
+const LOCAL_UP = new THREE.Vector3(0, 1, 0);
+const LOCAL_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
 const MAX_PITCH_RADIANS = THREE.MathUtils.degToRad(85);
 const LOOK_RADIANS_PER_PIXEL = 0.002;
 const DEFAULT_MOVEMENT_SPEED_UNITS_PER_SECOND = 1.4;
@@ -35,7 +38,8 @@ const DEFAULT_MAX_ACCELERATION_UNITS_PER_SECOND_SQUARED = 8;
 
 /**
  * A single, scene-aware input owner for the Spark renderer. Primary drag looks
- * in screen space, and a stationary primary click requests pointer lock so a
+ * by default; inspection offers Pan, Turn, and Rotate with Shift+drag look.
+ * A stationary primary click in the default mode requests pointer lock so a
  * desktop mouse can look without holding a button (Esc releases the lock and
  * drag-look remains the fallback). Keyboard, joystick, mouse wheel, and
  * two-finger trackpad scrolling move on the authored navigation plane.
@@ -46,7 +50,14 @@ export class SpatialNavigationControls {
   private readonly navigationUp = new THREE.Vector3(0, 1, 0);
   private readonly activeKeys = new Set<string>();
   private readonly pendingKeys = new Set<string>();
-  private readonly activeTouches = new Set<number>();
+  private readonly activeTouches = new Map<number, { x: number; y: number }>();
+  private panFrame: { origin: THREE.Vector3; target: THREE.Vector3 } | null = null;
+  private selectedDragMode: InspectionDragMode = "pan";
+  private dragAction: InspectionDragMode = "turn";
+  private readonly inspectionRotation = new THREE.Quaternion();
+  private readonly rotationStep = new THREE.Quaternion();
+  private panDeltaX = 0;
+  private panDeltaY = 0;
   private navigationBounds: NavigationBounds[] = [];
   private movementMode: SpatialMovementMode = "walk";
   private movementSpeeds: Record<SpatialMovementMode, number> = {
@@ -72,11 +83,11 @@ export class SpatialNavigationControls {
   private lookPitch = 0;
   private readonly lookBaseRight = new THREE.Vector3(1, 0, 0);
   private readonly lookBaseQuaternion = new THREE.Quaternion();
-  private lookPointerId: number | null = null;
+  private dragPointerId: number | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
-  private lookStartX = 0;
-  private lookStartY = 0;
+  private dragStartX = 0;
+  private dragStartY = 0;
   private lookDeltaX = 0;
   private lookDeltaY = 0;
   private wheelDeltaX = 0;
@@ -89,24 +100,30 @@ export class SpatialNavigationControls {
   }
 
   /**
-   * Re-establish the authored horizon after loading, resetting, or accepting a
-   * camera pose. This is the plane used for yaw and movement until the next
-   * authored pose is applied.
+   * Re-establish movement after loading, resetting, or accepting a camera pose.
+   * Inspection keeps the view orientation and the scene's vertical axis;
+   * walking uses the authored horizon for yaw and movement.
    */
   align(camera: THREE.PerspectiveCamera): void {
-    this.navigationUp.copy(camera.up).normalize();
+    if (this.panFrame) this.panFrame.target.copy(this.panFrame.origin);
+    if (!this.panFrame) this.navigationUp.copy(camera.up).normalize();
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
+    this.panDeltaX = 0;
+    this.panDeltaY = 0;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     // Alignment follows teleports and authored pose changes; momentum must
     // never carry through a teleport.
     this.motorVelocity.set(0, 0, 0);
+    // A saved inspection up vector describes the picture, not gravity.
+    if (this.panFrame) return;
     // Rebuild the yaw/pitch frame from the camera's current orientation. The
     // stored pitch is measured against the authored horizon and clamped here,
     // so a framing authored beyond the clamp can never start the camera past
-    // the pole, and any roll the incoming pose carried is levelled away —
-    // yaw/pitch look has no axis that could ever reintroduce it.
+    // the pole. The saved up vector retains the pose's authored orientation.
+    // Walking yaw/pitch keeps this horizon; inspection turns use screen axes.
     const up = this.navigationUp;
     const forward = camera.getWorldDirection(new THREE.Vector3());
     const sine = THREE.MathUtils.clamp(forward.dot(up), -1, 1);
@@ -150,8 +167,8 @@ export class SpatialNavigationControls {
     this.applyLookOrientation(camera);
   }
 
-  // Camera orientation is always exactly yaw about the aligned up, then pitch
-  // about the yawed right axis, applied to the roll-free base frame.
+  // Walking and collision-aware flight use yaw about the aligned up, then
+  // pitch about the yawed right axis, applied to the roll-free base frame.
   private applyLookOrientation(camera: THREE.PerspectiveCamera): void {
     camera.quaternion
       .setFromAxisAngle(this.lookBaseRight, this.lookPitch)
@@ -189,6 +206,22 @@ export class SpatialNavigationControls {
     this.motorVelocity.set(0, 0, 0);
   }
 
+  setPanTarget(target: THREE.Vector3 | null): void {
+    this.panFrame = target ? { origin: target.clone(), target: target.clone() } : null;
+    if (target) this.navigationUp.copy(LOCAL_UP);
+    this.suspend();
+  }
+
+  get inspectionDragMode(): InspectionDragMode {
+    return this.selectedDragMode;
+  }
+
+  setInspectionDragMode(mode: InspectionDragMode): void {
+    this.selectedDragMode = mode;
+    this.suspend();
+    this.motorVelocity.set(0, 0, 0);
+  }
+
   configureMovementProfiles(artifact: unknown): void {
     if (!artifact || typeof artifact !== "object") return;
     const agent = Reflect.get(artifact, "agent");
@@ -215,6 +248,8 @@ export class SpatialNavigationControls {
     if (enabled) return;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
+    this.panDeltaX = 0;
+    this.panDeltaY = 0;
     this.clearKeyboardState();
     this.motorVelocity.set(0, 0, 0);
   }
@@ -251,17 +286,20 @@ export class SpatialNavigationControls {
     if (!this.translationEnabled) {
       this.wheelDeltaX = 0;
       this.wheelDeltaY = 0;
+      this.panDeltaX = 0;
+      this.panDeltaY = 0;
       this.clearKeyboardState();
       return lookUpdated;
     }
     const wheelUpdated = this.applyWheel(camera);
+    const panUpdated = this.applyPan(camera);
     const movementUpdated = this.applyMovement(
       camera,
       this.combinedMovement(externalMovement),
       deltaSeconds,
     );
     this.pendingKeys.clear();
-    const translated = wheelUpdated || movementUpdated;
+    const translated = wheelUpdated || panUpdated || movementUpdated;
     if (
       translated &&
       positionBeforeMovement &&
@@ -311,49 +349,71 @@ export class SpatialNavigationControls {
     if (!this.lookEnabled) return;
     if (event.pointerType === "mouse") {
       if (event.button !== 0 || this.isPointerLocked()) return;
-      this.beginLook(event);
+      this.beginDrag(event);
       return;
     }
 
-    this.activeTouches.add(event.pointerId);
-    // Additional touches are inert: they neither move the camera nor cancel an
-    // in-progress one-finger look.
-    if (this.activeTouches.size === 1) this.beginLook(event);
+    this.activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    // Walking keeps extra contacts inert. Inspection uses one finger to pan
+    // and the centre of two fingers to turn.
+    if (this.activeTouches.size === 1) this.beginDrag(event);
+    if (this.panFrame) this.alignTouchDrag(event.shiftKey);
   };
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
     if (this.isPointerLocked()) {
       if (!this.lookEnabled) return;
-      this.lookDeltaX += event.movementX;
-      this.lookDeltaY += event.movementY;
+      if (this.panFrame) this.queueInspectionRotation("turn", event.movementX, event.movementY);
+      else {
+        this.lookDeltaX += event.movementX;
+        this.lookDeltaY += event.movementY;
+      }
       return;
     }
-    if (event.pointerId !== this.lookPointerId) return;
-    this.lookDeltaX += event.clientX - this.lastPointerX;
-    this.lookDeltaY += event.clientY - this.lastPointerY;
-    this.lastPointerX = event.clientX;
-    this.lastPointerY = event.clientY;
+    let x = event.clientX;
+    let y = event.clientY;
+    if (event.pointerType !== "mouse" && this.panFrame) {
+      if (!this.activeTouches.has(event.pointerId)) return;
+      this.activeTouches.set(event.pointerId, { x, y });
+      if (this.activeTouches.size > 2) return;
+      const centre = this.touchCentre();
+      if (!centre) return;
+      x = centre.x;
+      y = centre.y;
+    } else if (event.pointerId !== this.dragPointerId) return;
+    if (this.dragAction === "pan") {
+      this.panDeltaX += x - this.lastPointerX;
+      this.panDeltaY += y - this.lastPointerY;
+    } else if (this.panFrame) {
+      this.queueInspectionRotation(this.dragAction, x - this.lastPointerX, y - this.lastPointerY);
+    } else {
+      this.lookDeltaX += x - this.lastPointerX;
+      this.lookDeltaY += y - this.lastPointerY;
+    }
+    this.lastPointerX = x;
+    this.lastPointerY = y;
   };
 
   private readonly handlePointerEnd = (event: PointerEvent): void => {
     if (event.pointerType !== "mouse") {
-      this.activeTouches.delete(event.pointerId);
+      if (this.activeTouches.delete(event.pointerId) && this.panFrame) this.alignTouchDrag(event.shiftKey);
     } else if (
       event.type === "pointerup" &&
       event.button === 0 &&
-      event.pointerId === this.lookPointerId &&
+      event.pointerId === this.dragPointerId &&
       this.lookEnabled &&
+      !this.panFrame &&
       !this.isPointerLocked() &&
       Math.hypot(
-        event.clientX - this.lookStartX,
-        event.clientY - this.lookStartY,
+        event.clientX - this.dragStartX,
+        event.clientY - this.dragStartY,
       ) < CLICK_MAX_TRAVEL_PIXELS
     ) {
       // A stationary primary click upgrades to pointer-lock mouse look; a drag
       // stays on the existing capture-based look path.
       this.requestPointerLock();
     }
-    if (event.pointerId === this.lookPointerId) this.lookPointerId = null;
+    if (event.pointerId === this.dragPointerId) this.dragPointerId = null;
     try {
       if (this.canvas.hasPointerCapture(event.pointerId)) {
         this.canvas.releasePointerCapture(event.pointerId);
@@ -430,7 +490,7 @@ export class SpatialNavigationControls {
     }
   }
 
-  private beginLook(event: PointerEvent): void {
+  private beginDrag(event: PointerEvent): void {
     this.canvas.focus({ preventScroll: true });
     try {
       this.canvas.setPointerCapture(event.pointerId);
@@ -438,21 +498,33 @@ export class SpatialNavigationControls {
       // Pointer capture is an enhancement; document-level move/up listeners
       // still preserve a complete gesture when a browser declines it.
     }
-    this.lookPointerId = event.pointerId;
+    this.dragPointerId = event.pointerId;
+    this.dragAction = this.panFrame && !event.shiftKey ? this.selectedDragMode : "turn";
+    // Direct manipulation must not coast from a previous travel gesture.
+    if (this.panFrame) {
+      this.motorVelocity.set(0, 0, 0);
+      this.pendingKeys.clear();
+    }
     this.lastPointerX = event.clientX;
     this.lastPointerY = event.clientY;
-    this.lookStartX = event.clientX;
-    this.lookStartY = event.clientY;
+    this.dragStartX = event.clientX;
+    this.dragStartY = event.clientY;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
+    this.panDeltaX = 0;
+    this.panDeltaY = 0;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
   }
 
   private suspend(): void {
-    this.lookPointerId = null;
+    this.dragPointerId = null;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
+    this.panDeltaX = 0;
+    this.panDeltaY = 0;
     this.wheelDeltaX = 0;
     this.wheelDeltaY = 0;
     this.activeTouches.clear();
@@ -463,6 +535,13 @@ export class SpatialNavigationControls {
   }
 
   private applyLook(camera: THREE.PerspectiveCamera): boolean {
+    if (this.panFrame) {
+      const rotation = this.inspectionRotation;
+      if (rotation.x === 0 && rotation.y === 0 && rotation.z === 0 && rotation.w === 1) return false;
+      camera.quaternion.multiply(rotation).normalize();
+      rotation.identity();
+      return true;
+    }
     const deltaX = this.lookDeltaX;
     const deltaY = this.lookDeltaY;
     this.lookDeltaX = 0;
@@ -478,6 +557,58 @@ export class SpatialNavigationControls {
       MAX_PITCH_RADIANS,
     );
     this.applyLookOrientation(camera);
+    return true;
+  }
+
+  private queueInspectionRotation(action: "turn" | "rotate", x: number, y: number): void {
+    // Compose in input order, so switching between turn and roll within one
+    // render frame retains each gesture's own axis.
+    if (action === "rotate") {
+      this.inspectionRotation.multiply(this.rotationStep.setFromAxisAngle(LOCAL_ROLL_AXIS, x * LOOK_RADIANS_PER_PIXEL));
+    } else {
+      this.inspectionRotation
+        .multiply(this.rotationStep.setFromAxisAngle(LOCAL_UP, -x * LOOK_RADIANS_PER_PIXEL))
+        .multiply(this.rotationStep.setFromAxisAngle(LOCAL_RIGHT, -y * LOOK_RADIANS_PER_PIXEL));
+    }
+  }
+
+  private touchCentre(): { x: number; y: number } | null {
+    if (!this.activeTouches.size) return null;
+    let x = 0;
+    let y = 0;
+    for (const point of this.activeTouches.values()) {
+      x += point.x;
+      y += point.y;
+    }
+    return { x: x / this.activeTouches.size, y: y / this.activeTouches.size };
+  }
+
+  private alignTouchDrag(shiftKey: boolean): void {
+    const centre = this.touchCentre();
+    this.dragPointerId = this.activeTouches.keys().next().value ?? null;
+    if (!centre) return;
+    this.dragAction = this.activeTouches.size === 1 && !shiftKey ? this.selectedDragMode : "turn";
+    this.lastPointerX = centre.x;
+    this.lastPointerY = centre.y;
+  }
+
+  private applyPan(camera: THREE.PerspectiveCamera): boolean {
+    const x = this.panDeltaX;
+    const y = this.panDeltaY;
+    this.panDeltaX = 0;
+    this.panDeltaY = 0;
+    if (!this.panFrame || (!x && !y)) return false;
+    // Convert CSS pixels into the visible plane at the scene's centre. This
+    // follows the camera's framing instead of assuming metric scene units.
+    const depth = Math.max(camera.near, camera.position.distanceTo(this.panFrame.target));
+    const scale = 2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) /
+      Math.max(1, this.canvas.clientHeight);
+    const movement = LOCAL_RIGHT.clone().applyQuaternion(camera.quaternion).multiplyScalar(-x * scale)
+      .addScaledVector(LOCAL_UP.clone().applyQuaternion(camera.quaternion), y * scale);
+    camera.position.add(movement);
+    // Carry the reference plane with the pan. Its distance stays steady when
+    // dragging sideways, and turning cannot collapse it to the near plane.
+    this.panFrame.target.add(movement);
     return true;
   }
 

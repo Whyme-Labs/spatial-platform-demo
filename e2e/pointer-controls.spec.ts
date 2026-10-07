@@ -55,6 +55,104 @@ test.describe("spatial navigation direction", () => {
     expect(Math.abs(dot(pitchDelta, afterTurn.right))).toBeLessThan(0.02);
   });
 
+  test("Shift-drag turns an inspection view sideways at a steep angle without spinning it", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    await page.keyboard.down("Shift");
+    await drag(page, { x: 500, y: 700 }, { x: 500, y: 70 });
+    const tilted = await readCameraState(page);
+    await drag(page, { x: 500, y: 320 }, { x: 420, y: 320 });
+    const turned = await readCameraState(page);
+    await page.keyboard.up("Shift");
+
+    expect(dot(turned.up, tilted.up)).toBeGreaterThan(0.9999);
+    expect(dot(subtract(turned.direction, tilted.direction), tilted.right)).toBeLessThan(-0.1);
+    expect(vectorLength(subtract(turned.position, tilted.position))).toBeLessThan(0.001);
+  });
+
+  test("inspection activation keeps Rise vertical after a tilted opening was aligned", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?mode=fly&inspection=true");
+    const before = await readCameraState(page);
+    await page.keyboard.down("e");
+    await expect.poll(async () => (await readCameraState(page)).position[1]! - before.position[1]!).toBeGreaterThan(0.05);
+    await page.keyboard.up("e");
+    const after = await readCameraState(page);
+    expect(Math.hypot(after.position[0]! - before.position[0]!, after.position[2]! - before.position[2]!)).toBeLessThan(0.001);
+  });
+
+  test("panning a tilted inspection view does not inherit forward travel", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    await page.keyboard.down("Shift");
+    await drag(page, { x: 500, y: 580 }, { x: 500, y: 100 });
+    await page.keyboard.up("Shift");
+    await page.keyboard.down("w");
+    await page.waitForTimeout(180);
+    // Releasing travel and starting Pan can arrive in the same render frame.
+    const before = await page.locator("#controlCanvas").evaluate((canvas) => {
+      const before = JSON.parse(document.body.dataset.cameraState!);
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", key: "w" }));
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 99, pointerType: "mouse", clientX: 500, clientY: 320, button: 0 }));
+      document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 99, pointerType: "mouse", clientX: 580, clientY: 320 }));
+      return before as CameraState;
+    });
+    await expect.poll(async () => dot(subtract((await readCameraState(page)).position, before.position), before.right)).toBeLessThan(-0.01);
+    const after = await readCameraState(page);
+    await page.keyboard.up("w");
+    await page.locator("#controlCanvas").dispatchEvent("pointerup", { pointerId: 99, pointerType: "mouse", button: 0 });
+    const displacement = subtract(after.position, before.position);
+    expect(Math.abs(dot(displacement, before.direction))).toBeLessThan(0.001);
+    expect(dot(displacement, before.right)).toBeLessThan(-0.01);
+    expect(dot(after.direction, before.direction)).toBeGreaterThan(0.9999);
+    expect(dot(after.up, before.up)).toBeGreaterThan(0.9999);
+  });
+
+  test("Rotate tilts the picture without changing the viewing direction or position", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    await page.getByRole("combobox", { name: "Drag action" }).selectOption("rotate");
+    const before = await readCameraState(page);
+    await drag(page, { x: 500, y: 320 }, { x: 580, y: 320 });
+    const after = await readCameraState(page);
+    expect(dot(after.direction, before.direction)).toBeGreaterThan(0.9999);
+    expect(dot(after.right, before.up)).toBeGreaterThan(0.1);
+    expect(vectorLength(subtract(after.position, before.position))).toBeLessThan(0.001);
+  });
+
+  test("starting Pan cancels a released travel tap buffered for the next frame", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    const before = await page.locator("#controlCanvas").evaluate((canvas) => {
+      const before = JSON.parse(document.body.dataset.cameraState!);
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", key: "w" }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", key: "w" }));
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 98, pointerType: "mouse", clientX: 500, clientY: 320, button: 0 }));
+      document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 98, pointerType: "mouse", clientX: 580, clientY: 320 }));
+      return before as CameraState;
+    });
+    await expect.poll(async () => dot(subtract((await readCameraState(page)).position, before.position), before.right)).toBeLessThan(-0.01);
+    const after = await readCameraState(page);
+    await page.locator("#controlCanvas").dispatchEvent("pointerup", { pointerId: 98, pointerType: "mouse", button: 0 });
+    expect(Math.abs(dot(subtract(after.position, before.position), before.direction))).toBeLessThan(0.001);
+  });
+
+  test("Pan stays parallel to the displayed view through pitched and rolled angles", async ({ page }) => {
+    await page.goto("/e2e/fixtures/pointer-controls.html?orientation=world-up&mode=fly&inspection=true");
+    const mode = page.getByRole("combobox", { name: "Drag action" });
+    for (let angle = 0; angle < 4; angle += 1) {
+      await mode.selectOption("turn");
+      await drag(page, { x: 500, y: 500 }, { x: 420, y: 160 });
+      await mode.selectOption("rotate");
+      await drag(page, { x: 500, y: 320 }, { x: 620, y: 320 });
+      await mode.selectOption("pan");
+      const before = await readCameraState(page);
+      await drag(page, { x: 500, y: 320 }, { x: 580, y: 380 });
+      const after = await readCameraState(page);
+      const displacement = subtract(after.position, before.position);
+      expect(Math.abs(dot(displacement, before.direction))).toBeLessThan(0.001);
+      expect(dot(displacement, before.right)).toBeLessThan(-0.01);
+      expect(dot(displacement, before.up)).toBeGreaterThan(0.01);
+      expect(dot(after.direction, before.direction)).toBeGreaterThan(0.9999);
+      expect(dot(after.up, before.up)).toBeGreaterThan(0.9999);
+    }
+  });
+
   test("sustained vertical dragging can never pitch past the clamp or flip the camera", async ({
     page,
   }) => {

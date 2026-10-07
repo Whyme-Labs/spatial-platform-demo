@@ -753,23 +753,127 @@ test("an auxiliary QA version does not hide publishing for the approved visual v
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
   await openProjectWorkSection(page, "Overview");
-  await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Review privacy and approve", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Publish shareable URL", exact: true }).click();
   await expect(page.locator("#releaseDialog")).toBeVisible();
 });
 
-test("processed splats stay blocked until their walking map is approved", async ({ page }) => {
-  await mockApprovedProject(page, () => undefined, { previewReady: false });
+test("one Gaussian PLY creates a project and offers preview without a geometry upload", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { captureIntake: true, navigationReady: false, visualOnlyQa: true });
+  const uploadBodies: Array<Record<string, unknown>> = [];
+  let projectBody: Record<string, unknown> | undefined;
+  page.on("request", (request) => {
+    if (request.method() !== "POST") return;
+    const path = new URL(request.url()).pathname;
+    if (path === "/api/projects") projectBody = request.postDataJSON();
+    if (path === `/api/projects/${projectId}/uploads`) uploadBodies.push(request.postDataJSON());
+  });
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Upload capture", exact: true }).click();
+  const intake = page.locator("#newProjectDialog");
+  await intake.getByLabel("Scene name", { exact: true }).fill("Corrected Spark room");
+  await intake.getByRole("button", { name: "Continue to files", exact: true }).click();
+  await intake.locator("#newCaptureOrigin").selectOption("fjd");
+  await intake.locator("#newCaptureAdapter").selectOption("fjd-trion");
+  await intake.getByLabel("3D appearance file", { exact: true }).setInputFiles({
+    name: "myhouse_Gaussian.ply",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("ply\nformat binary_little_endian 1.0\nend_header\n"),
+  });
+  await expect(intake.locator("#newCaptureGeometry")).not.toHaveAttribute("required");
+  await expect(intake.locator("#newCaptureFrameConfirmation")).toBeHidden();
+  await intake.getByRole("button", { name: "Review processing plan", exact: true }).click();
+  await expect(intake.getByText("✓ Open a private preview", { exact: true })).toBeVisible();
+  await expect(intake.getByText("✓ Build the walkable area", { exact: true })).toHaveCount(0);
+  await intake.getByRole("button", { name: "Create and process scene", exact: true }).click();
+  await expect(intake).toBeHidden();
+  expect(projectBody?.capturePlan).toEqual([{ format: "ply", purpose: "gaussian_splat" }]);
+  expect(uploadBodies).toHaveLength(1);
+  expect(uploadBodies[0]).toMatchObject({ fileName: "myhouse_Gaussian.ply", purpose: "gaussian_splat" });
+  expect(uploadBodies[0]?.captureJourney).toBeUndefined();
+  await expect(page.locator("#projectCurrentAction")).toHaveText("Open private preview");
+  await page.getByRole("button", { name: "Add measurement geometry", exact: true }).click();
+  const attachment = page.locator("#uploadDialog");
+  await attachment.locator("#uploadAssetInput").setInputFiles({
+    name: "registered-house.e57",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("registered metric geometry fixture"),
+  });
+  await expect(attachment.locator("#uploadPurpose")).toHaveValue("metric_point_cloud");
+  await attachment.getByRole("button", { name: "Start resumable upload", exact: true }).click();
+  await expect(attachment).toBeHidden();
+  expect(uploadBodies).toHaveLength(2);
+  expect(uploadBodies[1]).toMatchObject({ purpose: "metric_point_cloud", targetVersionId: versionId });
+});
+
+test("a visual-only scene can pass privacy review and explicitly publish a public Fly release", async ({ page }) => {
+  let publishedBody: Record<string, unknown> | null = null;
+  let approvalBody: Record<string, unknown> | null = null;
+  await mockApprovedProject(page, (body) => { publishedBody = body; }, { navigationReady: false, visualOnlyQa: true });
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/api/versions/${versionId}/approve`) {
+      approvalBody = request.postDataJSON();
+    }
+  });
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
+  const qa = page.locator("#qaDialog");
+  await expect(qa.getByText("Approve a Fly-only visual scene. Measurement and walking are not included.", { exact: true })).toBeVisible();
+  await expect(qa.locator("select[name='measurementGrade']")).toBeDisabled();
+  await expect(qa.getByRole("checkbox")).not.toBeChecked();
+  await qa.getByRole("checkbox", { name: "I confirm privacy and publication review is approved.", exact: true }).check();
+  await qa.getByRole("button", { name: "Approve immutable version", exact: true }).click();
+  const release = page.locator("#releaseDialog");
+  await expect(release).toBeVisible();
+  expect(approvalBody).toMatchObject({ viewingMode: "fly-only", measurementGrade: "visual-only", privacyStatus: "approved" });
+  expect(publishedBody).toBeNull();
+  await expect(release.getByText("Visitors can fly around the visual scene. Measurement and walking are not included.", { exact: true })).toBeVisible();
+  await expect(release.locator("select[name='defaultMovementMode']")).toBeDisabled();
+  await expect(release.locator("input[name='applySourceToWorld']")).not.toBeChecked();
+  await release.getByRole("button", { name: "Publish release", exact: true }).click();
+  const confirmation = page.locator("#publicationConfirmationDialog");
+  await expect(confirmation.getByText("Publish publicly?", { exact: true })).toBeVisible();
+  expect(publishedBody).toBeNull();
+  await confirmation.getByRole("button", { name: "Make it public", exact: true }).click();
+  await expect.poll(() => publishedBody).not.toBeNull();
+  expect(publishedBody).toMatchObject({ accessPolicy: "public", viewerConfig: { viewingMode: "fly-only", defaultMovementMode: "fly" } });
+  expect(publishedBody).not.toHaveProperty("viewerConfig.sourceToWorld");
+});
+
+test("qualified geometry offers fresh walking review after a Fly-only approval", async ({ page }) => {
+  let decision: Record<string, unknown> | null = null;
+  await mockApprovedProject(page, () => undefined, { approvedViewingMode: "fly-only", approvedWebFormat: "spz" });
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === `/api/versions/${versionId}/approve`) decision = request.postDataJSON();
+  });
+  await page.goto("/studio.html#projects");
+  await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
+  await page.getByRole("button", { name: "Review privacy and approve", exact: true }).click();
+  const qa = page.locator("#qaDialog");
+  await expect(qa.getByText("Approve this scene with its verified walking map.", { exact: true })).toBeVisible();
+  await expect(qa.locator("#qaAssetSelect option")).toHaveCount(1);
+  await expect(qa.locator("#qaAssetSelect")).toHaveValue("55555555-5555-4555-8555-555555555556");
+  await qa.getByRole("checkbox", { name: "I confirm privacy and publication review is approved.", exact: true }).check();
+  await qa.getByRole("button", { name: "Approve immutable version", exact: true }).click();
+  await expect(page.locator("#releaseDialog")).toBeVisible();
+  expect(decision).toMatchObject({ viewingMode: "walkable", webAssetId: "55555555-5555-4555-8555-555555555556" });
+  await expect(page.locator("#releaseDialog select[name='defaultMovementMode']")).toHaveValue("walk");
+});
+
+test("processed splats offer a private Fly preview without a walking map", async ({ page }) => {
+  await mockApprovedProject(page, () => undefined, { navigationReady: false });
 
   await page.goto("/studio.html#projects");
   await page.getByRole("button", { name: "Open Corrected Spark room", exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`#project/${projectId}/structure$`));
-  await expect(page.locator("#projectCurrentStage")).toHaveText("Structure");
-  await expect(page.locator("#projectCurrentBlocker")).toContainText("Registered geometry");
-  await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`#project/${projectId}$`));
+  await expect(page.locator("#projectCurrentStage")).toHaveText("Preview");
+  await expect(page.locator("#projectCurrentBlocker")).toContainText("No blocker");
+  await expect(page.getByRole("button", { name: "Open private preview", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy private preview URL", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Publish shareable URL", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy preview URL", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Complete walking map", exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Upload registered geometry", exact: true })).toBeVisible();
   await openProjectWorkSection(page, "Overview");
   await expect(page.getByText("Optional editing, evidence, and delivery tools", { exact: true })).toBeVisible();
   await openProjectWorkSection(page, "Structure");
@@ -785,7 +889,7 @@ test("processed splats stay blocked until their walking map is approved", async 
 
 test("walking evidence builds automatically without exposing routine authoring", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, {
-    previewReady: false,
+    navigationReady: false,
     walkingState: "building",
   });
 
@@ -801,7 +905,7 @@ test("walking evidence builds automatically without exposing routine authoring",
 
 test("automatic reconstruction exposes only unresolved structural exceptions", async ({ page }) => {
   await mockApprovedProject(page, () => undefined, {
-    previewReady: false,
+    navigationReady: false,
     walkingState: "exception",
   });
 
@@ -1032,7 +1136,10 @@ async function mockApprovedProject(
     navigationBuildHistory?: boolean;
     multiLevelFloorplan?: boolean;
     qualifiedTraversalEvidence?: boolean;
-    previewReady?: boolean;
+    navigationReady?: boolean;
+    visualOnlyQa?: boolean;
+    approvedViewingMode?: "fly-only" | "walkable";
+    approvedWebFormat?: "rad" | "spz";
     walkingState?: "building" | "exception";
     captureIntake?: boolean;
     noviceLifecycle?: boolean;
@@ -1044,6 +1151,7 @@ async function mockApprovedProject(
   } = {},
 ): Promise<void> {
   let projectCreated = !options.captureIntake;
+  let approvalViewingMode = options.approvedViewingMode ?? null;
   let noviceStage: "structure" | "privacy" | "approved" = options.noviceLifecycle
     ? "structure"
     : "approved";
@@ -1058,7 +1166,7 @@ async function mockApprovedProject(
     id: projectId,
     name: "Corrected Spark room",
     slug: "corrected-spark-room",
-    status: options.archived ? "ARCHIVED" : options.noviceLifecycle ? "QA_REQUIRED" : "APPROVED",
+    status: options.archived ? "ARCHIVED" : options.noviceLifecycle || options.visualOnlyQa ? "QA_REQUIRED" : "APPROVED",
     captureAdapter: "open-import",
     deliveryTemplate: "Property showcase",
     notes: "Visual-only Gaussian fixture.",
@@ -1216,11 +1324,12 @@ async function mockApprovedProject(
       });
     }
     if (
-      options.noviceLifecycle && method === "POST" &&
+      (options.noviceLifecycle || options.visualOnlyQa || options.approvedViewingMode) && method === "POST" &&
       path === `/api/versions/${versionId}/approve`
     ) {
       noviceStage = "approved";
       project.status = "APPROVED";
+      approvalViewingMode = request.postDataJSON().viewingMode ?? "walkable";
       return json(route, 200, { version: { id: versionId, status: "APPROVED" } });
     }
     if (options.archived && method === "POST" && path === `/api/projects/${projectId}/restore`) {
@@ -1272,8 +1381,11 @@ async function mockApprovedProject(
           {
             id: versionId,
             version_number: 1,
-            status: options.noviceLifecycle && noviceStage !== "approved" ? "QA_REQUIRED" : "APPROVED",
-            manifest_json: noviceStage === "approved"
+            status: options.visualOnlyQa && !approvalViewingMode || options.noviceLifecycle && noviceStage !== "approved" ? "QA_REQUIRED" : "APPROVED",
+            manifest_json: approvalViewingMode
+              ? JSON.stringify({ measurementGrade: "visual-only", viewingMode: approvalViewingMode,
+                webAssetId: options.approvedWebFormat === "spz" ? "55555555-5555-4555-8555-555555555556" : "55555555-5555-4555-8555-555555555555" })
+              : noviceStage === "approved"
               ? JSON.stringify({ measurementGrade: "visual-only" })
               : null,
             created_at: now,
@@ -1289,6 +1401,10 @@ async function mockApprovedProject(
             size_bytes: 73_400_000,
             integrity_status: "verified",
           },
+          ...(options.approvedWebFormat === "spz" ? [{
+            id: "55555555-5555-4555-8555-555555555556", version_id: versionId,
+            kind: "web", format: "spz", file_name: "scene.spz", size_bytes: 4096, integrity_status: "verified",
+          }] : []),
           ...(options.noviceLifecycle
             ? [
               {
@@ -1408,7 +1524,8 @@ async function mockApprovedProject(
             updated_at: now,
           }]
           : [],
-        previewReadyVersionIds: options.previewReady === false ||
+        previewReadyVersionIds: [versionId],
+        navigationReadyVersionIds: options.navigationReady === false ||
             options.noviceLifecycle && noviceStage === "structure"
           ? []
           : [versionId],

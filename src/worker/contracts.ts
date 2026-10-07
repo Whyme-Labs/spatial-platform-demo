@@ -594,8 +594,12 @@ export const qaDecisionSchema = z.object({
   visualGrade: z.enum(["A", "B", "C"]),
   privacyStatus: z.literal("approved"),
   measurementGrade: z.enum(["visual-only", "indicative", "project-verified", "professional-certified"]),
+  viewingMode: z.enum(["fly-only", "walkable"]).default("walkable"),
   notes: z.string().trim().max(4000).optional(),
 }).superRefine((decision, context) => {
+  if (decision.viewingMode === "fly-only" && decision.measurementGrade !== "visual-only") {
+    context.addIssue({ code: "custom", path: ["measurementGrade"], message: "A Fly-only scene cannot claim metric measurement assurance" });
+  }
   if (decision.visualGrade === "C" && !decision.notes) {
     context.addIssue({
       code: "custom",
@@ -3486,6 +3490,7 @@ export const releaseInputSchema = z.object({
     // and delivery-policy budget selection.
     splatBudgetMillions: z.number().min(0.25).max(8).nullish(),
     defaultMovementMode: z.enum(["walk", "fly"]).default("walk"),
+    viewingMode: z.enum(["fly-only", "walkable"]).default("walkable"),
     sceneRotationDegrees: z.tuple([
       z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
       z.number().finite().min(SCENE_ROTATION_MIN_DEGREES).max(SCENE_ROTATION_MAX_DEGREES),
@@ -3497,6 +3502,11 @@ export const releaseInputSchema = z.object({
     initialCamera: cameraPoseSchema.optional(),
   }),
 }).superRefine((value, context) => {
+  if (value.viewerConfig.viewingMode === "fly-only" && (
+    value.viewerConfig.defaultMovementMode !== "fly" || value.viewerConfig.sourceToWorld
+  )) {
+    context.addIssue({ code: "custom", path: ["viewerConfig"], message: "A Fly-only release requires Fly movement and cannot declare a metric transform" });
+  }
   if (value.viewerConfig.sceneRotationDegrees && value.viewerConfig.sourceToWorld) {
     context.addIssue({
       code: "custom",

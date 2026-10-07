@@ -255,7 +255,7 @@ describe("Spatial Studio Worker", () => {
     expect(response.status).toBe(404);
   });
 
-  it("gives operators a signed render-native authoring scene without weakening preview walking gates", async () => {
+  it("previews a verified visual scene without geometry while preserving spatial authoring gates", async () => {
     const cookie = await login();
     const membership = await env.DB.prepare(`
       SELECT organisation_id AS organisationId, user_id AS userId
@@ -412,14 +412,53 @@ describe("Spatial Studio Worker", () => {
     expect(assetResponse.status).toBe(200);
     expect(new Uint8Array(await assetResponse.arrayBuffer())).toEqual(bytes);
 
+    const priorReleaseId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO releases
+        (id, organisation_id, project_id, version_id, web_asset_id, access_policy,
+          viewer_config_json, published_at, created_by)
+      VALUES (?, ?, ?, ?, ?, 'customer-authenticated', ?, datetime('now'), ?)
+    `).bind(
+      priorReleaseId, membership!.organisationId, projectId, versionId, assetId,
+      JSON.stringify({
+        sourceToWorld: { ...registrationPayload.sourceToWorld, translationMetres: [100, 0, 0] },
+        initialCamera: { position: [101, 1, 1], target: [100, 1, 0], fovDegrees: 58 },
+        defaultMovementMode: "walk",
+      }), membership!.userId,
+    ).run();
     const previewResponse = await exports.default.fetch(
       `${origin}/api/projects/${projectId}/versions/${versionId}/preview`,
       { headers: { cookie } },
     );
-    expect(previewResponse.status).toBe(409);
-    await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("approved structural collision"),
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json<{
+      manifest: {
+        scene: { contentUrl: string; collisionUrl: null };
+        viewer: { defaultMovementMode: string; sourceToWorld?: unknown; captureRegistration?: unknown; initialCamera?: unknown };
+        spatial?: unknown;
+      };
+    }>();
+    expect(preview.manifest.scene.collisionUrl).toBeNull();
+    expect(preview.manifest.spatial).toBeUndefined();
+    expect(preview.manifest.viewer.defaultMovementMode).toBe("fly");
+    expect(preview.manifest.viewer.sourceToWorld).toBeUndefined();
+    expect(preview.manifest.viewer.captureRegistration).toBeUndefined();
+    expect(preview.manifest.viewer.initialCamera).toBeUndefined();
+    const previewAssetResponse = await exports.default.fetch(new URL(preview.manifest.scene.contentUrl, origin));
+    expect(previewAssetResponse.status).toBe(200);
+    expect(new Uint8Array(await previewAssetResponse.arrayBuffer())).toEqual(bytes);
+    const anonymousPreviewResponse = await exports.default.fetch(
+      `${origin}/api/projects/${projectId}/versions/${versionId}/preview`,
+    );
+    expect(anonymousPreviewResponse.status).toBe(401);
+    const readinessResponse = await exports.default.fetch(`${origin}/api/projects/${projectId}`, {
+      headers: { cookie },
     });
+    await expect(readinessResponse.json()).resolves.toMatchObject({
+      previewReadyVersionIds: [versionId],
+      navigationReadyVersionIds: [],
+    });
+    await env.DB.prepare("DELETE FROM releases WHERE id = ?").bind(priorReleaseId).run();
 
     const sourceJobId = crypto.randomUUID();
     const sourceExtractionId = crypto.randomUUID();
@@ -2698,10 +2737,13 @@ describe("Spatial Studio Worker", () => {
       `${origin}/api/projects/${project.id}/versions/${secondVersionId}/preview`,
       { headers: { cookie: reviewerCookie } },
     );
-    expect(previewResponse.status).toBe(409);
+    expect(previewResponse.status).toBe(200);
     expect(previewResponse.headers.get("cache-control")).toBe("private, no-store");
     await expect(previewResponse.json()).resolves.toMatchObject({
-      error: expect.stringContaining("no verified capture-to-scene registration"),
+      manifest: {
+        scene: { collisionUrl: null },
+        viewer: { defaultMovementMode: "fly" },
+      },
     });
 
     const comparisonResponse = await exports.default.fetch(
@@ -4030,6 +4072,60 @@ describe("Spatial Studio Worker", () => {
     expect(new Uint8Array(await privateCollisionResponse.arrayBuffer())).toEqual(
       new Uint8Array([1, 2, 3, 4]),
     );
+
+    // A fresh capability review can enable walking without changing the
+    // published Fly release or uploading the visual again.
+    const priorDecision = JSON.parse(String(approvalRequest.body));
+    const approveMode = (viewingMode: string) => exports.default.fetch(
+      `${origin}/api/versions/${completed.asset.versionId}/approve`,
+      { ...approvalRequest, body: JSON.stringify({ ...priorDecision, viewingMode }) },
+    );
+    expect((await approveMode("fly-only")).status).toBe(200);
+    const publishMode = (viewingMode: string) => exports.default.fetch(
+      `${origin}/api/projects/${project.id}/releases`,
+      {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ slug: "capability-upgrade-fixture", accessPolicy: "public", viewerConfig: {
+          title: "Capability upgrade fixture", measurementDisclaimer: VISUAL_ONLY_MEASUREMENT_DISCLAIMER,
+          viewingMode, defaultMovementMode: viewingMode === "fly-only" ? "fly" : "walk",
+          ...(viewingMode === "fly-only" ? {
+            initialCamera: { position: [101, 1, 1], target: [100, 1, 0], fovDegrees: 58 },
+            sceneRotationDegrees: [0, 0, 180],
+          } : {}),
+        } }),
+      },
+    );
+    const publishedFly = await publishMode("fly-only");
+    expect(publishedFly.status).toBe(201);
+    const flyRelease = await publishedFly.json<{ release: { id: string } }>();
+    expect((await approveMode("walkable")).status).toBe(200);
+    const upgradePreview = await exports.default.fetch(
+      `${origin}/api/projects/${project.id}/versions/${completed.asset.versionId}/preview`, { headers: { cookie } },
+    );
+    const upgradedCamera = await upgradePreview.json<{ renderable: { viewer: Record<string, unknown> } }>();
+    expect(upgradedCamera.renderable.viewer.viewingMode).toBe("walkable");
+    expect(upgradedCamera.renderable.viewer.initialCamera).toBeUndefined();
+    expect(upgradedCamera.renderable.viewer.sceneRotationDegrees).toBeUndefined();
+    const publishedWalk = await publishMode("walkable");
+    expect(publishedWalk.status, JSON.stringify(await publishedWalk.clone().json())).toBe(201);
+    const walkRelease = await publishedWalk.json<{ release: { id: string } }>();
+    const walkingManifest = await exports.default.fetch(`${origin}/api/releases/capability-upgrade-fixture/manifest`);
+    await expect(walkingManifest.json()).resolves.toMatchObject({
+      viewer: { viewingMode: "walkable" }, spatial: { navigationArtifact: { schemaVersion: "spatial-navigation-v7" } },
+    });
+    const restoreFly = await exports.default.fetch(`${origin}/api/release-channels/capability-upgrade-fixture/rollback`, {
+      method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ releaseId: flyRelease.release.id }),
+    });
+    expect(restoreFly.status).toBe(200);
+    const unchangedFly = await exports.default.fetch(`${origin}/api/releases/capability-upgrade-fixture/manifest`);
+    await expect(unchangedFly.json()).resolves.toMatchObject({ viewer: { viewingMode: "fly-only" }, spatial: null });
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM release_channels WHERE slug = 'capability-upgrade-fixture'"),
+      env.DB.prepare("DELETE FROM scene_render_sessions WHERE release_id IN (?, ?)").bind(flyRelease.release.id, walkRelease.release.id),
+      env.DB.prepare("DELETE FROM releases WHERE id IN (?, ?)").bind(flyRelease.release.id, walkRelease.release.id),
+      env.DB.prepare("UPDATE scene_versions SET status = 'APPROVED' WHERE id = ?").bind(completed.asset.versionId),
+      env.DB.prepare("UPDATE projects SET status = 'APPROVED' WHERE id = ?").bind(project.id),
+    ]);
 
     await env.SPATIAL_ASSETS.delete(navigationReportKey);
     const missingNavigationObjectRelease = await exports.default.fetch(

@@ -20,4 +20,11 @@ describe("QA decision contract", () => {
     expect(qaDecisionSchema.safeParse({ ...baseDecision, visualGrade: "A" }).success).toBe(true);
     expect(qaDecisionSchema.safeParse({ ...baseDecision, visualGrade: "B" }).success).toBe(true);
   });
+
+  it("keeps metric claims out of Fly-only approval", () => {
+    const visual = { ...baseDecision, visualGrade: "B", viewingMode: "fly-only" };
+    expect(qaDecisionSchema.safeParse(visual).success).toBe(true);
+    expect(qaDecisionSchema.safeParse({ ...visual, measurementGrade: "indicative" }).success).toBe(false);
+    expect(qaDecisionSchema.safeParse({ ...visual, privacyStatus: "pending" }).success).toBe(false);
+  });
 });

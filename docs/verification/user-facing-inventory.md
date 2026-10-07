@@ -40,8 +40,8 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 - Forms: 37
 - Dialogs: 37
 - Governed fields: 246
-- Static and generated controls: 305
-- Route and control assurance: browser=11, deployed-staging=28, integration=111, production-attested=1, static=337, unit=1
+- Static and generated controls: 307
+- Route and control assurance: browser=12, deployed-staging=28, integration=111, production-attested=1, static=338, unit=1
 - Persisted state sets: 69
 - Asynchronous workflows: 59
 
@@ -121,108 +121,108 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | POST /api/projects/:projectId/archive | platform_admin\|production_operator | src/worker/index.ts:4843 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
 | POST /api/projects/:projectId/restore | platform_admin\|production_operator | src/worker/index.ts:4861 | API-A | integration | test/platform.spec.ts |
 | GET /api/projects/:projectId | platform_admin\|production_operator | src/worker/index.ts:4878 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/projects/:projectId/capture-bundles | platform_admin\|production_operator | src/worker/index.ts:5005 | API-A | integration | test/capture-bundle.spec.ts |
-| PATCH /api/projects/:projectId/capture-bundles/:manifestId | platform_admin\|production_operator | src/worker/index.ts:5253 | API-A | integration | test/capture-bundle.spec.ts |
-| GET /api/projects/:projectId/reviewers | platform_admin\|production_operator | src/worker/index.ts:5291 | API-A | static | src/worker/index.ts:5291 |
-| POST /api/projects/:projectId/reviewers | platform_admin\|production_operator | src/worker/index.ts:5314 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/projects/:projectId/reviewers/:userId | platform_admin\|production_operator | src/worker/index.ts:5429 | API-A | integration | test/platform.spec.ts |
-| GET /api/review/inbox | customer_reviewer\|customer_readonly | src/worker/index.ts:5456 | API-A | integration | test/platform.spec.ts |
-| GET /api/review/projects/:projectId | customer_reviewer\|customer_readonly | src/worker/index.ts:5491 | API-A | static | src/worker/index.ts:5491 |
-| POST /api/review/projects/:projectId/versions/:versionId/comments | customer_reviewer\|customer_readonly | src/worker/index.ts:5520 | API-A | integration | test/platform.spec.ts |
-| POST /api/review/projects/:projectId/versions/:versionId/decisions | customer_reviewer\|customer_readonly | src/worker/index.ts:5578 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/reviews | platform_admin\|production_operator | src/worker/index.ts:5617 | API-A | integration | test/platform.spec.ts |
-| PATCH /api/projects/:projectId/reviews/comments/:commentId | platform_admin\|production_operator | src/worker/index.ts:5663 | API-A | static | src/worker/index.ts:5663 |
-| GET /api/projects/:projectId/spatial/authoring-renderable | platform_admin\|production_operator | src/worker/index.ts:5688 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/versions/:versionId/preview | platform_admin\|production_operator | src/worker/index.ts:5785 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| GET /api/projects/:projectId/theme | platform_admin\|production_operator | src/worker/index.ts:5928 | API-A | static | src/worker/index.ts:5928 |
-| PUT /api/projects/:projectId/theme | platform_admin\|production_operator | src/worker/index.ts:5945 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/domains | platform_admin\|production_operator | src/worker/index.ts:5977 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/domains | platform_admin\|production_operator | src/worker/index.ts:5997 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/domains/:domainId/challenge | platform_admin\|production_operator | src/worker/index.ts:6034 | API-A | static | src/worker/index.ts:6034 |
-| POST /api/projects/:projectId/domains/:domainId/verify | platform_admin\|production_operator | src/worker/index.ts:6068 | API-A | static | src/worker/index.ts:6068 |
-| POST /api/projects/:projectId/domains/:domainId/provision | platform_admin\|production_operator | src/worker/index.ts:6135 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/projects/:projectId/domains/:domainId | platform_admin\|production_operator | src/worker/index.ts:6236 | API-A | static | src/worker/index.ts:6236 |
-| GET /api/hosting | platform_admin\|production_operator | src/worker/index.ts:6283 | API-A | integration | test/platform.spec.ts |
-| POST /api/admin/billing/invoices | platform_admin | src/worker/index.ts:6354 | API-A | integration | test/platform.spec.ts |
-| POST /api/admin/billing/invoices/:invoiceId/transition | platform_admin | src/worker/index.ts:6514 | API-A | integration | test/platform.spec.ts |
-| POST /api/admin/billing/subscriptions/:subscriptionId/transition | platform_admin | src/worker/index.ts:6662 | API-A | integration | test/platform.spec.ts |
-| POST /api/billing/stripe/webhook | platform_admin\|production_operator | src/worker/index.ts:6792 | API-A | static | src/worker/index.ts:6792 |
-| POST /api/hosting/lifecycle/run | platform_admin\|production_operator | src/worker/index.ts:6868 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/retention/restore-drill | platform_admin\|production_operator | src/worker/index.ts:6877 | API-A | static | src/worker/index.ts:6877 |
-| PUT /api/projects/:projectId/hosting | platform_admin\|production_operator | src/worker/index.ts:6941 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/hosting/renew | platform_admin\|production_operator | src/worker/index.ts:7084 | API-A | static | src/worker/index.ts:7084 |
-| POST /api/projects/:projectId/hosting/cancel | platform_admin\|production_operator | src/worker/index.ts:7095 | API-A | static | src/worker/index.ts:7095 |
-| PUT /api/projects/:projectId/retention | platform_admin\|production_operator | src/worker/index.ts:7174 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/spatial | platform_admin\|production_operator | src/worker/index.ts:7209 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/projects/:projectId/spatial/entities | platform_admin\|production_operator | src/worker/index.ts:7434 | API-A | integration | test/platform.spec.ts |
-| PATCH /api/projects/:projectId/spatial/entities/:entityId | platform_admin\|production_operator | src/worker/index.ts:7495 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/projects/:projectId/spatial/entities/:entityId | platform_admin\|production_operator | src/worker/index.ts:7559 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/spatial/navigation-obstacles | platform_admin\|production_operator | src/worker/index.ts:7573 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/projects/:projectId/spatial/navigation-obstacles/:obstacleId | platform_admin\|production_operator | src/worker/index.ts:7630 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/spatial/navigation-traversals | platform_admin\|production_operator | src/worker/index.ts:8406 | API-A | integration | test/platform.spec.ts |
-| PATCH /api/projects/:projectId/spatial/navigation-traversals/:traversalId | platform_admin\|production_operator | src/worker/index.ts:8532 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/projects/:projectId/spatial/navigation-traversals/:traversalId | platform_admin\|production_operator | src/worker/index.ts:8664 | API-A | static | src/worker/index.ts:8664 |
-| PUT /api/projects/:projectId/spatial/navigation-profile | platform_admin\|production_operator | src/worker/index.ts:8692 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/spatial/navigation-builds | platform_admin\|production_operator | src/worker/index.ts:8857 | API-A | static | src/worker/index.ts:8857 |
-| POST /api/projects/:projectId/spatial/navigation-builds/:buildId/review | platform_admin\|production_operator | src/worker/index.ts:9098 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/projects/:projectId/spatial/routes | platform_admin\|production_operator | src/worker/index.ts:9292 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/spatial/semantic-extractions | platform_admin\|production_operator | src/worker/index.ts:9330 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
-| POST /api/projects/:projectId/spatial/semantic-extractions/:extractionId/review | platform_admin\|production_operator | src/worker/index.ts:9444 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
-| POST /api/projects/:projectId/spatial/versions/:versionId/structure-rebuilds | platform_admin\|production_operator | src/worker/index.ts:9755 | API-A | integration | test/structure-rebuild.spec.ts |
-| POST /api/projects/:projectId/spatial/floorplan-extractions | platform_admin\|production_operator | src/worker/index.ts:9816 | API-A | integration | test/vendor-neutral-floorplan-workflow.spec.ts |
-| POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/correction-drafts | platform_admin\|production_operator | src/worker/index.ts:10053 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review | platform_admin\|production_operator | src/worker/index.ts:10191 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/exports | platform_admin\|production_operator | src/worker/index.ts:11048 | API-A | static | src/worker/index.ts:11048 |
-| GET /api/projects/:projectId/spatial/floorplan-exports/:exportId/download | platform_admin\|production_operator | src/worker/index.ts:11295 | API-A | static | src/worker/index.ts:11295 |
-| POST /api/projects/:projectId/spatial/capture-completeness | platform_admin\|production_operator | src/worker/index.ts:11322 | API-A | integration | test/capture-scan-structure.spec.ts |
-| PATCH /api/projects/:projectId/spatial/capture-completeness/:reportId | platform_admin\|production_operator | src/worker/index.ts:11553 | API-A | integration | test/platform.spec.ts |
-| PUT /api/projects/:projectId/spatial/delivery-policy | platform_admin\|production_operator | src/worker/index.ts:11596 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/measurement | platform_admin\|production_operator | src/worker/index.ts:11629 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/measurement/briefs | platform_admin\|production_operator | src/worker/index.ts:11680 | API-A | integration | test/capture-bundle.spec.ts |
-| POST /api/projects/:projectId/measurement/briefs/:briefId/check-points | platform_admin\|production_operator | src/worker/index.ts:11798 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/measurement/briefs/:briefId/qa-report | platform_admin\|production_operator | src/worker/index.ts:11865 | API-A | integration | test/platform.spec.ts |
-| POST /api/projects/:projectId/measurement/briefs/:briefId/deliverables | platform_admin\|production_operator | src/worker/index.ts:11980 | API-A | integration | test/platform.spec.ts |
-| GET /api/projects/:projectId/measurement/deliverables/:deliverableId/download | platform_admin\|production_operator | src/worker/index.ts:12226 | API-A | static | src/worker/index.ts:12226 |
-| POST /api/projects/:projectId/measurement/briefs/:briefId/signoffs | platform_admin\|production_operator | src/worker/index.ts:12246 | API-A | integration | test/project-governance.spec.ts |
-| POST /api/projects/:projectId/costs | platform_admin\|production_operator | src/worker/index.ts:12320 | API-A | static | src/worker/index.ts:12320 |
-| GET /api/projects/:projectId/uploads/open | platform_admin\|production_operator | src/worker/index.ts:12354 | API-A | integration | test/capture-agent-credentials.spec.ts |
-| POST /api/projects/:projectId/uploads | platform_admin\|production_operator | src/worker/index.ts:12451 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| PUT /api/uploads/:uploadId/parts/:partNumber | platform_admin\|production_operator | src/worker/index.ts:12764 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/uploads/:uploadId/complete | platform_admin\|production_operator | src/worker/index.ts:12823 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| DELETE /api/uploads/:uploadId | platform_admin\|production_operator | src/worker/index.ts:13028 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| GET /api/jobs | platform_admin\|production_operator | src/worker/index.ts:13051 | API-A | integration | test/platform.spec.ts |
-| GET /api/releases | platform_admin\|production_operator | src/worker/index.ts:13113 | API-A | integration | test/platform.spec.ts |
-| POST /api/jobs/:jobId/retry | platform_admin\|production_operator | src/worker/index.ts:13162 | API-A | integration | test/capture-adapter-import.spec.ts |
-| POST /api/jobs/:jobId/cancel | platform_admin\|production_operator | src/worker/index.ts:13248 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/jobs/:jobId/manual-complete | platform_admin\|production_operator | src/worker/index.ts:13344 | API-A | integration | test/platform.spec.ts |
-| POST /api/worker/jobs/lease | service | src/worker/index.ts:13388 | API-A | integration | test/capture-adapter-import.spec.ts |
-| GET /api/worker/jobs/:jobId/input | service | src/worker/index.ts:13690 | API-A | static | src/worker/index.ts:13690 |
-| GET /api/worker/jobs/:jobId/inputs/:role | service | src/worker/index.ts:13706 | API-A | integration | test/wayfinder-trajectory.spec.ts |
-| PUT /api/worker/jobs/:jobId/outputs/:kind/:fileName | service | src/worker/index.ts:13810 | API-A | integration | test/registered-scene-change.spec.ts |
-| POST /api/worker/jobs/:jobId/outputs | service | src/worker/index.ts:13852 | API-A | integration | test/platform.spec.ts |
-| PUT /api/worker/jobs/:jobId/outputs/:outputId/parts/:partNumber | service | src/worker/index.ts:13907 | API-A | integration | test/platform.spec.ts |
-| POST /api/worker/jobs/:jobId/outputs/:outputId/complete | service | src/worker/index.ts:13939 | API-A | integration | test/platform.spec.ts |
-| POST /api/worker/jobs/:jobId/heartbeat | service | src/worker/index.ts:13988 | API-A | integration | test/platform.spec.ts |
-| POST /api/worker/jobs/:jobId/complete | service | src/worker/index.ts:14015 | API-A | integration | test/capture-adapter-import.spec.ts |
-| POST /api/worker/jobs/:jobId/scene-change-complete | service | src/worker/index.ts:14584 | API-A | integration | test/registered-scene-change.spec.ts |
-| POST /api/worker/jobs/:jobId/semantic-extraction-complete | service | src/worker/index.ts:14788 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
-| POST /api/worker/jobs/:jobId/floorplan-extraction-complete | service | src/worker/index.ts:15017 | API-A | integration | test/vendor-neutral-floorplan-workflow.spec.ts |
-| POST /api/worker/jobs/:jobId/fail | service | src/worker/index.ts:15615 | API-A | integration | test/capture-adapter-import.spec.ts |
-| POST /api/versions/:versionId/approve | platform_admin\|production_operator | src/worker/index.ts:15749 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| GET /api/projects/:projectId/releases/:releaseId/access-token | platform_admin\|production_operator | src/worker/index.ts:15857 | API-A | integration | test/release-token-reveal.spec.ts |
-| POST /api/projects/:projectId/releases | platform_admin\|production_operator | src/worker/index.ts:15913 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/release-channels/:slug/rollback | platform_admin\|production_operator | src/worker/index.ts:16456 | API-A | integration | test/platform.spec.ts |
-| DELETE /api/release-channels/:slug | platform_admin\|production_operator | src/worker/index.ts:16508 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| POST /api/releases/:slug/telemetry-session | public | src/worker/index.ts:16743 | API-A | integration | test/platform.spec.ts |
-| GET /api/releases/:slug/manifest | public | src/worker/index.ts:16829 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
-| GET /public-asset/:releaseId/:assetId/:fileName | public | src/worker/index.ts:16974 | ROUTE-A | integration | test/platform.spec.ts |
-| GET /asset/:releaseId/:assetId/:fileName | platform_admin\|production_operator | src/worker/index.ts:17008 | ROUTE-A | integration | test/platform.spec.ts |
-| POST /api/telemetry | public | src/worker/index.ts:17265 | API-A | integration | test/platform.spec.ts |
-| GET /api/releases/:releaseId/navigation-traversal-evidence | platform_admin\|production_operator | src/worker/index.ts:17460 | API-A | integration | test/platform.spec.ts |
-| GET / | public | src/worker/index.ts:17522 | ROUTE-A | static | src/worker/index.ts:17522 |
-| GET /s/:slug | public | src/worker/index.ts:17545 | ROUTE-A | integration | test/platform.spec.ts |
-| GET /preview/:projectId/:versionId | signed-session | src/worker/index.ts:17579 | ROUTE-A | static | src/worker/index.ts:17579 |
-| GET /review/:slug | signed-session | src/worker/index.ts:17582 | ROUTE-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/capture-bundles | platform_admin\|production_operator | src/worker/index.ts:5009 | API-A | integration | test/capture-bundle.spec.ts |
+| PATCH /api/projects/:projectId/capture-bundles/:manifestId | platform_admin\|production_operator | src/worker/index.ts:5257 | API-A | integration | test/capture-bundle.spec.ts |
+| GET /api/projects/:projectId/reviewers | platform_admin\|production_operator | src/worker/index.ts:5295 | API-A | static | src/worker/index.ts:5295 |
+| POST /api/projects/:projectId/reviewers | platform_admin\|production_operator | src/worker/index.ts:5318 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/projects/:projectId/reviewers/:userId | platform_admin\|production_operator | src/worker/index.ts:5433 | API-A | integration | test/platform.spec.ts |
+| GET /api/review/inbox | customer_reviewer\|customer_readonly | src/worker/index.ts:5460 | API-A | integration | test/platform.spec.ts |
+| GET /api/review/projects/:projectId | customer_reviewer\|customer_readonly | src/worker/index.ts:5495 | API-A | static | src/worker/index.ts:5495 |
+| POST /api/review/projects/:projectId/versions/:versionId/comments | customer_reviewer\|customer_readonly | src/worker/index.ts:5524 | API-A | integration | test/platform.spec.ts |
+| POST /api/review/projects/:projectId/versions/:versionId/decisions | customer_reviewer\|customer_readonly | src/worker/index.ts:5582 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/reviews | platform_admin\|production_operator | src/worker/index.ts:5621 | API-A | integration | test/platform.spec.ts |
+| PATCH /api/projects/:projectId/reviews/comments/:commentId | platform_admin\|production_operator | src/worker/index.ts:5667 | API-A | static | src/worker/index.ts:5667 |
+| GET /api/projects/:projectId/spatial/authoring-renderable | platform_admin\|production_operator | src/worker/index.ts:5692 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/versions/:versionId/preview | platform_admin\|production_operator | src/worker/index.ts:5789 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| GET /api/projects/:projectId/theme | platform_admin\|production_operator | src/worker/index.ts:5949 | API-A | static | src/worker/index.ts:5949 |
+| PUT /api/projects/:projectId/theme | platform_admin\|production_operator | src/worker/index.ts:5966 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/domains | platform_admin\|production_operator | src/worker/index.ts:5998 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/domains | platform_admin\|production_operator | src/worker/index.ts:6018 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/domains/:domainId/challenge | platform_admin\|production_operator | src/worker/index.ts:6055 | API-A | static | src/worker/index.ts:6055 |
+| POST /api/projects/:projectId/domains/:domainId/verify | platform_admin\|production_operator | src/worker/index.ts:6089 | API-A | static | src/worker/index.ts:6089 |
+| POST /api/projects/:projectId/domains/:domainId/provision | platform_admin\|production_operator | src/worker/index.ts:6156 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/projects/:projectId/domains/:domainId | platform_admin\|production_operator | src/worker/index.ts:6257 | API-A | static | src/worker/index.ts:6257 |
+| GET /api/hosting | platform_admin\|production_operator | src/worker/index.ts:6304 | API-A | integration | test/platform.spec.ts |
+| POST /api/admin/billing/invoices | platform_admin | src/worker/index.ts:6375 | API-A | integration | test/platform.spec.ts |
+| POST /api/admin/billing/invoices/:invoiceId/transition | platform_admin | src/worker/index.ts:6535 | API-A | integration | test/platform.spec.ts |
+| POST /api/admin/billing/subscriptions/:subscriptionId/transition | platform_admin | src/worker/index.ts:6683 | API-A | integration | test/platform.spec.ts |
+| POST /api/billing/stripe/webhook | platform_admin\|production_operator | src/worker/index.ts:6813 | API-A | static | src/worker/index.ts:6813 |
+| POST /api/hosting/lifecycle/run | platform_admin\|production_operator | src/worker/index.ts:6889 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/retention/restore-drill | platform_admin\|production_operator | src/worker/index.ts:6898 | API-A | static | src/worker/index.ts:6898 |
+| PUT /api/projects/:projectId/hosting | platform_admin\|production_operator | src/worker/index.ts:6962 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/hosting/renew | platform_admin\|production_operator | src/worker/index.ts:7105 | API-A | static | src/worker/index.ts:7105 |
+| POST /api/projects/:projectId/hosting/cancel | platform_admin\|production_operator | src/worker/index.ts:7116 | API-A | static | src/worker/index.ts:7116 |
+| PUT /api/projects/:projectId/retention | platform_admin\|production_operator | src/worker/index.ts:7195 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/spatial | platform_admin\|production_operator | src/worker/index.ts:7230 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/projects/:projectId/spatial/entities | platform_admin\|production_operator | src/worker/index.ts:7455 | API-A | integration | test/platform.spec.ts |
+| PATCH /api/projects/:projectId/spatial/entities/:entityId | platform_admin\|production_operator | src/worker/index.ts:7516 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/projects/:projectId/spatial/entities/:entityId | platform_admin\|production_operator | src/worker/index.ts:7580 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/spatial/navigation-obstacles | platform_admin\|production_operator | src/worker/index.ts:7594 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/projects/:projectId/spatial/navigation-obstacles/:obstacleId | platform_admin\|production_operator | src/worker/index.ts:7651 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/spatial/navigation-traversals | platform_admin\|production_operator | src/worker/index.ts:8427 | API-A | integration | test/platform.spec.ts |
+| PATCH /api/projects/:projectId/spatial/navigation-traversals/:traversalId | platform_admin\|production_operator | src/worker/index.ts:8553 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/projects/:projectId/spatial/navigation-traversals/:traversalId | platform_admin\|production_operator | src/worker/index.ts:8685 | API-A | static | src/worker/index.ts:8685 |
+| PUT /api/projects/:projectId/spatial/navigation-profile | platform_admin\|production_operator | src/worker/index.ts:8713 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/spatial/navigation-builds | platform_admin\|production_operator | src/worker/index.ts:8878 | API-A | static | src/worker/index.ts:8878 |
+| POST /api/projects/:projectId/spatial/navigation-builds/:buildId/review | platform_admin\|production_operator | src/worker/index.ts:9119 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/projects/:projectId/spatial/routes | platform_admin\|production_operator | src/worker/index.ts:9313 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/spatial/semantic-extractions | platform_admin\|production_operator | src/worker/index.ts:9351 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
+| POST /api/projects/:projectId/spatial/semantic-extractions/:extractionId/review | platform_admin\|production_operator | src/worker/index.ts:9465 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
+| POST /api/projects/:projectId/spatial/versions/:versionId/structure-rebuilds | platform_admin\|production_operator | src/worker/index.ts:9776 | API-A | integration | test/structure-rebuild.spec.ts |
+| POST /api/projects/:projectId/spatial/floorplan-extractions | platform_admin\|production_operator | src/worker/index.ts:9837 | API-A | integration | test/vendor-neutral-floorplan-workflow.spec.ts |
+| POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/correction-drafts | platform_admin\|production_operator | src/worker/index.ts:10074 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/spatial/floorplan-extractions/:extractionId/review | platform_admin\|production_operator | src/worker/index.ts:10212 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/projects/:projectId/spatial/floorplan-revisions/:revisionId/exports | platform_admin\|production_operator | src/worker/index.ts:11069 | API-A | static | src/worker/index.ts:11069 |
+| GET /api/projects/:projectId/spatial/floorplan-exports/:exportId/download | platform_admin\|production_operator | src/worker/index.ts:11316 | API-A | static | src/worker/index.ts:11316 |
+| POST /api/projects/:projectId/spatial/capture-completeness | platform_admin\|production_operator | src/worker/index.ts:11343 | API-A | integration | test/capture-scan-structure.spec.ts |
+| PATCH /api/projects/:projectId/spatial/capture-completeness/:reportId | platform_admin\|production_operator | src/worker/index.ts:11574 | API-A | integration | test/platform.spec.ts |
+| PUT /api/projects/:projectId/spatial/delivery-policy | platform_admin\|production_operator | src/worker/index.ts:11617 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/measurement | platform_admin\|production_operator | src/worker/index.ts:11650 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/measurement/briefs | platform_admin\|production_operator | src/worker/index.ts:11701 | API-A | integration | test/capture-bundle.spec.ts |
+| POST /api/projects/:projectId/measurement/briefs/:briefId/check-points | platform_admin\|production_operator | src/worker/index.ts:11819 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/measurement/briefs/:briefId/qa-report | platform_admin\|production_operator | src/worker/index.ts:11886 | API-A | integration | test/platform.spec.ts |
+| POST /api/projects/:projectId/measurement/briefs/:briefId/deliverables | platform_admin\|production_operator | src/worker/index.ts:12001 | API-A | integration | test/platform.spec.ts |
+| GET /api/projects/:projectId/measurement/deliverables/:deliverableId/download | platform_admin\|production_operator | src/worker/index.ts:12247 | API-A | static | src/worker/index.ts:12247 |
+| POST /api/projects/:projectId/measurement/briefs/:briefId/signoffs | platform_admin\|production_operator | src/worker/index.ts:12267 | API-A | integration | test/project-governance.spec.ts |
+| POST /api/projects/:projectId/costs | platform_admin\|production_operator | src/worker/index.ts:12341 | API-A | static | src/worker/index.ts:12341 |
+| GET /api/projects/:projectId/uploads/open | platform_admin\|production_operator | src/worker/index.ts:12375 | API-A | integration | test/capture-agent-credentials.spec.ts |
+| POST /api/projects/:projectId/uploads | platform_admin\|production_operator | src/worker/index.ts:12472 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| PUT /api/uploads/:uploadId/parts/:partNumber | platform_admin\|production_operator | src/worker/index.ts:12785 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/uploads/:uploadId/complete | platform_admin\|production_operator | src/worker/index.ts:12844 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| DELETE /api/uploads/:uploadId | platform_admin\|production_operator | src/worker/index.ts:13049 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| GET /api/jobs | platform_admin\|production_operator | src/worker/index.ts:13072 | API-A | integration | test/platform.spec.ts |
+| GET /api/releases | platform_admin\|production_operator | src/worker/index.ts:13134 | API-A | integration | test/platform.spec.ts |
+| POST /api/jobs/:jobId/retry | platform_admin\|production_operator | src/worker/index.ts:13183 | API-A | integration | test/capture-adapter-import.spec.ts |
+| POST /api/jobs/:jobId/cancel | platform_admin\|production_operator | src/worker/index.ts:13269 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/jobs/:jobId/manual-complete | platform_admin\|production_operator | src/worker/index.ts:13365 | API-A | integration | test/platform.spec.ts |
+| POST /api/worker/jobs/lease | service | src/worker/index.ts:13409 | API-A | integration | test/capture-adapter-import.spec.ts |
+| GET /api/worker/jobs/:jobId/input | service | src/worker/index.ts:13711 | API-A | static | src/worker/index.ts:13711 |
+| GET /api/worker/jobs/:jobId/inputs/:role | service | src/worker/index.ts:13727 | API-A | integration | test/wayfinder-trajectory.spec.ts |
+| PUT /api/worker/jobs/:jobId/outputs/:kind/:fileName | service | src/worker/index.ts:13831 | API-A | integration | test/registered-scene-change.spec.ts |
+| POST /api/worker/jobs/:jobId/outputs | service | src/worker/index.ts:13873 | API-A | integration | test/platform.spec.ts |
+| PUT /api/worker/jobs/:jobId/outputs/:outputId/parts/:partNumber | service | src/worker/index.ts:13928 | API-A | integration | test/platform.spec.ts |
+| POST /api/worker/jobs/:jobId/outputs/:outputId/complete | service | src/worker/index.ts:13960 | API-A | integration | test/platform.spec.ts |
+| POST /api/worker/jobs/:jobId/heartbeat | service | src/worker/index.ts:14009 | API-A | integration | test/platform.spec.ts |
+| POST /api/worker/jobs/:jobId/complete | service | src/worker/index.ts:14036 | API-A | integration | test/capture-adapter-import.spec.ts |
+| POST /api/worker/jobs/:jobId/scene-change-complete | service | src/worker/index.ts:14605 | API-A | integration | test/registered-scene-change.spec.ts |
+| POST /api/worker/jobs/:jobId/semantic-extraction-complete | service | src/worker/index.ts:14809 | API-A | integration | test/semantic-extraction-workflow.spec.ts |
+| POST /api/worker/jobs/:jobId/floorplan-extraction-complete | service | src/worker/index.ts:15038 | API-A | integration | test/vendor-neutral-floorplan-workflow.spec.ts |
+| POST /api/worker/jobs/:jobId/fail | service | src/worker/index.ts:15636 | API-A | integration | test/capture-adapter-import.spec.ts |
+| POST /api/versions/:versionId/approve | platform_admin\|production_operator | src/worker/index.ts:15770 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| GET /api/projects/:projectId/releases/:releaseId/access-token | platform_admin\|production_operator | src/worker/index.ts:15898 | API-A | integration | test/release-token-reveal.spec.ts |
+| POST /api/projects/:projectId/releases | platform_admin\|production_operator | src/worker/index.ts:15954 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/release-channels/:slug/rollback | platform_admin\|production_operator | src/worker/index.ts:16525 | API-A | integration | test/platform.spec.ts |
+| DELETE /api/release-channels/:slug | platform_admin\|production_operator | src/worker/index.ts:16589 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| POST /api/releases/:slug/telemetry-session | public | src/worker/index.ts:16824 | API-A | integration | test/platform.spec.ts |
+| GET /api/releases/:slug/manifest | public | src/worker/index.ts:16910 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| GET /public-asset/:releaseId/:assetId/:fileName | public | src/worker/index.ts:17056 | ROUTE-A | integration | test/platform.spec.ts |
+| GET /asset/:releaseId/:assetId/:fileName | platform_admin\|production_operator | src/worker/index.ts:17090 | ROUTE-A | integration | test/platform.spec.ts |
+| POST /api/telemetry | public | src/worker/index.ts:17347 | API-A | integration | test/platform.spec.ts |
+| GET /api/releases/:releaseId/navigation-traversal-evidence | platform_admin\|production_operator | src/worker/index.ts:17542 | API-A | integration | test/platform.spec.ts |
+| GET / | public | src/worker/index.ts:17604 | ROUTE-A | static | src/worker/index.ts:17604 |
+| GET /s/:slug | public | src/worker/index.ts:17627 | ROUTE-A | integration | test/platform.spec.ts |
+| GET /preview/:projectId/:versionId | signed-session | src/worker/index.ts:17661 | ROUTE-A | static | src/worker/index.ts:17661 |
+| GET /review/:slug | signed-session | src/worker/index.ts:17664 | ROUTE-A | integration | test/platform.spec.ts |
 | GET /api/projects/:projectId/versions/compare | platform_admin\|production_operator | src/worker/routes/comparison.ts:150 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
 | POST /api/projects/:projectId/spatial/change-reports | platform_admin\|production_operator | src/worker/routes/comparison.ts:299 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
 | PATCH /api/projects/:projectId/spatial/change-reports/:reportId | platform_admin\|production_operator | src/worker/routes/comparison.ts:483 | API-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
@@ -260,28 +260,28 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | captureBundleReviewForm | captureBundleReviewDialog | global | studio.html:710 | FORM-A | static | studio.html:710 |
 | editProjectForm | editProjectDialog | global | studio.html:726 | FORM-A | static | studio.html:726 |
 | qaForm | qaDialog | global | studio.html:750 | FORM-A | static | studio.html:750 |
-| releaseForm | releaseDialog | global | studio.html:768 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| reviewerForm | reviewerDialog | global | studio.html:855 | FORM-A | static | studio.html:855 |
-| deliveryForm | deliveryDialog | global | studio.html:871 | FORM-A | static | studio.html:871 |
-| domainForm | domainDialog | global | studio.html:895 | FORM-A | static | studio.html:895 |
-| entityForm | entityDialog | global | studio.html:919 | FORM-A | static | studio.html:919 |
-| navigationProfileForm | navigationProfileDialog | global | studio.html:938 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| navigationBuildForm | navigationBuildDialog | global | studio.html:966 | FORM-A | static | studio.html:966 |
-| navigationTraversalForm | navigationTraversalDialog | global | studio.html:995 | FORM-A | static | studio.html:995 |
-| semanticExtractionForm | semanticExtractionDialog | global | studio.html:1016 | FORM-A | browser | e2e/ui-quality.spec.ts |
-| semanticReviewForm | semanticReviewDialog | global | studio.html:1045 | FORM-A | static | studio.html:1045 |
-| floorplanExtractionForm | floorplanExtractionDialog | global | studio.html:1066 | FORM-A | static | studio.html:1066 |
-| floorplanReviewForm | floorplanReviewDialog | global | studio.html:1101 | FORM-A | static | studio.html:1101 |
-| routeForm | routeDialog | global | studio.html:1135 | FORM-A | static | studio.html:1135 |
-| measurementBriefForm | measurementBriefDialog | global | studio.html:1152 | FORM-A | static | studio.html:1152 |
-| checkPointForm | checkPointDialog | global | studio.html:1170 | FORM-A | static | studio.html:1170 |
-| geometryChangeForm | geometryChangeDialog | global | studio.html:1186 | FORM-A | static | studio.html:1186 |
-| geometryChangeReviewForm | geometryChangeReviewDialog | global | studio.html:1205 | FORM-A | static | studio.html:1205 |
-| rawSceneChangeForm | rawSceneChangeDialog | global | studio.html:1221 | FORM-A | static | studio.html:1221 |
-| rawSceneChangeReviewForm | rawSceneChangeReviewDialog | global | studio.html:1250 | FORM-A | static | studio.html:1250 |
-| captureCompletenessForm | captureCompletenessDialog | global | studio.html:1266 | FORM-A | static | studio.html:1266 |
-| captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1293 | FORM-A | static | studio.html:1293 |
-| versionComparisonForm | versionComparisonDialog | global | studio.html:1322 | FORM-A | static | studio.html:1322 |
+| releaseForm | releaseDialog | global | studio.html:769 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| reviewerForm | reviewerDialog | global | studio.html:856 | FORM-A | static | studio.html:856 |
+| deliveryForm | deliveryDialog | global | studio.html:872 | FORM-A | static | studio.html:872 |
+| domainForm | domainDialog | global | studio.html:896 | FORM-A | static | studio.html:896 |
+| entityForm | entityDialog | global | studio.html:920 | FORM-A | static | studio.html:920 |
+| navigationProfileForm | navigationProfileDialog | global | studio.html:939 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| navigationBuildForm | navigationBuildDialog | global | studio.html:967 | FORM-A | static | studio.html:967 |
+| navigationTraversalForm | navigationTraversalDialog | global | studio.html:996 | FORM-A | static | studio.html:996 |
+| semanticExtractionForm | semanticExtractionDialog | global | studio.html:1017 | FORM-A | browser | e2e/ui-quality.spec.ts |
+| semanticReviewForm | semanticReviewDialog | global | studio.html:1046 | FORM-A | static | studio.html:1046 |
+| floorplanExtractionForm | floorplanExtractionDialog | global | studio.html:1067 | FORM-A | static | studio.html:1067 |
+| floorplanReviewForm | floorplanReviewDialog | global | studio.html:1102 | FORM-A | static | studio.html:1102 |
+| routeForm | routeDialog | global | studio.html:1136 | FORM-A | static | studio.html:1136 |
+| measurementBriefForm | measurementBriefDialog | global | studio.html:1153 | FORM-A | static | studio.html:1153 |
+| checkPointForm | checkPointDialog | global | studio.html:1171 | FORM-A | static | studio.html:1171 |
+| geometryChangeForm | geometryChangeDialog | global | studio.html:1187 | FORM-A | static | studio.html:1187 |
+| geometryChangeReviewForm | geometryChangeReviewDialog | global | studio.html:1206 | FORM-A | static | studio.html:1206 |
+| rawSceneChangeForm | rawSceneChangeDialog | global | studio.html:1222 | FORM-A | static | studio.html:1222 |
+| rawSceneChangeReviewForm | rawSceneChangeReviewDialog | global | studio.html:1251 | FORM-A | static | studio.html:1251 |
+| captureCompletenessForm | captureCompletenessDialog | global | studio.html:1267 | FORM-A | static | studio.html:1267 |
+| captureCompletenessReviewForm | captureCompletenessReviewDialog | global | studio.html:1294 | FORM-A | static | studio.html:1294 |
+| versionComparisonForm | versionComparisonDialog | global | studio.html:1323 | FORM-A | static | studio.html:1323 |
 | accessCodeForm | none | global | index.html:270 | FORM-A | browser | e2e/release-access-code.spec.ts |
 | sceneReviewForm | none | global | index.html:296 | FORM-A | static | index.html:296 |
 
@@ -555,35 +555,35 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | identityProviderDialog | global | studio.html:573 | DIALOG-A | static | studio.html:573 |
 | captureAgentDialog | global | studio.html:590 | DIALOG-A | static | studio.html:590 |
 | captureAgentTokenDialog | global | studio.html:612 | DIALOG-A | static | studio.html:612 |
-| uploadDialog | global | studio.html:627 | DIALOG-A | static | studio.html:627 |
+| uploadDialog | global | studio.html:627 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
 | captureBundleDialog | global | studio.html:656 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
 | captureBundleReviewDialog | global | studio.html:708 | DIALOG-A | static | studio.html:708 |
 | editProjectDialog | global | studio.html:724 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
 | qaDialog | global | studio.html:748 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| releaseDialog | global | studio.html:766 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| askDialog | global | studio.html:821 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| publicationConfirmationDialog | global | studio.html:841 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| reviewerDialog | global | studio.html:853 | DIALOG-A | static | studio.html:853 |
-| deliveryDialog | global | studio.html:869 | DIALOG-A | static | studio.html:869 |
-| domainDialog | global | studio.html:893 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| entityDialog | global | studio.html:917 | DIALOG-A | static | studio.html:917 |
-| navigationProfileDialog | global | studio.html:936 | DIALOG-A | static | studio.html:936 |
-| navigationBuildDialog | global | studio.html:964 | DIALOG-A | static | studio.html:964 |
-| navigationTraversalDialog | global | studio.html:993 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| semanticExtractionDialog | global | studio.html:1014 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
-| semanticReviewDialog | global | studio.html:1043 | DIALOG-A | static | studio.html:1043 |
-| floorplanExtractionDialog | global | studio.html:1064 | DIALOG-A | static | studio.html:1064 |
-| floorplanReviewDialog | global | studio.html:1099 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
-| routeDialog | global | studio.html:1133 | DIALOG-A | static | studio.html:1133 |
-| measurementBriefDialog | global | studio.html:1150 | DIALOG-A | static | studio.html:1150 |
-| checkPointDialog | global | studio.html:1168 | DIALOG-A | static | studio.html:1168 |
-| geometryChangeDialog | global | studio.html:1184 | DIALOG-A | static | studio.html:1184 |
-| geometryChangeReviewDialog | global | studio.html:1203 | DIALOG-A | static | studio.html:1203 |
-| rawSceneChangeDialog | global | studio.html:1219 | DIALOG-A | static | studio.html:1219 |
-| rawSceneChangeReviewDialog | global | studio.html:1248 | DIALOG-A | static | studio.html:1248 |
-| captureCompletenessDialog | global | studio.html:1264 | DIALOG-A | static | studio.html:1264 |
-| captureCompletenessReviewDialog | global | studio.html:1291 | DIALOG-A | static | studio.html:1291 |
-| versionComparisonDialog | global | studio.html:1307 | DIALOG-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
+| releaseDialog | global | studio.html:767 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| askDialog | global | studio.html:822 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| publicationConfirmationDialog | global | studio.html:842 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| reviewerDialog | global | studio.html:854 | DIALOG-A | static | studio.html:854 |
+| deliveryDialog | global | studio.html:870 | DIALOG-A | static | studio.html:870 |
+| domainDialog | global | studio.html:894 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| entityDialog | global | studio.html:918 | DIALOG-A | static | studio.html:918 |
+| navigationProfileDialog | global | studio.html:937 | DIALOG-A | static | studio.html:937 |
+| navigationBuildDialog | global | studio.html:965 | DIALOG-A | static | studio.html:965 |
+| navigationTraversalDialog | global | studio.html:994 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| semanticExtractionDialog | global | studio.html:1015 | DIALOG-A | browser | e2e/ui-quality.spec.ts |
+| semanticReviewDialog | global | studio.html:1044 | DIALOG-A | static | studio.html:1044 |
+| floorplanExtractionDialog | global | studio.html:1065 | DIALOG-A | static | studio.html:1065 |
+| floorplanReviewDialog | global | studio.html:1100 | DIALOG-A | browser | e2e/release-authoring.spec.ts |
+| routeDialog | global | studio.html:1134 | DIALOG-A | static | studio.html:1134 |
+| measurementBriefDialog | global | studio.html:1151 | DIALOG-A | static | studio.html:1151 |
+| checkPointDialog | global | studio.html:1169 | DIALOG-A | static | studio.html:1169 |
+| geometryChangeDialog | global | studio.html:1185 | DIALOG-A | static | studio.html:1185 |
+| geometryChangeReviewDialog | global | studio.html:1204 | DIALOG-A | static | studio.html:1204 |
+| rawSceneChangeDialog | global | studio.html:1220 | DIALOG-A | static | studio.html:1220 |
+| rawSceneChangeReviewDialog | global | studio.html:1249 | DIALOG-A | static | studio.html:1249 |
+| captureCompletenessDialog | global | studio.html:1265 | DIALOG-A | static | studio.html:1265 |
+| captureCompletenessReviewDialog | global | studio.html:1292 | DIALOG-A | static | studio.html:1292 |
+| versionComparisonDialog | global | studio.html:1308 | DIALOG-A | deployed-staging | scripts/staging-lifecycle-canary.mjs |
 
 ## Buttons and links
 
@@ -675,60 +675,60 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | studio.html:button:725 | button | × | editProjectDialog | studio.html:725 | CONTROL-A | static | studio.html:725 |
 | studio.html:button:743 | button | Save project settings | editProjectDialog / editProjectForm | studio.html:743 | CONTROL-A | static | studio.html:743 |
 | studio.html:button:749 | button | × | qaDialog | studio.html:749 | CONTROL-A | static | studio.html:749 |
-| studio.html:button:761 | button | Approve immutable version | qaDialog / qaForm | studio.html:761 | CONTROL-A | static | studio.html:761 |
-| studio.html:button:767 | button | × | releaseDialog | studio.html:767 | CONTROL-A | static | studio.html:767 |
-| releaseUseCurrentView | button | Use current view | releaseDialog / releaseForm | studio.html:788 | CONTROL-A | static | studio.html:788 |
-| studio.html:button:816 | button | Publish release | releaseDialog / releaseForm | studio.html:816 | CONTROL-A | static | studio.html:816 |
-| studio.html:button:822 | button | × | askDialog | studio.html:822 | CONTROL-A | static | studio.html:822 |
-| studio.html:button:834 | button | Cancel | askDialog / askForm | studio.html:834 | CONTROL-A | static | studio.html:834 |
-| askConfirm | button | Confirm | askDialog / askForm | studio.html:835 | CONTROL-A | static | studio.html:835 |
-| studio.html:button:847 | button | Keep current release | publicationConfirmationDialog | studio.html:847 | CONTROL-A | static | studio.html:847 |
-| publicationConfirmationSubmit | button | Confirm | publicationConfirmationDialog | studio.html:848 | CONTROL-A | static | studio.html:848 |
-| studio.html:button:854 | button | × | reviewerDialog | studio.html:854 | CONTROL-A | static | studio.html:854 |
-| studio.html:button:864 | button | Send secure invitation | reviewerDialog / reviewerForm | studio.html:864 | CONTROL-A | static | studio.html:864 |
-| studio.html:button:870 | button | × | deliveryDialog | studio.html:870 | CONTROL-A | static | studio.html:870 |
-| studio.html:button:887 | button | Save brand & retention | deliveryDialog / deliveryForm | studio.html:887 | CONTROL-A | static | studio.html:887 |
-| startHostingCheckout | button | Open billing workspace | deliveryDialog / deliveryForm | studio.html:888 | CONTROL-A | static | studio.html:888 |
-| studio.html:button:894 | button | × | domainDialog | studio.html:894 | CONTROL-A | static | studio.html:894 |
-| studio.html:button:902 | button | Create verification record | domainDialog / domainForm | studio.html:902 | CONTROL-A | static | studio.html:902 |
-| studio.html:button:918 | button | × | entityDialog | studio.html:918 | CONTROL-A | static | studio.html:918 |
-| studio.html:button:931 | button | Add spatial entity | entityDialog / entityForm | studio.html:931 | CONTROL-A | static | studio.html:931 |
-| studio.html:button:937 | button | × | navigationProfileDialog | studio.html:937 | CONTROL-A | static | studio.html:937 |
-| studio.html:button:959 | button | Save walking profile | navigationProfileDialog / navigationProfileForm | studio.html:959 | CONTROL-A | static | studio.html:959 |
-| studio.html:button:965 | button | × | navigationBuildDialog | studio.html:965 | CONTROL-A | static | studio.html:965 |
-| studio.html:button:988 | button | Build verified walking map | navigationBuildDialog / navigationBuildForm | studio.html:988 | CONTROL-A | static | studio.html:988 |
-| studio.html:button:994 | button | × | navigationTraversalDialog | studio.html:994 | CONTROL-A | static | studio.html:994 |
-| studio.html:button:1009 | button | Author traversal | navigationTraversalDialog / navigationTraversalForm | studio.html:1009 | CONTROL-A | static | studio.html:1009 |
-| studio.html:button:1015 | button | × | semanticExtractionDialog | studio.html:1015 | CONTROL-A | static | studio.html:1015 |
-| studio.html:button:1038 | button | Queue semantic extraction | semanticExtractionDialog / semanticExtractionForm | studio.html:1038 | CONTROL-A | static | studio.html:1038 |
-| studio.html:button:1044 | button | × | semanticReviewDialog | studio.html:1044 | CONTROL-A | static | studio.html:1044 |
-| studio.html:button:1059 | button | Record semantic review | semanticReviewDialog / semanticReviewForm | studio.html:1059 | CONTROL-A | static | studio.html:1059 |
-| studio.html:button:1065 | button | × | floorplanExtractionDialog | studio.html:1065 | CONTROL-A | static | studio.html:1065 |
-| studio.html:button:1094 | button | Queue floor-plan extraction | floorplanExtractionDialog / floorplanExtractionForm | studio.html:1094 | CONTROL-A | static | studio.html:1094 |
-| studio.html:button:1100 | button | × | floorplanReviewDialog | studio.html:1100 | CONTROL-A | static | studio.html:1100 |
-| studio.html:button:1128 | button | Save operator decision | floorplanReviewDialog / floorplanReviewForm | studio.html:1128 | CONTROL-A | static | studio.html:1128 |
-| studio.html:button:1134 | button | × | routeDialog | studio.html:1134 | CONTROL-A | static | studio.html:1134 |
-| studio.html:button:1144 | button | Create guided route | routeDialog / routeForm | studio.html:1144 | CONTROL-A | static | studio.html:1144 |
-| studio.html:button:1151 | button | × | measurementBriefDialog | studio.html:1151 | CONTROL-A | static | studio.html:1151 |
-| studio.html:button:1163 | button | Create evidence brief | measurementBriefDialog / measurementBriefForm | studio.html:1163 | CONTROL-A | static | studio.html:1163 |
-| studio.html:button:1169 | button | × | checkPointDialog | studio.html:1169 | CONTROL-A | static | studio.html:1169 |
-| studio.html:button:1179 | button | Record check point | checkPointDialog / checkPointForm | studio.html:1179 | CONTROL-A | static | studio.html:1179 |
-| studio.html:button:1185 | button | × | geometryChangeDialog | studio.html:1185 | CONTROL-A | static | studio.html:1185 |
-| studio.html:button:1198 | button | Generate metric evidence | geometryChangeDialog / geometryChangeForm | studio.html:1198 | CONTROL-A | static | studio.html:1198 |
-| studio.html:button:1204 | button | × | geometryChangeReviewDialog | studio.html:1204 | CONTROL-A | static | studio.html:1204 |
-| studio.html:button:1214 | button | Record review | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1214 | CONTROL-A | static | studio.html:1214 |
-| studio.html:button:1220 | button | × | rawSceneChangeDialog | studio.html:1220 | CONTROL-A | static | studio.html:1220 |
-| studio.html:button:1243 | button | Queue registration and comparison | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1243 | CONTROL-A | static | studio.html:1243 |
-| studio.html:button:1249 | button | × | rawSceneChangeReviewDialog | studio.html:1249 | CONTROL-A | static | studio.html:1249 |
-| studio.html:button:1259 | button | Record raw-scene review | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1259 | CONTROL-A | static | studio.html:1259 |
-| studio.html:button:1265 | button | × | captureCompletenessDialog | studio.html:1265 | CONTROL-A | static | studio.html:1265 |
-| studio.html:button:1286 | button | Analyze capture trajectory | captureCompletenessDialog / captureCompletenessForm | studio.html:1286 | CONTROL-A | static | studio.html:1286 |
-| studio.html:button:1292 | button | × | captureCompletenessReviewDialog | studio.html:1292 | CONTROL-A | static | studio.html:1292 |
-| studio.html:button:1302 | button | Record capture review | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1302 | CONTROL-A | static | studio.html:1302 |
-| studio.html:button:1309 | button | × | versionComparisonDialog | studio.html:1309 | CONTROL-A | static | studio.html:1309 |
-| comparisonSubmit | button | Load comparison | versionComparisonDialog / versionComparisonForm | studio.html:1325 | CONTROL-A | static | studio.html:1325 |
-| compareLeftRetry | button | Retry left renderer | versionComparisonDialog | studio.html:1340 | CONTROL-A | static | studio.html:1340 |
-| compareRightRetry | button | Retry right renderer | versionComparisonDialog | studio.html:1350 | CONTROL-A | static | studio.html:1350 |
+| studio.html:button:762 | button | Approve immutable version | qaDialog / qaForm | studio.html:762 | CONTROL-A | static | studio.html:762 |
+| studio.html:button:768 | button | × | releaseDialog | studio.html:768 | CONTROL-A | static | studio.html:768 |
+| releaseUseCurrentView | button | Use current view | releaseDialog / releaseForm | studio.html:789 | CONTROL-A | static | studio.html:789 |
+| studio.html:button:817 | button | Publish release | releaseDialog / releaseForm | studio.html:817 | CONTROL-A | static | studio.html:817 |
+| studio.html:button:823 | button | × | askDialog | studio.html:823 | CONTROL-A | static | studio.html:823 |
+| studio.html:button:835 | button | Cancel | askDialog / askForm | studio.html:835 | CONTROL-A | static | studio.html:835 |
+| askConfirm | button | Confirm | askDialog / askForm | studio.html:836 | CONTROL-A | static | studio.html:836 |
+| studio.html:button:848 | button | Keep current release | publicationConfirmationDialog | studio.html:848 | CONTROL-A | static | studio.html:848 |
+| publicationConfirmationSubmit | button | Confirm | publicationConfirmationDialog | studio.html:849 | CONTROL-A | static | studio.html:849 |
+| studio.html:button:855 | button | × | reviewerDialog | studio.html:855 | CONTROL-A | static | studio.html:855 |
+| studio.html:button:865 | button | Send secure invitation | reviewerDialog / reviewerForm | studio.html:865 | CONTROL-A | static | studio.html:865 |
+| studio.html:button:871 | button | × | deliveryDialog | studio.html:871 | CONTROL-A | static | studio.html:871 |
+| studio.html:button:888 | button | Save brand & retention | deliveryDialog / deliveryForm | studio.html:888 | CONTROL-A | static | studio.html:888 |
+| startHostingCheckout | button | Open billing workspace | deliveryDialog / deliveryForm | studio.html:889 | CONTROL-A | static | studio.html:889 |
+| studio.html:button:895 | button | × | domainDialog | studio.html:895 | CONTROL-A | static | studio.html:895 |
+| studio.html:button:903 | button | Create verification record | domainDialog / domainForm | studio.html:903 | CONTROL-A | static | studio.html:903 |
+| studio.html:button:919 | button | × | entityDialog | studio.html:919 | CONTROL-A | static | studio.html:919 |
+| studio.html:button:932 | button | Add spatial entity | entityDialog / entityForm | studio.html:932 | CONTROL-A | static | studio.html:932 |
+| studio.html:button:938 | button | × | navigationProfileDialog | studio.html:938 | CONTROL-A | static | studio.html:938 |
+| studio.html:button:960 | button | Save walking profile | navigationProfileDialog / navigationProfileForm | studio.html:960 | CONTROL-A | static | studio.html:960 |
+| studio.html:button:966 | button | × | navigationBuildDialog | studio.html:966 | CONTROL-A | static | studio.html:966 |
+| studio.html:button:989 | button | Build verified walking map | navigationBuildDialog / navigationBuildForm | studio.html:989 | CONTROL-A | static | studio.html:989 |
+| studio.html:button:995 | button | × | navigationTraversalDialog | studio.html:995 | CONTROL-A | static | studio.html:995 |
+| studio.html:button:1010 | button | Author traversal | navigationTraversalDialog / navigationTraversalForm | studio.html:1010 | CONTROL-A | static | studio.html:1010 |
+| studio.html:button:1016 | button | × | semanticExtractionDialog | studio.html:1016 | CONTROL-A | static | studio.html:1016 |
+| studio.html:button:1039 | button | Queue semantic extraction | semanticExtractionDialog / semanticExtractionForm | studio.html:1039 | CONTROL-A | static | studio.html:1039 |
+| studio.html:button:1045 | button | × | semanticReviewDialog | studio.html:1045 | CONTROL-A | static | studio.html:1045 |
+| studio.html:button:1060 | button | Record semantic review | semanticReviewDialog / semanticReviewForm | studio.html:1060 | CONTROL-A | static | studio.html:1060 |
+| studio.html:button:1066 | button | × | floorplanExtractionDialog | studio.html:1066 | CONTROL-A | static | studio.html:1066 |
+| studio.html:button:1095 | button | Queue floor-plan extraction | floorplanExtractionDialog / floorplanExtractionForm | studio.html:1095 | CONTROL-A | static | studio.html:1095 |
+| studio.html:button:1101 | button | × | floorplanReviewDialog | studio.html:1101 | CONTROL-A | static | studio.html:1101 |
+| studio.html:button:1129 | button | Save operator decision | floorplanReviewDialog / floorplanReviewForm | studio.html:1129 | CONTROL-A | static | studio.html:1129 |
+| studio.html:button:1135 | button | × | routeDialog | studio.html:1135 | CONTROL-A | static | studio.html:1135 |
+| studio.html:button:1145 | button | Create guided route | routeDialog / routeForm | studio.html:1145 | CONTROL-A | static | studio.html:1145 |
+| studio.html:button:1152 | button | × | measurementBriefDialog | studio.html:1152 | CONTROL-A | static | studio.html:1152 |
+| studio.html:button:1164 | button | Create evidence brief | measurementBriefDialog / measurementBriefForm | studio.html:1164 | CONTROL-A | static | studio.html:1164 |
+| studio.html:button:1170 | button | × | checkPointDialog | studio.html:1170 | CONTROL-A | static | studio.html:1170 |
+| studio.html:button:1180 | button | Record check point | checkPointDialog / checkPointForm | studio.html:1180 | CONTROL-A | static | studio.html:1180 |
+| studio.html:button:1186 | button | × | geometryChangeDialog | studio.html:1186 | CONTROL-A | static | studio.html:1186 |
+| studio.html:button:1199 | button | Generate metric evidence | geometryChangeDialog / geometryChangeForm | studio.html:1199 | CONTROL-A | static | studio.html:1199 |
+| studio.html:button:1205 | button | × | geometryChangeReviewDialog | studio.html:1205 | CONTROL-A | static | studio.html:1205 |
+| studio.html:button:1215 | button | Record review | geometryChangeReviewDialog / geometryChangeReviewForm | studio.html:1215 | CONTROL-A | static | studio.html:1215 |
+| studio.html:button:1221 | button | × | rawSceneChangeDialog | studio.html:1221 | CONTROL-A | static | studio.html:1221 |
+| studio.html:button:1244 | button | Queue registration and comparison | rawSceneChangeDialog / rawSceneChangeForm | studio.html:1244 | CONTROL-A | static | studio.html:1244 |
+| studio.html:button:1250 | button | × | rawSceneChangeReviewDialog | studio.html:1250 | CONTROL-A | static | studio.html:1250 |
+| studio.html:button:1260 | button | Record raw-scene review | rawSceneChangeReviewDialog / rawSceneChangeReviewForm | studio.html:1260 | CONTROL-A | static | studio.html:1260 |
+| studio.html:button:1266 | button | × | captureCompletenessDialog | studio.html:1266 | CONTROL-A | static | studio.html:1266 |
+| studio.html:button:1287 | button | Analyze capture trajectory | captureCompletenessDialog / captureCompletenessForm | studio.html:1287 | CONTROL-A | static | studio.html:1287 |
+| studio.html:button:1293 | button | × | captureCompletenessReviewDialog | studio.html:1293 | CONTROL-A | static | studio.html:1293 |
+| studio.html:button:1303 | button | Record capture review | captureCompletenessReviewDialog / captureCompletenessReviewForm | studio.html:1303 | CONTROL-A | static | studio.html:1303 |
+| studio.html:button:1310 | button | × | versionComparisonDialog | studio.html:1310 | CONTROL-A | static | studio.html:1310 |
+| comparisonSubmit | button | Load comparison | versionComparisonDialog / versionComparisonForm | studio.html:1326 | CONTROL-A | static | studio.html:1326 |
+| compareLeftRetry | button | Retry left renderer | versionComparisonDialog | studio.html:1341 | CONTROL-A | static | studio.html:1341 |
+| compareRightRetry | button | Retry right renderer | versionComparisonDialog | studio.html:1351 | CONTROL-A | static | studio.html:1351 |
 | index.html:button:145 | button | Capture | generated/global | index.html:145 | CONTROL-A | static | index.html:145 |
 | index.html:button:146 | button | Reconstruct | generated/global | index.html:146 | CONTROL-A | static | index.html:146 |
 | index.html:button:147 | button | Structure | generated/global | index.html:147 | CONTROL-A | static | index.html:147 |
@@ -765,124 +765,126 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | index.html:a:242 | link | About Spatial Studio | generated/global | index.html:242 | LINK-A | static | index.html:242 |
 | accessSignInLink | link | Sign in | generated/global | index.html:287 | LINK-A | browser | e2e/release-access-code.spec.ts |
 | index.html:a:294 | link | Review inbox | generated/global | index.html:294 | LINK-A | static | index.html:294 |
-| src/client/studio.ts:button:3282 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3282 | CONTROL-A | static | src/client/studio.ts:3282 |
-| src/client/studio.ts:edit:4427 | button | edit | generated/global | src/client/studio.ts:4427 | CONTROL-A | static | src/client/studio.ts:4427 |
-| src/client/studio.ts:remove:4429 | button | remove | generated/global | src/client/studio.ts:4429 | CONTROL-A | static | src/client/studio.ts:4429 |
-| src/client/studio.ts:edit:4539 | button | edit | generated/global | src/client/studio.ts:4539 | CONTROL-A | static | src/client/studio.ts:4539 |
-| src/client/studio.ts:toggle:4541 | button | toggle | generated/global | src/client/studio.ts:4541 | CONTROL-A | static | src/client/studio.ts:4541 |
-| src/client/studio.ts:anchor:4729 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:4729 | CONTROL-A | static | src/client/studio.ts:4729 |
-| src/client/studio.ts:accept:5446 | button | accept | generated/global | src/client/studio.ts:5446 | CONTROL-A | static | src/client/studio.ts:5446 |
-| src/client/studio.ts:decline:5447 | button | decline | generated/global | src/client/studio.ts:5447 | CONTROL-A | static | src/client/studio.ts:5447 |
-| src/client/studio.ts:identity:5603 | button | identity | generated/global | src/client/studio.ts:5603 | CONTROL-A | static | src/client/studio.ts:5603 |
-| src/client/studio.ts:retry:5828 | button | retry | generated/global | src/client/studio.ts:5828 | CONTROL-A | static | src/client/studio.ts:5828 |
-| src/client/studio.ts:cancel:5839 | button | cancel | generated/global | src/client/studio.ts:5839 | CONTROL-A | static | src/client/studio.ts:5839 |
-| src/client/studio.ts:channel:5898 | a | `/s/${release.slug}` \| `/s/${release.slug}` | generated/global | src/client/studio.ts:5898 | CONTROL-A | static | src/client/studio.ts:5898 |
-| src/client/studio.ts:manage:5911 | button | manage | generated/global | src/client/studio.ts:5911 | CONTROL-A | static | src/client/studio.ts:5911 |
-| src/client/studio.ts:exportEvidence:5924 | button | exportEvidence | generated/global | src/client/studio.ts:5924 | CONTROL-A | static | src/client/studio.ts:5924 |
-| src/client/studio.ts:revoke:5934 | button | revoke | generated/global | src/client/studio.ts:5934 | CONTROL-A | static | src/client/studio.ts:5934 |
-| src/client/studio.ts:rollback:5951 | button | rollback | generated/global | src/client/studio.ts:5951 | CONTROL-A | static | src/client/studio.ts:5951 |
-| src/client/studio.ts:inspect:6019 | button | inspect | generated/global | src/client/studio.ts:6019 | CONTROL-A | static | src/client/studio.ts:6019 |
-| src/client/studio.ts:reviewScene:6029 | a | `/review/${project.release_slug}` \| isReviewer() ? "Review in scene" : "Open review link" | generated/global | src/client/studio.ts:6029 | CONTROL-A | static | src/client/studio.ts:6029 |
-| src/client/studio.ts:invite:6036 | button | invite | generated/global | src/client/studio.ts:6036 | CONTROL-A | static | src/client/studio.ts:6036 |
-| src/client/studio.ts:compare:6058 | button | compare | generated/global | src/client/studio.ts:6058 | CONTROL-A | static | src/client/studio.ts:6058 |
-| src/client/studio.ts:button:6078 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6078 | CONTROL-A | static | src/client/studio.ts:6078 |
-| src/client/studio.ts:revoke:6107 | button | revoke | generated/global | src/client/studio.ts:6107 | CONTROL-A | static | src/client/studio.ts:6107 |
-| src/client/studio.ts:manage:6170 | button | manage | generated/global | src/client/studio.ts:6170 | CONTROL-A | static | src/client/studio.ts:6170 |
-| src/client/studio.ts:cancel:6196 | button | cancel | generated/global | src/client/studio.ts:6196 | CONTROL-A | static | src/client/studio.ts:6196 |
-| src/client/studio.ts:resume:6257 | a | checkout.checkout_url | generated/global | src/client/studio.ts:6257 | CONTROL-A | static | src/client/studio.ts:6257 |
-| src/client/studio.ts:runNow:6280 | button | runNow | generated/global | src/client/studio.ts:6280 | CONTROL-A | static | src/client/studio.ts:6280 |
-| src/client/studio.ts:restoreDrill:6288 | button | state.selected?.project ? `Read a retained object for ${state.selected.project.name}` : "Open a project first" | generated/global | src/client/studio.ts:6288 | CONTROL-A | static | src/client/studio.ts:6288 |
-| src/client/studio.ts:submit:6416 | button | entity ? "Save spatial entity" : "Add spatial entity" \| traversal ? "Save traversal" : "Author traversal" \| activeUpload?.projectId === state.selected.project.id ? "Resume upload" : "Start resumable upload" \| "Resume upload" \| options.confirmLabel | generated/global | src/client/studio.ts:6416 | CONTROL-A | static | src/client/studio.ts:6416 |
-| src/client/studio.ts:paid:6469 | button | paid | generated/global | src/client/studio.ts:6469 | CONTROL-A | static | src/client/studio.ts:6469 |
-| src/client/studio.ts:voidInvoice:6471 | button | voidInvoice | generated/global | src/client/studio.ts:6471 | CONTROL-A | static | src/client/studio.ts:6471 |
-| src/client/studio.ts:button:6543 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6543 | CONTROL-A | static | src/client/studio.ts:6543 |
-| src/client/studio.ts:activate:6701 | button | provider.secretConfigured ? "Run live OIDC discovery and activate this provider." : `Configure OIDC_CLIENT_SECRETS for key ${provider.id} be | generated/global | src/client/studio.ts:6701 | CONTROL-A | static | src/client/studio.ts:6701 |
-| src/client/studio.ts:disable:6719 | button | disable | generated/global | src/client/studio.ts:6719 | CONTROL-A | static | src/client/studio.ts:6719 |
-| src/client/studio.ts:remove:6732 | button | remove | generated/global | src/client/studio.ts:6732 | CONTROL-A | static | src/client/studio.ts:6732 |
-| src/client/studio.ts:edit:6799 | button | edit | generated/global | src/client/studio.ts:6799 | CONTROL-A | static | src/client/studio.ts:6799 |
-| src/client/studio.ts:rotate:6801 | button | rotate | generated/global | src/client/studio.ts:6801 | CONTROL-A | static | src/client/studio.ts:6801 |
-| src/client/studio.ts:revoke:6803 | button | revoke | generated/global | src/client/studio.ts:6803 | CONTROL-A | static | src/client/studio.ts:6803 |
-| src/client/studio.ts:reinvite:6852 | button | reinvite | generated/global | src/client/studio.ts:6852 | CONTROL-A | static | src/client/studio.ts:6852 |
-| src/client/studio.ts:save:6864 | button | save | generated/global | src/client/studio.ts:6864 | CONTROL-A | static | src/client/studio.ts:6864 |
-| src/client/studio.ts:revoke:6877 | button | revoke | generated/global | src/client/studio.ts:6877 | CONTROL-A | static | src/client/studio.ts:6877 |
-| src/client/studio.ts:resend:6922 | button | pending ? "Sending another code…" : remaining > 0 ? `Resend code in ${remaining}s` : !turnstileToken ? "Complete security check to resend" : | generated/global | src/client/studio.ts:6922 | CONTROL-A | static | src/client/studio.ts:6922 |
-| src/client/studio.ts:edit:7356 | button | edit | generated/global | src/client/studio.ts:7356 | CONTROL-A | static | src/client/studio.ts:7356 |
-| src/client/studio.ts:remove:7358 | button | remove | generated/global | src/client/studio.ts:7358 | CONTROL-A | static | src/client/studio.ts:7358 |
-| src/client/studio.ts:remove:7381 | button | remove | generated/global | src/client/studio.ts:7381 | CONTROL-A | static | src/client/studio.ts:7381 |
-| src/client/studio.ts:add:7394 | button | add | generated/global | src/client/studio.ts:7394 | CONTROL-A | static | src/client/studio.ts:7394 |
-| src/client/studio.ts:review:7446 | button | review | generated/global | src/client/studio.ts:7446 | CONTROL-A | static | src/client/studio.ts:7446 |
-| src/client/studio.ts:cancel:7454 | button | cancel | generated/global | src/client/studio.ts:7454 | CONTROL-A | static | src/client/studio.ts:7454 |
-| src/client/studio.ts:retry:7469 | button | retry | generated/global | src/client/studio.ts:7469 | CONTROL-A | static | src/client/studio.ts:7469 |
-| src/client/studio.ts:queueExtraction:7494 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7494 | CONTROL-A | static | src/client/studio.ts:7494 |
-| src/client/studio.ts:refreshExtractions:7504 | button | refreshExtractions | generated/global | src/client/studio.ts:7504 | CONTROL-A | static | src/client/studio.ts:7504 |
-| src/client/studio.ts:addRoute:7550 | button | addRoute | generated/global | src/client/studio.ts:7550 | CONTROL-A | static | src/client/studio.ts:7550 |
-| src/client/studio.ts:tuneNavigation:7553 | button | tuneNavigation | generated/global | src/client/studio.ts:7553 | CONTROL-A | static | src/client/studio.ts:7553 |
-| src/client/studio.ts:authorTraversal:7555 | button | authorTraversal | generated/global | src/client/studio.ts:7555 | CONTROL-A | static | src/client/studio.ts:7555 |
-| src/client/studio.ts:buildNavigation:7557 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7557 | CONTROL-A | static | src/client/studio.ts:7557 |
-| src/client/studio.ts:edit:7586 | button | edit | generated/global | src/client/studio.ts:7586 | CONTROL-A | static | src/client/studio.ts:7586 |
-| src/client/studio.ts:archive:7588 | button | archive | generated/global | src/client/studio.ts:7588 | CONTROL-A | static | src/client/studio.ts:7588 |
-| src/client/studio.ts:approve:7684 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7684 | CONTROL-A | static | src/client/studio.ts:7684 |
-| src/client/studio.ts:reject:7714 | button | reject | generated/global | src/client/studio.ts:7714 | CONTROL-A | static | src/client/studio.ts:7714 |
-| src/client/studio.ts:refresh:7736 | button | refresh | generated/global | src/client/studio.ts:7736 | CONTROL-A | static | src/client/studio.ts:7736 |
-| src/client/studio.ts:retry:7746 | button | retry | generated/global | src/client/studio.ts:7746 | CONTROL-A | static | src/client/studio.ts:7746 |
-| src/client/studio.ts:analyzeCapture:7800 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7800 | CONTROL-A | static | src/client/studio.ts:7800 |
-| src/client/studio.ts:savePolicy:7841 | button | savePolicy | generated/global | src/client/studio.ts:7841 | CONTROL-A | static | src/client/studio.ts:7841 |
-| src/client/studio.ts:review:7932 | button | review | generated/global | src/client/studio.ts:7932 | CONTROL-A | static | src/client/studio.ts:7932 |
-| src/client/studio.ts:configure:7943 | button | configure | generated/global | src/client/studio.ts:7943 | CONTROL-A | static | src/client/studio.ts:7943 |
-| src/client/studio.ts:configureHosting:7953 | button | configureHosting | generated/global | src/client/studio.ts:7953 | CONTROL-A | static | src/client/studio.ts:7953 |
-| src/client/studio.ts:publishedLink:7965 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7965 | CONTROL-A | static | src/client/studio.ts:7965 |
-| src/client/studio.ts:button:8027 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:8027 | CONTROL-A | static | src/client/studio.ts:8027 |
-| src/client/studio.ts:undo:8034 | button | undo | generated/global | src/client/studio.ts:8034 | CONTROL-A | static | src/client/studio.ts:8034 |
-| src/client/studio.ts:finish:8038 | button | finish | generated/global | src/client/studio.ts:8038 | CONTROL-A | static | src/client/studio.ts:8038 |
-| src/client/studio.ts:save:8042 | button | save | generated/global | src/client/studio.ts:8042 | CONTROL-A | static | src/client/studio.ts:8042 |
-| src/client/studio.ts:review:8679 | button | review | generated/global | src/client/studio.ts:8679 | CONTROL-A | static | src/client/studio.ts:8679 |
-| src/client/studio.ts:cancel:8684 | button | cancel | generated/global | src/client/studio.ts:8684 | CONTROL-A | static | src/client/studio.ts:8684 |
-| src/client/studio.ts:retry:8700 | button | retry | generated/global | src/client/studio.ts:8700 | CONTROL-A | static | src/client/studio.ts:8700 |
-| src/client/studio.ts:queue:8715 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8715 | CONTROL-A | static | src/client/studio.ts:8715 |
-| src/client/studio.ts:refresh:8725 | button | refresh | generated/global | src/client/studio.ts:8725 | CONTROL-A | static | src/client/studio.ts:8725 |
-| src/client/studio.ts:rebuild:8743 | button | rebuild | generated/global | src/client/studio.ts:8743 | CONTROL-A | static | src/client/studio.ts:8743 |
-| src/client/studio.ts:download:8805 | button | download | generated/global | src/client/studio.ts:8805 | CONTROL-A | static | src/client/studio.ts:8805 |
-| src/client/studio.ts:generate:8824 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8824 | CONTROL-A | static | src/client/studio.ts:8824 |
-| src/client/studio.ts:anchor:9765 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9765 | CONTROL-A | static | src/client/studio.ts:9765 |
-| src/client/studio.ts:review:10723 | button | review | generated/global | src/client/studio.ts:10723 | CONTROL-A | static | src/client/studio.ts:10723 |
-| src/client/studio.ts:addPoint:10911 | button | addPoint | generated/global | src/client/studio.ts:10911 | CONTROL-A | static | src/client/studio.ts:10911 |
-| src/client/studio.ts:report:10913 | button | report | generated/global | src/client/studio.ts:10913 | CONTROL-A | static | src/client/studio.ts:10913 |
-| src/client/studio.ts:generate:10923 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:10923 | CONTROL-A | static | src/client/studio.ts:10923 |
-| src/client/studio.ts:download:10944 | button | download | generated/global | src/client/studio.ts:10944 | CONTROL-A | static | src/client/studio.ts:10944 |
-| src/client/studio.ts:create:10980 | button | create | generated/global | src/client/studio.ts:10980 | CONTROL-A | static | src/client/studio.ts:10980 |
-| src/client/studio.ts:anchor:11097 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:11097 | CONTROL-A | static | src/client/studio.ts:11097 |
-| src/client/studio.ts:retry:11513 | button | retry | generated/global | src/client/studio.ts:11513 | CONTROL-A | static | src/client/studio.ts:11513 |
-| src/client/studio.ts:reveal:11580 | button | reveal | generated/global | src/client/studio.ts:11580 | CONTROL-A | static | src/client/studio.ts:11580 |
-| src/client/studio.ts:copyPreview:11713 | button | copyPreview | generated/global | src/client/studio.ts:11713 | CONTROL-A | static | src/client/studio.ts:11713 |
-| src/client/studio.ts:publishedLink:11730 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11730 | CONTROL-A | static | src/client/studio.ts:11730 |
-| src/client/studio.ts:qaButton:11753 | button | qaButton | generated/global | src/client/studio.ts:11753 | CONTROL-A | static | src/client/studio.ts:11753 |
-| src/client/studio.ts:publishButton:11768 | button | publishButton | generated/global | src/client/studio.ts:11768 | CONTROL-A | static | src/client/studio.ts:11768 |
-| src/client/studio.ts:editButton:11817 | button | editButton | generated/global | src/client/studio.ts:11817 | CONTROL-A | static | src/client/studio.ts:11817 |
-| src/client/studio.ts:lifecycleButton:11820 | button | lifecycleButton | generated/global | src/client/studio.ts:11820 | CONTROL-A | static | src/client/studio.ts:11820 |
-| src/client/studio.ts:compareButton:11847 | button | compareButton | generated/global | src/client/studio.ts:11847 | CONTROL-A | static | src/client/studio.ts:11847 |
-| src/client/studio.ts:uploadButton:11851 | button | uploadButton | generated/global | src/client/studio.ts:11851 | CONTROL-A | static | src/client/studio.ts:11851 |
-| src/client/studio.ts:registerBundle:11875 | button | registerBundle | generated/global | src/client/studio.ts:11875 | CONTROL-A | static | src/client/studio.ts:11875 |
-| src/client/studio.ts:link:11889 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11889 | CONTROL-A | static | src/client/studio.ts:11889 |
-| src/client/studio.ts:exportEvidence:11895 | button | exportEvidence | generated/global | src/client/studio.ts:11895 | CONTROL-A | static | src/client/studio.ts:11895 |
-| src/client/studio.ts:revoke:11908 | button | revoke | generated/global | src/client/studio.ts:11908 | CONTROL-A | static | src/client/studio.ts:11908 |
-| src/client/studio.ts:rollback:11925 | button | rollback | generated/global | src/client/studio.ts:11925 | CONTROL-A | static | src/client/studio.ts:11925 |
-| src/client/studio.ts:inviteButton:11946 | button | inviteButton | generated/global | src/client/studio.ts:11946 | CONTROL-A | static | src/client/studio.ts:11946 |
-| src/client/studio.ts:reviewButton:11948 | button | reviewButton | generated/global | src/client/studio.ts:11948 | CONTROL-A | static | src/client/studio.ts:11948 |
-| src/client/studio.ts:deliveryButton:11960 | button | deliveryButton | generated/global | src/client/studio.ts:11960 | CONTROL-A | static | src/client/studio.ts:11960 |
-| src/client/studio.ts:spatialButton:11968 | button | spatialButton | generated/global | src/client/studio.ts:11968 | CONTROL-A | static | src/client/studio.ts:11968 |
-| src/client/studio.ts:measurementButton:11971 | button | measurementButton | generated/global | src/client/studio.ts:11971 | CONTROL-A | static | src/client/studio.ts:11971 |
-| src/client/studio.ts:domainButton:11983 | button | domainButton | generated/global | src/client/studio.ts:11983 | CONTROL-A | static | src/client/studio.ts:11983 |
-| src/client/studio.ts:review:12510 | button | review | generated/global | src/client/studio.ts:12510 | CONTROL-A | static | src/client/studio.ts:12510 |
-| src/client/studio.ts:retry:13020 | button | retry | generated/global | src/client/studio.ts:13020 | CONTROL-A | static | src/client/studio.ts:13020 |
-| src/client/studio.ts:resume:13070 | button | checkout.checkout_url | generated/global | src/client/studio.ts:13070 | CONTROL-A | static | src/client/studio.ts:13070 |
-| src/client/studio.ts:discard:13083 | button | discard | generated/global | src/client/studio.ts:13083 | CONTROL-A | static | src/client/studio.ts:13083 |
-| src/client/studio.ts:retry:14261 | button | retry | generated/global | src/client/studio.ts:14261 | CONTROL-A | static | src/client/studio.ts:14261 |
-| src/client/studio.ts:verify:14330 | button | verify | generated/global | src/client/studio.ts:14330 | CONTROL-A | static | src/client/studio.ts:14330 |
-| src/client/studio.ts:challenge:14342 | button | challenge | generated/global | src/client/studio.ts:14342 | CONTROL-A | static | src/client/studio.ts:14342 |
-| src/client/studio.ts:provision:14355 | button | provision | generated/global | src/client/studio.ts:14355 | CONTROL-A | static | src/client/studio.ts:14355 |
-| src/client/studio.ts:open:14381 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14381 | CONTROL-A | static | src/client/studio.ts:14381 |
-| src/client/studio.ts:remove:14388 | button | remove | generated/global | src/client/studio.ts:14388 | CONTROL-A | static | src/client/studio.ts:14388 |
-| src/client/studio.ts:verify:14443 | button | verify | generated/global | src/client/studio.ts:14443 | CONTROL-A | static | src/client/studio.ts:14443 |
+| src/client/studio.ts:button:3289 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:3289 | CONTROL-A | static | src/client/studio.ts:3289 |
+| src/client/studio.ts:edit:4443 | button | edit | generated/global | src/client/studio.ts:4443 | CONTROL-A | static | src/client/studio.ts:4443 |
+| src/client/studio.ts:remove:4445 | button | remove | generated/global | src/client/studio.ts:4445 | CONTROL-A | static | src/client/studio.ts:4445 |
+| src/client/studio.ts:edit:4555 | button | edit | generated/global | src/client/studio.ts:4555 | CONTROL-A | static | src/client/studio.ts:4555 |
+| src/client/studio.ts:toggle:4557 | button | toggle | generated/global | src/client/studio.ts:4557 | CONTROL-A | static | src/client/studio.ts:4557 |
+| src/client/studio.ts:anchor:4745 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:4745 | CONTROL-A | static | src/client/studio.ts:4745 |
+| src/client/studio.ts:accept:5462 | button | accept | generated/global | src/client/studio.ts:5462 | CONTROL-A | static | src/client/studio.ts:5462 |
+| src/client/studio.ts:decline:5463 | button | decline | generated/global | src/client/studio.ts:5463 | CONTROL-A | static | src/client/studio.ts:5463 |
+| src/client/studio.ts:identity:5619 | button | identity | generated/global | src/client/studio.ts:5619 | CONTROL-A | static | src/client/studio.ts:5619 |
+| src/client/studio.ts:retry:5844 | button | retry | generated/global | src/client/studio.ts:5844 | CONTROL-A | static | src/client/studio.ts:5844 |
+| src/client/studio.ts:cancel:5855 | button | cancel | generated/global | src/client/studio.ts:5855 | CONTROL-A | static | src/client/studio.ts:5855 |
+| src/client/studio.ts:channel:5914 | a | `/s/${release.slug}` \| `/s/${release.slug}` | generated/global | src/client/studio.ts:5914 | CONTROL-A | static | src/client/studio.ts:5914 |
+| src/client/studio.ts:manage:5927 | button | manage | generated/global | src/client/studio.ts:5927 | CONTROL-A | static | src/client/studio.ts:5927 |
+| src/client/studio.ts:exportEvidence:5940 | button | exportEvidence | generated/global | src/client/studio.ts:5940 | CONTROL-A | static | src/client/studio.ts:5940 |
+| src/client/studio.ts:revoke:5950 | button | revoke | generated/global | src/client/studio.ts:5950 | CONTROL-A | static | src/client/studio.ts:5950 |
+| src/client/studio.ts:rollback:5967 | button | rollback | generated/global | src/client/studio.ts:5967 | CONTROL-A | static | src/client/studio.ts:5967 |
+| src/client/studio.ts:inspect:6035 | button | inspect | generated/global | src/client/studio.ts:6035 | CONTROL-A | static | src/client/studio.ts:6035 |
+| src/client/studio.ts:reviewScene:6045 | a | `/review/${project.release_slug}` \| isReviewer() ? "Review in scene" : "Open review link" | generated/global | src/client/studio.ts:6045 | CONTROL-A | static | src/client/studio.ts:6045 |
+| src/client/studio.ts:invite:6052 | button | invite | generated/global | src/client/studio.ts:6052 | CONTROL-A | static | src/client/studio.ts:6052 |
+| src/client/studio.ts:compare:6074 | button | compare | generated/global | src/client/studio.ts:6074 | CONTROL-A | static | src/client/studio.ts:6074 |
+| src/client/studio.ts:button:6094 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6094 | CONTROL-A | static | src/client/studio.ts:6094 |
+| src/client/studio.ts:revoke:6123 | button | revoke | generated/global | src/client/studio.ts:6123 | CONTROL-A | static | src/client/studio.ts:6123 |
+| src/client/studio.ts:manage:6186 | button | manage | generated/global | src/client/studio.ts:6186 | CONTROL-A | static | src/client/studio.ts:6186 |
+| src/client/studio.ts:cancel:6212 | button | cancel | generated/global | src/client/studio.ts:6212 | CONTROL-A | static | src/client/studio.ts:6212 |
+| src/client/studio.ts:resume:6273 | a | checkout.checkout_url | generated/global | src/client/studio.ts:6273 | CONTROL-A | static | src/client/studio.ts:6273 |
+| src/client/studio.ts:runNow:6296 | button | runNow | generated/global | src/client/studio.ts:6296 | CONTROL-A | static | src/client/studio.ts:6296 |
+| src/client/studio.ts:restoreDrill:6304 | button | state.selected?.project ? `Read a retained object for ${state.selected.project.name}` : "Open a project first" | generated/global | src/client/studio.ts:6304 | CONTROL-A | static | src/client/studio.ts:6304 |
+| src/client/studio.ts:submit:6432 | button | entity ? "Save spatial entity" : "Add spatial entity" \| traversal ? "Save traversal" : "Author traversal" \| activeUpload?.projectId === state.selected.project.id ? "Resume upload" : "Start resumable upload" \| "Resume upload" \| options.confirmLabel | generated/global | src/client/studio.ts:6432 | CONTROL-A | browser | e2e/release-authoring.spec.ts |
+| src/client/studio.ts:paid:6485 | button | paid | generated/global | src/client/studio.ts:6485 | CONTROL-A | static | src/client/studio.ts:6485 |
+| src/client/studio.ts:voidInvoice:6487 | button | voidInvoice | generated/global | src/client/studio.ts:6487 | CONTROL-A | static | src/client/studio.ts:6487 |
+| src/client/studio.ts:button:6559 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:6559 | CONTROL-A | static | src/client/studio.ts:6559 |
+| src/client/studio.ts:activate:6717 | button | provider.secretConfigured ? "Run live OIDC discovery and activate this provider." : `Configure OIDC_CLIENT_SECRETS for key ${provider.id} be | generated/global | src/client/studio.ts:6717 | CONTROL-A | static | src/client/studio.ts:6717 |
+| src/client/studio.ts:disable:6735 | button | disable | generated/global | src/client/studio.ts:6735 | CONTROL-A | static | src/client/studio.ts:6735 |
+| src/client/studio.ts:remove:6748 | button | remove | generated/global | src/client/studio.ts:6748 | CONTROL-A | static | src/client/studio.ts:6748 |
+| src/client/studio.ts:edit:6815 | button | edit | generated/global | src/client/studio.ts:6815 | CONTROL-A | static | src/client/studio.ts:6815 |
+| src/client/studio.ts:rotate:6817 | button | rotate | generated/global | src/client/studio.ts:6817 | CONTROL-A | static | src/client/studio.ts:6817 |
+| src/client/studio.ts:revoke:6819 | button | revoke | generated/global | src/client/studio.ts:6819 | CONTROL-A | static | src/client/studio.ts:6819 |
+| src/client/studio.ts:reinvite:6868 | button | reinvite | generated/global | src/client/studio.ts:6868 | CONTROL-A | static | src/client/studio.ts:6868 |
+| src/client/studio.ts:save:6880 | button | save | generated/global | src/client/studio.ts:6880 | CONTROL-A | static | src/client/studio.ts:6880 |
+| src/client/studio.ts:revoke:6893 | button | revoke | generated/global | src/client/studio.ts:6893 | CONTROL-A | static | src/client/studio.ts:6893 |
+| src/client/studio.ts:resend:6938 | button | pending ? "Sending another code…" : remaining > 0 ? `Resend code in ${remaining}s` : !turnstileToken ? "Complete security check to resend" : | generated/global | src/client/studio.ts:6938 | CONTROL-A | static | src/client/studio.ts:6938 |
+| src/client/studio.ts:edit:7372 | button | edit | generated/global | src/client/studio.ts:7372 | CONTROL-A | static | src/client/studio.ts:7372 |
+| src/client/studio.ts:remove:7374 | button | remove | generated/global | src/client/studio.ts:7374 | CONTROL-A | static | src/client/studio.ts:7374 |
+| src/client/studio.ts:remove:7397 | button | remove | generated/global | src/client/studio.ts:7397 | CONTROL-A | static | src/client/studio.ts:7397 |
+| src/client/studio.ts:add:7410 | button | add | generated/global | src/client/studio.ts:7410 | CONTROL-A | static | src/client/studio.ts:7410 |
+| src/client/studio.ts:review:7462 | button | review | generated/global | src/client/studio.ts:7462 | CONTROL-A | static | src/client/studio.ts:7462 |
+| src/client/studio.ts:cancel:7470 | button | cancel | generated/global | src/client/studio.ts:7470 | CONTROL-A | static | src/client/studio.ts:7470 |
+| src/client/studio.ts:retry:7485 | button | retry | generated/global | src/client/studio.ts:7485 | CONTROL-A | static | src/client/studio.ts:7485 |
+| src/client/studio.ts:queueExtraction:7510 | button | eligibleSemanticAssets.length ? "" : "Upload and verify a source, master, or point-cloud PLY on this immutable version first." | generated/global | src/client/studio.ts:7510 | CONTROL-A | static | src/client/studio.ts:7510 |
+| src/client/studio.ts:refreshExtractions:7520 | button | refreshExtractions | generated/global | src/client/studio.ts:7520 | CONTROL-A | static | src/client/studio.ts:7520 |
+| src/client/studio.ts:addRoute:7566 | button | addRoute | generated/global | src/client/studio.ts:7566 | CONTROL-A | static | src/client/studio.ts:7566 |
+| src/client/studio.ts:tuneNavigation:7569 | button | tuneNavigation | generated/global | src/client/studio.ts:7569 | CONTROL-A | static | src/client/studio.ts:7569 |
+| src/client/studio.ts:authorTraversal:7571 | button | authorTraversal | generated/global | src/client/studio.ts:7571 | CONTROL-A | static | src/client/studio.ts:7571 |
+| src/client/studio.ts:buildNavigation:7573 | button | collisionAssets.length ? "Build Detour route topology, replay capsule routes, then validate every v7 room anchor and reviewed wall with Rapi | generated/global | src/client/studio.ts:7573 | CONTROL-A | static | src/client/studio.ts:7573 |
+| src/client/studio.ts:edit:7602 | button | edit | generated/global | src/client/studio.ts:7602 | CONTROL-A | static | src/client/studio.ts:7602 |
+| src/client/studio.ts:archive:7604 | button | archive | generated/global | src/client/studio.ts:7604 | CONTROL-A | static | src/client/studio.ts:7604 |
+| src/client/studio.ts:approve:7700 | button | evidenceDetails ? "Open and inspect the frozen build evidence before approval." : "This build has no inspectable artifact and cannot be appr | generated/global | src/client/studio.ts:7700 | CONTROL-A | static | src/client/studio.ts:7700 |
+| src/client/studio.ts:reject:7730 | button | reject | generated/global | src/client/studio.ts:7730 | CONTROL-A | static | src/client/studio.ts:7730 |
+| src/client/studio.ts:refresh:7752 | button | refresh | generated/global | src/client/studio.ts:7752 | CONTROL-A | static | src/client/studio.ts:7752 |
+| src/client/studio.ts:retry:7762 | button | retry | generated/global | src/client/studio.ts:7762 | CONTROL-A | static | src/client/studio.ts:7762 |
+| src/client/studio.ts:analyzeCapture:7816 | button | captureUsesProvisionalUnits ? "Capture completeness requires reviewed metric metres; provisional scene units support relative navigation onl | generated/global | src/client/studio.ts:7816 | CONTROL-A | static | src/client/studio.ts:7816 |
+| src/client/studio.ts:savePolicy:7857 | button | savePolicy | generated/global | src/client/studio.ts:7857 | CONTROL-A | static | src/client/studio.ts:7857 |
+| src/client/studio.ts:review:7948 | button | review | generated/global | src/client/studio.ts:7948 | CONTROL-A | static | src/client/studio.ts:7948 |
+| src/client/studio.ts:configure:7959 | button | configure | generated/global | src/client/studio.ts:7959 | CONTROL-A | static | src/client/studio.ts:7959 |
+| src/client/studio.ts:configureHosting:7969 | button | configureHosting | generated/global | src/client/studio.ts:7969 | CONTROL-A | static | src/client/studio.ts:7969 |
+| src/client/studio.ts:publishedLink:7981 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:7981 | CONTROL-A | static | src/client/studio.ts:7981 |
+| src/client/studio.ts:button:8043 | button | "Hosting already active" \| "Administrator billing" \| "Open billing workspace" | generated/global | src/client/studio.ts:8043 | CONTROL-A | static | src/client/studio.ts:8043 |
+| src/client/studio.ts:undo:8050 | button | undo | generated/global | src/client/studio.ts:8050 | CONTROL-A | static | src/client/studio.ts:8050 |
+| src/client/studio.ts:finish:8054 | button | finish | generated/global | src/client/studio.ts:8054 | CONTROL-A | static | src/client/studio.ts:8054 |
+| src/client/studio.ts:save:8058 | button | save | generated/global | src/client/studio.ts:8058 | CONTROL-A | static | src/client/studio.ts:8058 |
+| src/client/studio.ts:review:8695 | button | review | generated/global | src/client/studio.ts:8695 | CONTROL-A | static | src/client/studio.ts:8695 |
+| src/client/studio.ts:cancel:8700 | button | cancel | generated/global | src/client/studio.ts:8700 | CONTROL-A | static | src/client/studio.ts:8700 |
+| src/client/studio.ts:retry:8716 | button | retry | generated/global | src/client/studio.ts:8716 | CONTROL-A | static | src/client/studio.ts:8716 |
+| src/client/studio.ts:queue:8731 | button | assets.length ? "" : "Upload and verify a metric PLY, E57, LAS, LAZ, or PTS asset first." | generated/global | src/client/studio.ts:8731 | CONTROL-A | static | src/client/studio.ts:8731 |
+| src/client/studio.ts:refresh:8741 | button | refresh | generated/global | src/client/studio.ts:8741 | CONTROL-A | static | src/client/studio.ts:8741 |
+| src/client/studio.ts:rebuild:8759 | button | rebuild | generated/global | src/client/studio.ts:8759 | CONTROL-A | static | src/client/studio.ts:8759 |
+| src/client/studio.ts:download:8821 | button | download | generated/global | src/client/studio.ts:8821 | CONTROL-A | static | src/client/studio.ts:8821 |
+| src/client/studio.ts:generate:8840 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:8840 | CONTROL-A | static | src/client/studio.ts:8840 |
+| src/client/studio.ts:anchor:9781 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:9781 | CONTROL-A | static | src/client/studio.ts:9781 |
+| src/client/studio.ts:review:10739 | button | review | generated/global | src/client/studio.ts:10739 | CONTROL-A | static | src/client/studio.ts:10739 |
+| src/client/studio.ts:addPoint:10927 | button | addPoint | generated/global | src/client/studio.ts:10927 | CONTROL-A | static | src/client/studio.ts:10927 |
+| src/client/studio.ts:report:10929 | button | report | generated/global | src/client/studio.ts:10929 | CONTROL-A | static | src/client/studio.ts:10929 |
+| src/client/studio.ts:generate:10939 | button | points.length < 3 ? "Record at least three independent check points and generate a passing QA report." : "Generate a passing QA report befor | generated/global | src/client/studio.ts:10939 | CONTROL-A | static | src/client/studio.ts:10939 |
+| src/client/studio.ts:download:10960 | button | download | generated/global | src/client/studio.ts:10960 | CONTROL-A | static | src/client/studio.ts:10960 |
+| src/client/studio.ts:create:10996 | button | create | generated/global | src/client/studio.ts:10996 | CONTROL-A | static | src/client/studio.ts:10996 |
+| src/client/studio.ts:anchor:11113 | a | objectUrl \| objectUrl \| objectUrl | generated/global | src/client/studio.ts:11113 | CONTROL-A | static | src/client/studio.ts:11113 |
+| src/client/studio.ts:retry:11539 | button | retry | generated/global | src/client/studio.ts:11539 | CONTROL-A | static | src/client/studio.ts:11539 |
+| src/client/studio.ts:reveal:11606 | button | reveal | generated/global | src/client/studio.ts:11606 | CONTROL-A | static | src/client/studio.ts:11606 |
+| src/client/studio.ts:copyPreview:11739 | button | copyPreview | generated/global | src/client/studio.ts:11739 | CONTROL-A | static | src/client/studio.ts:11739 |
+| src/client/studio.ts:openPreview:11749 | button | openPreview | generated/global | src/client/studio.ts:11749 | CONTROL-A | static | src/client/studio.ts:11749 |
+| src/client/studio.ts:addGeometry:11764 | button | addGeometry | generated/global | src/client/studio.ts:11764 | CONTROL-A | static | src/client/studio.ts:11764 |
+| src/client/studio.ts:publishedLink:11778 | a | `/s/${activeRelease.slug}` \| `Open published /${activeRelease.slug}` \| `/s/${activeRelease.slug}` \| "Open published preview" | generated/global | src/client/studio.ts:11778 | CONTROL-A | static | src/client/studio.ts:11778 |
+| src/client/studio.ts:qaButton:11801 | button | qaButton | generated/global | src/client/studio.ts:11801 | CONTROL-A | static | src/client/studio.ts:11801 |
+| src/client/studio.ts:publishButton:11816 | button | publishButton | generated/global | src/client/studio.ts:11816 | CONTROL-A | static | src/client/studio.ts:11816 |
+| src/client/studio.ts:editButton:11865 | button | editButton | generated/global | src/client/studio.ts:11865 | CONTROL-A | static | src/client/studio.ts:11865 |
+| src/client/studio.ts:lifecycleButton:11868 | button | lifecycleButton | generated/global | src/client/studio.ts:11868 | CONTROL-A | static | src/client/studio.ts:11868 |
+| src/client/studio.ts:compareButton:11895 | button | compareButton | generated/global | src/client/studio.ts:11895 | CONTROL-A | static | src/client/studio.ts:11895 |
+| src/client/studio.ts:uploadButton:11899 | button | uploadButton | generated/global | src/client/studio.ts:11899 | CONTROL-A | static | src/client/studio.ts:11899 |
+| src/client/studio.ts:registerBundle:11923 | button | registerBundle | generated/global | src/client/studio.ts:11923 | CONTROL-A | static | src/client/studio.ts:11923 |
+| src/client/studio.ts:link:11937 | a | `/s/${release.slug}` \| `${release.slug} · ${release.access_policy}${release.is_active ? " · active" : ""}` | generated/global | src/client/studio.ts:11937 | CONTROL-A | static | src/client/studio.ts:11937 |
+| src/client/studio.ts:exportEvidence:11943 | button | exportEvidence | generated/global | src/client/studio.ts:11943 | CONTROL-A | static | src/client/studio.ts:11943 |
+| src/client/studio.ts:revoke:11956 | button | revoke | generated/global | src/client/studio.ts:11956 | CONTROL-A | static | src/client/studio.ts:11956 |
+| src/client/studio.ts:rollback:11973 | button | rollback | generated/global | src/client/studio.ts:11973 | CONTROL-A | static | src/client/studio.ts:11973 |
+| src/client/studio.ts:inviteButton:11994 | button | inviteButton | generated/global | src/client/studio.ts:11994 | CONTROL-A | static | src/client/studio.ts:11994 |
+| src/client/studio.ts:reviewButton:11996 | button | reviewButton | generated/global | src/client/studio.ts:11996 | CONTROL-A | static | src/client/studio.ts:11996 |
+| src/client/studio.ts:deliveryButton:12008 | button | deliveryButton | generated/global | src/client/studio.ts:12008 | CONTROL-A | static | src/client/studio.ts:12008 |
+| src/client/studio.ts:spatialButton:12016 | button | spatialButton | generated/global | src/client/studio.ts:12016 | CONTROL-A | static | src/client/studio.ts:12016 |
+| src/client/studio.ts:measurementButton:12019 | button | measurementButton | generated/global | src/client/studio.ts:12019 | CONTROL-A | static | src/client/studio.ts:12019 |
+| src/client/studio.ts:domainButton:12031 | button | domainButton | generated/global | src/client/studio.ts:12031 | CONTROL-A | static | src/client/studio.ts:12031 |
+| src/client/studio.ts:review:12558 | button | review | generated/global | src/client/studio.ts:12558 | CONTROL-A | static | src/client/studio.ts:12558 |
+| src/client/studio.ts:retry:13093 | button | retry | generated/global | src/client/studio.ts:13093 | CONTROL-A | static | src/client/studio.ts:13093 |
+| src/client/studio.ts:resume:13143 | button | checkout.checkout_url | generated/global | src/client/studio.ts:13143 | CONTROL-A | static | src/client/studio.ts:13143 |
+| src/client/studio.ts:discard:13156 | button | discard | generated/global | src/client/studio.ts:13156 | CONTROL-A | static | src/client/studio.ts:13156 |
+| src/client/studio.ts:retry:14380 | button | retry | generated/global | src/client/studio.ts:14380 | CONTROL-A | static | src/client/studio.ts:14380 |
+| src/client/studio.ts:verify:14449 | button | verify | generated/global | src/client/studio.ts:14449 | CONTROL-A | static | src/client/studio.ts:14449 |
+| src/client/studio.ts:challenge:14461 | button | challenge | generated/global | src/client/studio.ts:14461 | CONTROL-A | static | src/client/studio.ts:14461 |
+| src/client/studio.ts:provision:14474 | button | provision | generated/global | src/client/studio.ts:14474 | CONTROL-A | static | src/client/studio.ts:14474 |
+| src/client/studio.ts:open:14500 | a | `https://${domain.hostname}/` | generated/global | src/client/studio.ts:14500 | CONTROL-A | static | src/client/studio.ts:14500 |
+| src/client/studio.ts:remove:14507 | button | remove | generated/global | src/client/studio.ts:14507 | CONTROL-A | static | src/client/studio.ts:14507 |
+| src/client/studio.ts:verify:14562 | button | verify | generated/global | src/client/studio.ts:14562 | CONTROL-A | static | src/client/studio.ts:14562 |
 | src/client/studio/stages/compare.ts:review:938 | button | review | generated/global | src/client/studio/stages/compare.ts:938 | CONTROL-A | static | src/client/studio/stages/compare.ts:938 |
 | src/client/studio/stages/compare.ts:visual:944 | button | visualAvailable ? "" : "Two versions need verified web scenes, approved navigation, and capture registration." | generated/global | src/client/studio/stages/compare.ts:944 | CONTROL-A | static | src/client/studio/stages/compare.ts:944 |
 | src/client/studio/stages/compare.ts:retry:1166 | button | retry | generated/global | src/client/studio/stages/compare.ts:1166 | CONTROL-A | static | src/client/studio/stages/compare.ts:1166 |
@@ -891,9 +893,9 @@ Every inventory row names a policy; that reference is part of the row's acceptan
 | src/client/studio/stages/compare.ts:visual:1263 | button | visualAvailable ? "" : "Two versions need verified web scenes, approved navigation, and capture registration." | generated/global | src/client/studio/stages/compare.ts:1263 | CONTROL-A | static | src/client/studio/stages/compare.ts:1263 |
 | src/client/studio/stages/compare.ts:compare:1279 | button | compare | generated/global | src/client/studio/stages/compare.ts:1279 | CONTROL-A | static | src/client/studio/stages/compare.ts:1279 |
 | src/client/studio/stages/compare.ts:compareRaw:1302 | button | rawAvailable ? "" : "Two versions need verified source PLY assets and capture-registration evidence." | generated/global | src/client/studio/stages/compare.ts:1302 | CONTROL-A | static | src/client/studio/stages/compare.ts:1302 |
-| src/client/viewer.ts:button:1155 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1155 | CONTROL-A | static | src/client/viewer.ts:1155 |
-| src/client/viewer.ts:button:1186 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1186 | CONTROL-A | static | src/client/viewer.ts:1186 |
-| src/client/viewer.ts:button:1265 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1265 | CONTROL-A | static | src/client/viewer.ts:1265 |
+| src/client/viewer.ts:button:1156 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1156 | CONTROL-A | static | src/client/viewer.ts:1156 |
+| src/client/viewer.ts:button:1187 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1187 | CONTROL-A | static | src/client/viewer.ts:1187 |
+| src/client/viewer.ts:button:1266 | button | floorPlanDisplayLabel(room.label, index, directoryRooms.length) === room.label ? room.label : `${index + 1}. ${room.label}` \| `${route.label}${route.estimated_seconds ? ` · ${Math.ceil(route.estimated_seconds / 60)} min` : ""}` \| idleLabel() | generated/global | src/client/viewer.ts:1266 | CONTROL-A | static | src/client/viewer.ts:1266 |
 
 ## Persisted states
 

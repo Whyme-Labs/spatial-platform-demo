@@ -1466,8 +1466,10 @@ function frameHostMessages(page: Page): Promise<Array<Record<string, unknown>>> 
   );
 }
 
-function sendRendererReady(page: Page): Promise<void> {
-  return page.frameLocator("#rendererFrame").locator("body").evaluate(() => {
+async function sendRendererReady(page: Page): Promise<void> {
+  const body = page.frameLocator("#rendererFrame").locator("body");
+  await expect(body.getByRole("status", { includeHidden: true })).toHaveText("Loading spatial scene");
+  await body.evaluate(() => {
     parent.postMessage({
       source: "spatial-spark",
       type: "ready",

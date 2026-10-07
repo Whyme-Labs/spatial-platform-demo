@@ -244,12 +244,13 @@ const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
 const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
 const desktopVerticalHelp = byId<HTMLElement>("desktopVerticalHelp");
 const movementModeToggle = byId<HTMLButtonElement>("movementModeToggle");
+const inspectionDragMode = byId<HTMLSelectElement>("inspectionDragMode");
 const movementPad = byId<HTMLElement>("movementPad");
 const flightAltitudeControls = byId<HTMLElement>("flightAltitudeControls");
 const flyAscend = byId<HTMLButtonElement>("flyAscend");
 const flyDescend = byId<HTMLButtonElement>("flyDescend");
 const mobileControls = new MobileControlSurface({
-  coarsePointer: matchMedia("(any-pointer: coarse)"),
+  coarsePointer: matchMedia("(pointer: coarse)"),
   elements: {
     viewport: sparkViewport,
     pad: movementPad,
@@ -258,6 +259,7 @@ const mobileControls = new MobileControlSurface({
     lookHint: byId("mobileLookHint"),
   },
   onModeChange: (active) => {
+    if (!active) stopMobileVerticalMovement();
     post({
       source: "spatial-spark",
       type: "control-mode",
@@ -300,12 +302,14 @@ function visibleOverlayRect(element: HTMLElement): OverlayRect | null {
 }
 
 function publishOverlayLayoutReceipt(): void {
+  const toolbar = visibleOverlayRect(document.querySelector<HTMLElement>(".spark-controls")!);
+  if (toolbar) sparkViewport.style.setProperty("--spark-toolbar-height", `${toolbar.bottom - toolbar.top}px`);
   post({
     source: "spatial-spark",
     type: "overlay-layout",
     viewport: { width: innerWidth, height: innerHeight },
     zones: {
-      toolbar: visibleOverlayRect(document.querySelector<HTMLElement>(".spark-controls")!),
+      toolbar,
       status: visibleOverlayRect(controlStatus),
       help: visibleOverlayRect(helpPanel),
       movement: visibleOverlayRect(movementPad),
@@ -324,7 +328,7 @@ let webglRenderer: THREE.WebGLRenderer | null = null;
 let rendererCamera: THREE.PerspectiveCamera | null = null;
 let rendererControls: ReturnType<typeof createSpatialLookControls> | null = null;
 let resizeObserver: ResizeObserver | null = null;
-let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
+let initialView: { position: THREE.Vector3; quaternion: THREE.Quaternion; up: THREE.Vector3 } | null = null;
 let readySent = false;
 let visualReadyHandled = false;
 let heartbeatHandle: number | null = null;
@@ -346,6 +350,7 @@ let navigationRuntimeGeneration = 0;
 let walkableBoundarySource: WalkableBoundarySource = "none";
 let movementRuntimeReady = false;
 let authoringHostActive = false;
+let visualPreviewActive = false;
 let lastWalkablePosition: THREE.Vector3 | null = null;
 let lastCameraBroadcastAt = 0;
 let lastBroadcastPosition: THREE.Vector3 | null = null;
@@ -422,6 +427,7 @@ async function start(): Promise<void> {
   controls.setTranslationEnabled(false);
   rendererControls = controls;
   let visualSceneReady = false;
+  let sceneCentre: THREE.Vector3 | null = null;
   let pendingSpatialRuntimeMessage: object | null = null;
   let activeSpatialRuntimeSignature: string | null = null;
   let hydratedNavigationMeshUrl: string | null = null;
@@ -440,6 +446,20 @@ async function start(): Promise<void> {
     if (event.origin !== parentOrigin || event.source !== window.parent) return;
     if (!event.data || typeof event.data !== "object") return;
     if (Reflect.get(event.data, "source") !== "spatial-host") return;
+    if (Reflect.get(event.data, "type") === "set-visual-preview") {
+      if (fatalFailure || collisionDrivenMovement) return;
+      visualPreviewActive = true;
+      if (visualSceneReady && !sceneCentre) {
+        mesh.updateMatrixWorld(true);
+        sceneCentre = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld).getCenter(new THREE.Vector3());
+      }
+      if (sceneCentre) controls.setPanTarget(sceneCentre);
+      movementMode = "fly";
+      controls.setMovementMode("fly");
+      setMovementAvailability(controls, visualSceneReady);
+      setControlStatus("Fly preview · drag to pan", "ready");
+      return;
+    }
     if (Reflect.get(event.data, "type") === "set-outer-overlay-mode") {
       const requestedMode = Reflect.get(event.data, "mode");
       const mode: RendererOuterOverlayMode = requestedMode === "navigator" || requestedMode === "review"
@@ -538,6 +558,8 @@ async function start(): Promise<void> {
       authoredTraversalOverlay?.destroy();
       authoredTraversalOverlay = null;
       collisionDrivenMovement = false;
+      visualPreviewActive = false;
+      controls.setPanTarget(null);
       movementMode = "walk";
       stopMobileVerticalMovement();
       controls.setMovementMode("walk");
@@ -699,6 +721,7 @@ async function start(): Promise<void> {
             initialView = {
               position: camera.position.clone(),
               quaternion: camera.quaternion.clone(),
+              up: camera.up.clone(),
             };
             movementRuntimeReady = true;
             setMovementAvailability(controls, true);
@@ -783,6 +806,7 @@ async function start(): Promise<void> {
       return;
     }
     if (Reflect.get(event.data, "type") === "movement-key") {
+      if (Reflect.get(event.data, "pressed") === true) mobileControls.setInputMode("pc");
       controls.setKeyboardKeyState(
         String(Reflect.get(event.data, "code") ?? ""),
         Reflect.get(event.data, "pressed") === true,
@@ -1044,6 +1068,13 @@ async function start(): Promise<void> {
 
   await mesh.initialized;
   setProgress(86, "Framing the reconstructed place");
+  let sceneBounds: THREE.Box3 | null = null;
+  if (!config.initialCamera || visualPreviewActive) {
+    mesh.updateMatrixWorld(true);
+    sceneBounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
+    sceneCentre = sceneBounds.getCenter(new THREE.Vector3());
+  }
+  if (visualPreviewActive && sceneCentre) controls.setPanTarget(sceneCentre);
   if (config.initialCamera) {
     camera.fov = config.initialCamera.fovDegrees;
     if (config.initialCamera.up) {
@@ -1053,10 +1084,10 @@ async function start(): Promise<void> {
     camera.lookAt(new THREE.Vector3().fromArray(config.initialCamera.target));
     camera.updateProjectionMatrix();
   } else {
-    frameScene(mesh, camera);
+    frameScene(sceneBounds!, camera);
   }
-  setMovementAvailability(controls, movementRuntimeReady);
-  if (walkableBoundarySource === "none") {
+  setMovementAvailability(controls, movementRuntimeReady || visualPreviewActive);
+  if (walkableBoundarySource === "none" && !visualPreviewActive) {
     setControlStatus("Walking map required · preview blocked", "error");
   }
   anchorCameraToWalkable(camera);
@@ -1064,6 +1095,7 @@ async function start(): Promise<void> {
   initialView = {
     position: camera.position.clone(),
     quaternion: camera.quaternion.clone(),
+    up: camera.up.clone(),
   };
   visualSceneReady = true;
   if (pendingSpatialRuntimeMessage) {
@@ -1207,9 +1239,9 @@ async function start(): Promise<void> {
     // reviews the scene precisely before a walking runtime exists, and gating
     // the overlay on that runtime stranded it on a permanent "Finalising the
     // view" over a fully rendered scene. But the visual alone must never post
-    // "ready" — the host treats ready as movement-ready and enables room
-    // navigation on it, so ready waits for the verified runtime (or an
-    // authoring host's free-fly grant), and never follows a fatal error.
+    // "ready" without a movement contract. A verified walking runtime or an
+    // explicit private-preview/authoring flight grant enables movement.
+    // A fatal error must never be followed by ready.
     if (!visualReadyHandled && visualSceneReady && !fatalFailure) {
       visualReadyHandled = true;
       resetButton.disabled = false;
@@ -1222,10 +1254,10 @@ async function start(): Promise<void> {
     }
     if (
       !readySent && !fatalFailure && visualSceneReady &&
-      (movementRuntimeReady || authoringHostActive)
+      (movementRuntimeReady || authoringHostActive || visualPreviewActive)
     ) {
       readySent = true;
-      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive);
+      setMovementAvailability(controls, movementRuntimeReady || authoringHostActive || visualPreviewActive);
       post({
         source: "spatial-spark",
         type: "ready",
@@ -1473,7 +1505,9 @@ function cameraPose(camera: THREE.PerspectiveCamera): {
   return {
     position: camera.position.toArray() as Vector3Tuple,
     target: target.toArray() as Vector3Tuple,
-    up: camera.up.toArray() as Vector3Tuple,
+    up: (visualPreviewActive
+      ? new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
+      : camera.up).toArray() as Vector3Tuple,
     fovDegrees: camera.fov,
   };
 }
@@ -1918,25 +1952,42 @@ function setMovementAvailability(
   controls.setTranslationEnabled(available);
   controls.setNavigationBounds(available && !collisionDrivenMovement ? walkableBoxes : []);
   mobileControls.setReady(available && readySent);
+  byId("mobileLookHint").querySelector("span:last-child")!.textContent = visualPreviewActive
+    ? "Drag scene to pan" : "Drag scene to look";
   mobileMovementHelp.textContent = available
-    ? collisionDrivenMovement && movementMode === "fly"
+    ? visualPreviewActive
+      ? "Drag to pan · two-finger drag to turn · joystick to fly · Rise and Lower change altitude"
+      : movementMode === "fly"
       ? "Drag to look · fly with the joystick · Rise and Lower change altitude"
       : "Drag to look · move with the left-thumb joystick"
     : "Walking map required before this scene can be viewed";
   desktopMovementHelp.textContent = available
-    ? collisionDrivenMovement && movementMode === "fly"
+    ? visualPreviewActive
+      ? "Drag to pan · Shift+drag to turn · scroll to travel"
+      : movementMode === "fly"
       ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
       : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel"
     : "Walking map required before this scene can be viewed";
   desktopKeyboardHelp.hidden = !available;
-  desktopVerticalHelp.hidden = !available || !collisionDrivenMovement || movementMode !== "fly";
-  flightAltitudeControls.hidden = !available || !collisionDrivenMovement ||
+  desktopVerticalHelp.hidden = !available || movementMode !== "fly";
+  flightAltitudeControls.hidden = !available ||
     movementMode !== "fly" || !mobileControls.active;
+  updateInspectionDragChrome();
 }
 
-function frameScene(mesh: SplatMesh, camera: THREE.PerspectiveCamera): void {
-  mesh.updateMatrixWorld(true);
-  const bounds = mesh.getBoundingBox().clone().applyMatrix4(mesh.matrixWorld);
+function updateInspectionDragChrome(): void {
+  inspectionDragMode.hidden = !visualPreviewActive;
+  inspectionDragMode.disabled = !readySent || fatalFailure;
+  if (!visualPreviewActive) return;
+  const mode = rendererControls?.inspectionDragMode ?? "pan";
+  inspectionDragMode.value = mode;
+  const action = mode === "rotate" ? "rotate clockwise/counterclockwise" : mode;
+  byId("mobileLookHint").querySelector("span:last-child")!.textContent = `Drag scene to ${mode}`;
+  desktopMovementHelp.textContent = `Drag to ${action} · Shift+drag to turn · scroll to travel`;
+  mobileMovementHelp.textContent = `Drag to ${action} · two-finger drag to turn · joystick to fly · Rise and Lower change altitude`;
+}
+
+function frameScene(bounds: THREE.Box3, camera: THREE.PerspectiveCamera): void {
   const sphere = bounds.getBoundingSphere(new THREE.Sphere());
   const center = sphere.center;
   const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 1;
@@ -2008,10 +2059,22 @@ function bindChrome(): void {
     button.addEventListener("lostpointercapture", stopMobileVerticalMovement);
   }
   helpButton.addEventListener("click", toggleHelp);
+  inspectionDragMode.addEventListener("change", changeInspectionDragMode);
   fullscreenButton.addEventListener("click", requestFullscreen);
   document.addEventListener("fullscreenchange", updateFullscreenControl);
   window.addEventListener("resize", handleChromeResize);
   scheduleOverlayLayoutReceipt();
+}
+
+function changeInspectionDragMode(): void {
+  const mode = inspectionDragMode.value;
+  if (!visualPreviewActive || !rendererControls || (mode !== "pan" && mode !== "turn" && mode !== "rotate")) return;
+  mobileControls.suspend();
+  stopMobileVerticalMovement();
+  rendererControls.setInspectionDragMode(mode);
+  updateInspectionDragChrome();
+  setControlStatus(`Fly preview · drag to ${mode}`, "ready");
+  canvas.focus({ preventScroll: true });
 }
 
 function toggleMovementMode(): void {
@@ -2052,17 +2115,20 @@ function toggleMovementMode(): void {
 
 function updateMovementModeChrome(): void {
   movementModeToggle.hidden = !collisionDrivenMovement;
-  const compact = matchMedia("(any-pointer: coarse)").matches;
+  const compact = mobileControls.inputMode === "touch";
   movementModeToggle.textContent = movementMode === "walk"
     ? (compact ? "Fly" : "Fly mode")
     : (compact ? "Walk" : "Walk mode");
   movementModeToggle.setAttribute("aria-pressed", String(movementMode === "fly"));
-  desktopVerticalHelp.hidden = !movementRuntimeReady || movementMode !== "fly";
-  flightAltitudeControls.hidden = !movementRuntimeReady || movementMode !== "fly" ||
+  desktopVerticalHelp.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly";
+  flightAltitudeControls.hidden = !(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly" ||
     !mobileControls.active;
-  desktopMovementHelp.textContent = movementMode === "fly"
+  desktopMovementHelp.textContent = visualPreviewActive
+    ? "Drag to pan · Shift+drag to turn · scroll to travel"
+    : movementMode === "fly"
     ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
     : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel";
+  updateInspectionDragChrome();
   scheduleOverlayLayoutReceipt();
 }
 
@@ -2199,7 +2265,7 @@ function startMobileVerticalMovement(
   button: HTMLButtonElement,
   direction: -1 | 1,
 ): void {
-  if (!movementRuntimeReady || movementMode !== "fly" || !mobileControls.active) return;
+  if (!(movementRuntimeReady || visualPreviewActive) || movementMode !== "fly" || !mobileControls.active) return;
   event.preventDefault();
   mobileVerticalMovement = direction;
   button.toggleAttribute("data-active", true);
@@ -2224,6 +2290,7 @@ function resetView(): void {
   if (!camera) return;
   camera.position.copy(initialView.position);
   camera.quaternion.copy(initialView.quaternion);
+  if (visualPreviewActive) camera.up.copy(initialView.up);
   if (physicalNavigationRuntime) {
     const restored = physicalNavigationRuntime.placeCamera(
       camera.position.toArray() as Vector3Tuple,
@@ -2337,6 +2404,7 @@ function dispose(): void {
     button.removeEventListener("lostpointercapture", stopMobileVerticalMovement);
   }
   helpButton.removeEventListener("click", toggleHelp);
+  inspectionDragMode.removeEventListener("change", changeInspectionDragMode);
   fullscreenButton.removeEventListener("click", requestFullscreen);
   if (overlayLayoutFrame !== null) {
     cancelAnimationFrame(overlayLayoutFrame);

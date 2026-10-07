@@ -10,12 +10,12 @@ describe("mobile free-roam controls", () => {
     const controls = new MobileControlModel();
 
     expect(controls.state).toMatchObject({
-      touchCapable: false,
+      inputMode: "pc",
       ready: false,
       active: false,
       movement: { x: 0, z: 0 },
     });
-    controls.setTouchCapable(true);
+    controls.setInputMode("touch");
     expect(controls.state.active).toBe(false);
 
     controls.setReady(true);
@@ -39,7 +39,7 @@ describe("mobile free-roam controls", () => {
     expect(controls.state.magnitude).toBe(1);
   });
 
-  it("returns to neutral after cancellation, backgrounding, or touch capability loss", () => {
+  it("returns to neutral after cancellation, backgrounding, or switching to PC controls", () => {
     const controls = readyControls();
     controls.beginPointer(9, 0, 0, 56);
     controls.movePointer(9, 0, -48, 56);
@@ -54,9 +54,9 @@ describe("mobile free-roam controls", () => {
     expect(controls.state.movement).toEqual({ x: 0, z: 0 });
 
     controls.beginPointer(11, 0, -48, 56);
-    controls.setTouchCapable(false);
+    controls.setInputMode("pc");
     expect(controls.state).toMatchObject({
-      touchCapable: false,
+      inputMode: "pc",
       active: false,
       pointerId: null,
       movement: { x: 0, z: 0 },
@@ -91,7 +91,7 @@ describe("mobile free-roam controls", () => {
 
 function readyControls(): MobileControlModel {
   const controls = new MobileControlModel();
-  controls.setTouchCapable(true);
+  controls.setInputMode("touch");
   controls.setReady(true);
   return controls;
 }

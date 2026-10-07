@@ -85,6 +85,7 @@ type ReleaseManifest = {
     measurementDisclaimer: string;
     splatBudgetMillions?: number | null;
     defaultMovementMode?: "walk" | "fly";
+    viewingMode?: "fly-only" | "walkable";
     sceneRotationDegrees?: [number, number, number];
     sourceToWorld?: SourceToWorldTransform;
     initialCamera?: {
@@ -461,7 +462,7 @@ async function loadPublishedReleaseOnce(): Promise<void> {
     dynamicBarrierRequests.delete(requestId);
   }
   activeDynamicBarriers.clear();
-  setLoading(true, activePrivatePreview ? "Authorising private walkable preview…" : "Authorising scene release…");
+  setLoading(true, activePrivatePreview ? "Authorising private preview…" : "Authorising scene release…");
   rendererReady = false;
   rendererLivenessAtMs = null;
   sceneSession = null;
@@ -1551,6 +1552,13 @@ function setRendererCamera(cameraPose: CameraPose): Promise<CameraPose> {
 
 function sendSpatialRuntime(): void {
   const spatial = activeManifest?.spatial;
+  if ((activePrivatePreview || activeManifest?.viewer.viewingMode === "fly-only") && !spatial) {
+    frame.contentWindow?.postMessage({
+      source: "spatial-host",
+      type: "set-visual-preview",
+    }, location.origin);
+    return;
+  }
   if (!spatial) return;
   const artifactNavMesh = spatial.navigationArtifact
     ? Reflect.get(spatial.navigationArtifact, "navMesh")

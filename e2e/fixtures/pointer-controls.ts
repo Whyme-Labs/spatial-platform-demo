@@ -36,6 +36,16 @@ const controls = createSpatialLookControls(canvas);
 controls.align(camera);
 const fixtureParameters = new URL(location.href).searchParams;
 if (fixtureParameters.get("mode") === "fly") controls.setMovementMode("fly");
+if (fixtureParameters.get("inspection") === "true") {
+  controls.setPanTarget(new THREE.Vector3(0, 0, 0));
+  const modeSelect = document.querySelector<HTMLSelectElement>("#inspectionDragMode")!;
+  modeSelect.hidden = false;
+  modeSelect.addEventListener("change", () => {
+    const mode = modeSelect.value;
+    if (mode === "pan" || mode === "turn" || mode === "rotate") controls.setInspectionDragMode(mode);
+    canvas.focus();
+  });
+}
 const requestedBoundary = fixtureParameters.get("boundary");
 if (requestedBoundary) {
   const padding = new THREE.Vector3(0.2, 0.2, 0.2);
