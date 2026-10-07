@@ -21,6 +21,9 @@
   </head>
   <body>
     <canvas id="controlCanvas"></canvas>
+    <select id="inspectionDragMode" aria-label="Drag action" style="position:absolute;top:8px;left:8px" hidden>
+      <option value="pan">Pan</option><option value="turn">Turn</option><option value="rotate">Rotate</option>
+    </select>
     <script type="module" src="./pointer-controls.ts"></script>
   </body>
 </html>

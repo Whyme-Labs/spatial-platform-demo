@@ -7,6 +7,7 @@ type MovementInput = {
 };
 
 export type SpatialMovementMode = "walk" | "fly";
+export type InspectionDragMode = "pan" | "turn" | "rotate";
 
 type NavigationBounds = {
   min: THREE.Vector3;
@@ -15,6 +16,7 @@ type NavigationBounds = {
 
 const LOCAL_RIGHT = new THREE.Vector3(1, 0, 0);
 const LOCAL_UP = new THREE.Vector3(0, 1, 0);
+const LOCAL_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
 const MAX_PITCH_RADIANS = THREE.MathUtils.degToRad(85);
 const LOOK_RADIANS_PER_PIXEL = 0.002;
 const DEFAULT_MOVEMENT_SPEED_UNITS_PER_SECOND = 1.4;
@@ -36,7 +38,7 @@ const DEFAULT_MAX_ACCELERATION_UNITS_PER_SECOND_SQUARED = 8;
 
 /**
  * A single, scene-aware input owner for the Spark renderer. Primary drag looks
- * by default; an inspection pan target makes drag pan and Shift+drag look.
+ * by default; inspection offers Pan, Turn, and Rotate with Shift+drag look.
  * A stationary primary click in the default mode requests pointer lock so a
  * desktop mouse can look without holding a button (Esc releases the lock and
  * drag-look remains the fallback). Keyboard, joystick, mouse wheel, and
@@ -50,7 +52,10 @@ export class SpatialNavigationControls {
   private readonly pendingKeys = new Set<string>();
   private readonly activeTouches = new Map<number, { x: number; y: number }>();
   private panFrame: { origin: THREE.Vector3; target: THREE.Vector3 } | null = null;
-  private dragPanning = false;
+  private selectedDragMode: InspectionDragMode = "pan";
+  private dragAction: InspectionDragMode = "turn";
+  private readonly inspectionRotation = new THREE.Quaternion();
+  private readonly rotationStep = new THREE.Quaternion();
   private panDeltaX = 0;
   private panDeltaY = 0;
   private navigationBounds: NavigationBounds[] = [];
@@ -104,6 +109,7 @@ export class SpatialNavigationControls {
     if (!this.panFrame) this.navigationUp.copy(camera.up).normalize();
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
     this.panDeltaX = 0;
     this.panDeltaY = 0;
     this.wheelDeltaX = 0;
@@ -204,6 +210,16 @@ export class SpatialNavigationControls {
     this.panFrame = target ? { origin: target.clone(), target: target.clone() } : null;
     if (target) this.navigationUp.copy(LOCAL_UP);
     this.suspend();
+  }
+
+  get inspectionDragMode(): InspectionDragMode {
+    return this.selectedDragMode;
+  }
+
+  setInspectionDragMode(mode: InspectionDragMode): void {
+    this.selectedDragMode = mode;
+    this.suspend();
+    this.motorVelocity.set(0, 0, 0);
   }
 
   configureMovementProfiles(artifact: unknown): void {
@@ -347,8 +363,11 @@ export class SpatialNavigationControls {
   private readonly handlePointerMove = (event: PointerEvent): void => {
     if (this.isPointerLocked()) {
       if (!this.lookEnabled) return;
-      this.lookDeltaX += event.movementX;
-      this.lookDeltaY += event.movementY;
+      if (this.panFrame) this.queueInspectionRotation("turn", event.movementX, event.movementY);
+      else {
+        this.lookDeltaX += event.movementX;
+        this.lookDeltaY += event.movementY;
+      }
       return;
     }
     let x = event.clientX;
@@ -362,9 +381,11 @@ export class SpatialNavigationControls {
       x = centre.x;
       y = centre.y;
     } else if (event.pointerId !== this.dragPointerId) return;
-    if (this.dragPanning) {
+    if (this.dragAction === "pan") {
       this.panDeltaX += x - this.lastPointerX;
       this.panDeltaY += y - this.lastPointerY;
+    } else if (this.panFrame) {
+      this.queueInspectionRotation(this.dragAction, x - this.lastPointerX, y - this.lastPointerY);
     } else {
       this.lookDeltaX += x - this.lastPointerX;
       this.lookDeltaY += y - this.lastPointerY;
@@ -478,13 +499,19 @@ export class SpatialNavigationControls {
       // still preserve a complete gesture when a browser declines it.
     }
     this.dragPointerId = event.pointerId;
-    this.dragPanning = Boolean(this.panFrame && !event.shiftKey);
+    this.dragAction = this.panFrame && !event.shiftKey ? this.selectedDragMode : "turn";
+    // Direct manipulation must not coast from a previous travel gesture.
+    if (this.panFrame) {
+      this.motorVelocity.set(0, 0, 0);
+      this.pendingKeys.clear();
+    }
     this.lastPointerX = event.clientX;
     this.lastPointerY = event.clientY;
     this.dragStartX = event.clientX;
     this.dragStartY = event.clientY;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
     this.panDeltaX = 0;
     this.panDeltaY = 0;
     this.wheelDeltaX = 0;
@@ -495,6 +522,7 @@ export class SpatialNavigationControls {
     this.dragPointerId = null;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
+    this.inspectionRotation.identity();
     this.panDeltaX = 0;
     this.panDeltaY = 0;
     this.wheelDeltaX = 0;
@@ -507,21 +535,19 @@ export class SpatialNavigationControls {
   }
 
   private applyLook(camera: THREE.PerspectiveCamera): boolean {
+    if (this.panFrame) {
+      const rotation = this.inspectionRotation;
+      if (rotation.x === 0 && rotation.y === 0 && rotation.z === 0 && rotation.w === 1) return false;
+      camera.quaternion.multiply(rotation).normalize();
+      rotation.identity();
+      return true;
+    }
     const deltaX = this.lookDeltaX;
     const deltaY = this.lookDeltaY;
     this.lookDeltaX = 0;
     this.lookDeltaY = 0;
     if (Math.abs(deltaX) < MOVEMENT_EPSILON && Math.abs(deltaY) < MOVEMENT_EPSILON) {
       return false;
-    }
-
-    if (this.panFrame) {
-      // Inspection turns follow the view's own axes. World-up yaw becomes a
-      // screen spin when the view is aimed steeply up or down.
-      camera.rotateY(-deltaX * LOOK_RADIANS_PER_PIXEL);
-      camera.rotateX(-deltaY * LOOK_RADIANS_PER_PIXEL);
-      camera.quaternion.normalize();
-      return true;
     }
 
     this.lookYaw -= deltaX * LOOK_RADIANS_PER_PIXEL;
@@ -532,6 +558,18 @@ export class SpatialNavigationControls {
     );
     this.applyLookOrientation(camera);
     return true;
+  }
+
+  private queueInspectionRotation(action: "turn" | "rotate", x: number, y: number): void {
+    // Compose in input order, so switching between turn and roll within one
+    // render frame retains each gesture's own axis.
+    if (action === "rotate") {
+      this.inspectionRotation.multiply(this.rotationStep.setFromAxisAngle(LOCAL_ROLL_AXIS, x * LOOK_RADIANS_PER_PIXEL));
+    } else {
+      this.inspectionRotation
+        .multiply(this.rotationStep.setFromAxisAngle(LOCAL_UP, -x * LOOK_RADIANS_PER_PIXEL))
+        .multiply(this.rotationStep.setFromAxisAngle(LOCAL_RIGHT, -y * LOOK_RADIANS_PER_PIXEL));
+    }
   }
 
   private touchCentre(): { x: number; y: number } | null {
@@ -549,7 +587,7 @@ export class SpatialNavigationControls {
     const centre = this.touchCentre();
     this.dragPointerId = this.activeTouches.keys().next().value ?? null;
     if (!centre) return;
-    this.dragPanning = this.activeTouches.size === 1 && !shiftKey;
+    this.dragAction = this.activeTouches.size === 1 && !shiftKey ? this.selectedDragMode : "turn";
     this.lastPointerX = centre.x;
     this.lastPointerY = centre.y;
   }

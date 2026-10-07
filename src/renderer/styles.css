@@ -165,6 +165,8 @@ button {
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
   display: flex;
+  flex-wrap: wrap;
+  max-width: calc(100% - 28px);
   gap: 2px;
   padding: 4px;
   border: 1px solid rgb(255 255 255 / 13%);
@@ -176,7 +178,7 @@ button {
   backdrop-filter: blur(20px) saturate(115%);
 }
 
-.spark-controls button {
+.spark-controls :is(button, select) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -219,13 +221,13 @@ button {
   content: "⛶";
 }
 
-.spark-controls button:hover,
-.spark-controls button:focus-visible {
+.spark-controls :is(button, select):hover,
+.spark-controls :is(button, select):focus-visible {
   background: rgb(255 255 255 / 8%);
   color: #fff;
 }
 
-.spark-controls button:focus-visible {
+.spark-controls :is(button, select):focus-visible {
   outline: 2px solid #d4ff58;
   outline-offset: -2px;
 }
@@ -240,10 +242,15 @@ button {
   color: #e5f6b1;
 }
 
+.spark-controls select {
+  font-family: inherit;
+  color-scheme: dark;
+}
+
 .spark-help {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 100px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + var(--spark-toolbar-height, 52px) + 48px);
   display: grid;
   max-width: 360px;
   gap: 6px;
@@ -296,7 +303,7 @@ button {
   box-shadow: 0 0 14px rgb(212 255 88 / 70%);
 }
 
-.spark-controls button:disabled {
+.spark-controls :is(button, select):disabled {
   cursor: wait;
   opacity: 0.58;
 }
@@ -314,7 +321,7 @@ button {
 .spark-control-status {
   position: absolute;
   right: max(14px, env(safe-area-inset-right));
-  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 58px);
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + var(--spark-toolbar-height, 52px) + 6px);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -538,7 +545,7 @@ button {
 
   .spark-help {
     right: 14px;
-    bottom: calc(max(14px, env(safe-area-inset-bottom)) + 56px);
+    bottom: calc(max(14px, env(safe-area-inset-bottom)) + var(--spark-toolbar-height, 52px) + 48px);
     left: 14px;
     max-width: none;
   }
@@ -573,7 +580,7 @@ button {
   padding: 4px;
 }
 
-.spark-viewport[data-input-mode="touch"] .spark-controls button {
+.spark-viewport[data-input-mode="touch"] .spark-controls :is(button, select) {
   min-width: max-content;
   min-height: 44px;
   padding: 0 11px;
@@ -593,7 +600,7 @@ button {
 }
 
 .spark-viewport[data-input-mode="touch"] .spark-help {
-  top: calc(max(10px, env(safe-area-inset-top)) + 100px);
+  top: calc(max(10px, env(safe-area-inset-top)) + var(--spark-toolbar-height, 54px) + 46px);
   right: 10px;
   bottom: auto;
   left: 10px;
@@ -601,7 +608,7 @@ button {
 }
 
 .spark-viewport[data-input-mode="touch"] .spark-control-status {
-  top: calc(max(10px, env(safe-area-inset-top)) + 60px);
+  top: calc(max(10px, env(safe-area-inset-top)) + var(--spark-toolbar-height, 54px) + 6px);
   right: max(12px, env(safe-area-inset-right));
   bottom: auto;
 }

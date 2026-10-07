@@ -357,7 +357,10 @@ Implemented:
   room/POI semantics, and a responsive authored-geometry floor plan with live
   camera position
 - Fly-only inspection uses drag to pan and Shift+drag to turn; touch uses one
-  finger to pan and two fingers to turn. PC controls show keyboard and wheel
+  finger to pan and two fingers to turn. The visible drag-action selector offers
+  Pan, Turn, and Rotate; Rotate tilts the view clockwise/counterclockwise.
+  Pan moves parallel to the displayed view at tilted and rolled angles, and
+  starting a drag stops leftover travel momentum. PC controls show keyboard and wheel
   instructions; touch controls show the joystick and Rise/Lower buttons. The
   control set follows the primary pointer and switches when another input is
   used, including on devices with both a mouse and touchscreen. Window width

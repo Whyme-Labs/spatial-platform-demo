@@ -117,6 +117,27 @@ for (const accessPolicy of ["private-preview", "public"]) {
         // The saved view must carry its screen-up axis after inspection turns.
         expect(direction(panAfterTurn).reduce((sum, value, index) => sum + value * panAfterTurn.up[index]!, 0)).toBeCloseTo(0, 5);
 
+        const dragMode = renderer.getByRole("combobox", { name: "Drag action" });
+        await expect(dragMode).toBeVisible();
+        await expect(dragMode).toBeEnabled();
+        await dragMode.selectOption("rotate");
+        if (touch) {
+          await canvas.dispatchEvent("pointerdown", { pointerId: 19, pointerType: "touch", clientX: 140, clientY: 200, button: 0 });
+          await canvas.dispatchEvent("pointermove", { pointerId: 19, pointerType: "touch", clientX: 220, clientY: 200 });
+          await canvas.dispatchEvent("pointerup", { pointerId: 19, pointerType: "touch", clientX: 220, clientY: 200, button: 0 });
+        } else {
+          const bounds = await canvas.boundingBox();
+          await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(bounds!.x + bounds!.width / 2 + 80, bounds!.y + bounds!.height / 2, { steps: 4 });
+          await page.mouse.up();
+        }
+        await expect.poll(async () => distance((await cameraPose(page)).up, panAfterTurn.up)).toBeGreaterThan(0.05);
+        const afterRotate = await cameraPose(page);
+        expect(distance(afterRotate.position, panAfterTurn.position)).toBeLessThan(0.001);
+        expect(distance(direction(afterRotate), direction(panAfterTurn))).toBeLessThan(0.001);
+        await dragMode.selectOption("pan");
+
         const before = await cameraPosition(page);
         if (touch) {
           const rise = renderer.locator("#flyAscend");
@@ -149,7 +170,12 @@ for (const accessPolicy of ["private-preview", "public"]) {
 
           // Window size changes the layout, not the selected input controls.
           await page.setViewportSize({ width: 390, height: 844 });
+          const toolbar = await renderer.locator(".spark-controls").boundingBox();
+          expect(toolbar!.x).toBeGreaterThanOrEqual(0);
+          expect(toolbar!.x + toolbar!.width).toBeLessThanOrEqual(390);
           await renderer.locator("#toggleHelp").click();
+          const help = await renderer.locator("#controlHelp").boundingBox();
+          expect(help!.y + help!.height).toBeLessThanOrEqual(toolbar!.y);
           await expect(renderer.getByText("PC controls", { exact: true })).toBeVisible();
           await expect(renderer.locator("#desktopKeyboardHelp")).toBeVisible();
           await expect(renderer.locator("#movementPad")).toBeHidden();

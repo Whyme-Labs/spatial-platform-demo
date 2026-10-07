@@ -244,6 +244,7 @@ const desktopMovementHelp = byId<HTMLElement>("desktopMovementHelp");
 const desktopKeyboardHelp = byId<HTMLElement>("desktopKeyboardHelp");
 const desktopVerticalHelp = byId<HTMLElement>("desktopVerticalHelp");
 const movementModeToggle = byId<HTMLButtonElement>("movementModeToggle");
+const inspectionDragMode = byId<HTMLSelectElement>("inspectionDragMode");
 const movementPad = byId<HTMLElement>("movementPad");
 const flightAltitudeControls = byId<HTMLElement>("flightAltitudeControls");
 const flyAscend = byId<HTMLButtonElement>("flyAscend");
@@ -301,12 +302,14 @@ function visibleOverlayRect(element: HTMLElement): OverlayRect | null {
 }
 
 function publishOverlayLayoutReceipt(): void {
+  const toolbar = visibleOverlayRect(document.querySelector<HTMLElement>(".spark-controls")!);
+  if (toolbar) sparkViewport.style.setProperty("--spark-toolbar-height", `${toolbar.bottom - toolbar.top}px`);
   post({
     source: "spatial-spark",
     type: "overlay-layout",
     viewport: { width: innerWidth, height: innerHeight },
     zones: {
-      toolbar: visibleOverlayRect(document.querySelector<HTMLElement>(".spark-controls")!),
+      toolbar,
       status: visibleOverlayRect(controlStatus),
       help: visibleOverlayRect(helpPanel),
       movement: visibleOverlayRect(movementPad),
@@ -1969,6 +1972,19 @@ function setMovementAvailability(
   desktopVerticalHelp.hidden = !available || movementMode !== "fly";
   flightAltitudeControls.hidden = !available ||
     movementMode !== "fly" || !mobileControls.active;
+  updateInspectionDragChrome();
+}
+
+function updateInspectionDragChrome(): void {
+  inspectionDragMode.hidden = !visualPreviewActive;
+  inspectionDragMode.disabled = !readySent || fatalFailure;
+  if (!visualPreviewActive) return;
+  const mode = rendererControls?.inspectionDragMode ?? "pan";
+  inspectionDragMode.value = mode;
+  const action = mode === "rotate" ? "rotate clockwise/counterclockwise" : mode;
+  byId("mobileLookHint").querySelector("span:last-child")!.textContent = `Drag scene to ${mode}`;
+  desktopMovementHelp.textContent = `Drag to ${action} · Shift+drag to turn · scroll to travel`;
+  mobileMovementHelp.textContent = `Drag to ${action} · two-finger drag to turn · joystick to fly · Rise and Lower change altitude`;
 }
 
 function frameScene(bounds: THREE.Box3, camera: THREE.PerspectiveCamera): void {
@@ -2043,10 +2059,22 @@ function bindChrome(): void {
     button.addEventListener("lostpointercapture", stopMobileVerticalMovement);
   }
   helpButton.addEventListener("click", toggleHelp);
+  inspectionDragMode.addEventListener("change", changeInspectionDragMode);
   fullscreenButton.addEventListener("click", requestFullscreen);
   document.addEventListener("fullscreenchange", updateFullscreenControl);
   window.addEventListener("resize", handleChromeResize);
   scheduleOverlayLayoutReceipt();
+}
+
+function changeInspectionDragMode(): void {
+  const mode = inspectionDragMode.value;
+  if (!visualPreviewActive || !rendererControls || (mode !== "pan" && mode !== "turn" && mode !== "rotate")) return;
+  mobileControls.suspend();
+  stopMobileVerticalMovement();
+  rendererControls.setInspectionDragMode(mode);
+  updateInspectionDragChrome();
+  setControlStatus(`Fly preview · drag to ${mode}`, "ready");
+  canvas.focus({ preventScroll: true });
 }
 
 function toggleMovementMode(): void {
@@ -2100,6 +2128,7 @@ function updateMovementModeChrome(): void {
     : movementMode === "fly"
     ? "Click or drag to look · Esc releases mouse look · move through the full camera direction"
     : "Click or drag to look · Esc releases mouse look · scroll or two-finger swipe to travel";
+  updateInspectionDragChrome();
   scheduleOverlayLayoutReceipt();
 }
 
@@ -2375,6 +2404,7 @@ function dispose(): void {
     button.removeEventListener("lostpointercapture", stopMobileVerticalMovement);
   }
   helpButton.removeEventListener("click", toggleHelp);
+  inspectionDragMode.removeEventListener("change", changeInspectionDragMode);
   fullscreenButton.removeEventListener("click", requestFullscreen);
   if (overlayLayoutFrame !== null) {
     cancelAnimationFrame(overlayLayoutFrame);
